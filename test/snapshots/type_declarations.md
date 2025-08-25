@@ -129,16 +129,24 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Map, Foo, Some, Maybe, SomeFunc, add_one, main!
+]
+
+
+Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
+Foo: (Bar, Baz)
+
+Some(a): {
+	foo: ((Ok(a), bar): Something)
+}
+Maybe(a): [(Some(a), None)]
+SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
+MyType: U64
+MyType2: Module.Thingy
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_declarations.md:5:8:5:11
-UNDECLARED TYPE - type_declarations.md:5:13:5:16
-UNDECLARED TYPE - type_declarations.md:7:19:7:21
-UNDECLARED TYPE - type_declarations.md:7:32:7:41
-MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
-EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
-EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:13 to 3:41

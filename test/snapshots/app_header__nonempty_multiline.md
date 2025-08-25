@@ -6,19 +6,19 @@ type=header
 # SOURCE
 ~~~roc
 app # This comment is here
-	[main!]
-	{ pf: platform "../main.roc", somePkg: "../main.roc" }
+	{ pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon String CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (header-only)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../main.roc" platform [main]), somePkg: "../main.roc" }
+
 ~~~
 # EXPECTED
 NIL

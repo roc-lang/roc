@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app { pf: "../basic-cli/main.roc" platform [main!] }
 
 mapList : List(a), (a -> b) -> List(b)
 mapList = |list, fn| list.map(fn)
@@ -14,7 +14,7 @@ main! = |_| mapList([1,2,3,4,5])
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare Int Comma Int Comma Int Comma Int Comma Int CloseSquare CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare Int Comma Int Comma Int Comma Int Comma Int CloseSquare CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -80,10 +80,15 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/main.roc" platform [main]) }
+
+mapList: (List(a) -> ((a -> b) -> List(b)))
+mapList = \(list, fn) -> list | .map(fn)
+main
+(<malformed>! | _) | mapList([(1, 2, 3, 4, 5)])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
+NIL
 # PROBLEMS
 **Parse Error**
 at 6:7 to 6:7

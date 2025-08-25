@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app { pf: "../basic-cli/main.roc" platform [main!] }
 
 main! = |_| {
     # Regular unused variable - should warn
@@ -29,7 +29,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign Int LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign Int LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -70,11 +70,33 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/main.roc" platform [main]) }
+
+main
+(<malformed>! | _) | {
+	unused_var = 42
+	
+
+# Regular used variable - should be fine
+used_var = 100
+	
+
+# Another unused variable - should warn
+another_unused = "hello"
+	
+
+# Underscore variable that is unused - should be fine
+_ignored # Comment 1 =  # Comment 2
+	999 # Comment 3
+	
+
+# Use only the used_var
+result = used_var + 10
+	result
+}
 ~~~
 # EXPECTED
-UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
-UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:7 to 3:7

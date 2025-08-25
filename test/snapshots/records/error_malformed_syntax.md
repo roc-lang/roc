@@ -26,11 +26,10 @@ OpenCurly LowerIdent OpColon String Comma OpColon Int Comma Comma LowerIdent OpC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ name: ("Alice", <malformed>), 30, <malformed> }
 ~~~
 # EXPECTED
-PARSE ERROR - error_malformed_syntax.md:1:18:1:19
-PARSE ERROR - error_malformed_syntax.md:1:20:1:22
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:18 to 1:18

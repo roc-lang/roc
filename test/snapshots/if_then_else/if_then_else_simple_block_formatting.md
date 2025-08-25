@@ -18,11 +18,12 @@ KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool {
+	A
+} else 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
-INCOMPATIBLE IF BRANCHES - if_then_else_simple_block_formatting.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

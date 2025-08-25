@@ -53,10 +53,18 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	blue,
+]
+
+import styles exposing [Color, CC]
+
+# instantiating an RGB nominal tab union from the styles.Color module
+blue: CC.Color
+blue = (CC.Color) | RGB((0, 0, 255))
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:1 to 4:26

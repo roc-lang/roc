@@ -31,7 +31,7 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(1, 2, 3, <malformed>)]
 ~~~
 # EXPECTED
 NIL

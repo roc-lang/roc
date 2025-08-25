@@ -57,13 +57,21 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	MyType, processValue
+]
+
+
+MyType: UnknownType
+
+processValue: (UndeclaredResult -> Str)
+processValue = \value -> {
+	"processed"
+}
+AnotherType: SomeModule.MissingType
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
-MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
-UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
-UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 5:16 to 5:39

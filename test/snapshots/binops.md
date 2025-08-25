@@ -101,7 +101,7 @@ OpenRound Int OpPlus Int Comma Int OpBinaryMinus Int Comma Int OpStar Int Comma 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(4 + 2, 4 - 2, 4 * 2, 4 / 2, 4 < 2, 4 > 2, 4 <= 2, 4 >= 2, 4 == 2, 4 != 2, 4 // 2, (Bool.True) && (Bool.False), (Bool.False) || (Bool.True), None ?? 0, <malformed>)
 ~~~
 # EXPECTED
 NIL

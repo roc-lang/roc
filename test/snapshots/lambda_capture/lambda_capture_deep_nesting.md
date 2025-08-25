@@ -78,7 +78,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar O
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\a -> \b -> \c -> \d -> \e -> (((a + b) + c) + d) + e(1)(2)(3)(4)(5)
 ~~~
 # EXPECTED
 NIL

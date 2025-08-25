@@ -16,11 +16,13 @@ KwModule OpenSquare LowerIdent Comma UpperIdent CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	something, SomeType
+]
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:9:1:18
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:20:1:28
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

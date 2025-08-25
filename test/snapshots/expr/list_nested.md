@@ -34,7 +34,7 @@ OpenSquare OpenSquare Int Comma Int CloseSquare Comma OpenSquare Int Comma Int C
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[([(1, 2)], [(3, 4)], [5])]
 ~~~
 # EXPECTED
 NIL

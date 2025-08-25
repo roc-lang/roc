@@ -43,7 +43,9 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+a = 10
+b = \_ -> a * 2(5)
+b
 ~~~
 # EXPECTED
 NIL

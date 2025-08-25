@@ -168,14 +168,33 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json]
+import http exposing [Client, Http]
+
+# Test unresolved qualified value
+main = (Json.NonExistent) | .method
+
+# Test unresolved qualified type in annotation
+parseData: (Json.InvalidType -> Str)
+parseData = \data -> Json | .stringify(data)
+processRequest: ((Http.Server) | Request -> (Http.Server) | Response)
+processRequest = \req -> (Http.Server) | .defaultResponse
+
+# Test typo in qualified name
+result = Json | .prase("test")
+config = (Unknown.Module) | .config
+
+# Test valid module but invalid member
+client = Http | .invalidMethod
+
+# Test deeply nested invalid qualification
+parser = (((Json.Parser) | Advanced) | NonExistent) | .create
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
-MODULE NOT FOUND - can_import_unresolved_qualified.md:4:1:4:27
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
-UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:17

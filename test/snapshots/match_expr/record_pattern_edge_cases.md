@@ -24,7 +24,51 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when ... is {
+	{
+		a: {
+			b: {
+				c
+			}
+		}
+	}
+	<malformed>
+	"deeply nested: ${c}"
+	{ x, y: {  } }
+	<malformed>
+	"mixed with empty: ${x}"
+	{
+		outer: ({
+			inner
+		}, simple)
+	}
+	<malformed>
+	"mixed: ${inner} and ${simple}"
+	{
+		a: (({
+			b
+		}, c): {
+			d
+		})
+	}
+	<malformed>
+	"multiple nested: ${b}, ${d}"
+	{
+		name: x
+	}
+	<malformed>
+	"renamed: ${x}"
+	{
+		person: {
+			name: ((firstName, age): userAge)
+		}
+	}
+	<malformed>
+	"renamed nested: ${firstName} (${userAge.to_str()})"
+	{  }
+	<malformed>
+	"empty record"
+} -> <malformed>
 ~~~
 # EXPECTED
 NIL

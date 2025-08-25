@@ -26,10 +26,10 @@ OpenSquare OpenSquare CloseSquare Comma OpenSquare Int CloseSquare Comma OpenSqu
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[([], [1], ["hello"])]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_nested_heterogeneous.md:1:6:1:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:20

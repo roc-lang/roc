@@ -55,7 +55,15 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+foo: (Bool -> Bool)
+foo = \a -> {
+	expect a == (Bool.True)
+	a: a
+}
 ~~~
 # EXPECTED
 NIL

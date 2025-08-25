@@ -23,11 +23,13 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign KwIf LowerIdent Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+foo = if tru 0
 ~~~
 # EXPECTED
-IF WITHOUT ELSE - expr_if_missing_else.md:3:7:3:9
-UNRECOGNIZED SYNTAX - expr_if_missing_else.md:3:7:3:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:7 to 3:14

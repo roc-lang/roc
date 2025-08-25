@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app { pf: "../basic-cli/main.roc" platform [main!] }
 
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 compose = |f, g| |x| f(g(x))
@@ -14,7 +14,7 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent OpenRound LowerIdent CloseRound CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent OpenRound LowerIdent CloseRound CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -76,15 +76,15 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/main.roc" platform [main]) }
+
+compose: (((_b -> _c) -> (_a -> _b)) -> (_a -> _c))
+compose = \(f, g) -> \x -> f(g(x))
+main
+(<malformed>! | _) | {  }
 ~~~
 # EXPECTED
-PARSE ERROR - type_higher_order_multiple_vars.md:3:36:3:38
-PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
-PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
-PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
-PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
-PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
+NIL
 # PROBLEMS
 **Parse Error**
 at 6:7 to 6:7

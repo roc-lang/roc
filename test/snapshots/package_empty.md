@@ -16,7 +16,8 @@ KwPackage OpenSquare CloseSquare OpenCurly CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package []
+
 ~~~
 # EXPECTED
 NIL

@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 # Function with pure annotation using thin arrow
 add : I32, I32 -> I32
@@ -19,7 +19,7 @@ main! = add(1, 2)
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly Dot LowerIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly Dot LowerIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -98,7 +98,16 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+add: (I32 -> (I32 -> I32))
+add = \(x, y) -> {
+	x: ((x, y): y)
+} | .x
+double: (I32 -> I32)
+double = \x -> add((x, x))
+main<malformed>!
+add((1, 2))
 ~~~
 # EXPECTED
 NIL

@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 # Basic empty list polymorphism
 my_empty_list = []
@@ -37,7 +37,7 @@ main = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpAssign OpenSquare CloseSquare LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpAssign OpenSquare CloseSquare LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -176,21 +176,32 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+my_empty_list = []
+
+# Empty list used in different contexts
+int_list = [(1, 2, 3)]
+str_list = [("hello", "world")]
+float_list = [(1.1, 2.2, 3.3)]
+all_int_list = int_list + <malformed>
+my_empty_list
+all_str_list = str_list + <malformed>
+my_empty_list
+all_float_list = float_list + <malformed>
+my_empty_list
+get_empty = \_ -> []
+empty_int_list = get_empty(42)
+empty_str_list = get_empty("test")
+main = \_ -> {
+	len1 = List | .len(all_int_list)
+	len2 = List | .len(all_str_list)
+	len3 = List | .len(all_float_list)
+	(len1 + len2) + len3
+}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
-PARSE ERROR - let_polymorphism_lists.md:12:28:12:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
-PARSE ERROR - let_polymorphism_lists.md:13:28:13:41
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
-PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
-UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
-UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
-UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
-UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
+NIL
 # PROBLEMS
 **Parse Error**
 at 12:26 to 12:26

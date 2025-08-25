@@ -32,10 +32,15 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json]
+
+main = Json | .utf8
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_json.md:3:1:3:17
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:17

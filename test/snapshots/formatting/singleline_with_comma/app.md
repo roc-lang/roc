@@ -5,18 +5,19 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
+app { pf: "../basic-cli/main.roc" platform [a1!, a2!,], a: "a", }
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon String Comma CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare Comma LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
 (header-only)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/main.roc" platform [a1, a2]), a: ("a", <malformed>) }
+
 ~~~
 # EXPECTED
 NIL

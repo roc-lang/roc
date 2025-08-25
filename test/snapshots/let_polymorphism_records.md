@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 # Basic values for polymorphism testing
 num = 42
@@ -44,7 +44,7 @@ main = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Float LowerIdent OpAssign String LowerIdent OpAssign OpenSquare CloseSquare LowerIdent OpAssign OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpAmpersand LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma Int CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma String CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent Dot LowerIdent OpPlus LowerIdent Dot LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Float LowerIdent OpAssign String LowerIdent OpAssign OpenSquare CloseSquare LowerIdent OpAssign OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpAmpersand LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma Int CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma String CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent Dot LowerIdent OpPlus LowerIdent Dot LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -229,11 +229,38 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+num = 42
+frac = 4.2
+str = "hello"
+my_empty_list = []
+my_nonempty_list = [(num, frac)]
+make_container = \value -> {
+	data: ((value, count): 1)
+}
+int_container = make_container(num)
+str_container = make_container(str)
+list_container = make_container(my_empty_list)
+update_data = \(container, new_value) -> {
+	container: container
+	<malformed>
+	data: new_value
+}
+updated_int = update_data((int_container, 100))
+updated_str = update_data((str_container, "world"))
+identity_record = \x -> {
+	value: x
+}
+int_record = identity_record(42)
+str_record = identity_record("test")
+list_record = identity_record([(1, 2, 3)])
+main = \_ -> {
+	(int_container | .count) + (str_container | .count)
+}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
-UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
+NIL
 # PROBLEMS
 **Parse Error**
 at 19:50 to 19:50

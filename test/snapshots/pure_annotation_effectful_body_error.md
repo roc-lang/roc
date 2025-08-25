@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 
@@ -17,7 +17,7 @@ main! = bad_function("This should fail")
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpColon UpperIdent OpArrow OpenCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound String CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpColon UpperIdent OpArrow OpenCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -57,10 +57,19 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+import pf exposing [Stdout]
+
+# This should be a type error: pure annotation but effectful body
+bad_function: (Str -> {  })
+bad_function = \msg -> Stdout | .line
+msg!
+main<malformed>!
+bad_function("This should fail")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - pure_annotation_effectful_body_error.md:3:1:3:17
+NIL
 # PROBLEMS
 **Parse Error**
 at 9:7 to 9:7

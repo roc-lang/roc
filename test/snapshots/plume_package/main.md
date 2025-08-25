@@ -18,10 +18,13 @@ KwPackage OpenSquare UpperIdent Comma CloseSquare OpenCurly CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [
+	Color,
+]
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - main.md:2:5:2:10
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

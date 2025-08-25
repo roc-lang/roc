@@ -47,7 +47,12 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	convert_me,
+]
+
+convert_me: ((a -> b where a() | .convert: a) -> b)
+convert_me = ...
 ~~~
 # EXPECTED
 NIL

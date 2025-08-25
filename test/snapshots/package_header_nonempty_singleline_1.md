@@ -16,11 +16,13 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [
+	something, SomeType
+] packages {somePkg, ("../main.roc", other): "../../other/main.roc"}
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
-EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:21:1:29
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -59,7 +59,9 @@ OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound Lower
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+pair: (a -> (a -> (a, a)))
+pair = \(x, y) -> (x, y)
+pair((42, "hello"))
 ~~~
 # EXPECTED
 NIL

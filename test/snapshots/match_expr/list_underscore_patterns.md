@@ -23,10 +23,29 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when items is {
+	[_]
+	<malformed>
+	1 # pattern match on a list with a single (ignored) element
+	[<unary_double_dot>]
+	last
+	<malformed>
+	<malformed>
+	last # pattern match on the last item in the list
+	[first => (<unary_double_dot> => first # pattern match on the first item in the list)]
+	[(_, _, third)]
+	<malformed>
+	third
+	[(x, _, _, y)]
+	<malformed>
+	x + y
+	[]
+	<malformed>
+	0
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

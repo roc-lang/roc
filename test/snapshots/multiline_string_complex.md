@@ -90,7 +90,50 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	value1, value2, value3, value4
+]
+
+
+value1 = ""
+This
+is
+a
+"string"<malformed>just
+one
+line
+
+value2 = ""
+This
+is
+a
+"string"<malformed>just
+one
+line
+
+value3 = ""
+This
+is
+a
+string
+""With
+multiple
+lines
+""<malformed>{
+	value1
+}
+value4 = ""
+This
+is
+a
+string
+# A comment in between
+""With
+multiple
+lines
+""<malformed>{
+	value2
+}
 ~~~
 # EXPECTED
 NIL

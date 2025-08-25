@@ -16,7 +16,7 @@ Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+2147483647
 ~~~
 # EXPECTED
 NIL

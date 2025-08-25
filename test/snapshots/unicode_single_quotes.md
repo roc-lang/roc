@@ -95,34 +95,75 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+x = ('a',
+    'é',
+    '🚀',
+    '\u',
+    '\u)',
+    '\u(',
+    '\u()',
+    '\u(1F680)',
+    '\u(K)',
+    '\\',
+    '\'',
+    '',
+    'long',
+    '\',
+)
+
+y = 'u
+
+# Test backslash before EOF
+'\, <malformed>)
+<malformed><malformed>
+<malformed><malformed><malformed><malformed><malformed>
+<malformed><malformed>
+<malformed><malformed>
+<malformed>
+<malformed>(<malformed>)
+<malformed>()
+<malformed>
+<malformed>(1F680)F680<malformed>
+<malformed>
+<malformed>(K)
+<malformed>
+'\\',
+    '\'',
+    '',
+    'long',
+    '\',
+)
+
+y = 'u
+
+# Test backslash before EOF
+'\
+<malformed>
+'\'',
+    '',
+    'long',
+    '\',
+)
+
+y = 'u
+
+# Test backslash before EOF
+'\
+<malformed>
+<malformed><malformed>
+<malformed>ong<malformed>
+<malformed><malformed>
+<malformed>
+y = <malformed>
+
+# Test backslash before EOF
+<malformed>
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID ESCAPE SEQUENCE - :0:0:0:0
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:9:5:9:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:12:5:12:12
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:11
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:20:7
-PARSE ERROR - unicode_single_quotes.md:23:1:23:3
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-INVALID TUPLE ELEMENT - :0:0:0:0
-UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 5:5 to 5:5

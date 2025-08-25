@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app { pf: "../basic-cli/main.roc" platform [main!] }
 
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 curry = |fn| |x| |y| fn(x, y)
@@ -14,7 +14,7 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent OpArrow LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent OpArrow LowerIdent CloseRound OpArrow OpenRound LowerIdent OpArrow LowerIdent OpArrow LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -80,13 +80,16 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/main.roc" platform [main]) }
+
+curry: ((_a -> (_b -> _c)) -> ((_a -> _b) -> _c))
+curry = \fn -> \x -> \y -> fn((x, y))
+
+main
+(<malformed>! | _) | {  }
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_multi_arg.md:3:27:3:28
-PARSE ERROR - type_function_multi_arg.md:3:40:3:42
-PARSE ERROR - type_function_multi_arg.md:3:42:3:43
-MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
+NIL
 # PROBLEMS
 **Parse Error**
 at 6:7 to 6:7

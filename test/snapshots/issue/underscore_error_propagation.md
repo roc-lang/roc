@@ -63,11 +63,25 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+BadBase := _
+
+BadDerived := BadBase
+
+value: BadDerived
+value = "test"
+
+GoodBase := Str
+
+GoodDerived := GoodBase
+
+goodValue: GoodDerived
+goodValue = "test"
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:13

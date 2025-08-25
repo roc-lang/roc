@@ -22,10 +22,26 @@ KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatAr
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when sequence is {
+	[(0, count)]
+	<malformed>
+	count
+	[(1, x, 3)]
+	<malformed>
+	x
+	[(42, value)]
+	<malformed>
+	value
+	[(first, 99)]
+	<malformed>
+	first
+	[]
+	<malformed>
+	0
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_mixed_literals.md:1:7:1:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:16

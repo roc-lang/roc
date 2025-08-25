@@ -18,10 +18,10 @@ OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ ..person }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_field_update.md:1:5:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

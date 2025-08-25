@@ -16,10 +16,10 @@ OpUnaryMinus LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-rec1 | .field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

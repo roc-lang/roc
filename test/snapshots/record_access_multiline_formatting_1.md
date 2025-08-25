@@ -22,10 +22,10 @@ LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound C
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+some_fn(arg1)
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - :0:0:0:0
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

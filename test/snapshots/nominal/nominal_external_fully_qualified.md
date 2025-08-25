@@ -59,11 +59,26 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	handleResult,
+]
+
+import MyResultModule
+
+handleResult: (MyResultModule.MyResultType((Str, I32)) -> Str)
+handleResult = \result -> {
+	when result is {
+		(MyResultModule.MyResultType) | Ok(value)
+		<malformed>
+		value: value
+		(MyResultModule.MyResultType) | Err(code)
+		<malformed>
+		"Error: $(code.toStr())"
+	} -> <malformed>
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
-UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
+NIL
 # PROBLEMS
 **Parse Error**
 at 7:5 to 7:18

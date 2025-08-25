@@ -413,22 +413,54 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Import exposing
+import I1 exposing [I11, I12]
+import I2 exposing [I21]
+<malformed>Ias1<malformed>
+I22
+<malformed>Ias2<malformed>
+<malformed>
+A(a): (a where a() | .a1: (a -> (a -> (<malformed> -> (Str, a() | .a2): (a -> (a -> (<malformed> -> Str)))))))
+B(b): (b where b() | .b1: (b -> (b -> (<malformed> -> (Str, b() | .b2): (b -> (b -> (<malformed> -> Str)))))))
+C((a, b, <malformed>): (a, b, <malformed>))
+D((a, b, <malformed>): C((a, b, <malformed>)))
+E: {
+	a: ((Str, b): Str, <malformed>)
+	F: [
+		(A, B, <malformed>),
+	]
+	g: (e -> e where e() | A, e() | B)
+	h = \(x, y) -> {
+		h1 = {
+			h11: (((x, h12): x, h13): {
+				h131: ((x, h132): y, <malformed>, <malformed>)
+				h2 = h((x, y, <malformed>))
+				h3 = A((x, y, <malformed>))
+				h4 = [
+					(x, y, <malformed>),
+				]
+				h5 = (x, y, <malformed>)
+				when x is {
+					Z1(a => (b => (<malformed> => (<malformed> => a))))
+					Z2(a => (b => (<malformed> => a)))
+					Z3( {
+						a: a,
+						b => (<malformed> => (<malformed> => a)),
+					})
+					Z4([
+						a => (b => (<malformed> => (<malformed> => a))),
+					])
+				} -> <malformed>
+			})
+		}
+	}
+}
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:14:1:23:11
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:24:1:33:11
-MODULE NOT FOUND - everything.md:4:1:7:2
-MODULE NOT FOUND - everything.md:8:1:11:2
-UNUSED VARIABLE - everything.md:90:5:90:6
-UNUSED VARIABLE - everything.md:95:4:95:5
-UNUSED VARIABLE - everything.md:100:5:100:6
-UNUSED VARIABLE - everything.md:106:5:106:6
-UNUSED VARIABLE - everything.md:61:2:61:4
-UNUSED VARIABLE - everything.md:69:2:69:4
-UNUSED VARIABLE - everything.md:73:2:73:4
-UNUSED VARIABLE - everything.md:77:2:77:4
-UNUSED VARIABLE - everything.md:81:2:81:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 9:6 to 9:6

@@ -22,7 +22,11 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+foo = 42
 ~~~
 # EXPECTED
 NIL

@@ -73,7 +73,12 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+identity: (a -> a)
+identity = \x -> x
+
+needs_string: ((Str -> Str) -> Str)
+needs_string = \f -> f(["hello"])
+needs_string(identity)
 ~~~
 # EXPECTED
 NIL

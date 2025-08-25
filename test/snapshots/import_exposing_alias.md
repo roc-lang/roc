@@ -73,10 +73,24 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	main,
+]
+
+import json exposing [Json, decode]<malformed>fromJson<malformed>
+encode
+<malformed>toJson<malformed>
+main = {
+	data = {
+		name: (("Bob", age): 25)
+	}
+	encoded = toJson(data)
+	decoded = fromJson(encoded)
+	decoded
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - import_exposing_alias.md:3:1:3:65
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:35 to 3:35

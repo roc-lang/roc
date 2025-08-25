@@ -26,16 +26,11 @@ LowerIdent OpAssign String LowerIdent OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+me = "luc"
+foo = <malformed>
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_017.md:1:1:1:3
-PARSE ERROR - fuzz_crash_017.md:1:4:1:5
-PARSE ERROR - fuzz_crash_017.md:1:6:1:7
-PARSE ERROR - fuzz_crash_017.md:1:7:1:10
-PARSE ERROR - fuzz_crash_017.md:1:10:1:11
-PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
+NIL
 # PROBLEMS
 **Parse Error**
 at 2:7 to 2:7

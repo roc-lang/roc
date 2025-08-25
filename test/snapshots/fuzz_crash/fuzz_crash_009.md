@@ -31,16 +31,13 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+f {
+	o,
+	<malformed>,
+}foo = <malformed>
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-MISSING HEADER - fuzz_crash_009.md:1:2:1:3
-PARSE ERROR - fuzz_crash_009.md:1:3:1:4
-PARSE ERROR - fuzz_crash_009.md:1:4:1:5
-PARSE ERROR - fuzz_crash_009.md:1:5:1:6
-PARSE ERROR - fuzz_crash_009.md:2:6:2:7
-PARSE ERROR - fuzz_crash_009.md:6:12:6:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 2:6 to 2:6

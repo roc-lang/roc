@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 
@@ -13,7 +13,7 @@ main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -37,10 +37,16 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+import pf exposing [Stdout]
+
+main
+(<malformed>! | _) | (Stdout | .line)
+"Hello, world!"!
 ~~~
 # EXPECTED
-MODULE NOT FOUND - hello_world.md:3:1:3:17
+NIL
 # PROBLEMS
 **Parse Error**
 at 5:7 to 5:7

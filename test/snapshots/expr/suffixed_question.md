@@ -22,11 +22,10 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(Stdout | .line) ?? <malformed>
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
-UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:14 to 1:14

@@ -18,10 +18,10 @@ LowerIdent LowerIdent LowerIdent Int OpArrow Int Int OpArrow Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_with_numbers.md:1:1:1:5
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

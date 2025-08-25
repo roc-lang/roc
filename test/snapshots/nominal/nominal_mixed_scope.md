@@ -65,15 +65,30 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	LocalStatus, processColor
+]
+
+
+LocalStatus := [(Pending, Complete)]
+processColor: (_ -> LocalStatus)
+processColor = \color -> {
+	import Color exposing [RGB]
+	when color is {
+		RGB.Red
+		<malformed>
+		LocalStatus.Pending
+		RGB.Green
+		<malformed>
+		LocalStatus.Complete
+		RGB.Blue
+		<malformed>
+		LocalStatus.Pending
+	} -> <malformed>
+}
 ~~~
 # EXPECTED
-IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
-NOT IMPLEMENTED - :0:0:0:0
-UNDECLARED TYPE - nominal_mixed_scope.md:9:12:9:17
-UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
-UNDECLARED TYPE - nominal_mixed_scope.md:13:9:13:12
-UNDECLARED TYPE - nominal_mixed_scope.md:14:9:14:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 11:5 to 11:17

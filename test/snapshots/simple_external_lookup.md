@@ -19,10 +19,10 @@ UpperIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+List | .map
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:8

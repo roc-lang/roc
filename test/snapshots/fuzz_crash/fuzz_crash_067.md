@@ -28,10 +28,16 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int C
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+f = <malformed>
+{
+	crash 1
+}
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - fuzz_crash_067.md:4:5:4:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:5 to 3:5

@@ -20,11 +20,20 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when color is {
+	Red
+	<malformed>
+	1
+	Blue
+	<malformed>
+	2
+	Green
+	<malformed>
+	"3"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
-INCOMPATIBLE MATCH BRANCHES - basic_tag_union.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

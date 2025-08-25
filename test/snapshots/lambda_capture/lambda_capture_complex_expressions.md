@@ -30,7 +30,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar KwIf LowerIdent OpGreate
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\outer -> \inner -> if outer > 0(outer + inner) <malformed>
 ~~~
 # EXPECTED
 NIL

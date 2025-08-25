@@ -31,10 +31,15 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	main,
+]
+
+import pf exposing [Stdout, line, write]
+main = 42
 ~~~
 # EXPECTED
-MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:40

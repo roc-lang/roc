@@ -21,10 +21,23 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when result is {
+	Ok(value)
+	<malformed>
+	value + 1
+	Err(value)
+	<malformed>
+	value - 1
+	Ok(different)
+	<malformed>
+	different * 2
+	Err(different)
+	<malformed>
+	different / 2
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - branch_scoping.md:1:7:1:13
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

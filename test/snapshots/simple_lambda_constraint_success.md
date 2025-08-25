@@ -67,7 +67,18 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	addTwo, addTwoF64
+]
+
+
+# Should successfully constrain literal 2 to I64
+addTwo: (I64 -> I64)
+addTwo = \x -> x + 2
+
+# Should successfully constrain literal 2.0 to F64
+addTwoF64: (F64 -> F64)
+addTwoF64 = \x -> x + 2.0
 ~~~
 # EXPECTED
 NIL

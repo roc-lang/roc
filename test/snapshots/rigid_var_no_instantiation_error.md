@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 # Polymorphic function that swaps elements of a tuple
 swap : (a, b) -> (b, a)
@@ -32,7 +32,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound OpenRound Int Comma String CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound UpperIdent Dot LowerIdent Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound String Comma String CloseRound CloseRound OpenCurly CloseCurly CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound OpenRound Int Comma String CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound UpperIdent Dot LowerIdent Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound String Comma String CloseRound CloseRound OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -127,13 +127,22 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+swap: ((a, b) -> (b, a))
+swap = \pair -> {
+	(x, y) = pair((y, x))
+}
+main
+(<malformed>! | _) | {
+	result1 = swap((42, "hello"))
+	result2 = swap((Bool | .true, [(1, 2, 3)]))
+	result3 = swap(("foo", "bar"))
+	{  }
+}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
-UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
-UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
-UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 11:7 to 11:7

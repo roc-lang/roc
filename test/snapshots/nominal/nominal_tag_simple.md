@@ -57,10 +57,19 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Color, blue
+]
+
+
+Color := [(Red, Green, Blue)]
+blue: Color
+blue = Color.Blue
+yellow: Color
+yellow = Color.Yellow
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 4:1

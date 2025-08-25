@@ -96,7 +96,11 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\{ a: a, (x: (b, c), y): { d: d, e: e } } -> (((a + b) + c) + d) + e({
+	a: (((1, x): (2, 3), y): {
+		d: ((4, e): 5)
+	})
+})
 ~~~
 # EXPECTED
 NIL

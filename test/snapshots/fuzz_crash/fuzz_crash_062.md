@@ -19,11 +19,14 @@ KwModule OpenSquare CloseCurly OpBar Int KwAs LowerIdent OpOr OpBar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	<malformed>,
+]
+
+<malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_062.md:1:8:1:9
-PARSE ERROR - fuzz_crash_062.md:2:9:2:9
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:8 to 1:8

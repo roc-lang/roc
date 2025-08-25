@@ -80,7 +80,25 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon OpenCurly LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	extract_age,
+]
+
+extract_age: ({
+	age: U64
+} -> U64)
+extract_age = \person -> {
+	{
+		age: age
+	} = person
+	
+
+(({
+		a: 0
+	} | .a) + age) - ({
+		a: 0
+	} | .a)
+}
 ~~~
 # EXPECTED
 NIL

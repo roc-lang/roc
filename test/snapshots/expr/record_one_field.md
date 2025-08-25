@@ -21,7 +21,7 @@ OpenCurly LowerIdent OpColon String CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+name: "Alice"
 ~~~
 # EXPECTED
 NIL

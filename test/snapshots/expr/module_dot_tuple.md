@@ -19,10 +19,10 @@ UpperIdent Dot Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+I | 5
 ~~~
 # EXPECTED
-PARSE ERROR - module_dot_tuple.md:1:2:1:4
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:4

@@ -23,13 +23,35 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare Lo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when list is {
+	[]
+	<malformed>
+	0
+	[x]
+	<malformed>
+	x
+	[(first, second)]
+	<malformed>
+	first + second
+	[(head, <unary_double_dot>)]
+	tail
+	<malformed>
+	<malformed>
+	head
+	[(One, Two, <unary_double_dot>)]
+	rest
+	<malformed>
+	<malformed>
+	3
+	[(x, y, z, <unary_double_dot>)]
+	more
+	<malformed>
+	<malformed>
+	(x + y) + z
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
-UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
-UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
-UNUSED VARIABLE - list_destructure_variations.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:12

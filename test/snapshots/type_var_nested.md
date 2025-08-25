@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "platform.roc" }
+app { pf: "platform.roc" platform [main] }
 
 # Map over Result type
 map_result : Result(a, e), (a -> b) -> Result(b, e)
@@ -36,7 +36,7 @@ main = |_| "done"
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent OpenRound LowerIdent CloseRound CloseRound UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly CloseCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar Int LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound UpperIdent OpenRound LowerIdent Comma UpperIdent CloseRound Comma UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound LowerIdent OpAssign OpBar Underscore OpBar String ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent OpenRound LowerIdent CloseRound CloseRound UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly CloseCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar Int LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound UpperIdent OpenRound LowerIdent Comma UpperIdent CloseRound Comma UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound LowerIdent OpAssign OpBar Underscore OpBar String ~~~
 # PARSE
 ~~~clojure
 (block
@@ -70,7 +70,7 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
     (lambda
       (body
         (block
-          (match <36 branches>)
+          (match <38 branches>)
           (binop_colon
             (lc "identity")
             (binop_thin_arrow
@@ -217,7 +217,32 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("platform.roc" platform [main]) }
+
+map_result: (Result((a, e)) -> ((a -> b) -> Result((b, e))))
+map_result = \(result, transform) -> {
+	when result is {
+		Ok(value)
+		<malformed>
+		Ok(transform(value))
+		Err(error)
+		<malformed>
+		Err(error)
+	} -> <malformed>
+	identity: (a -> a)
+	identity = \x -> x
+	make_pair: (a -> (b -> {
+		first: ((a, second): b)
+	}))
+	make_pair = \(x, y) -> {
+		first: ((x, second): y)
+	}
+	list_length: (List(_a) -> U64)
+	list_length = \_lst -> 42
+	wrap_in_result: (a -> Result((Result((a, Str)), Str)))
+	wrap_in_result = \value -> Ok(Ok(value))
+	main = \_ -> "done"
+}
 ~~~
 # EXPECTED
 NIL

@@ -16,10 +16,10 @@ KwIf LowerIdent OpGreaterThan Int String KwElse String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_expression.md:1:4:1:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:10

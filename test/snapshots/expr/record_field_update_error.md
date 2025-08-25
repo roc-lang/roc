@@ -23,13 +23,12 @@ OpenCurly LowerIdent OpAmpersand LowerIdent OpColon Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person
+<malformed>
+age: 31
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:11
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
-UNDEFINED VARIABLE - record_field_update_error.md:1:3:1:9
-MALFORMED TYPE - record_field_update_error.md:1:17:1:19
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:10 to 1:10

@@ -16,10 +16,10 @@ LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+foo
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_ident_simple.md:1:1:1:4
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

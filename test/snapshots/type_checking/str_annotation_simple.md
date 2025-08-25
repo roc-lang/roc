@@ -28,7 +28,11 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+x: Str
+x = "hello"
 ~~~
 # EXPECTED
 NIL

@@ -27,7 +27,7 @@ OpenSquare OpenRound Int Comma String CloseRound Comma OpenRound Float Comma Str
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[((1, "a"), (2.5, "b"))]
 ~~~
 # EXPECTED
 NIL

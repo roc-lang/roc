@@ -20,12 +20,13 @@ KwModule UpperIdent CloseSquare UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+P<malformed>
+F
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_011.md:1:8:1:9
-PARSE ERROR - fuzz_crash_011.md:1:9:1:10
-PARSE ERROR - fuzz_crash_011.md:1:11:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:8

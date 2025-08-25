@@ -40,7 +40,9 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 5
+y = \_ -> x(1)
+y
 ~~~
 # EXPECTED
 NIL

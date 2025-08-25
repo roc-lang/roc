@@ -18,10 +18,12 @@ KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool {
+	A # Comment after expr
+} else B
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_comments_formatting.md:1:4:1:8
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

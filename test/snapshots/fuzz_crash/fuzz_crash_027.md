@@ -6,7 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 # Thnt!
-app [main!] { pf: platform "c" }
+app { pf: "c" platform [main!] }
 
 import pf.Stdout exposing [line!, e!]
 
@@ -167,7 +167,7 @@ expect {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare KwImport UpperIdent KwExposing OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent Dot OpStar CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent Comma CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly UpperIdent CloseRound OpColon OpenSquare CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg OpenRound CloseRound Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar KwMatch LowerIdent OpenCurly LowerIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent LowerIdent CloseCurly UpperIdent OpFatArrow Int String OpFatArrow Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent OpEquals Int LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound LowerIdent OpenRound KwDbg Int Comma CloseRound KwCrash MalformedString LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LowerIdent OpenSquare Comma CloseRound Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseCurly KwAs LowerIdent MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare KwImport UpperIdent KwExposing OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent Dot OpStar CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent Comma CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly UpperIdent CloseRound OpColon OpenSquare CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg OpenRound CloseRound Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar KwMatch LowerIdent OpenCurly LowerIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent LowerIdent CloseCurly UpperIdent OpFatArrow Int String OpFatArrow Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent OpEquals Int LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound LowerIdent OpenRound KwDbg Int Comma CloseRound KwCrash MalformedString LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LowerIdent OpenSquare Comma CloseRound Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseCurly KwAs LowerIdent MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -335,7 +335,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lc "ane")
     (lambda
       (body
-        (if_else <89 branches>)
+        (if_else <91 branches>)
       )
       (args
         (lc "num")
@@ -358,7 +358,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             (lc "other")
             (num_literal_i32 1)
           )
-          (if_else <109 branches>)
+          (if_else <111 branches>)
         )
       )
       (args
@@ -409,71 +409,61 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Thnt!
+app { # Thnt!
+pf: ("c" platform [main]) }
+
+import pf exposing [Stdout, line, e]
+import Stdot
+import pkg exposing [S, func]<malformed>fry<malformed>
+<malformed>
+<malformed>
+import Bae exposing [Gooe]
+import Ba
+Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
+MapML((a, b, <malformed>): List() -> ((a -> b) -> List(b)))
+Foo: (Bar, Baz)
+line: (Bar, Baz, <malformed>)
+Some(a): {
+	foo: ((Ok(a), bar): g)
+}
+Ml(a): {
+	bar: Som
+}
+Soine(a): {
+	bar: Som
+}
+Maya
+<malformed>: [] #se
+
+Func(a): (Maybe(a) -> (a -> Maybe(a)))
+ane = \num -> if num 2 else 5
+
+add_one: (U64 -> U64)
+add_one = \num -> {
+	other = 1
+	if num {
+		<malformed>()
+		0
+	} else {
+		<malformed>
+		123
+		other: other
+	}
+}
+match_time = <malformed>
+empty: {  }
+empty = {  }
+
+tuple: Value((a, b, c))
+expect {
+	foo = 1 # Thio
+	blah = 1
+	blah == foo
+}
 ~~~
 # EXPECTED
-LEADING ZERO - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - fuzz_crash_027.md:40:5:40:6
-PARSE ERROR - fuzz_crash_027.md:40:7:40:8
-PARSE ERROR - fuzz_crash_027.md:40:9:40:10
-PARSE ERROR - fuzz_crash_027.md:41:1:41:2
-PARSE ERROR - fuzz_crash_027.md:122:3:122:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
-UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
-UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
-UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
-UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
-UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
-UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
-UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
-UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
-MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
-MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
-MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
-UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
-UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
-EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
-UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
-UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
-UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
-UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
-UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
-UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
-UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
-UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
-UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
-UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
-UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
-UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
-UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
-UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
-INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
+NIL
 # PROBLEMS
 **Parse Error**
 at 10:29 to 10:29

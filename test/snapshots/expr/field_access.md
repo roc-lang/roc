@@ -19,10 +19,10 @@ LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person | .name
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - field_access.md:1:1:1:7
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:11

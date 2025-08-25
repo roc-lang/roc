@@ -38,11 +38,23 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [
+	a!,
+	b!,
+] packages {a, ((
+	"a",
+	b,
+): "b", <malformed>)}
+
+a<malformed>!Str
+<malformed>
+Str
+b<malformed>!Str
+<malformed>
+Str
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - package.md:3:3:3:5
-EXPOSED BUT NOT DEFINED - package.md:4:3:4:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 9:2 to 9:2

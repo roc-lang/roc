@@ -39,20 +39,12 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString UpperIdent OpenRoun
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Fli / (main | .roc)
+<malformed>
+Pair((a, b + <malformed>()))
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-MISSING HEADER - fuzz_crash_021.md:1:1:1:4
-PARSE ERROR - fuzz_crash_021.md:1:4:1:5
-PARSE ERROR - fuzz_crash_021.md:1:5:1:9
-PARSE ERROR - fuzz_crash_021.md:1:9:1:13
-PARSE ERROR - fuzz_crash_021.md:1:13:1:14
-PARSE ERROR - fuzz_crash_021.md:1:14:1:16
-PARSE ERROR - fuzz_crash_021.md:1:16:1:16
-PARSE ERROR - fuzz_crash_021.md:3:1:3:5
-PARSE ERROR - fuzz_crash_021.md:3:15:3:15
-MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:13 to 1:13

@@ -28,10 +28,14 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+x: U8
+x = 500
 ~~~
 # EXPECTED
-NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:4:5:4:8
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

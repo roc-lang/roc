@@ -56,14 +56,23 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	red, green, blue
+]
+
+
+import Color<malformed>
+red: Color
+red = Red
+
+blue: Color
+blue = Blue
+
+green: Color
+green = Green
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_wildcard.md:3:13:3:15
-MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
-UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
-UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
-UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:14 to 3:14

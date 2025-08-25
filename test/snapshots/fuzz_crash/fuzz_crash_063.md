@@ -22,11 +22,15 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	<malformed>,
+]
+
+0
+<malformed> | .a
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_063.md:1:8:1:9
-PARSE ERROR - fuzz_crash_063.md:1:13:1:13
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:8 to 1:8

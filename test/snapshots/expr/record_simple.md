@@ -27,7 +27,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+name: (("Alice", age): 30)
 ~~~
 # EXPECTED
 NIL

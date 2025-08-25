@@ -76,10 +76,25 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Int LowerIdent OpAssign Int 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Top-level variables
+x = 5
+y = 10
+
+# Function that shadows outer variable
+outerFunc = \_ -> {
+	x = 20 # Should shadow top-level x
+	innerResult = {
+		z = x + y # x should resolve to 20, y to 10
+		z + 1
+	}
+	innerResult: innerResult
+}
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 8:13 to 8:17

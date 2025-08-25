@@ -57,7 +57,12 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	stringify,
+]
+
+stringify: ((a -> Str where a() | .to_str: a) -> Str)
+stringify = \value -> value | .to_str()
 ~~~
 # EXPECTED
 NIL

@@ -16,10 +16,10 @@ KwIf LowerIdent Int KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool 1 else 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_minimal.md:1:4:1:8
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

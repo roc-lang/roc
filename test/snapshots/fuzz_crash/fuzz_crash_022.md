@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { |f: platform "c" }
+app { |f: "c" platform [main!] }
 
 UserId : U64
 
@@ -16,11 +16,15 @@ getUser = |id| if (id > 1!) "big" else "l"
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly OpBar LowerIdent OpColon KwPlatform String CloseCurly UpperIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwIf OpenRound LowerIdent OpGreaterThan Int OpBang CloseRound String KwElse String OpUnaryMinus LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
+KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly UpperIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwIf OpenRound LowerIdent OpGreaterThan Int OpBang CloseRound String KwElse String OpUnaryMinus LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
   (malformed malformed:expr_unexpected_token)
+  (list_literal
+    (lc "main")
+  )
+  (unary_not <unary>)
   (malformed malformed:expr_unexpected_token)
   (binop_colon
     (uc "UserId")
@@ -64,35 +68,37 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly OpBar LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app {  }
+
+<malformed>[main]<malformed>!
+<malformed>
+UserId: U64
+
+ser: (UserId -> Str)
+getUser = \id -> if id > 1 <malformed>!
+"big"
+<malformed>
+
+"l" - ain
+(<malformed>! | _) | getUser(900)
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_022.md:1:1:1:4
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
-PARSE ERROR - fuzz_crash_022.md:1:28:1:29
-PARSE ERROR - fuzz_crash_022.md:1:29:1:30
-PARSE ERROR - fuzz_crash_022.md:1:30:1:31
-PARSE ERROR - fuzz_crash_022.md:1:32:1:33
-PARSE ERROR - fuzz_crash_022.md:6:27:6:28
-PARSE ERROR - fuzz_crash_022.md:8:1:8:2
-MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
-INVALID IF CONDITION - :0:0:0:0
-UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
+NIL
 # PROBLEMS
 **Expected Package or Platform Name**
-at 1:1 to 1:15
+at 1:1 to 1:7
 
 **Expected Close Curly Brace**
-at 1:1 to 1:15
-
-**No Platform**
-at 1:1 to 1:15
+at 1:1 to 1:7
 
 **Parse Error**
-at 1:19 to 1:19
+at 1:15 to 1:15
 
 **Parse Error**
-at 1:28 to 1:28
+at 1:24 to 1:29
+
+**Parse Error**
+at 1:30 to 1:30
 
 **Parse Error**
 at 1:32 to 1:32
@@ -113,7 +119,13 @@ at 6:35 to 6:35
 at 8:7 to 8:7
 
 **Unsupported Node**
-at 1:28 to 1:28
+at 1:15 to 1:15
+
+**Unsupported Node**
+at 1:24 to 1:30
+
+**Unsupported Node**
+at 1:30 to 1:30
 
 **Unsupported Node**
 at 1:32 to 1:32
@@ -134,6 +146,8 @@ at 8:5 to 8:7
 ~~~clojure
 (Expr.block
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.unary_not)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)

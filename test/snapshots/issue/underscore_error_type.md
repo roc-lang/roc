@@ -149,15 +149,33 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+BadType := _
+
+foo: BadType
+foo = 42
+
+BadList := List(_)
+bar: BadList
+bar = [(1, 2, 3)]
+BadRecord := {
+	field: ((_, other): U32)
+}
+baz: BadRecord
+baz = {
+	field: (("hi", other): 5)
+}
+BadFunction := _ -> _
+qux: BadFunction
+qux = \x -> x
+BadTuple := (_, U32)
+quux: BadTuple
+quux = ("hello", 42)
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:8:17:8:17
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:13

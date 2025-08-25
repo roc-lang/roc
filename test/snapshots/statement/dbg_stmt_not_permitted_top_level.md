@@ -28,10 +28,16 @@ KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign Trip
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+<malformed>"foo"
+
+foo = ...
 ~~~
 # EXPECTED
-INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 4:1 to 4:1

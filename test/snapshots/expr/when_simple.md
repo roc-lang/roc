@@ -18,10 +18,10 @@ LowerIdent LowerIdent LowerIdent UpperIdent OpenRound LowerIdent CloseRound OpAr
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_simple.md:1:1:1:5
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

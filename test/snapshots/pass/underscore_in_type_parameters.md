@@ -85,15 +85,26 @@ KwModule OpenSquare CloseSquare UpperIdent OpenRound Underscore CloseRound OpCol
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Type with underscore in parameter position
+MyType(_): Str
+
+# Type with underscore and regular parameter
+MyType2((_, b)): b
+
+# Type with parameters where underscore comes second
+MyType3((a, _)): a
+
+# More complex type with underscore parameter
+ComplexType((_, b)): {
+	field: b
+}
+MultiType((_, _, c)): c
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:4:8:4:9
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:7:9:7:10
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:10:12:10:13
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:13:13:13:14
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
+NIL
 # PROBLEMS
 **Pattern in Expression Context**
 at 4:8 to 4:9

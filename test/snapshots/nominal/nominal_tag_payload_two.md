@@ -103,7 +103,23 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	MyResult, ok, is_ok
+]
+
+
+MyResult((ok, err)) := [(Ok(ok), Err(err))]
+ok: (ok -> MyResult((ok, _)))
+ok = \a -> MyResult.Ok(a)
+is_ok: (MyResult((_ok, _err)) -> Bool)
+is_ok = \result -> when result is {
+	MyResult.Ok(_)
+	<malformed>
+	Bool.True
+	MyResult.Err(_)
+	<malformed>
+	Bool.False
+} -> <malformed>
 ~~~
 # EXPECTED
 NIL

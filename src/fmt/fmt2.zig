@@ -131,23 +131,18 @@ const Formatter = struct {
                 _ = try self.flushCommentsBefore(a.region);
                 try self.pushAll("app");
 
-                // Format provides
-                try self.formatExposedList(a.provides);
-
-                // Format platform
+                // Format packages (which now includes platform with provides)
                 try self.pushAll(" { ");
-                try self.formatNode(a.platform_idx);
-
-                // Format packages if present
                 const packages_idx = a.packages;
                 if (@intFromEnum(packages_idx) != 0) {
-                    try self.pushAll(", ");
                     var it = self.ast.node_slices.nodes(&packages_idx);
+                    var first = true;
                     while (it.next()) |pkg| {
+                        if (!first) try self.pushAll(", ");
+                        first = false;
                         try self.formatNode(pkg);
                     }
                 }
-
                 try self.pushAll(" }");
             },
             .package => |p| {
@@ -413,6 +408,7 @@ const Formatter = struct {
             .binop_or => try self.formatBinOp(node_idx, " || "),
             .binop_as => try self.formatBinOp(node_idx, " as "),
             .binop_where => try self.formatBinOp(node_idx, " where "),
+            .binop_platform => try self.formatBinOp(node_idx, " platform "),
             .binop_pipe => try self.formatBinOp(node_idx, " | "),
 
             // Identifiers
@@ -520,6 +516,59 @@ const Formatter = struct {
 
         const lhs = binop.lhs;
         const rhs = binop.rhs;
+        
+        // Special case for binop_platform: format as "string" platform [provides]
+        if (node.tag == .binop_platform) {
+            try self.formatNode(lhs); // The platform string
+            try self.pushAll(" platform ");
+            
+            // The RHS is a block containing the provides list - format it as a list
+            const rhs_node = self.getNode(rhs);
+            if (rhs_node.tag == .block) {
+                // Format as a list with square brackets
+                const multiline = self.collectionIsMultiline(rhs);
+                
+                try self.pushAll("[");
+                
+                if (multiline) {
+                    self.curr_indent += 1;
+                }
+                
+                var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
+                var first_elem = true;
+                while (it.next()) |elem| {
+                    if (multiline) {
+                        if (!first_elem) {
+                            try self.push(',');
+                        }
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    } else {
+                        if (!first_elem) {
+                            try self.pushAll(", ");
+                        }
+                    }
+                    first_elem = false;
+                    try self.formatNode(elem);
+                }
+                
+                if (multiline) {
+                    // Preserve trailing comma if it exists
+                    if (self.hasTrailingComma(rhs)) {
+                        try self.push(',');
+                    }
+                    self.curr_indent -= 1;
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                }
+                
+                try self.pushAll("]");
+            } else {
+                // Shouldn't happen but fall back to regular formatting
+                try self.formatNode(rhs);
+            }
+            return;
+        }
 
         // Special case: binop_pipe with uppercase/lowercase identifiers is actually a qualified name
         // like Bool.True being parsed as (binop_pipe (uc "Bool") (uc "True"))
@@ -1379,46 +1428,47 @@ const Formatter = struct {
     fn formatStringInterpolation(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // String interpolation stores nodes that get concatenated
-        // The parser alternates between string literals and interpolated expressions
-        // TODO: This needs better handling to preserve the exact formatting
-        // For now, just output the raw source
-        const start = node.start.offset;
-        var end = start;
-
-        // Find the closing quote
-        if (end < self.source.len and self.source[end] == '"') {
-            end += 1; // Skip opening quote
-            var depth: u32 = 1;
-            while (end < self.source.len and depth > 0) {
-                if (self.source[end] == '"' and (end == 0 or self.source[end - 1] != '\\')) {
-                    depth -= 1;
-                } else if (self.source[end] == '$' and end + 1 < self.source.len and self.source[end + 1] == '{') {
-                    // Entering interpolation
-                    end += 2;
-                    // Skip to closing brace
-                    var brace_depth: u32 = 1;
-                    while (end < self.source.len and brace_depth > 0) {
-                        if (self.source[end] == '{') {
-                            brace_depth += 1;
-                        } else if (self.source[end] == '}') {
-                            brace_depth -= 1;
+        // String interpolation stores alternating string parts and expressions in nodes
+        try self.push('"');
+        
+        var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        var is_string_part = true;
+        
+        while (iter.next()) |part_idx| {
+            const part = self.getNode(part_idx);
+            
+            if (is_string_part) {
+                // This is a string literal part
+                if (part.tag == .str_literal_small or part.tag == .str_literal_big) {
+                    // Extract the string content without quotes
+                    const start = part.start.offset;
+                    if (start < self.source.len and self.source[start] == '"') {
+                        // Skip opening quote
+                        var pos = start + 1;
+                        while (pos < self.source.len and self.source[pos] != '"') {
+                            if (self.source[pos] == '\\' and pos + 1 < self.source.len) {
+                                // Output escape sequence
+                                try self.push(self.source[pos]);
+                                try self.push(self.source[pos + 1]);
+                                pos += 2;
+                            } else {
+                                try self.push(self.source[pos]);
+                                pos += 1;
+                            }
                         }
-                        end += 1;
                     }
-                    continue;
                 }
-                end += 1;
+            } else {
+                // This is an interpolated expression
+                try self.pushAll("${");
+                try self.formatNode(part_idx);
+                try self.push('}');
             }
+            
+            is_string_part = !is_string_part;
         }
-
-        // Output the interpolated string as-is from source
-        if (end > start) {
-            try self.pushAll(self.source[start..end]);
-        }
-
-        // Update position past this interpolated string
-        self.last_formatted_pos = end;
+        
+        try self.push('"');
     }
 
     fn formatStringFromSource(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1574,6 +1624,7 @@ const Formatter = struct {
             .binop_thick_arrow => .{ .left = 1, .right = 2 },
             .binop_as => .{ .left = 3, .right = 4 },
             .binop_where => .{ .left = 1, .right = 2 },
+            .binop_platform => .{ .left = 3, .right = 4 },
             else => .{ .left = 0, .right = 0 },
         };
     }

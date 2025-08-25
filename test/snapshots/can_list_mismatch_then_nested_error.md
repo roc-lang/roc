@@ -27,11 +27,10 @@ OpenSquare Int Comma String Comma OpenSquare Int Comma String CloseSquare CloseS
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(1, "hello", [(3, "world")])]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:2:1:2
-INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:15:1:15
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:26

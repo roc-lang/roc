@@ -66,10 +66,32 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma CloseCurly OpenCurly Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "foo" # Comment after name requires {(Main, <malformed>)} main exposes  [
+	# Comment after platform keyword
+	# Comment after name
+	# Comment after requires keyword
+	# Comment after rigids open
+	# Comment after rigid member
+	# Comment after rigids close
+	# Comment after signatures open
+	<malformed>,
+]
+
+Str
+<malformed>
+{  }<malformed>
+<malformed>
+<malformed>
+[(foo, <malformed>)]
+<malformed>
+{
+	some_pkg: ("../some_pkg.roc", <malformed>)
+	<malformed>
+	[(bar, <malformed>)]
+}
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform_header_nonempty_1.md:12:4:12:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 6:3 to 6:3

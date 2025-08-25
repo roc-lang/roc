@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 # Test ellipsis placeholder
 testEllipsis : U64 -> U64
@@ -32,7 +32,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar TripleDot LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound OpenSquare CloseSquare CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar TripleDot LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound OpenSquare CloseSquare CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -129,13 +129,30 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+testEllipsis: (U64 -> U64)
+testEllipsis = \_ -> ...
+
+# Test crash statement
+testCrash: (U64 -> U64)
+testCrash = \_ -> {
+	crash "This is a crash message"
+}
+testCrashSimple: (U64 -> U64)
+testCrashSimple = \_ -> {
+	crash "oops"
+}
+main
+(<malformed>! | _) | {
+	result1 = testEllipsis(42)
+	result2 = testCrash(42)
+	result3 = testCrashSimple(42)
+	[]
+}
 ~~~
 # EXPECTED
-UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
-UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
-UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
-TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
+NIL
 # PROBLEMS
 **Parse Error**
 at 19:7 to 19:7

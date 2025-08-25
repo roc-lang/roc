@@ -18,12 +18,14 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma DoubleDot LowerIdent Clo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{ first_name, ..others }
+	<malformed>
+	Str | .len(first_name) > Str | .len(others | .last_name)
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:33:2:40
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:55:2:62
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

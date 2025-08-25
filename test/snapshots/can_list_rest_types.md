@@ -19,11 +19,19 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when numbers is {
+	[(first, <unary_double_dot>)]
+	restNums
+	<malformed>
+	<malformed>
+	restNums
+	[]
+	<malformed>
+	[]
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
-UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:15

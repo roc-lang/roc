@@ -54,10 +54,10 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+name: ((((("Alice", age): 30, active): Bool | .true, scores): [(95, 87, 92)], balance): 1250.75)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:75 to 1:76

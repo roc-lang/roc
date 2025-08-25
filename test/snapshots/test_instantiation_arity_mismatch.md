@@ -53,10 +53,13 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+identity: ((a, b) -> (a, b))
+identity = \pair -> pair
+
+identity((1, 2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:19
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 2:21 to 2:32

@@ -18,12 +18,10 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when numbers is { [<unary_double_dot>], middle, _ } -> <malformed> => ...
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:1:7:1:14
-INVALID PATTERN - :0:0:0:0
-UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:15

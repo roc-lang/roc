@@ -75,7 +75,12 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpenRou
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	deserialize,
+]
+
+deserialize: ((List(U8) -> Result((a, [DecodeErr])) where a() | .decode: List(U8)) -> Result((a, [DecodeErr])))
+deserialize = \_ -> ...
 ~~~
 # EXPECTED
 NIL

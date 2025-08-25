@@ -23,10 +23,13 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+BadType := _
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - minimal_underscore.md:1:1:1:1
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:13

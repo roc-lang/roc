@@ -19,13 +19,10 @@ OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<malformed><malformed>
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-MISSING HEADER - fuzz_crash_003.md:1:1:1:2
-PARSE ERROR - fuzz_crash_003.md:1:3:1:4
-PARSE ERROR - fuzz_crash_003.md:1:4:1:6
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:1

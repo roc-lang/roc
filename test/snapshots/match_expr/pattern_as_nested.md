@@ -19,11 +19,23 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{ name, (address: {
+		city
+	}) as addr }
+	<malformed>
+	fullPerson
+	<malformed>((fullPerson, addr, city))
+	{
+		name
+	}
+	<malformed>
+	simplePerson
+	<malformed>((simplePerson, name, "unknown"))
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_as_nested.md:1:7:1:13
-UNUSED VARIABLE - pattern_as_nested.md:2:7:2:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

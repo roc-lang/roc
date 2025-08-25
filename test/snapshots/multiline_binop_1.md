@@ -29,7 +29,7 @@ Int OpPlus Int OpStar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1 # One + 2 # Two * 3
 ~~~
 # EXPECTED
 NIL

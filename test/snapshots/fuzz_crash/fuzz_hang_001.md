@@ -20,11 +20,10 @@ Int OpenRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0()
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_hang_001.md:1:1:1:2
-PARSE ERROR - fuzz_hang_001.md:1:3:1:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:4

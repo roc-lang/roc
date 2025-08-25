@@ -16,10 +16,10 @@ LowerIdent OpBang OpenRound OpenCurly CloseCurly CloseRound OpDoubleQuestion Str
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+get_name
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -40,7 +40,13 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma LowerI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+field_with_underscores: ((
+	(
+		"underscore",
+		field123,
+	): "numbers",
+	camelCase,
+): "camel", <malformed>)
 ~~~
 # EXPECTED
 NIL

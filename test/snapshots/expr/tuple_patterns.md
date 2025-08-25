@@ -116,23 +116,12 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(((((x, y) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([(1, 2, 3)], "hello")
+
+{  }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - tuple_patterns.md:4:6:4:7
-UNUSED VARIABLE - tuple_patterns.md:4:9:4:10
-UNUSED VARIABLE - tuple_patterns.md:7:7:7:8
-UNUSED VARIABLE - tuple_patterns.md:7:10:7:11
-UNUSED VARIABLE - tuple_patterns.md:7:15:7:16
-UNUSED VARIABLE - tuple_patterns.md:7:18:7:19
-UNUSED VARIABLE - tuple_patterns.md:10:6:10:11
-UNUSED VARIABLE - tuple_patterns.md:10:13:10:19
-UNUSED VARIABLE - tuple_patterns.md:10:21:10:26
-UNUSED VARIABLE - tuple_patterns.md:13:6:13:10
-UNUSED VARIABLE - tuple_patterns.md:13:12:13:18
-UNUSED VARIABLE - tuple_patterns.md:13:20:13:27
-UNUSED VARIABLE - tuple_patterns.md:16:6:16:10
-UNUSED VARIABLE - tuple_patterns.md:16:12:16:17
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:10 to 16:19

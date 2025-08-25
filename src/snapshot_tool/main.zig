@@ -1177,7 +1177,7 @@ fn processSnapshotContent(
     try generateTokensSection2(&output, &parser, &content);
     try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
     const root_node_idx: ?AST.Node.Idx = if (parse_result) |idx| @as(AST.Node.Idx, @enumFromInt(idx)) else null;
-    try generateFormattedSection2(&output, &content, ast_ptr, &parser, root_node_idx);
+    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx);
 
     // Create a TypeStore for type inference
     var types_store = try types.Store.initCapacity(allocator, 2048, 512);
@@ -2332,7 +2332,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
     // Handle payload based on node tag
     switch (node.tag) {
         // Binops use the binop field - must list them all explicitly
-        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_pipe => {
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_platform, .binop_pipe => {
             const binop = ast.node_slices.binOp(node.payload.binop);
             try writer.writeAll("\n");
             try outputASTNodeAsSExpr(writer, ast, env, binop.lhs, indent + 1);
@@ -2648,12 +2648,13 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 }
 
 /// Generate FORMATTED section for AST2
-fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, root_node: ?AST.Node.Idx) !void {
+fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx) !void {
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    // Use the new AST2-aware formatter
-    const formatted_output = try fmt.formatAst2(output.gpa, ast, content.source, root_node);
+    // Use the new AST2-aware formatter with ident_store
+    const ident_store = env.getIdentStore();
+    const formatted_output = try fmt.formatAst2(output.gpa, ast, content.source, ident_store, root_node);
     defer output.gpa.free(formatted_output);
 
     // Always use the formatted output
@@ -2672,7 +2673,6 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
 
 // The old Formatter2 struct has been moved to fmt2.zig as the production formatter
 // and is now accessed through fmt.formatSource()
-
 
 /// Generate CANONICALIZE section for CIR2
 fn generateCanonicalizeSection2(
@@ -3025,10 +3025,21 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
         if (cir.ast.header) |header| {
             switch (header) {
                 .app => |app| {
-                    // App headers expose functions
-                    var provides_iter = cir.ast.node_slices.nodes(&app.provides);
-
-                    while (provides_iter.next()) |node_idx| {
+                    // App headers expose functions - now stored in the platform binop
+                    // Find the platform field in packages
+                    var packages_iter = cir.ast.node_slices.nodes(&app.packages);
+                    while (packages_iter.next()) |field_idx| {
+                        const field_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_idx))));
+                        if (field_node.tag == .binop_colon) {
+                            const field_binop = cir.ast.node_slices.binOp(field_node.payload.binop);
+                            const rhs_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_binop.rhs))));
+                            if (rhs_node.tag == .binop_platform) {
+                                // This is the platform field with provides list
+                                const platform_binop = cir.ast.node_slices.binOp(rhs_node.payload.binop);
+                                const provides_block = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(platform_binop.rhs))));
+                                if (provides_block.tag == .block) {
+                                    var provides_iter = cir.ast.node_slices.nodes(&provides_block.payload.nodes);
+                                    while (provides_iter.next()) |node_idx| {
                         const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
                         // After canonicalization, nodes might have been converted to expressions
                         // Check the tag to see what we have
@@ -3063,6 +3074,10 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
 
                             const type_str = type_writer.get();
                             try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+                        }
+                    }
+                                }
+                            }
                         }
                     }
                 },

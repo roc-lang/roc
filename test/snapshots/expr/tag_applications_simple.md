@@ -77,10 +77,12 @@ OpenSquare UpperIdent OpenRound Int CloseRound Comma UpperIdent Comma UpperIdent
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[
+	(Some(42), None, Ok("hello"), Err("oops"), Just(100), Nothing, Left(1), Right(2), Some(Ok(Just(42))), Result(Ok(Some(True))), <malformed>),
+]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 12:1 to 12:1

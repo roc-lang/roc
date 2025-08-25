@@ -245,35 +245,25 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Parser, Config]
+import http exposing [Client, Auth, HttpAuth]
+import utils exposing [String, Format, padLeft]
+parseConfig: (Config.Settings -> Str)
+parseConfig = \settings -> Config | .toString(settings)
+authenticate: (Str -> (Str -> HttpAuth.Token))
+authenticate = \(user, pass) -> HttpAuth | .login((user, pass))
+processData: ((Config.Parser) | Advanced -> (Str -> Result((Str, (Config.Parser) | Error))))
+processData = \(advancedConfig, input) -> ((Config.Parser) | Advanced) | .parseWith((advancedConfig, input))
+formatOutput: (Str -> Str)
+formatOutput = \text -> padLeft((text, Config | .defaultPadding))
+validateAuth: (HttpAuth.Credentials -> Result((HttpAuth.Token, HttpAuth.Error)))
+validateAuth = \creds -> HttpAuth | .validate(creds)
 ~~~
 # EXPECTED
-PARSE ERROR - can_import_nested_modules.md:3:19:3:26
-PARSE ERROR - can_import_nested_modules.md:4:19:4:24
-PARSE ERROR - can_import_nested_modules.md:4:25:4:27
-PARSE ERROR - can_import_nested_modules.md:5:1:5:7
-PARSE ERROR - can_import_nested_modules.md:5:8:5:13
-PARSE ERROR - can_import_nested_modules.md:5:13:5:20
-PARSE ERROR - can_import_nested_modules.md:5:20:5:27
-PARSE ERROR - can_import_nested_modules.md:5:28:5:36
-PARSE ERROR - can_import_nested_modules.md:5:37:5:38
-PARSE ERROR - can_import_nested_modules.md:5:38:5:45
-PARSE ERROR - can_import_nested_modules.md:5:45:5:46
-MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
-MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
-MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
-MODULE NOT IMPORTED - can_import_nested_modules.md:12:28:12:42
-UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
-MODULE NOT IMPORTED - can_import_nested_modules.md:16:15:16:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:16:58:16:77
-UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:16:25:36
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
-UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:26

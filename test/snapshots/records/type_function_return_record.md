@@ -16,7 +16,7 @@ LowerIdent OpBang OpColon UpperIdent Comma UpperIdent OpFatArrow OpenCurly Lower
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+create_user
 ~~~
 # EXPECTED
 NIL

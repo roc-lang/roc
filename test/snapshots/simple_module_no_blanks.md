@@ -35,10 +35,17 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	hello!, world
+]
+
+import pf exposing [Stdout]
+hello<malformed>!
+Stdout | .line"Hello"!
+world = "World"
 ~~~
 # EXPECTED
-MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:8 to 3:8

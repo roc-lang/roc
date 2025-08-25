@@ -32,7 +32,7 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\{ name: name, age: age } -> "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # EXPECTED
 NIL

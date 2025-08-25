@@ -48,7 +48,15 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+foo = \num -> {
+	<malformed>
+	num | .to_str()
+	<malformed>(num)
+}
 ~~~
 # EXPECTED
 NIL

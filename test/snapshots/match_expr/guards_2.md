@@ -20,37 +20,16 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when value is {
+	[(first, <unary_double_dot>)]
+	rest
+	<malformed>
+	if List | .len(rest) > 5 => "long list starting with ${Num.toStr first}" [(x, y)]
+	if x == y => "pair of equal values: ${Num.toStr x}" _ => "other"
+} -> <malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - guards_2.md:2:25:2:25
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:47:2:49
-IF WITHOUT ELSE - guards_2.md:2:25:2:27
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:51:2:75
-PARSE ERROR - guards_2.md:2:75:2:75
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:75:2:77
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:77:2:80
-PARSE ERROR - guards_2.md:2:92:2:92
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:92:2:93
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:2:93:2:93
-PARSE ERROR - guards_2.md:2:93:2:93
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:2:93:2:94
-PARSE ERROR - guards_2.md:3:12:3:12
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:22:3:24
-IF WITHOUT ELSE - guards_2.md:3:12:3:14
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:26:3:48
-PARSE ERROR - guards_2.md:3:48:3:48
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:48:3:50
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:50:3:53
-PARSE ERROR - guards_2.md:3:61:3:61
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:61:3:62
-UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
-PARSE ERROR - guards_2.md:3:62:3:62
-UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
-UNDEFINED VARIABLE - guards_2.md:1:7:1:12
-UNRECOGNIZED SYNTAX - guards_2.md:2:25:2:51
-UNUSED VARIABLE - guards_2.md:2:6:2:11
-UNUSED VARIABLE - guards_2.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

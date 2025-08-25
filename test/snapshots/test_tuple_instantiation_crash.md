@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 # A polymorphic function that expects a tuple
 swap : (a, b) -> (b, a)
@@ -17,7 +17,7 @@ main = swap(1, 2)
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -65,10 +65,17 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+swap: ((a, b) -> (b, a))
+swap = \(x, y) -> (y, x)
+
+# Call it with two separate arguments instead of a tuple
+# This should trigger instantiation and then crash on error reporting
+main = swap((1, 2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:12
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:13 to 4:24

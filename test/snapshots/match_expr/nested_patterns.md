@@ -21,11 +21,29 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenCurly LowerIdent OpColon O
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when data is {
+	Container({
+		items: [(First(x), <unary_double_dot>)]
+		rest
+		<malformed>
+	})
+	<malformed>
+	x + List | .len(rest)
+	Container({
+		items: []
+	})
+	<malformed>
+	0
+	Wrapper([(Tag(value), Other(y))])
+	<malformed>
+	value + y
+	Simple(x)
+	<malformed>
+	x
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
-UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:12

@@ -16,10 +16,10 @@ OpBang LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+blah!
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_not.md:1:2:1:6
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

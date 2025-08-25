@@ -22,10 +22,10 @@ OpenSquare Int Comma String Comma Float CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(1, "hello", 3.14)]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_heterogeneous.md:1:2:1:2
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:18

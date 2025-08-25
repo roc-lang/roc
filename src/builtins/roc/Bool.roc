@@ -32,7 +32,6 @@ Eq(a) : a
         a.is_eq(a) -> Bool,
 
 ## Represents the boolean true and false using an nominal type.
-## `Bool` implements the `Eq` ability.
 Bool := [True, False]
 
 ## The boolean true value.

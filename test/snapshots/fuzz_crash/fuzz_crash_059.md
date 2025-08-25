@@ -14,34 +14,54 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 # PARSE
 ~~~clojure
 (block
+  (list_literal)
+  (block
+    (binop_colon
+      (lc "f")
+      (malformed malformed:expr_unexpected_token)
+    )
+    (str_literal_small "")
+  )
   (import
     (uc "B")
     (uc "G")
   )
-  (if_else <4 branches>)
+  (if_else <6 branches>)
   (num_literal_i32 0)
 )
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app {  }
+
+[]{
+	f: <malformed>
+	""
+}
+import B exposing [G]
+if 0 {  } else <malformed>
+0
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_059.md:2:3:2:5
-PARSE ERROR - fuzz_crash_059.md:2:6:2:7
-PARSE ERROR - fuzz_crash_059.md:2:7:2:8
-PARSE ERROR - fuzz_crash_059.md:2:8:2:9
-PARSE ERROR - fuzz_crash_059.md:2:9:2:13
-PARSE ERROR - fuzz_crash_059.md:2:13:2:14
-PARSE ERROR - fuzz_crash_059.md:2:14:2:15
-PARSE ERROR - fuzz_crash_059.md:2:15:2:16
-MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
+NIL
 # PROBLEMS
+**Expected Open Curly Brace**
+at 1:1 to 1:4
+
+**Parse Error**
+at 1:9 to 1:9
+
 **Parse Error**
 at 2:3 to 2:7
 
 **Parse Error**
 at 2:13 to 2:13
+
+**Unsupported Node**
+at 1:4 to 1:5
+
+**Unsupported Node**
+at 1:9 to 1:9
 
 **Unsupported Node**
 at 1:20 to 2:2
@@ -52,6 +72,14 @@ at 2:13 to 2:13
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
+  (Expr.block
+    (Expr.binop_colon
+      (Expr.lookup "f")
+      (Expr.malformed)
+    )
+    (Expr.str_literal_small)
+  )
   (Expr.malformed)
   (Expr.if_else)
   (Expr.num_literal_i32 0)

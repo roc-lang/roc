@@ -117,13 +117,16 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent C
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
+multi_arg_fn: (a -> (b -> (a -> (c -> (a -> (d -> (a -> (e -> (a, b, c, d, e)))))))))
+multi_arg_fn = \(x1, x2, x3, x4, x5, x6, x7, x8) -> (x1, x2, x4, x6, x8)
+result = multi_arg_fn((42, "hello", "world", 1.5, 3.14, [(1, 2)], True, "done", <malformed>))
 ~~~
 # EXPECTED
-UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:25:5:27
-UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:33:5:35
-UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:41:5:43
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 19:1 to 19:1

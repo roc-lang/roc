@@ -19,14 +19,17 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when numbers is {
+	[]
+	<malformed>
+	acc
+	[(first, <unary_double_dot>)]
+	<malformed>
+	0
+} -> <malformed>
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
-UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
-UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
-UNUSED VARIABLE - list_patterns.md:3:6:3:11
-UNUSED VARIABLE - list_patterns.md:3:15:3:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:15

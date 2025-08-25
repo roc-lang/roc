@@ -21,12 +21,10 @@ MalformedString LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRoun
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:2:2:2:11
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:3:3:3:4
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_3.md:4:3:4:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:1

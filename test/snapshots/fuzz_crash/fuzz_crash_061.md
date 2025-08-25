@@ -19,13 +19,14 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform <malformed> requires n: 0 exposes  [
+	<malformed>,
+]
+
+[]
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
-PARSE ERROR - fuzz_crash_061.md:2:11:2:12
-PARSE ERROR - fuzz_crash_061.md:2:16:2:22
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:9 to 1:9

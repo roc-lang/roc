@@ -16,7 +16,7 @@ KwReturn UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<ret>
 ~~~
 # EXPECTED
 NIL

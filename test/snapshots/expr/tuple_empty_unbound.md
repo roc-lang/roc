@@ -16,10 +16,10 @@ OpenRound CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+()
 ~~~
 # EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:2

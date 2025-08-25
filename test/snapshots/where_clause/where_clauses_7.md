@@ -91,11 +91,15 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Hash,
+]
+
+Hash((a, hasher)): ((a # After var where a() | .hash: hasher) -> hasher, hasher() | Hasher)
+Decode(a): (a where a() | .decode(List(U8) -> (<malformed> -> a)))
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:3:1:10:26
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
+NIL
 # PROBLEMS
 **Parse Error**
 at 16:3 to 16:3

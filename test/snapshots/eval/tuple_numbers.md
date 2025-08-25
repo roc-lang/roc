@@ -16,7 +16,7 @@ OpenRound Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1
 ~~~
 # EXPECTED
 NIL

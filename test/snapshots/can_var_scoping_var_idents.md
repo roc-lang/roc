@@ -60,7 +60,18 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Function showing var vs regular identifier independence
+testFunc = \input -> {
+	sum = input # Regular identifier
+	var sum_ = input * 2 # Var with underscore - should not conflict
+	
+
+sum_ = sum_ + sum # Reassign var - should work
+	sum + sum_ # Both should be accessible
+}
 ~~~
 # EXPECTED
 NIL

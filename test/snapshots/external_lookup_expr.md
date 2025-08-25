@@ -19,10 +19,10 @@ UpperIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Json | .utf8
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:9

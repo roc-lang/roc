@@ -52,11 +52,15 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 5
+y = \_ -> {
+	x = 10
+	x: x
+}({  })
+y
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - let_shadows_capture.md:4:9:4:10
-UNUSED VARIABLE - let_shadows_capture.md:2:5:2:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:10 to 3:14

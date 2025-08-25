@@ -55,10 +55,16 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSq
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	decodeThings,
+]
+
+import Decode exposing [Decode]
+decodeThings: (List(List(U8)) -> List(a) where a() | Decode)
+decodeThings = ...
 ~~~
 # EXPECTED
-MODULE NOT FOUND - where_clauses_4.md:3:1:3:32
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:31

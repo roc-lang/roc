@@ -16,6 +16,14 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 # PARSE
 ~~~clojure
 (block
+  (list_literal)
+  (block
+    (binop_colon
+      (lc "f")
+      (malformed malformed:expr_unexpected_token)
+    )
+    (str_literal_small "")
+  )
   (block
     (block
       (num_literal_i32 0)
@@ -26,22 +34,45 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app {  }
+
+[]{
+	f: <malformed>
+	""
+}
+{
+	{
+		0
+	}
+}
+""
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_044.md:1:20:1:21
-PARSE ERROR - fuzz_crash_044.md:1:21:1:22
-PARSE ERROR - fuzz_crash_044.md:1:22:1:23
-PARSE ERROR - fuzz_crash_044.md:2:1:2:2
-PARSE ERROR - fuzz_crash_044.md:2:2:2:3
-PARSE ERROR - fuzz_crash_044.md:4:1:4:2
-PARSE ERROR - fuzz_crash_044.md:4:2:4:2
-PARSE ERROR - fuzz_crash_044.md:4:2:4:3
-# PROBLEMS
 NIL
+# PROBLEMS
+**Expected Open Curly Brace**
+at 1:1 to 1:4
+
+**Parse Error**
+at 1:9 to 1:9
+
+**Unsupported Node**
+at 1:4 to 1:5
+
+**Unsupported Node**
+at 1:9 to 1:9
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
+  (Expr.block
+    (Expr.binop_colon
+      (Expr.lookup "f")
+      (Expr.malformed)
+    )
+    (Expr.str_literal_small)
+  )
   (Expr.block
     (Expr.block
       (Expr.num_literal_i32 0)

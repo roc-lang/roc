@@ -27,15 +27,15 @@ LowerIdent OpenSquare CloseSquare LowerIdent LowerIdent OpAssign MalformedSingle
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+mule
+[]
+
+#el
+vavar
+t = <malformed>
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_031.md:1:1:1:5
-PARSE ERROR - fuzz_crash_031.md:1:6:1:7
-PARSE ERROR - fuzz_crash_031.md:1:7:1:8
-PARSE ERROR - fuzz_crash_031.md:4:1:4:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
-UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 4:10 to 4:10

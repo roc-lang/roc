@@ -22,10 +22,10 @@ LowerIdent Dot LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(person | .address) | .street
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_chained_access.md:1:1:1:7
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:21

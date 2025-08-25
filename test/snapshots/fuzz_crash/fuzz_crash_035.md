@@ -19,10 +19,13 @@ KwModule OpenSquare CloseSquare OpenCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+{
+}
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_035.md:1:9:1:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:9 to 2:2

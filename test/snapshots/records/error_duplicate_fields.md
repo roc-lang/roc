@@ -45,11 +45,10 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+name: ((((("Alice", age): 30, name): "Bob", email): "alice@example.com", age): 25)
 ~~~
 # EXPECTED
-DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:27:1:31
-DUPLICATE RECORD FIELD - error_duplicate_fields.md:1:68:1:71
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:71 to 1:72

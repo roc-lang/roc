@@ -19,10 +19,17 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when isReady is {
+	True
+	<malformed>
+	"ready to go!"
+	False
+	<malformed>
+	"not ready yet"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - boolean_patterns.md:1:7:1:14
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:15

@@ -20,10 +20,20 @@ KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatA
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when color is {
+	(Blue.Green) | Red
+	<malformed>
+	1
+	Black
+	<malformed>
+	2
+	White
+	<malformed>
+	3
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

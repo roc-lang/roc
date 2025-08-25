@@ -19,10 +19,10 @@ Int OpPlus OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1 + <malformed>
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:4 to 1:4

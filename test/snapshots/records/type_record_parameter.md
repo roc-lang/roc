@@ -45,7 +45,9 @@ LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpCo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+process_things: ({
+	name: (((Str, age): U32, thing): a)
+} -> ((a -> Str) -> Str))
 ~~~
 # EXPECTED
 NIL

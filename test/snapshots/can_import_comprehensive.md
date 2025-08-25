@@ -135,12 +135,40 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json]
+import http exposing [Client, Http, get, post]
+import utils exposing [String, Str]
+
+main = {
+	client = Http | .get
+	parser = Json | .utf8
+	helper = Str | .trim
+	
+
+# Test direct module access
+result1 = Json | .parse
+	
+
+# Test aliased module access
+result2 = Http | .post
+	
+
+# Test exposed items (should work without module prefix)
+result3 = get
+	result4 = post
+	
+
+# Test multiple qualified access
+combined = Str | .concat(
+
+(client, parser, helper, result1, result2, result3, result4, combined, <malformed>))
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:17
-MODULE NOT FOUND - can_import_comprehensive.md:4:1:4:48
-MODULE NOT FOUND - can_import_comprehensive.md:5:1:5:27
+NIL
 # PROBLEMS
 **Parse Error**
 at 34:5 to 34:5

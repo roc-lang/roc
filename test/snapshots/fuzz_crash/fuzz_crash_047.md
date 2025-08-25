@@ -47,7 +47,16 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	person, updated
+]
+
+
+person = {
+	name: (("Alice", age): 30)
+}
+updated = { ..person }
+age: 31<malformed>
 ~~~
 # EXPECTED
 NIL

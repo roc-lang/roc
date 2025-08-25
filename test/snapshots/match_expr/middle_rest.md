@@ -21,11 +21,10 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when items is { [(first, <unary_double_dot>)], last, <malformed>, <malformed>, first + last, [(a, b, <unary_double_dot>)], middle, (x, y) } -> <malformed> => ((a + b) + x) + y
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
-UNUSED VARIABLE - middle_rest.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

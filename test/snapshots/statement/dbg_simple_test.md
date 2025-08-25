@@ -35,7 +35,14 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	test,
+]
+
+test = {
+	x = 42
+	<malformed>(x)
+}
 ~~~
 # EXPECTED
 NIL

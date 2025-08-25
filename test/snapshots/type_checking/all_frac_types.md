@@ -50,7 +50,17 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+a: F32
+a = 3.14
+
+b: F64
+b = 2.71828
+
+c: Dec
+c = 123.456
 ~~~
 # EXPECTED
 NIL

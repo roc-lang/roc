@@ -42,10 +42,17 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	red,
+]
+
+import Color
+
+red: Color.RGB
+red = (Color.RGB) | Red
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:13

@@ -18,11 +18,14 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{ name, age }
+	<malformed>
+	name
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
-UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

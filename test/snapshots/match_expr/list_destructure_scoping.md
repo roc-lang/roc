@@ -19,10 +19,17 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when list is {
+	[first]
+	<malformed>
+	first
+	[(first, second)]
+	<malformed>
+	first + second
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_destructure_scoping.md:1:7:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:12

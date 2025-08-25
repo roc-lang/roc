@@ -123,7 +123,6 @@ const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
 const Closure = CIR.Closure;
-const Ability = CIR.Ability;
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization

@@ -29,10 +29,13 @@ KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+{ name, (age, email) } = person
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:21

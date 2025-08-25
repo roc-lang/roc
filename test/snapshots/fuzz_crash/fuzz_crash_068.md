@@ -20,14 +20,14 @@ KwModule OpenSquare CloseSquare OpenRound OpenCurly Int CloseCurly CloseRound ~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+{
+	0
+}
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_068.md:1:9:1:10
-PARSE ERROR - fuzz_crash_068.md:1:10:1:11
-PARSE ERROR - fuzz_crash_068.md:1:11:1:12
-PARSE ERROR - fuzz_crash_068.md:1:12:1:13
-PARSE ERROR - fuzz_crash_068.md:1:13:1:14
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

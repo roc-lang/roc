@@ -21,11 +21,23 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when Answer is {
+	Answer
+	<malformed>
+	1
+	Zero
+	<malformed>
+	"hello"
+	Greeting
+	<malformed>
+	3
+	10
+	<malformed>
+	4
+} -> <malformed>
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
-INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

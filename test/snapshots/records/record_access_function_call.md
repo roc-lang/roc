@@ -22,10 +22,10 @@ OpenRound LowerIdent Dot LowerIdent CloseRound OpenRound Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person | .transform(42)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

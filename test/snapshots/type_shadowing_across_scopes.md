@@ -81,16 +81,20 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Result, processData
+]
+
+
+Result((a, b)): [(Ok(a), Err(b))]
+processData: (Str -> Str)
+processData = \data -> "processed"
+InnerModule: {
+	Result: [(Success, Failure)]
+}
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
-PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
-PARSE ERROR - type_shadowing_across_scopes.md:11:31:11:32
-PARSE ERROR - type_shadowing_across_scopes.md:12:1:12:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
-MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
-UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:16 to 4:1

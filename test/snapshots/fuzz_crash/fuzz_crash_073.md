@@ -18,13 +18,12 @@ KwModule OpenSquare CloseSquare OpBang Int Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+0 | .t!
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
-PARSE ERROR - fuzz_crash_073.md:1:9:1:10
-PARSE ERROR - fuzz_crash_073.md:1:10:1:11
-PARSE ERROR - fuzz_crash_073.md:1:12:1:14
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

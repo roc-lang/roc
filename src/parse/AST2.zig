@@ -385,6 +385,7 @@ pub fn region(
         .binop_thin_arrow,
         .binop_and,
         .binop_or,
+        .binop_platform,
         .binop_pipe,
         => {
             const binop = self.binOp(idx);
@@ -1193,6 +1194,7 @@ pub const Node = struct {
         binop_or, //               or
         binop_as, //               as
         binop_where, //            where (for type constraints)
+        binop_platform, //         platform (for app headers)
         binop_pipe, //             | for pattern alternatives (maybe we should replace this with `or`, not sure)
 
         // Identifiers, possibly with modifiers
@@ -1272,6 +1274,7 @@ pub const Node = struct {
                 .binop_or,
                 .binop_as,
                 .binop_where,
+                .binop_platform,
                 .binop_pipe,
                 => true,
 
@@ -1489,9 +1492,7 @@ pub const Diagnostic = struct {
 // Module header structures
 pub const Header = union(enum) {
     app: struct {
-        provides: collections.NodeSlices(Node.Idx).Idx, // List of exposed items (as nodes)
-        platform_idx: Node.Idx, // Platform specification node
-        packages: collections.NodeSlices(Node.Idx).Idx, // List of package nodes
+        packages: collections.NodeSlices(Node.Idx).Idx, // List of package nodes including platform
         region: Position, // Start position
     },
     module: struct {

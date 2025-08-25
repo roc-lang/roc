@@ -39,16 +39,16 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	red,
+]
+
+import design exposing [Styles, Color, Encoder]<malformed>CE<malformed>
+red: CE
+red = ...
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_long_package.md:3:21:3:27
-PARSE ERROR - nominal_import_long_package.md:3:28:3:36
-PARSE ERROR - nominal_import_long_package.md:3:37:3:38
-PARSE ERROR - nominal_import_long_package.md:3:46:3:48
-PARSE ERROR - nominal_import_long_package.md:3:51:3:52
-MODULE NOT FOUND - nominal_import_long_package.md:3:1:3:21
-UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:46 to 3:46

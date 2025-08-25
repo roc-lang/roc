@@ -29,14 +29,13 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent OpenSquare Lo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json][(foo, BAR)]
 ~~~
 # EXPECTED
-PARSE ERROR - stmt_import.md:3:18:3:19
-PARSE ERROR - stmt_import.md:3:19:3:22
-PARSE ERROR - stmt_import.md:3:22:3:23
-PARSE ERROR - stmt_import.md:3:27:3:28
-MODULE NOT FOUND - stmt_import.md:3:1:3:17
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:17

@@ -65,7 +65,12 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent Comma L
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	process,
+]
+
+process: (a -> (b -> (((c where a() | .convert: a) -> c, b() | .transform): b -> c)))
+process = ...
 ~~~
 # EXPECTED
 NIL

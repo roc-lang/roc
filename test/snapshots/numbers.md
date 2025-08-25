@@ -28,12 +28,10 @@ OpenRound Int UpperIdent Comma Int LowerIdent Comma Int UpperIdent Comma Int Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0
 ~~~
 # EXPECTED
-UPPERCASE BASE - :0:0:0:0
-UPPERCASE BASE - :0:0:0:0
-UPPERCASE BASE - :0:0:0:0
+NIL
 # PROBLEMS
 **Parse Error**
 at 2:6 to 2:6

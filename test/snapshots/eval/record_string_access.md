@@ -24,7 +24,9 @@ OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{
+	foo: "Hello"
+} | .foo
 ~~~
 # EXPECTED
 NIL

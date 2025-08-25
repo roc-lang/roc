@@ -21,11 +21,10 @@ Int OpBar ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0 | <malformed>
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_016.md:1:1:1:2
-PARSE ERROR - fuzz_crash_016.md:1:2:1:3
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:3 to 1:3

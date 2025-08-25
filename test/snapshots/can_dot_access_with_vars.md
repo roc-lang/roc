@@ -52,7 +52,9 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+list = [(1, 2, 3)]
+fn = \x -> x + 1
+list | .map(fn)
 ~~~
 # EXPECTED
 NIL

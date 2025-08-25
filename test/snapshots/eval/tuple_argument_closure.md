@@ -35,7 +35,7 @@ OpenRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\(x, y) -> x * y((1, 2))
 ~~~
 # EXPECTED
 NIL

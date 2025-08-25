@@ -20,11 +20,22 @@ KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when x is {
+	3.14f64
+	f64
+	<malformed>
+	"pi"
+	0.0f64
+	f64
+	<malformed>
+	"zero"
+	value
+	<malformed>
+	"other"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - f64_pattern_literal_error.md:1:7:1:8
-UNUSED VARIABLE - f64_pattern_literal_error.md:4:5:4:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

@@ -28,10 +28,14 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+x: U8
+x = -1
 ~~~
 # EXPECTED
-NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:4:5:4:7
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

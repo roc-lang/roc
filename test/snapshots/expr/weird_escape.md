@@ -16,10 +16,10 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"abc\qdef"
 ~~~
 # EXPECTED
-INVALID ESCAPE SEQUENCE - :0:0:0:0
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

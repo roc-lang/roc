@@ -16,10 +16,10 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"abc\u(zzzz)def"
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

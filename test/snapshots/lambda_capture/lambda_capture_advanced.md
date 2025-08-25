@@ -53,7 +53,7 @@ OpenRound OpBar LowerIdent Comma LowerIdent Comma LowerIdent OpBar OpBar LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\(a, b, c) -> \x -> ((a + b) + c) + x((10, 20, 5))(7)
 ~~~
 # EXPECTED
 NIL

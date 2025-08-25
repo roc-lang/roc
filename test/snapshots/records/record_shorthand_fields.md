@@ -23,13 +23,10 @@ OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseCur
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ name, (age, email, active) }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_shorthand_fields.md:1:3:1:7
-UNDEFINED VARIABLE - record_shorthand_fields.md:1:9:1:12
-UNDEFINED VARIABLE - record_shorthand_fields.md:1:14:1:19
-UNDEFINED VARIABLE - record_shorthand_fields.md:1:21:1:27
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:28 to 1:28

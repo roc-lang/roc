@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 # Polymorphic identity function with rigid type variable 'a'
 identity : a -> a
@@ -27,7 +27,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenSquare Int Comma Int Comma Int CloseSquare CloseRound OpenCurly CloseCurly CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenSquare Int Comma Int Comma Int CloseSquare CloseRound OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -90,12 +90,22 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+identity: (a -> a)
+identity = \x -> x
+
+# Use identity at different call sites with different types
+main
+(<malformed>! | _) | {
+	num = identity(42)
+	str = identity("hello")
+	lst = identity([(1, 2, 3)])
+	{  }
+}
 ~~~
 # EXPECTED
-UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
-UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
-UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
+NIL
 # PROBLEMS
 **Parse Error**
 at 8:7 to 8:7

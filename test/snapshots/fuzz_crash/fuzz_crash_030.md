@@ -57,21 +57,28 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "foo" # Ce requires n exposes  [
+	# Cd
+	# Ce
+	# ose
+	<malformed>,
+]
+
+Str
+<malformed>
+{  }<malformed>
+<malformed>
+<malformed>
+[<malformed>] # Cse
+<malformed>
+{ pkg: 77, "..c", mm } #
+<malformed>
+[
+	(ar, <malformed>),
+]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_030.md:8:5:8:6
-PARSE ERROR - fuzz_crash_030.md:12:8:12:9
-PARSE ERROR - fuzz_crash_030.md:12:9:12:12
-PARSE ERROR - fuzz_crash_030.md:12:12:12:13
-PARSE ERROR - fuzz_crash_030.md:12:13:12:14
-PARSE ERROR - fuzz_crash_030.md:12:15:12:17
-PARSE ERROR - fuzz_crash_030.md:12:17:12:18
-PARSE ERROR - fuzz_crash_030.md:13:2:13:10
-PARSE ERROR - fuzz_crash_030.md:14:3:14:4
-PARSE ERROR - fuzz_crash_030.md:15:1:15:3
-PARSE ERROR - fuzz_crash_030.md:15:3:15:4
-PARSE ERROR - fuzz_crash_030.md:16:3:16:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 5:6

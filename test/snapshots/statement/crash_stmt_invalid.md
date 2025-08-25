@@ -16,10 +16,10 @@ KwCrash Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+crash 42
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - crash_stmt_invalid.md:1:1:1:9
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

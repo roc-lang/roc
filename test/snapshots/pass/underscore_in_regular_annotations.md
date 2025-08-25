@@ -198,12 +198,37 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+main: (_ -> _)
+main = \x -> x
+
+identity: (a -> a)
+identity = \x -> x
+
+# Function with underscore in annotation
+process: (List(_) -> Str)
+process = \list -> "processed"
+
+# Record with underscore
+get_data: ({
+	field: ((_, other): U32)
+} -> U32)
+get_data = \record -> record | .other
+handle_result: (Result((_, Str)) -> Str)
+handle_result = \result -> when result is  {
+	Ok(_),
+	<malformed>,
+	"success",
+	(Err(msg) => msg, <malformed>),
+} -> map: (a -> b) -> (List(a) -> List(b))
+map = \(_, _) -> []
+transform: ((_a -> _b) -> _b)
+transform = \(_, b) -> b
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
-PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
-UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
+NIL
 # PROBLEMS
 **Parse Error**
 at 20:5 to 20:18

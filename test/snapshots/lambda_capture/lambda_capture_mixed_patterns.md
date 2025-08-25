@@ -51,7 +51,10 @@ OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\base -> {
+	simple = \x -> (base + x) + 1
+	simple(1)
+}(1)
 ~~~
 # EXPECTED
 NIL

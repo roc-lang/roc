@@ -36,7 +36,12 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+FirstType: U64
+SecondType: Str
+ThirdType: List(U8)
 ~~~
 # EXPECTED
 NIL

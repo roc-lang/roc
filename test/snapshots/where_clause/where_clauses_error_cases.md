@@ -79,17 +79,19 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	broken_fn1, broken_fn2, broken_fn3
+]
+
+
+# Missing colon in constraint
+broken_fn1: ((a -> b where a() | .method) -> b)
+
+# Empty where clause
+broken_fn2: (((a -> b where broken_fn3: a) -> b where c() | .method: c) -> d)
 ~~~
 # EXPECTED
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
-PARSE ERROR - where_clauses_error_cases.md:6:25:6:26
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
-MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
-MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:14 to 6:26

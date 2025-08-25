@@ -42,10 +42,13 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+s: ((b -> c where a() | .t: c, u): o)
+...
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_057.md:1:39:1:42
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:37 to 1:38

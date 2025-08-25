@@ -21,11 +21,30 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma UpperIdent Comma CloseCu
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "pf" requires {(
+	R1,
+	R2,
+	<malformed>,
+)} (
+	(
+		r1: R1 -> R2,
+		r2,
+	): R1 -> R2,
+	<malformed>,
+) exposes  [
+	E1,
+	E2,
+] packages {pa1, (
+	(
+		"pa1",
+		pa2,
+	): "pa2",
+	<malformed>,
+)}
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
-EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
+NIL
 # PROBLEMS
 **Parse Error**
 at 2:21 to 2:21

@@ -21,12 +21,10 @@ LowerIdent OpBar OpPercent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+mo | <malformed>
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_001.md:1:1:1:3
-PARSE ERROR - fuzz_crash_001.md:1:3:1:4
-PARSE ERROR - fuzz_crash_001.md:1:4:1:5
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:4 to 1:4

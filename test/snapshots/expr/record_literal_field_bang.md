@@ -34,7 +34,13 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+ {
+	answer: (
+		42,
+		launchTheNukes,
+	),
+	(<malformed>! | {  }) | ...,
+}
 ~~~
 # EXPECTED
 NIL

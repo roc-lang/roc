@@ -24,11 +24,15 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [
+	# Comment after exposes open
+	something, # Comment after exposed item
+	SomeType, # Comment after last exposed item
+] packages {somePkg, (("../main.roc", other): "../../other/main.roc", <malformed>)}
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
-EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:4:3:4:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 9:2 to 9:2

@@ -53,7 +53,10 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+f: ((Str, Str) -> (Str, Str))
+f = \x -> x
+
+f((1, 2))
 ~~~
 # EXPECTED
 NIL

@@ -67,26 +67,30 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	tus,r
+]
+
+
+LocalStatus: (lue => Loc = [(Pending, Complete)])
+olor: (_ -> tus)
+olor = \color -> {
+	import Color exposing [RGB]
+	when color is {
+		RGB
+		<malformed>
+		LocalStatus.Pending
+		Green
+		<malformed>
+		LocalStatus - Complete
+		B.Blue
+		<malformed>
+		LocalStatus.Pending
+	} -> <malformed>
+}
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_032.md:3:24:3:25
-PARSE ERROR - fuzz_crash_032.md:3:26:3:27
-PARSE ERROR - fuzz_crash_032.md:3:34:3:35
-PARSE ERROR - fuzz_crash_032.md:3:44:3:45
-IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
-UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
-PARSE ERROR - fuzz_crash_032.md:9:22:9:22
-UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
-UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
-NOT IMPLEMENTED - :0:0:0:0
-UNDECLARED TYPE - fuzz_crash_032.md:6:25:6:30
-EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:26:8:37
-INVALID PATTERN - :0:0:0:0
-UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
-EXPECTED NOMINAL TYPE - fuzz_crash_032.md:10:13:10:24
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 8:5 to 8:17

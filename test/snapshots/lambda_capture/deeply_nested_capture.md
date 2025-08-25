@@ -64,7 +64,13 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\a -> {
+	2
+	\b -> {
+		b: b
+		\c -> b_loc + c
+	}
+}(100)(20)(3)
 ~~~
 # EXPECTED
 NIL

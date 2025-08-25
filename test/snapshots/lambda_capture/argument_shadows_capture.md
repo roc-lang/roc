@@ -37,11 +37,10 @@ OpenCurly LowerIdent OpAssign Int OpenRound OpBar LowerIdent OpBar LowerIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 5(\x -> x)(10)
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - argument_shadows_capture.md:3:7:3:8
-UNUSED VARIABLE - argument_shadows_capture.md:2:5:2:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:6 to 3:10

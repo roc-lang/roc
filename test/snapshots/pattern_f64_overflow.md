@@ -22,14 +22,26 @@ KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Flo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when x is {
+	1e100
+	<malformed>
+	"very large number"
+	1e-40
+	<malformed>
+	"very small number"
+	1.7976931348623157e308
+	<malformed>
+	"near f64 max"
+	0.0
+	<malformed>
+	"zero"
+	value
+	<malformed>
+	"other"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_f64_overflow.md:1:7:1:8
-F64 NOT ALLOWED IN PATTERN - :0:0:0:0
-F64 NOT ALLOWED IN PATTERN - :0:0:0:0
-F64 NOT ALLOWED IN PATTERN - :0:0:0:0
-UNUSED VARIABLE - pattern_f64_overflow.md:6:5:6:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

@@ -22,10 +22,10 @@ LowerIdent OpenRound Int Comma String CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+foo((42, "hello"))
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_function.md:1:1:1:4
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

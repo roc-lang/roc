@@ -26,23 +26,15 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+C: k || when 0 is {
+	0 | 0
+	<malformed>
+} -> <malformed>
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - fuzz_crash_060.md:1:12:1:13
-PARSE ERROR - fuzz_crash_060.md:1:13:1:14
-PARSE ERROR - fuzz_crash_060.md:1:14:1:19
-PARSE ERROR - fuzz_crash_060.md:1:20:1:21
-PARSE ERROR - fuzz_crash_060.md:1:21:1:22
-PARSE ERROR - fuzz_crash_060.md:1:22:1:23
-PARSE ERROR - fuzz_crash_060.md:1:23:1:24
-PARSE ERROR - fuzz_crash_060.md:2:1:2:2
-PARSE ERROR - fuzz_crash_060.md:2:2:2:3
-PARSE ERROR - fuzz_crash_060.md:2:3:2:3
-PARSE ERROR - fuzz_crash_060.md:2:3:2:3
-PARSE ERROR - fuzz_crash_060.md:3:1:3:2
-UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:14 to 1:21

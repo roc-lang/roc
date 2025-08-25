@@ -25,11 +25,13 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon OpenSquare Int CloseSquare ~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+C: [0]
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:3:4:3:5
-MALFORMED TYPE - fuzz_crash_066.md:3:4:3:5
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:3 to 3:5

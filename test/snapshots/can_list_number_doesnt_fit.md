@@ -18,10 +18,10 @@ OpenSquare Int LowerIdent Comma Int LowerIdent Comma Int CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[1]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_number_doesnt_fit.md:1:7:1:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:3

@@ -41,17 +41,14 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(Foo.Bar) | .baz<malformed>
+x: ((
+	5,
+	y,
+): 0, <malformed>)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:17
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
-UNDEFINED VARIABLE - record_builder.md:1:3:1:14
-MALFORMED TYPE - record_builder.md:2:8:2:9
-MALFORMED TYPE - record_builder.md:3:8:3:9
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:15 to 1:15

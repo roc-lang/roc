@@ -18,7 +18,7 @@ Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+4
 ~~~
 # EXPECTED
 NIL

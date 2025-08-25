@@ -22,7 +22,11 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Float ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+foo = 12.34
 ~~~
 # EXPECTED
 NIL

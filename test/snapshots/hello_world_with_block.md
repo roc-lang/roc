@@ -8,7 +8,7 @@ type=file
 # Hello world!
 
 # Multiline comments?
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 
@@ -20,7 +20,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -50,11 +50,24 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Hello world!
+# Multiline comments?
+app { # Hello world!
+# Multiline comments?
+pf: ("../basic-cli/platform.roc" platform [main]) }
+
+import pf exposing [Stdout]
+
+main
+(<malformed>! | _) | {
+	world = "World"
+	# Hello
+Stdout | .line
+	"Hello, world!"!
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
-UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 8:7 to 8:7

@@ -20,11 +20,15 @@ KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module # Comment after module keyword [
+	# Comment After exposes open
+	something, # Comment after exposed item
+	SomeType, # Comment after final exposed item
+]
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -22,13 +22,10 @@ OpBar OpBar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\ -> 1
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
-MISSING HEADER - fuzz_crash_008.md:1:1:1:2
-PARSE ERROR - fuzz_crash_008.md:1:3:1:4
-PARSE ERROR - fuzz_crash_008.md:1:4:1:5
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:2

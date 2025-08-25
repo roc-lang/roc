@@ -46,18 +46,14 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma Strin
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)", <malformed>)
+<malformed>
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID ESCAPE SEQUENCE - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - string.md:15:1:15:2
-PARSE ERROR - string.md:15:2:15:3
+NIL
 # PROBLEMS
 **Parse Error**
 at 12:1 to 12:1

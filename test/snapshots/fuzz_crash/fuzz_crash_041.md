@@ -13,24 +13,44 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 # PARSE
 ~~~clojure
 (block
-  (malformed malformed:expr_unexpected_token)
+  (list_literal)
+  (binop_pipe
+    (block
+      (binop_colon
+        (lc "f")
+        (malformed malformed:expr_unexpected_token)
+      )
+      (str_literal_small "")
+    )
+    (tuple_literal
+      (num_literal_i32 0)
+      (binop_or
+        (malformed malformed:expr_unexpected_token)
+        (malformed malformed:expr_unexpected_token)
+      )
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app {  }
+
+[]
+{
+	f: <malformed>
+	""
+} | (0, <malformed> || <malformed>)
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_041.md:1:20:1:21
-PARSE ERROR - fuzz_crash_041.md:1:21:1:22
-PARSE ERROR - fuzz_crash_041.md:1:22:1:23
-PARSE ERROR - fuzz_crash_041.md:1:23:1:24
-PARSE ERROR - fuzz_crash_041.md:1:24:1:25
-PARSE ERROR - fuzz_crash_041.md:1:25:1:26
-PARSE ERROR - fuzz_crash_041.md:1:26:1:27
-PARSE ERROR - fuzz_crash_041.md:1:27:1:28
-PARSE ERROR - fuzz_crash_041.md:1:28:1:29
+NIL
 # PROBLEMS
+**Expected Open Curly Brace**
+at 1:1 to 1:4
+
+**Parse Error**
+at 1:9 to 1:9
+
 **Parse Error**
 at 1:24 to 1:24
 
@@ -40,21 +60,25 @@ at 1:29 to 1:29
 **Parse Error**
 at 1:29 to 1:29
 
-**Parse Error**
-at 1:29 to 1:29
+**Unsupported Node**
+at 1:4 to 1:5
 
 **Unsupported Node**
-at 1:29 to 1:29
+at 1:6 to 1:20
+
+**Unsupported Node**
+at 1:1 to 1:1
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
+  (Expr.lambda)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_arg -> Error")
 ~~~
 # TYPES
 ~~~roc

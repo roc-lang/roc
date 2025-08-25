@@ -112,12 +112,32 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Regular function with var usage
+processItems = \items -> {
+	var count_ = 0
+	var total_ = 0
+	
+
+# Reassign vars within same function - should work
+count_ = count_ + 1
+	total_ = total_ + 10
+	
+
+# Nested function - var reassignment should fail across function boundary
+nestedFunc = \_ -> {
+		count_ = count_ + 5 # Should cause error - different function
+		total_ = total_ * 2 # Should cause error - different function
+		count_: count_
+	}
+	result = nestedFunc({  })
+	total_ + result
+}
 ~~~
 # EXPECTED
-VAR REASSIGNMENT ERROR - :0:0:0:0
-VAR REASSIGNMENT ERROR - :0:0:0:0
-UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:16 to 4:24

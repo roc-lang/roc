@@ -21,11 +21,10 @@ OpStar KwImport UpperIdent KwAs ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<malformed>import B
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_038.md:1:1:1:2
-PARSE ERROR - fuzz_crash_038.md:1:2:1:8
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:1

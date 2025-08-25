@@ -33,7 +33,9 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+r: (a where a() | .h: s)
 ~~~
 # EXPECTED
 NIL

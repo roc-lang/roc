@@ -20,10 +20,20 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when shape is {
+	Circle(radius)
+	<malformed>
+	(3.14 * radius) * radius
+	Rectangle((width, height))
+	<malformed>
+	width * height
+	Triangle((base, height))
+	<malformed>
+	(0.5 * base) * height
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_with_payload.md:1:7:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

@@ -19,11 +19,10 @@ OpenCurly LowerIdent Comma UpperIdent CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ i, Complete }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_033.md:1:6:1:14
-PARSE ERROR - fuzz_crash_033.md:1:14:1:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

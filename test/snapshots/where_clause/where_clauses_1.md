@@ -80,11 +80,16 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Hash, Decode
+]
+
+
+Hash((a, hasher)): ((a where a() | .hash: hasher) -> hasher, hasher() | Hasher)
+Decode(a): ((a where a() | .decode: List(U8)) -> a)
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:1

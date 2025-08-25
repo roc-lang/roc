@@ -44,7 +44,11 @@ OpenSquare OpenSquare Int CloseSquare Comma OpenSquare Int CloseSquare Comma Ope
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[
+	([1], [2], [
+		(3, 4, <malformed>, [5], <malformed>),
+	]),
+]
 ~~~
 # EXPECTED
 NIL

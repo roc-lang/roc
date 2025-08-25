@@ -283,17 +283,52 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import http exposing [Client, Http, Request, Response]
+import json exposing [Json]
+import utils exposing [Result, Result]
+processRequest: (Request -> Response)
+processRequest = \req -> Http | .defaultResponse
+
+parseJson: (Str -> Json.Value)
+parseJson = \input -> Json | .parse(input)
+handleApi: (Http.Request -> Result((Http.Response, Json.Error)))
+handleApi = \request -> {
+	result = Json | .decode(request | .body)
+	when result is {
+		Ok(data)
+		<malformed>
+		Ok(Http | .success(data))
+		Err(err)
+		<malformed>
+		Err(err)
+	} -> <malformed>
+	config: Json.Config
+	config = Json | .defaultConfig
+	
+
+# Test nested type qualification
+advancedParser: ((Json.Parser) | Config -> (Str -> Result((Json.Value, (Json.Parser) | Error))))
+	advancedParser = \(parserConfig, input) -> (Json.Parser) | .parseWith((parserConfig, input))
+	combineResults: (Result((a, err)) -> (Result((b, err)) -> Result(((a, b), err))))
+	combineResults = \(result1, result2) -> when result1 is {
+		Ok(value1)
+		<malformed>
+		when result2 is {
+			Ok(value2)
+			<malformed>
+			Ok((value1, value2))
+			Err(err)
+			<malformed>
+			Err(err)
+		} -> Err(err) => Err(err)
+	} -> <malformed>
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
-MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
-MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
-UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
-UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
-UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
-MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
-MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
+NIL
 # PROBLEMS
 **Parse Error**
 at 16:5 to 16:18

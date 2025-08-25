@@ -82,12 +82,20 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+foo: U64
+bar: Thing((_a, _b, _))
+baz: (_a, _b, _c)
+add_one: (U8 -> (U16 -> U32))
+main<malformed>!List(String)
+<malformed>
+Result(({  }, _))
+tag_tuple: Value((_a, _b, _c))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_annotations.md:4:7:4:12
-UNDECLARED TYPE - type_annotations.md:7:14:7:20
-UNDECLARED TYPE - type_annotations.md:8:13:8:18
+NIL
 # PROBLEMS
 **Parse Error**
 at 7:7 to 7:7

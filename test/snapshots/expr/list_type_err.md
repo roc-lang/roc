@@ -22,10 +22,10 @@ OpenSquare Int Comma Int Comma String CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(1, 2, "hello")]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - list_type_err.md:1:5:1:5
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:15

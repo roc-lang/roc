@@ -16,7 +16,7 @@ KwDbg UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<malformed>
 ~~~
 # EXPECTED
 NIL

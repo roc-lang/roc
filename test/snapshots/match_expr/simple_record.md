@@ -19,10 +19,21 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{
+		name
+	}
+	<malformed>
+	name
+	{
+		age
+	}
+	<malformed>
+	age
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_record.md:1:7:1:13
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

@@ -29,7 +29,7 @@ OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int CloseRound OpenRound OpUn
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\x -> x + 1(-5)
 ~~~
 # EXPECTED
 NIL

@@ -33,11 +33,10 @@ OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\x -> \y -> x + z
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - lambda_invalid_references.md:1:13:1:14
-UNUSED VARIABLE - lambda_invalid_references.md:1:6:1:7
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:5

@@ -122,10 +122,36 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+someTag: ((
+	(
+		(
+			(
+				Some(42),
+				noneTag,
+			): None,
+			okTag,
+		): Ok("hello"),
+		errTag,
+	): Err("oops"),
+	addOne,
+): \x -> ((
+	(
+		(
+			x + 1,
+			result,
+		): addOne(5),
+		nested,
+	): Some(Ok(Just(42))),
+	tagList,
+): [(
+	Some(1),
+	Some(2),
+	None,
+	Some(3),
+)], <malformed>))
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
+NIL
 # PROBLEMS
 **Parse Error**
 at 10:1 to 10:1

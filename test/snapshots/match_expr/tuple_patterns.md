@@ -21,11 +21,20 @@ KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when coord is {
+	(Zero, Zero)
+	<malformed>
+	"origin"((x, Zero))
+	<malformed>
+	x((Zero, y))
+	<malformed>
+	y((x, y))
+	<malformed>
+	x
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
-UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

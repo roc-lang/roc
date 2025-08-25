@@ -1884,24 +1884,42 @@ pub fn canonicalizeHeader(self: *CIR, allocator: Allocator, raw_src: []const u8,
     // Process the header based on its type
     switch (header) {
         .app => |app| {
-            // For app headers, process the provides list
-            var iter = self.ast.node_slices.nodes(&app.provides);
-            while (iter.next()) |node_idx| {
-                // Each provided item needs to be canonicalized based on its type
-                const node = self.ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
-                switch (node.tag) {
-                    .lc => {
-                        // This is a value being provided - canonicalize as expression
-                        _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
-                    },
-                    .uc => {
-                        // This is a type being provided - would need type canonicalization
-                        // Currently types are handled separately
-                    },
-                    else => {
-                        // Other nodes in provides list - canonicalize as expressions
-                        _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
-                    },
+            // For app headers, process the packages which now includes platform with provides
+            var packages_iter = self.ast.node_slices.nodes(&app.packages);
+            while (packages_iter.next()) |field_idx| {
+                // Each field is a binop_colon
+                const field_node = self.ast.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
+                if (field_node.tag == .binop_colon) {
+                    const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                    // Check if the RHS is a platform binop
+                    const rhs_node = self.ast.nodes.get(@enumFromInt(@intFromEnum(field_binop.rhs)));
+                    if (rhs_node.tag == .binop_platform) {
+                        // This is the platform field with provides list
+                        const platform_binop = self.ast.node_slices.binOp(rhs_node.payload.binop);
+                        // The RHS of platform binop is the provides list (stored as a block)
+                        const provides_block = self.ast.nodes.get(@enumFromInt(@intFromEnum(platform_binop.rhs)));
+                        if (provides_block.tag == .block) {
+                            var provides_iter = self.ast.node_slices.nodes(&provides_block.payload.nodes);
+                            while (provides_iter.next()) |node_idx| {
+                                // Each provided item needs to be canonicalized
+                                const node = self.ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+                                switch (node.tag) {
+                                    .lc => {
+                                        // This is a value being provided - canonicalize as expression
+                                        _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
+                                    },
+                                    .uc => {
+                                        // This is a type being provided - would need type canonicalization
+                                        // Currently types are handled separately
+                                    },
+                                    else => {
+                                        // Other nodes in provides list - canonicalize as expressions
+                                        _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
+                                    },
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },

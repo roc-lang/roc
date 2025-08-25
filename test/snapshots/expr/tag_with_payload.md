@@ -19,7 +19,7 @@ UpperIdent OpenRound Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Some(42)
 ~~~
 # EXPECTED
 NIL

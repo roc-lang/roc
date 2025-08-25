@@ -36,7 +36,9 @@ LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person = {
+	name: ((("Alice", age): 30, email): "alice@example.com")
+}
 ~~~
 # EXPECTED
 NIL

@@ -24,10 +24,14 @@ KwModule OpenSquare CloseSquare KwVar LowerIdent OpAssign Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# This should cause an error - var not allowed at top level
+var topLevelVar_ = 0
 ~~~
 # EXPECTED
-PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:4
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

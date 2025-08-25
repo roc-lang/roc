@@ -55,10 +55,10 @@ UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan In
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - binop_omnibus__singleline.md:1:5:1:8
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:15

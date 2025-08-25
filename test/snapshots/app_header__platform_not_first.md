@@ -6,32 +6,27 @@ type=header
 # SOURCE
 ~~~roc
 app
-	[main!,]
-	{ somePkg: "../main.roc", pf: platform "../main.roc", }
+	{ somePkg: "../main.roc", pf: "../main.roc" platform [main!,], }
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang Comma CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon KwPlatform String Comma CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang Comma CloseSquare Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
 (header-only)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { somePkg: ((
+	"../main.roc",
+	pf,
+): "../main.roc" platform [main]) }
+
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:32 to 3:32
-
-**Expected Close Curly Brace**
-at 1:1 to 3:41
-
-**No Platform**
-at 1:1 to 3:41
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

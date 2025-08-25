@@ -32,12 +32,10 @@ OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ name, ((age: 30, email, status): "active", balance) }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:7
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:23
-UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:50
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:51 to 1:51

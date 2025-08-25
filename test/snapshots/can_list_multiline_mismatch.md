@@ -26,10 +26,10 @@ OpenSquare Int Comma String Comma Int CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(42, "hello world", 100)]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 5:1

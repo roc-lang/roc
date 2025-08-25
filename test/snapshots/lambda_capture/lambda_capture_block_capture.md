@@ -43,7 +43,9 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpBar LowerIdent OpBar Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 42
+f = \y -> x + y
+f(10)
 ~~~
 # EXPECTED
 NIL

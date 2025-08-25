@@ -18,10 +18,10 @@ LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+modu
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_005.md:1:1:1:5
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

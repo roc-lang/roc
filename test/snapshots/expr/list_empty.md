@@ -16,7 +16,7 @@ OpenSquare CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[]
 ~~~
 # EXPECTED
 NIL

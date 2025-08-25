@@ -35,10 +35,13 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "" requires main: Str -> Str exposes  []
+
+entrypoint: (Str -> Str)
+entrypoint = main
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - platform_header_str_simple.md:8:14:8:18
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 7:14 to 7:24

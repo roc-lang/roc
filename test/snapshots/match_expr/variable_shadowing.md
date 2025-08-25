@@ -19,11 +19,16 @@ KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound Upp
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when (value, other) is {
+	(Some(x), y)
+	<malformed>
+	x + y((None, x))
+	<malformed>
+	x * 2
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
-UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:22

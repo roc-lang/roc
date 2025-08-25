@@ -83,13 +83,20 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+foo: U64
+bar: Thing((a, b, _))
+biz: (a, b, c)
+add_one: (U8 -> (U16 -> U32))
+main<malformed>!List(String)
+<malformed>
+Result(({  }, _))
+tag_tuple: Value((a, b, c))
 ~~~
 # EXPECTED
-ASCII CONTROL CHARACTER - :0:0:0:0
-UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
-UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
-UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
+NIL
 # PROBLEMS
 **Parse Error**
 at 8:7 to 8:7

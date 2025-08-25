@@ -38,10 +38,13 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 42
+str = "hello"
+result = x + 5
+result
 ~~~
 # EXPECTED
-UNUSED VARIABLE - block_pattern_unify.md:3:5:3:8
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

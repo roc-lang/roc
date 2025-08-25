@@ -305,22 +305,51 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Import exposing
+import I1 exposing [I11, I12]
+import I2 exposing [I21]<malformed>Ias1<malformed>
+I22
+<malformed>Ias2<malformed>
+A(a): (((a where a() | .a1: (a, a)) -> Str, a() | .a2): (a, a) -> Str)
+B(b): (((b where b() | .b1: (b, b)) -> Str, b() | .b2): (b, b) -> Str)
+C((a, b)): (a, b)
+D((a, b)): C((a, b))
+E: {
+	a: ((Str, b): Str)
+}
+F: [(A, B)]
+g: (e -> e where e() | A, e() | B)
+h = \(x, y) -> {
+	h1 = {
+		h11: (((x, h12): x, h13): {
+			h131: ((x, h132): y)
+		})
+	}
+	h2 = h((x, y))
+	h3 = A((x, y))
+	h4 = [(x, y)]
+	h5 = (x, y)
+	when x is {
+		Z1((a, b))
+		<malformed>
+		a: a
+		Z2((a, b))
+		<malformed>
+		a: a
+		Z3({ a: a, b: b })
+		<malformed>
+		a: a
+		Z4([(a, b)])
+		<malformed>
+		a: a
+	} -> <malformed>
+}
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:74
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:9:1:9:74
-MODULE NOT FOUND - everything.md:4:1:4:30
-MODULE NOT FOUND - everything.md:5:1:5:46
-UNUSED VARIABLE - everything.md:26:10:26:11
-UNUSED VARIABLE - everything.md:27:9:27:10
-UNUSED VARIABLE - everything.md:28:11:28:12
-UNUSED VARIABLE - everything.md:29:10:29:11
-UNUSED VARIABLE - everything.md:19:2:19:4
-UNUSED VARIABLE - everything.md:20:2:20:4
-UNUSED VARIABLE - everything.md:21:2:21:4
-UNUSED VARIABLE - everything.md:22:2:22:4
-UNUSED VARIABLE - everything.md:23:2:23:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 5:25 to 5:25

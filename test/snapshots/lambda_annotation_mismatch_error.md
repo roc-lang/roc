@@ -67,11 +67,21 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	string_function, wrong_type_function
+]
+
+
+# Annotation says it takes and returns strings, but implementation uses number addition
+string_function: (Str -> Str)
+string_function = \x -> x + 42
+
+# Annotation says function returns I64, but implementation returns Frac(_prec)
+wrong_type_function: (I64 -> I64)
+wrong_type_function = \x -> x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:19 to 4:29

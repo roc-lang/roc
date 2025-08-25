@@ -26,10 +26,14 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign LowerIdent OpPlus
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	add2,
+]
+
+add2 = x + 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -16,12 +16,10 @@ LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+process_user
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:44
-PARSE ERROR - type_constrained_record.md:1:37:1:40
-MALFORMED TYPE - type_constrained_record.md:1:37:1:45
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

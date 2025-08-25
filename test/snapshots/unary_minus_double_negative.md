@@ -26,7 +26,7 @@ OpenRound OpBar LowerIdent OpBar OpUnaryMinus OpenRound OpUnaryMinus LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\x -> --x(5)
 ~~~
 # EXPECTED
 NIL

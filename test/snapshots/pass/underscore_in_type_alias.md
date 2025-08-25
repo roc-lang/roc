@@ -88,18 +88,23 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+MyType: _
+
+OtherType := _
+
+ComplexType := List(_)
+RecordType := {
+	field: ((_, other): U32)
+}
+FunctionType := _ -> _
+TupleType := (_, U32, _)
+TagType := [(Some(_), None)]
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:21:7:21
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
+NIL
 # PROBLEMS
 **Pattern in Expression Context**
 at 3:10 to 3:11

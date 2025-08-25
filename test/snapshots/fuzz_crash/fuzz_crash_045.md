@@ -16,10 +16,11 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "" requires <malformed> exposes  []
+
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_045.md:1:51:1:51
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:22 to 1:22

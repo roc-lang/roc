@@ -22,7 +22,8 @@ OpenCurly KwCrash String OpenCurly CloseCurly CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+crash "This is a crash statement"
+{  }
 ~~~
 # EXPECTED
 NIL

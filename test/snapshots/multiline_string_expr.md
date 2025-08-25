@@ -17,7 +17,7 @@ MultilineString UpperIdent LowerIdent LowerIdent LowerIdent MultilineString Uppe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+""
 ~~~
 # EXPECTED
 NIL

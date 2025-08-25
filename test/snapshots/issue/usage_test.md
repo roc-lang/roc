@@ -40,11 +40,18 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+UnusedType := _
+
+UsedType := _
+
+value: UsedType
+value = 42
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:16

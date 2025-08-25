@@ -82,7 +82,21 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	person, final
+]
+
+
+person = {
+	name: ((("Alice", age): 30, city): "Boston")
+}
+updated_one = { ..person }
+age: 31<malformed>
+updated2 = { ..updated_one }
+city: "New York"<malformed>
+final = { ..updated2 }
+name: (("Alice Smith", age): 32)
+<malformed>
 ~~~
 # EXPECTED
 NIL

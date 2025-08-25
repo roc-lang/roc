@@ -42,7 +42,21 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	checkNumber,
+]
+
+checkNumber = \num -> {
+	if num < 0 {
+		"negative"
+	} else if num == 0 {
+		"zero"
+	} else if num > 100 {
+		"large"
+	} else {
+		"positive"
+	}
+}
 ~~~
 # EXPECTED
 NIL

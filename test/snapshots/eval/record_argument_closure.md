@@ -49,7 +49,9 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\{ x: x, y: y } -> x * y({
+	x: ((10, y): 20)
+})
 ~~~
 # EXPECTED
 NIL

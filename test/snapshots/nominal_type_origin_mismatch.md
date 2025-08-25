@@ -55,12 +55,17 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import Data exposing [Person]
+expectsPerson: (Person -> Str)
+expectsPerson = \p -> "Got a person"
+
+main = expectsPerson("not a person")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
-UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
-UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:29

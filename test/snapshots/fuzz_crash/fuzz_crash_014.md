@@ -28,13 +28,12 @@ Int LowerIdent Dot Int Int LowerIdent Int LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0b.0b | 0
+0bbu22
+0u22
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_014.md:1:1:1:3
-PARSE ERROR - fuzz_crash_014.md:1:3:1:5
-PARSE ERROR - fuzz_crash_014.md:2:1:2:6
-PARSE ERROR - fuzz_crash_014.md:3:1:3:5
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

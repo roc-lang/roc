@@ -26,12 +26,11 @@ Int LowerIdent OpColon UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0
+b: S.R
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_018.md:1:1:1:2
-PARSE ERROR - fuzz_crash_018.md:2:1:2:3
-UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:5 to 1:6

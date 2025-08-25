@@ -19,11 +19,13 @@ KwModule OpenSquare CloseSquare Int LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+0
+f
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_034.md:1:9:1:10
-PARSE ERROR - fuzz_crash_034.md:1:11:1:12
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

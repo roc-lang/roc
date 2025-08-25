@@ -21,10 +21,23 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenSquare LowerIdent Comma Lo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when data is {
+	Ok([(x, y)])
+	<malformed>
+	x + y
+	Err(x)
+	<malformed>
+	x - 1
+	Ok([x])
+	<malformed>
+	x * 2
+	Err(y)
+	<malformed>
+	y / 2
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:12

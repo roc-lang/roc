@@ -23,11 +23,17 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	<malformed>,
+]
+
+ {
+	_,
+}0<malformed>
+<malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_053.md:1:8:1:9
-PARSE ERROR - fuzz_crash_053.md:1:15:1:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:8 to 1:8

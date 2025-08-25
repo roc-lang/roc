@@ -17,12 +17,10 @@ MalformedString LowerIdent CloseRound CloseCurly LowerIdent LowerIdent LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+<malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:26:1:35
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:1:36:1:37
-UNDEFINED VARIABLE - string_multiline_formatting_(due_to_templating_not_multiline_string_literal)_1.md:2:1:2:2
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:1

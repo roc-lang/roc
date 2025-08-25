@@ -21,10 +21,10 @@ OpenSquare Int Comma String CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(1, "hello")]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_two_elements.md:1:2:1:2
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:12

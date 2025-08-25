@@ -36,7 +36,11 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\{
+	x: x
+} -> x({
+	x: -10
+})
 ~~~
 # EXPECTED
 NIL

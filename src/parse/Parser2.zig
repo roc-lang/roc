@@ -704,35 +704,15 @@ pub fn parseHeader(self: *Parser) Error!void {
 }
 
 fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-    // Parse provides list: app [main!] ...
-    self.expect(.OpenSquare) catch {
-        try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
-        return AST.Header{ .app = .{
-            .provides = @enumFromInt(0),
-            .platform_idx = @enumFromInt(0),
-            .packages = @enumFromInt(0),
-            .region = start_pos,
-        } };
-    };
-
-    const provides_idx = try self.parseExposedList(.CloseSquare);
-
-    self.expect(.CloseSquare) catch {
-        try self.pushDiagnostic(.header_expected_close_square, start_pos, self.currentPosition());
-    };
-
-    // Parse platform and packages: { pf: platform "...", package1: "...", ... }
+    // Parse app { pf: "..." platform [main!], package1: "...", ... }
     self.expect(.OpenCurly) catch {
         try self.pushDiagnostic(.expected_package_platform_open_curly, start_pos, self.currentPosition());
         return AST.Header{ .app = .{
-            .provides = provides_idx,
-            .platform_idx = @enumFromInt(0),
             .packages = @enumFromInt(0),
             .region = start_pos,
         } };
     };
 
-    var platform_field: Node.Idx = @enumFromInt(0);
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
@@ -756,44 +736,53 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
             break;
         };
 
-        // Check if this is the platform field
-        if (self.peek() == .KwPlatform) {
-            if (@intFromEnum(platform_field) != 0) {
-                try self.pushDiagnostic(.multiple_platforms, start_pos, self.currentPosition());
-                break;
-            }
-            self.advance(); // consume 'platform' keyword
-
-            // Parse platform string
-            if (self.peek() != .String) {
-                try self.pushDiagnostic(.expected_platform_string, start_pos, self.currentPosition());
-                break;
-            }
-
-            const platform_value = try self.parseExpr();
-
-            // Create a record field node for the platform
-            if (field_name) |name| {
-                const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
-                const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, platform_value);
-                platform_field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
+        // Parse the value part
+        if (self.peek() == .String) {
+            // This is a package or platform string
+            const string_value = try self.parseExpr();
+            
+            // Check if followed by 'platform' keyword
+            if (self.peek() == .KwPlatform) {
+                self.advance(); // consume 'platform' keyword
+                
+                // Parse provides list after platform keyword
+                self.expect(.OpenSquare) catch {
+                    try self.pushDiagnostic(.header_expected_open_square, field_start, self.currentPosition());
+                    continue;
+                };
+                
+                const provides_idx = try self.parseExposedList(.CloseSquare);
+                
+                self.expect(.CloseSquare) catch {
+                    try self.pushDiagnostic(.header_expected_close_square, field_start, self.currentPosition());
+                };
+                
+                // Create the provides list node (use block as a container for the exposed items)
+                const provides_node = try self.ast.appendNode(self.gpa, self.currentPosition(), .block, .{ .nodes = provides_idx });
+                
+                // Create the platform binop: string_value platform provides_node
+                const platform_binop_idx = try self.ast.appendBinOp(self.gpa, string_value, provides_node);
+                const platform_node = try self.ast.appendNode(self.gpa, field_start, .binop_platform, .{ .binop = platform_binop_idx });
+                
+                // Create the record field: field_name : platform_node
+                if (field_name) |name| {
+                    const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                    const field_binop_idx = try self.ast.appendBinOp(self.gpa, field_node, platform_node);
+                    const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = field_binop_idx });
+                    try self.scratch_nodes.append(self.gpa, field);
+                }
+            } else {
+                // Regular package field
+                if (field_name) |name| {
+                    const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                    const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, string_value);
+                    const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
+                    try self.scratch_nodes.append(self.gpa, field);
+                }
             }
         } else {
-            // Regular package field
-            if (self.peek() != .String) {
-                try self.pushDiagnostic(.expected_package_or_platform_string, start_pos, self.currentPosition());
-                break;
-            }
-
-            const package_value = try self.parseExpr();
-
-            // Create a record field node for the package
-            if (field_name) |name| {
-                const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
-                const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, package_value);
-                const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
-                try self.scratch_nodes.append(self.gpa, field);
-            }
+            try self.pushDiagnostic(.expected_package_or_platform_string, start_pos, self.currentPosition());
+            break;
         }
 
         // Check for comma (optional)
@@ -816,20 +805,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     else
         @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(0));
 
-    // Check that we found a platform
-    if (@intFromEnum(platform_field) == 0) {
-        try self.pushDiagnostic(.no_platform, start_pos, self.currentPosition());
-        return AST.Header{ .app = .{
-            .provides = provides_idx,
-            .platform_idx = @enumFromInt(0),
-            .packages = packages_idx,
-            .region = start_pos,
-        } };
-    }
-
     return AST.Header{ .app = .{
-        .provides = provides_idx,
-        .platform_idx = platform_field,
         .packages = packages_idx,
         .region = start_pos,
     } };

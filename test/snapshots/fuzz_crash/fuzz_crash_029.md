@@ -64,37 +64,39 @@ KwPlatform String KwRequires OpenCurly LowerIdent OpBang OpColon UpperIdent Open
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "foo" # Ce requires {n} <malformed>! exposes  [
+	# Cd
+	# Ce
+	# Co		{	} #ose
+	# d
+	List,
+]
+
+<malformed>
+<malformed>
+{  }<malformed>
+<malformed>
+<malformed>
+[] # Cse
+<malformed>
+vides # Cd
+{
+	pkg: (
+		"..l",
+		mmen,
+	)
+}
+<malformed>
+[
+	(
+		Ok(world),
+		n,
+	),
+]ar<malformed>
+<malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_029.md:4:4:4:5
-PARSE ERROR - fuzz_crash_029.md:5:14:5:17
-PARSE ERROR - fuzz_crash_029.md:5:19:5:21
-PARSE ERROR - fuzz_crash_029.md:5:22:5:23
-PARSE ERROR - fuzz_crash_029.md:5:23:5:24
-PARSE ERROR - fuzz_crash_029.md:5:24:5:25
-PARSE ERROR - fuzz_crash_029.md:6:4:6:5
-PARSE ERROR - fuzz_crash_029.md:7:2:7:9
-PARSE ERROR - fuzz_crash_029.md:8:3:8:4
-PARSE ERROR - fuzz_crash_029.md:9:3:9:4
-PARSE ERROR - fuzz_crash_029.md:10:2:10:10
-PARSE ERROR - fuzz_crash_029.md:11:3:11:8
-PARSE ERROR - fuzz_crash_029.md:12:3:12:4
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_029.md:13:6:13:7
-PARSE ERROR - fuzz_crash_029.md:13:7:13:10
-PARSE ERROR - fuzz_crash_029.md:13:10:13:11
-PARSE ERROR - fuzz_crash_029.md:13:11:13:12
-PARSE ERROR - fuzz_crash_029.md:13:13:13:17
-PARSE ERROR - fuzz_crash_029.md:13:19:13:20
-PARSE ERROR - fuzz_crash_029.md:14:2:14:10
-PARSE ERROR - fuzz_crash_029.md:15:3:15:4
-PARSE ERROR - fuzz_crash_029.md:15:14:15:15
-PARSE ERROR - fuzz_crash_029.md:15:16:15:17
-PARSE ERROR - fuzz_crash_029.md:15:17:15:18
-PARSE ERROR - fuzz_crash_029.md:16:1:16:3
-PARSE ERROR - fuzz_crash_029.md:16:3:16:4
-PARSE ERROR - fuzz_crash_029.md:17:3:17:4
-MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 5:5

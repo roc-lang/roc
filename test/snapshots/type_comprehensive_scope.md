@@ -212,13 +212,36 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	MyU64, Person, Result, Tree, Node
+]
+
+
+# Built-in types should work
+MyU64: U64
+MyString: Str
+MyBool: Bool
+
+# Simple user-defined type
+Person: {
+	name: ((Str, age): U64)
+}
+Result((ok, err)): [(Ok(ok), Err(err))]
+Tree(a): [(Branch(Node(a)), Leaf(a))]
+Node(a): {
+	value: ((a, children): List(Tree(a)))
+}
+MyResult: Result((Str, U64))
+Person: U64
+BadType: SomeUndeclaredType
+MyList: List(Str)
+MyDict: Dict((Str, U64))
+Complex: {
+	person: (((Person, result): Result((Bool, Str)), tree): Tree(U64))
+}
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
-UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
-TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
-UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 9:26 to 9:27

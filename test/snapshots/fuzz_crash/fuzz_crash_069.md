@@ -16,7 +16,8 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly Int Clos
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package []
+
 ~~~
 # EXPECTED
 NIL

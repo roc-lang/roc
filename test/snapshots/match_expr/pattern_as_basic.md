@@ -18,11 +18,16 @@ KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when (1, 2) is {
+	(x, y)
+	<malformed>
+	point
+	<malformed>
+	point
+} -> <malformed>
 ~~~
 # EXPECTED
-UNUSED VARIABLE - pattern_as_basic.md:2:6:2:7
-UNUSED VARIABLE - pattern_as_basic.md:2:9:2:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

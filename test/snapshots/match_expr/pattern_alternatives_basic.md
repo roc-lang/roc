@@ -56,7 +56,19 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColon OpenSquare UpperId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	kind,
+]
+
+Color: [(Red, Green, Blue, Yellow, Orange, Purple)]
+kind: (Color -> Str)
+kind = \color -> when color is {
+	Red
+	\Green -> Blue => "primary"
+	(Yellow.Orange) | Purple
+	<malformed>
+	"secondary"
+} -> <malformed>
 ~~~
 # EXPECTED
 NIL

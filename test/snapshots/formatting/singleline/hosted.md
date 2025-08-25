@@ -36,11 +36,22 @@ KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare LowerI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+hosted [
+	a!, b!
+]
+
+[a]<malformed>!
+b<malformed>!
+
+a<malformed>!Str
+<malformed>
+Str
+b<malformed>!Str
+<malformed>
+Str
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - hosted.md:1:9:1:11
-EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
+NIL
 # PROBLEMS
 **Expected Exposes**
 at 1:1 to 1:8

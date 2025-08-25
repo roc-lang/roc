@@ -18,7 +18,13 @@ KwMatch OpenSquare CloseSquare OpenCurly LowerIdent OpFatArrow OpenCurly LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when [] is {
+	empty
+	<malformed>
+	{
+		ints: ((([(1, 2, 3)], strs): [("a", "b", "c")], empty): empty)
+	}
+} -> <malformed>
 ~~~
 # EXPECTED
 NIL

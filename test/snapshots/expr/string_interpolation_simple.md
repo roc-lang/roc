@@ -16,10 +16,10 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"Hello ${name}!"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - string_interpolation_simple.md:1:10:1:14
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

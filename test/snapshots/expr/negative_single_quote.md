@@ -16,10 +16,10 @@ OpUnaryMinus SingleQuote ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-'i'
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -18,10 +18,14 @@ KwMatch LowerIdent OpenCurly LowerIdent OpFatArrow LowerIdent OpPlus Int CloseCu
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when value is {
+	x
+	<malformed>
+	x + 1
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - single_branch.md:1:7:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

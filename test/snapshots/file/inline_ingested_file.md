@@ -41,10 +41,17 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpCol
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+"users.json"<malformed>data: Str
+import Json
+
+foo = Json | .parse(data)
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
+NIL
 # PROBLEMS
 **Parse Error**
 at 3:21 to 3:21

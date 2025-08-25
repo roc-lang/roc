@@ -16,7 +16,14 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [] packages {d, {
+	{
+		d: {
+			0
+		} | .c
+	}
+}}
+
 ~~~
 # EXPECTED
 NIL

@@ -6,7 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 # This is a module comment!
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout exposing [line!, write!]
 
@@ -215,7 +215,7 @@ expect {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent KwAs UpperIdent Comma UpperIdent Dot OpStar CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent KwAs UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent Comma CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent Comma CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg LowerIdent OpenRound CloseRound Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly LowerIdent OpFatArrow Int String OpFatArrow Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent Comma CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent Comma CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int Comma CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound String Comma UpperIdent OpenRound String CloseRound CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent OpEquals Int LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound LowerIdent OpenRound KwDbg Int Comma CloseRound KwCrash String LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LowerIdent Comma CloseRound Comma Int Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseCurly KwAs LowerIdent LowerIdent OpQuestion MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent KwAs UpperIdent Comma UpperIdent Dot OpStar CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent KwAs UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent Comma CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent Comma CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg LowerIdent OpenRound CloseRound Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly LowerIdent OpFatArrow Int String OpFatArrow Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent Comma CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent Comma CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int Comma CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound String Comma UpperIdent OpenRound String CloseRound CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent OpEquals Int LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound LowerIdent OpenRound KwDbg Int Comma CloseRound KwCrash String LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LowerIdent Comma CloseRound Comma Int Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseCurly KwAs LowerIdent LowerIdent OpQuestion MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -447,7 +447,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
                   (lc "add_one_oneline")
                   (lambda
                     (body
-                      (if_else <128 branches>)
+                      (if_else <130 branches>)
                     )
                     (args
                       (lc "num")
@@ -470,7 +470,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
                           (lc "other")
                           (num_literal_i32 1)
                         )
-                        (if_else <149 branches>)
+                        (if_else <151 branches>)
                       )
                     )
                     (args
@@ -911,65 +911,108 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# This is a module comment!
+app { # This is a module comment!
+pf: ("../basic-cli/platform.roc" platform [main]) }
+
+import pf exposing [Stdout, line, write]
+import pf # Comment after qualifier exposing [StdoutMultiline # Comment after ident, line, write]
+import pkg exposing [Something, func]<malformed>function<malformed>
+Type
+<malformed>ValueCategory<malformed>
+<malformed>
+<malformed>
+import BadName exposing [GoodName]
+import BadNameMultiline exposing [GoodNameMultiline]
+
+Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
+MapML((a, b, <malformed>): List(a -> (<malformed> -> ((a -> b) -> List((b, <malformed>))))))
+Foo: (Bar, Baz)
+FooMultiline: (Bar, Baz, <malformed>)
+Some(a): {
+	foo: ((Ok(a), bar): Something)
+}
+SomeMl(a): ({
+	foo: ((Ok(a), bar): Something, <malformed>)
+	SomeMultiline(a): (({
+		foo # After field name: ((Ok(a), bar): Something, <malformed>)
+		Maybe(a): [(Some(a), None)]
+		MaybeMultiline(a): [(Some(a), None, <malformed>)]
+		SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
+		add_one_oneline = \num -> if num 2 else 5
+		add_one: (U64 -> U64)
+		add_one = \num -> {
+			other = 1
+			if num {
+				<malformed>
+				some_func()
+				0
+			} else {
+				<malformed>
+				123
+				other: other
+			}
+		}
+		match_time = <malformed>
+		foo: ((1, bar): 2, <unary_double_dot>)
+	} => 12-) -> add(34))
+	{ foo # After pattern record field name: ((1, bar): 2 => (<unary_double_dot> => (<malformed> => 12))), {
+		foo: ((1, bar): 2 | 7)
+	}, <malformed>, 12, {
+		foo: ((1, bar): 2 | 7 => (<malformed> => 12))
+		Ok(123)
+		<malformed>
+		123
+		Ok(Some(dude))
+		<malformed>
+		dude
+		TwoArgs(("hello", Some("world")))
+		<malformed>
+		1000
+	}, expect blah == 1, main, <malformed>!, List(String), <malformed>, Result(({  }, _)), main, (<malformed>! | _) | { world = "World", var number = 123, expect blah == 1, tag = Blue, <ret>, ..., match_time((..., <malformed>)), some_func(<malformed>), 42, <malformed> }, crash "Unreachable!", tag_with_payload = Ok(number), interpolated = "Hello, ${world}", list = [add_one(<malformed>)], number, (<malformed>, 456, 789, <malformed>) }
+	for n in list {
+		{
+			Stdout | .line
+			"Adding ${n} to ${number}"!
+			number = number + n
+		}
+	}
+	record = {
+		foo: ((((123, bar): "Hello", baz): tag, qux): Ok(world), punned)
+	}
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [(1, 2, 3)])
+	multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [(
+		1,
+		2,
+		3,
+	)], <malformed>)
+	bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
+	static_dispatch_style = some_fn(arg1)
+	<malformed> | .static_dispatch_method()
+	<malformed> | .next_static_dispatch_method()
+	<malformed> | .record_field
+	<malformed>
+	Stdout | .line
+	interpolated!
+	<malformed>
+	Stdout | .line
+	<malformed>!
+	Num | .toStr(number)
+} as a)
+string<malformed><malformed>
+<malformed>
+<malformed>
+empty: {  }
+empty = {  }
+tuple: Value((a, b, c))
+expect {
+	foo = 1
+	blah = 1
+	blah == foo
+}
 ~~~
 # EXPECTED
-UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
-UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
-UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
-UNDECLARED TYPE - syntax_grab_bag.md:40:2:40:5
-UNDECLARED TYPE - syntax_grab_bag.md:43:19:43:21
-UNDECLARED TYPE - syntax_grab_bag.md:43:32:43:41
-UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
-UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
-UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
-UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
-UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
-UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
-UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
-UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
-UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
-UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
-UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
-UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
-UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
-UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
-UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
-UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
-UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
-UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
-UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
-UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
-UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
-UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
-UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
-INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
-INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
+NIL
 # PROBLEMS
 **Parse Error**
 at 14:37 to 14:37

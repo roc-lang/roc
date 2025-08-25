@@ -40,13 +40,21 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo, bar, MyType, OtherType, foo, MyType
+]
+
+
+# This module exposes foo, bar, MyType, and OtherType
+# but only implements foo and MyType
+# This should generate "exposed but not implemented" errors for bar and OtherType
+# Also tests redundant exposed entries for foo and MyType
+foo = 42
+
+MyType: [(A, B, C)]
 ~~~
 # EXPECTED
-REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
-REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
-EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
-EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 10:10 to 10:18

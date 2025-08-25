@@ -19,11 +19,11 @@ Int OpenCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0{
+}
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_013.md:1:1:1:2
-PARSE ERROR - fuzz_crash_013.md:1:2:1:3
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:2 to 1:3

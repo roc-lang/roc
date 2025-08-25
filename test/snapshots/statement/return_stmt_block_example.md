@@ -62,10 +62,22 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	foo,
+]
+
+foo: (U64 -> Result((Str, [TooBig])))
+foo = \num -> {
+	str = if num > 10 {
+		<ret>
+	} else {
+		"SMALL"
+	}
+	Ok(str)
+}
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 5:11 to 5:25

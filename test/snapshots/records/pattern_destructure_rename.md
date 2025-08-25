@@ -18,10 +18,16 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent OpColon LowerIdent Comma Lower
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{
+		name: ((userName, age): userAge)
+	}
+	<malformed>
+	"User ${userName} is ${userAge.to_str()} years old"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_rename.md:1:7:1:13
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

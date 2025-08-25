@@ -22,10 +22,10 @@ OpenSquare Int Comma Float Comma String CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[(42, 4.2, "hello")]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - let_polymorphism_error.md:1:6:1:6
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:18

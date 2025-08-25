@@ -145,10 +145,25 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	makeAdder, curriedAdd, applyTwice
+]
+
+
+# Function that returns a function with polymorphic type
+makeAdder: (a -> (a -> a))
+makeAdder = \x -> \y -> x + y
+
+# Should constrain the literal 5 to I64
+curriedAdd: (I64 -> I64)
+curriedAdd = makeAdder(5)
+applyTwice: ((a -> a) -> (a -> a))
+applyTwice = \(f, x) -> f(f(x))
+addThreeTwice: (I64 -> I64)
+addThreeTwice = \n -> applyTwice(\x -> (x + 3, n))
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_currying_constraint.md:5:21:5:22
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:13 to 4:25

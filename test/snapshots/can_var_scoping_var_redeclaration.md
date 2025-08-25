@@ -62,10 +62,20 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar Underscore OpBar OpenC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Test var redeclaration (should produce shadowing warning)
+redeclareTest = \_ -> {
+	var x_ = 5
+	var x_ = 10 # Redeclare var - should warn but proceed
+	x_ = 15 # Reassign - should work without warning
+	x_: x_
+}
+result = redeclareTest({  })
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:17 to 4:21

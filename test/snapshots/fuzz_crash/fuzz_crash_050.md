@@ -26,11 +26,14 @@ KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+_0 = {
+	<malformed>
+}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
-PARSE ERROR - fuzz_crash_050.md:3:2:3:2
+NIL
 # PROBLEMS
 **Parse Error**
 at 2:1 to 2:1

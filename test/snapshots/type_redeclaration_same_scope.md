@@ -50,10 +50,15 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Maybe,
+]
+
+Maybe(a): [(Some(a), None)]
+Maybe(a): [(Ok(a), Err)]
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:12 to 4:1

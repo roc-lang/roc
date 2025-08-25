@@ -18,11 +18,14 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when person is {
+	{ name, address: { street, (city, zipCode) } }
+	<malformed>
+	"${name} lives on ${street} in ${city}"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
-UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

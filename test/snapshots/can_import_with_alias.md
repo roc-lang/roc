@@ -33,10 +33,15 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json, MyJson]
+
+main = MyJson | .decode
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:27

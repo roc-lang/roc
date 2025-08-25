@@ -16,10 +16,10 @@ OpUnaryMinus LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-foo
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

@@ -45,11 +45,25 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Foo, Bar
+]
+
+
+# First declare a type
+Foo: U64
+
+# Try to redeclare the same type (should error)
+Foo: Str
+
+# Declare another type that uses an undeclared type
+Bar: SomeUndeclaredType
+
+# Declare a type that properly uses a declared type
+Baz: Foo
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_scope_integration.md:7:1:7:10
-UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

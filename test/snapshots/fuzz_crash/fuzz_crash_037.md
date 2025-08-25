@@ -18,13 +18,12 @@ KwModule OpenSquare CloseSquare MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+<malformed>
 ~~~
 # EXPECTED
-INVALID ESCAPE SEQUENCE - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - fuzz_crash_037.md:1:9:1:10
-PARSE ERROR - fuzz_crash_037.md:1:10:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:9 to 1:9

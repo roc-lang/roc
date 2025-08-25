@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 # Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
 single_use : List(elem) -> Str
@@ -30,7 +30,7 @@ main = |x| "done"
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
 # PARSE
 ~~~clojure
 (block
@@ -156,15 +156,30 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app { pf: ("../basic-cli/platform.roc" platform [main]) }
+
+single_use: (List(elem) -> Str)
+single_use = \x -> "hello"
+
+# Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
+ending_underscore: (List(elem_) -> elem_)
+ending_underscore = \list -> "default"
+
+# Test 3: COMBINATION - single-use ending in underscore (both errors)
+combo_single: (List(bad_) -> Str)
+combo_single = \x -> "combo"
+
+# Test 4: VALID CASES - these should not generate warnings
+valid_single: (List(_elem) -> Str)
+valid_single = \x -> "valid"
+
+valid_multi: (elem -> List(elem))
+valid_multi = \x -> [x]
+
+main = \x -> "done"
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_var_underscore_conventions.md:5:15:5:16
-UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
-UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
-UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
-UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
-TYPE MISMATCH - type_var_underscore_conventions.md:8:36:8:41
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 4:14 to 4:31

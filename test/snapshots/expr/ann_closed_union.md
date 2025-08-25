@@ -39,7 +39,9 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+apple: [(Apple, IsFruit(Bool))]
+apple = Apple
+apple
 ~~~
 # EXPECTED
 NIL

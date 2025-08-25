@@ -16,10 +16,10 @@ OpUnaryMinus OpBang LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-h!
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:2
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

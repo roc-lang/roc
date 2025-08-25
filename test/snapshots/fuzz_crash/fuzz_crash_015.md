@@ -35,16 +35,15 @@ Int LowerIdent Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+0
+o0 | 0
+0_0_0
+0
+u8 | 0
+0__
 ~~~
 # EXPECTED
-LEADING ZERO - :0:0:0:0
-MISSING HEADER - fuzz_crash_015.md:1:1:1:4
-PARSE ERROR - fuzz_crash_015.md:1:4:1:6
-PARSE ERROR - fuzz_crash_015.md:2:1:2:4
-PARSE ERROR - fuzz_crash_015.md:3:1:3:4
-PARSE ERROR - fuzz_crash_015.md:3:4:3:6
-PARSE ERROR - fuzz_crash_015.md:4:1:4:3
+NIL
 # PROBLEMS
 **Pattern in Expression Context**
 at 2:2 to 2:3

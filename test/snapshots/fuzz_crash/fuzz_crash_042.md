@@ -35,12 +35,13 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+import u exposing [R]<malformed>
+g: (r -> (R | .a) | E)
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_042.md:1:19:1:20
-MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
-MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:19 to 1:19

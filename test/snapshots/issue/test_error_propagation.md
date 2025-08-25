@@ -40,10 +40,18 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+BadBase := _
+
+GoodAlias := BadBase
+
+value: GoodAlias
+value = "test"
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:13

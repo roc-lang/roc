@@ -46,7 +46,12 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+launchTheNukes: ({  } => Result)
+Bool
+LaunchNukeErr
+launchTheNukes = \{  } -> ...
+
+launchTheNukes({  })
 ~~~
 # EXPECTED
 NIL

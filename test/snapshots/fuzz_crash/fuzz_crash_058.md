@@ -13,27 +13,69 @@ app[]{f:platform"",r:"
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon MalformedString CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(block
+  (list_literal)
+  (record_literal
+    (binop_colon
+      (lc "f")
+      (malformed malformed:expr_unexpected_token)
+    )
+    (str_literal_small "")
+    (binop_colon
+      (lc "r")
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app {  }
+
+[]{ f: <malformed>, "", r: <malformed> }
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+NIL
 # PROBLEMS
+**Expected Open Curly Brace**
+at 1:1 to 1:4
+
 **Parse Error**
+at 1:9 to 1:9
+
+**Parse Error**
+at 1:22 to 1:22
+
+**Unsupported Node**
+at 1:4 to 1:5
+
+**Unsupported Node**
+at 1:9 to 1:9
+
+**Unsupported Node**
 at 1:22 to 1:22
 
 # CANONICALIZE
 ~~~clojure
-(empty)
+(Expr.block
+  (Expr.malformed)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "f")
+      (Expr.malformed)
+    )
+    (Expr.str_literal_small)
+    (Expr.binop_colon
+      (Expr.lookup "r")
+      (Expr.malformed)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag block :type "{}")
 ~~~
 # TYPES
 ~~~roc
-# No top-level expression found in file
 ~~~

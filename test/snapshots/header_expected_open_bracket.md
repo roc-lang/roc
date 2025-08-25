@@ -16,10 +16,11 @@ KwModule ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
 ~~~
 # EXPECTED
-PARSE ERROR - header_expected_open_bracket.md:1:7:1:7
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:7

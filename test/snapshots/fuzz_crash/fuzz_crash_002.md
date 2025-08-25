@@ -46,29 +46,11 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+modu: (((((((<malformed>: <malformed>): <malformed>): <malformed>): <malformed>): <malformed>): <malformed>): <malformed>)
+le[<malformed>]
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_002.md:1:1:1:5
-PARSE ERROR - fuzz_crash_002.md:1:5:1:6
-PARSE ERROR - fuzz_crash_002.md:1:6:1:7
-PARSE ERROR - fuzz_crash_002.md:1:7:1:8
-PARSE ERROR - fuzz_crash_002.md:1:8:1:9
-PARSE ERROR - fuzz_crash_002.md:1:9:1:10
-PARSE ERROR - fuzz_crash_002.md:1:10:1:11
-PARSE ERROR - fuzz_crash_002.md:1:11:1:12
-PARSE ERROR - fuzz_crash_002.md:1:12:1:13
-PARSE ERROR - fuzz_crash_002.md:1:13:1:14
-PARSE ERROR - fuzz_crash_002.md:1:14:1:15
-PARSE ERROR - fuzz_crash_002.md:1:15:1:16
-PARSE ERROR - fuzz_crash_002.md:1:16:1:17
-PARSE ERROR - fuzz_crash_002.md:1:17:1:18
-PARSE ERROR - fuzz_crash_002.md:1:18:1:19
-PARSE ERROR - fuzz_crash_002.md:1:19:1:20
-PARSE ERROR - fuzz_crash_002.md:1:20:1:21
-PARSE ERROR - fuzz_crash_002.md:1:21:1:23
-PARSE ERROR - fuzz_crash_002.md:1:23:1:24
-PARSE ERROR - fuzz_crash_002.md:1:24:1:25
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:6 to 1:6

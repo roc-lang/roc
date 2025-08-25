@@ -30,7 +30,9 @@ OpenCurly LowerIdent OpAssign String LowerIdent OpAssign String String CloseCurl
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+hello = "Hello"
+world = "World"
+"${hello} ${world}"
 ~~~
 # EXPECTED
 NIL

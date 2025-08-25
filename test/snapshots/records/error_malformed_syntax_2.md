@@ -27,13 +27,10 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpAssign String CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+age: (42, name) = "Alice"
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
-UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
-MALFORMED TYPE - error_malformed_syntax_2.md:1:8:1:10
-UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:17 to 1:17

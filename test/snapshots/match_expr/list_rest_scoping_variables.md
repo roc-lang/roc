@@ -21,18 +21,23 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when data is {
+	[<unary_double_dot>]
+	<malformed>
+	1
+	[(first, <unary_double_dot>)]
+	<malformed>
+	first
+	[(<unary_double_dot>, last)]
+	<malformed>
+	last
+	[(first, <unary_double_dot>, last)]
+	<malformed>
+	first + last
+} -> <malformed>
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
-UNDEFINED VARIABLE - list_rest_scoping_variables.md:1:7:1:11
-UNUSED VARIABLE - list_rest_scoping_variables.md:2:8:2:8
-UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:15
-UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:8
-UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:15
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:12

@@ -16,7 +16,7 @@ Float ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1.23456789012345678e10
 ~~~
 # EXPECTED
 NIL

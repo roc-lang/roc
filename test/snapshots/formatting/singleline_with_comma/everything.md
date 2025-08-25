@@ -250,22 +250,27 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+# Import exposing
+import I1 exposing [I11, I12]
+import I2 exposing [I21]<malformed>Ias1<malformed>
+I22
+<malformed>Ias2<malformed>
+<malformed>
+A(a): (a where a() | .a1: (a -> (a -> (<malformed> -> (Str, a() | .a2): (a -> (a -> (<malformed> -> ((Str, B(b)): b where b() | .b1: (b -> (b -> (<malformed> -> (Str, b() | .b2): (b -> (b -> (<malformed> -> (Str, C((a, b, <malformed>): (a, b, <malformed>)))))))))))))))))
+D((a, b, <malformed>): C((a, b, <malformed>)))
+E: {
+	a: ((Str, b): Str, <malformed>)
+	F: [
+		(A, B, <malformed>),
+	]
+	g: (e -> e where e() | A, e() | B, h) = <malformed>
+}
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:77
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:9:1:9:77
-MODULE NOT FOUND - everything.md:4:1:4:31
-MODULE NOT FOUND - everything.md:5:1:5:47
-UNUSED VARIABLE - everything.md:26:10:26:11
-UNUSED VARIABLE - everything.md:27:9:27:10
-UNUSED VARIABLE - everything.md:28:11:28:12
-UNUSED VARIABLE - everything.md:29:10:29:11
-UNUSED VARIABLE - everything.md:19:2:19:4
-UNUSED VARIABLE - everything.md:20:2:20:4
-UNUSED VARIABLE - everything.md:21:2:21:4
-UNUSED VARIABLE - everything.md:22:2:22:4
-UNUSED VARIABLE - everything.md:23:2:23:4
+NIL
 # PROBLEMS
 **Parse Error**
 at 5:25 to 5:25

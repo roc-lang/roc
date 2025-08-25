@@ -282,29 +282,62 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	Color,
+	ModuleA.ModuleB.TypeC,
+	Result,
+	ExternalModule,
+]
+
+<malformed>ModuleB.TypeC<malformed>
+Result<malformed>
+ExternalModule<malformed>
+<malformed>
+
+import Basics exposing [Result]
+import Color
+import ModuleA exposing [ModuleB, TypeC]
+import ExternalModule exposing [ExtMod]
+
+# Simple qualified type
+simpleQualified: Color.RGB
+simpleQualified = Color.RGB({
+	r: (((255, g): 0, b): 0)
+})
+
+# Aliased qualified type
+aliasedQualified: ExtMod.DataType
+aliasedQualified = (ExtMod.DataType) | Default
+
+# Multi-level qualified type
+multiLevelQualified: (ModuleA.ModuleB) | TypeC
+multiLevelQualified = TypeC | .new
+
+# Using qualified type with generics
+resultType: Result.Result((I32, Str))
+resultType = Result.Ok(42)
+getColor: ({  } -> Color.RGB)
+getColor = \_ -> Color.RGB({
+	r: (((0, g): 255, b): 0)
+})
+
+# Function accepting qualified type
+processColor: (Color.RGB -> Str)
+processColor = \color -> "Color processed"
+
+# Multiple qualified types in a function signature
+transform: (Result.Result((Color.RGB, ExtMod.Error)) -> (ModuleA.ModuleB) | TypeC)
+transform = \result -> when result is {
+	Result.Ok(rgb)
+	<malformed>
+	TypeC | .fromColor(rgb)
+	Result.Err(err)
+	<malformed>
+	TypeC | .default
+} -> <malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
-PARSE ERROR - qualified_type_canonicalization.md:10:15:10:23
-PARSE ERROR - qualified_type_canonicalization.md:10:24:10:32
-PARSE ERROR - qualified_type_canonicalization.md:10:33:10:34
-PARSE ERROR - qualified_type_canonicalization.md:10:39:10:40
-MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
-MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
-UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
-UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
-UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
-UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 3:12

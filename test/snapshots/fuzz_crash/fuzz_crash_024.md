@@ -38,22 +38,19 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	<malformed>,
+]
+
+{
+	pf: <malformed>
+	<malformed>
+	var t = <malformed>
+	var t = 0
+}
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
-PARSE ERROR - fuzz_crash_024.md:1:9:1:15
-PARSE ERROR - fuzz_crash_024.md:1:18:1:19
-UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_024.md:1:24:1:32
-PARSE ERROR - fuzz_crash_024.md:1:33:1:34
-PARSE ERROR - fuzz_crash_024.md:1:34:1:53
-PARSE ERROR - fuzz_crash_024.md:1:53:1:53
-PARSE ERROR - fuzz_crash_024.md:4:1:4:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
-PARSE ERROR - fuzz_crash_024.md:7:1:7:4
-MALFORMED TYPE - fuzz_crash_024.md:1:24:1:32
-UNRECOGNIZED SYNTAX - fuzz_crash_024.md:4:8:4:9
-DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:9 to 1:9

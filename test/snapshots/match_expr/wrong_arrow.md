@@ -19,12 +19,19 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpArrow UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when l is {
+	[]
+	<malformed>
+	Err(EmptyList)
+	[<unary_double_dot>]
+	e
+	<malformed>
+	<malformed>
+	Ok(e)
+} -> <malformed>
 ~~~
 # EXPECTED
-PARSE ERROR - wrong_arrow.md:2:8:2:8
-PARSE ERROR - wrong_arrow.md:3:13:3:13
-UNDEFINED VARIABLE - wrong_arrow.md:1:7:1:8
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:9

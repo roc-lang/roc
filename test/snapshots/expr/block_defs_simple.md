@@ -36,7 +36,9 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign LowerIdent OpPlus Int Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x = 42
+y = x + 1
+y * 2
 ~~~
 # EXPECTED
 NIL

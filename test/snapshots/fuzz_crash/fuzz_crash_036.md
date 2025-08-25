@@ -20,11 +20,14 @@ KwModule OpenSquare CloseSquare OpenCurly UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+{
+	B
+}
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_036.md:1:9:1:10
-PARSE ERROR - fuzz_crash_036.md:1:11:1:11
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:9 to 1:11

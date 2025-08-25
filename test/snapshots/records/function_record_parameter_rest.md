@@ -29,7 +29,7 @@ OpBar OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpBar String ~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\{ first_name: first_name, ..rest } -> "Hello ${first_name} ${rest.last_name}"
 ~~~
 # EXPECTED
 NIL

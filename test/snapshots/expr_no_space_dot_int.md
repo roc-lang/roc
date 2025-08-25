@@ -26,11 +26,13 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign LowerIdent Dot Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+foo = asd | 0
 ~~~
 # EXPECTED
-PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
-UNRECOGNIZED SYNTAX - expr_no_space_dot_int.md:3:10:3:12
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

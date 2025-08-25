@@ -24,10 +24,14 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool # Comment after cond {
+	1
+} else {
+	2
+}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_comments_complex.md:2:2:2:6
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 3:3

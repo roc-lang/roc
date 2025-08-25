@@ -22,10 +22,10 @@ LowerIdent OpenRound Int Comma Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+add((5, 3))
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - function_call.md:1:1:1:4
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

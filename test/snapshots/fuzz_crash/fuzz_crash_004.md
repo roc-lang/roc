@@ -18,10 +18,10 @@ UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+F
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_004.md:1:1:1:2
+NIL
 # PROBLEMS
 NIL
 # CANONICALIZE

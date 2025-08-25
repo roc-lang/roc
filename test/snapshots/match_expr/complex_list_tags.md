@@ -23,23 +23,35 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when events is {
+	[]
+	<malformed>
+	"no events"
+	[Click((x, y))]
+	<malformed>
+	"single click at (${Num.toStr(x)}, ${Num.toStr(y)})"
+	[(KeyPress(key), <unary_double_dot>)]
+	rest
+	<malformed>
+	<malformed>
+	"key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
+	[(Move((dx, dy)), Move((dx2, dy2)), <unary_double_dot>)]
+	others
+	<malformed>
+	<malformed>
+	"moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+	[(Scroll(amount), Click((x, y)), <unary_double_dot>)]
+	remaining
+	<malformed>
+	<malformed>
+	"scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
+	_
+	<malformed>
+	"other event pattern"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
-UNDEFINED VARIABLE - complex_list_tags.md:3:42:3:51
-UNDEFINED VARIABLE - complex_list_tags.md:3:59:3:68
-UNDEFINED VARIABLE - complex_list_tags.md:4:59:4:68
-UNDEFINED VARIABLE - complex_list_tags.md:4:69:4:77
-UNDEFINED VARIABLE - complex_list_tags.md:5:62:5:71
-UNDEFINED VARIABLE - complex_list_tags.md:5:79:5:88
-UNDEFINED VARIABLE - complex_list_tags.md:5:101:5:110
-UNDEFINED VARIABLE - complex_list_tags.md:5:119:5:128
-UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
-UNDEFINED VARIABLE - complex_list_tags.md:6:65:6:74
-UNDEFINED VARIABLE - complex_list_tags.md:6:100:6:109
-UNDEFINED VARIABLE - complex_list_tags.md:6:116:6:125
-UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:14

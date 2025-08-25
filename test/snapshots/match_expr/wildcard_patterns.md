@@ -20,11 +20,20 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when value is {
+	Answer
+	<malformed>
+	"the answer"
+	Zero
+	<malformed>
+	"zero"
+	other
+	<malformed>
+	"something else"
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - wildcard_patterns.md:1:7:1:12
-UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:13

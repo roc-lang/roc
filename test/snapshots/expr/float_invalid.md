@@ -19,10 +19,10 @@ Float Dot Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+3.14.15 | 15
 ~~~
 # EXPECTED
-PARSE ERROR - float_invalid.md:1:5:1:8
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:1 to 1:8

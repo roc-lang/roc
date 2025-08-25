@@ -23,11 +23,13 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+import S
+0
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_052.md:3:1:3:2
-MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:9 to 2:2

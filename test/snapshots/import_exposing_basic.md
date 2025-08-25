@@ -67,10 +67,22 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	main,
+]
+
+import json exposing [Json, decode, encode]
+main = {
+	data = {
+		name: (("Alice", age): 30)
+	}
+	encoded = encode(data)
+	decoded = decode(encoded)
+	decoded
+}
 ~~~
 # EXPECTED
-MODULE NOT FOUND - import_exposing_basic.md:3:1:3:43
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:42

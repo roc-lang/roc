@@ -31,7 +31,15 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	a,
+	b
+]
+
+
+a = 'a'
+b = 'a'
+b = 'a'
 ~~~
 # EXPECTED
 NIL

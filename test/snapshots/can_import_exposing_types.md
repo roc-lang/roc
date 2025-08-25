@@ -300,32 +300,55 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+
+import json exposing [Json, Value, Error, Config]
+import http exposing [Client, Http, Request, Response, Status]
+import utils exposing [Result, Result]
+parseJson: (Str -> Result((Value, Error)))
+parseJson = \input -> Json | .parse(input)
+handleRequest: (Request -> Response)
+handleRequest = \req -> {
+	result = Json | .decode(req | .body)
+	when result is {
+		Ok(value)
+		<malformed>
+		Http | .ok(value)
+		Err(error)
+		<malformed>
+		Http | .badRequest(error)
+	} -> <malformed>
+	processData: (Config -> (List(Value) -> Result((List(Value), Error))))
+	processData = \(config, values) -> List | .mapTry((values, \v -> (Json | .validateWith((config, v)), <malformed>)))
+	ServerConfig: {
+		jsonConfig: (((Config, httpStatus): Status, defaultResponse): Response, <malformed>)
+		createClient: (Config -> Http.Client)
+		createClient = \config -> Http | .clientWith(config)
+		handleResponse: (Response -> Str)
+		handleResponse = \response -> when response | .status is {
+			Ok(status)
+			<malformed>
+			Http | .statusToString(status)
+			Err(error)
+			<malformed>
+			Error | .toString(error)
+		} -> combineResults: Result((Value, Error)) -> (Status -> Result((Response, Error)))
+		combineResults = \(jsonResult, httpStatus) -> when jsonResult is {
+			Ok(value)
+			<malformed>
+			Ok({
+				body: ((Json | .encode(value), status): httpStatus)
+			})
+			Err(error)
+			<malformed>
+			Err(error)
+		} -> <malformed>
+	}
+}
 ~~~
 # EXPECTED
-UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
-UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
-UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
-MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:49
-MODULE NOT FOUND - can_import_exposing_types.md:4:1:4:64
-MODULE NOT FOUND - can_import_exposing_types.md:5:1:5:38
-UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
-UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
-UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
-UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
-UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
-UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
-UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
-UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
-UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
-UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
-UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
-UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
-UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
-UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
-UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
-UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
-UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
+NIL
 # PROBLEMS
 **Parse Error**
 at 15:5 to 15:18

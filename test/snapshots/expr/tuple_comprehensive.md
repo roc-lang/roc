@@ -137,17 +137,25 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+add_one = \_ -> {  }
+x = 10
+y = 20
+z = 30
+
+# example tuples
+empty = ()
+single = 42
+pair = (1, 2)
+triple = (1, "hello", True)
+nested = ((1, 2), (3, 4))
+mixed = (add_one(5), "world", [(1, 2, 3)])
+with_vars = (x, y, z)
+with_lambda = \n -> (n + 1, 42)
+
+empty
 ~~~
 # EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
-UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
-UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
-UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
-UNUSED VARIABLE - tuple_comprehensive.md:13:2:13:8
-UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
-UNUSED VARIABLE - tuple_comprehensive.md:15:2:15:11
-UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:15 to 3:19

@@ -52,7 +52,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar L
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+\outer -> \middle -> \inner -> (outer + middle) + inner(1)(2)(3)
 ~~~
 # EXPECTED
 NIL

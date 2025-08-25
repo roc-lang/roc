@@ -109,28 +109,24 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [
+	json_encoder,
+]
+
+import json exposing [Core, Utf8, Encoder]
+json_encoder: Encoder
+json_encoder = ((Json.Core) | Utf8) | .defaultEncoder
+
+# Test with qualified type in annotation
+process: (((json.Core) | Utf8) | Encoder -> Str)
+process = \encoder -> "processing"
+
+# Test with multiple qualifiers
+data: ((json.Core) | Utf8) | EncodedData
+data = ((json.Core) | Utf8) | .encode("hello")
 ~~~
 # EXPECTED
-PARSE ERROR - multi_qualified_import.md:3:17:3:22
-PARSE ERROR - multi_qualified_import.md:3:23:3:31
-PARSE ERROR - multi_qualified_import.md:3:32:3:33
-PARSE ERROR - multi_qualified_import.md:3:40:3:41
-PARSE ERROR - multi_qualified_import.md:14:12:14:17
-PARSE ERROR - multi_qualified_import.md:14:17:14:22
-PARSE ERROR - multi_qualified_import.md:14:22:14:29
-PARSE ERROR - multi_qualified_import.md:14:29:14:30
-PARSE ERROR - multi_qualified_import.md:14:30:14:31
-PARSE ERROR - multi_qualified_import.md:14:31:14:36
-PARSE ERROR - multi_qualified_import.md:14:36:14:37
-PARSE ERROR - multi_qualified_import.md:14:37:14:38
-MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
-UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
-UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
-MODULE NOT IMPORTED - multi_qualified_import.md:9:11:9:33
-UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
-MODULE NOT IMPORTED - multi_qualified_import.md:13:8:13:34
-UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
+NIL
 # PROBLEMS
 **Unsupported Node**
 at 3:1 to 3:40

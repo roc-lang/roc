@@ -20,10 +20,20 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+when nestedList is {
+	[([x], [y])]
+	<malformed>
+	x + y
+	[[(x, y)]]
+	<malformed>
+	x - y
+	[(x, [y])]
+	<malformed>
+	x * y
+} -> <malformed>
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
+NIL
 # PROBLEMS
 **Parse Error**
 at 1:1 to 1:18

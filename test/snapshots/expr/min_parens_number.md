@@ -16,7 +16,7 @@ OpUnaryMinus OpenRound Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-8
 ~~~
 # EXPECTED
 NIL
