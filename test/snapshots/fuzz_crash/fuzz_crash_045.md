@@ -8,17 +8,17 @@ type=file
 platform""requires{}{}exposes[]packages{}provides[
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_045.md:1:51:1:51
+PARSE ERROR - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_provides_close_square`
+A parsing error occurred: `expected_provides_open_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_045.md:1:51:1:51:**
+**fuzz_crash_045.md:1:50:1:51:**
 ```roc
 platform""requires{}{}exposes[]packages{}provides[
 ```
-                                                  ^
+                                                 ^
 
 
 # TOKENS
@@ -28,7 +28,7 @@ KwPlatform(1:1-1:9),StringStart(1:9-1:10),StringPart(1:10-1:10),StringEnd(1:10-1
 # PARSE
 ~~~clojure
 (file @1.1-1.51
-	(malformed-header @1.50-1.51 (tag "expected_provides_close_square"))
+	(malformed-header @1.50-1.51 (tag "expected_provides_open_curly"))
 	(statements))
 ~~~
 # FORMATTED

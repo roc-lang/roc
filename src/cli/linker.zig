@@ -35,16 +35,42 @@ pub const TargetFormat = enum {
     }
 };
 
+/// Target ABI for runtime-configurable linking
+pub const TargetAbi = enum {
+    musl,
+    gnu,
+
+    /// Convert from RocTarget to TargetAbi
+    pub fn fromRocTarget(roc_target: anytype) TargetAbi {
+        // Use string matching to avoid circular imports
+        const target_str = @tagName(roc_target);
+        if (std.mem.endsWith(u8, target_str, "musl")) {
+            return .musl;
+        } else {
+            return .gnu;
+        }
+    }
+};
+
 /// Configuration for linking operation
 pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
+
+    /// Target ABI - determines static vs dynamic linking strategy
+    target_abi: ?TargetAbi = null, // null means detect from system
 
     /// Output executable path
     output_path: []const u8,
 
     /// Input object files to link
     object_files: []const []const u8,
+
+    /// Platform-provided files to link before object files (e.g., Scrt1.o, crti.o, host.o)
+    platform_files_pre: []const []const u8 = &.{},
+
+    /// Platform-provided files to link after object files (e.g., crtn.o)
+    platform_files_post: []const []const u8 = &.{},
 
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
@@ -113,11 +139,32 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("-o");
             try args.append(config.output_path);
 
-            // Suppress LLD warnings
+            // Prevent hidden linker behaviour -- only explicit platfor mdependencies
+            try args.append("-nostdlib");
+            // Remove unused sections to reduce binary size
+            try args.append("--gc-sections");
+            // TODO make the confirugable instead of using comments
+            // Suppress linker warnings
             try args.append("-w");
+            // Verbose linker for debugging (uncomment as needed)
+            // try args.append("--verbose");
+            // try args.append("--print-map");
+            // try args.append("--error-limit=0");
 
-            // Use static linking to avoid dynamic linker dependency issues
-            try args.append("-static");
+            // Determine target ABI
+            const target_abi = config.target_abi orelse if (builtin.target.abi == .musl) TargetAbi.musl else TargetAbi.gnu;
+
+            switch (target_abi) {
+                .musl => {
+                    // Static musl linking
+                    try args.append("-static");
+                },
+                .gnu => {
+                    // Dynamic GNU linking
+                    try args.append("-dynamic-linker");
+                    try args.append("/lib64/ld-linux-x86-64.so.2");
+                },
+            }
         },
         .windows => {
             // Add linker name for Windows COFF
@@ -160,14 +207,30 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         },
     }
 
+    // Add platform-provided files that come before object files
+    for (config.platform_files_pre) |platform_file| {
+        try args.append(platform_file);
+    }
+
     // Add object files
     for (config.object_files) |obj_file| {
         try args.append(obj_file);
     }
 
+    // Add platform-provided files that come after object files
+    for (config.platform_files_post) |platform_file| {
+        try args.append(platform_file);
+    }
+
     // Add any extra arguments
     for (config.extra_args) |extra_arg| {
         try args.append(extra_arg);
+    }
+
+    // Debug: Print the linker command
+    std.log.debug("Linker command:", .{});
+    for (args.items) |arg| {
+        std.log.debug("  {s}", .{arg});
     }
 
     // Convert to null-terminated strings for C API
@@ -253,6 +316,8 @@ test "link config creation" {
     try std.testing.expect(config.target_format == TargetFormat.detectFromSystem());
     try std.testing.expectEqualStrings("test_output", config.output_path);
     try std.testing.expectEqual(@as(usize, 2), config.object_files.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_pre.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_post.len);
 }
 
 test "target format detection" {

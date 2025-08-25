@@ -47,6 +47,8 @@ ZIG_EXTERN_C void ZigLLVMSetOptBisectLimit(LLVMContextRef context_ref, int limit
 ZIG_EXTERN_C void ZigLLVMEnableBrokenDebugInfoCheck(LLVMContextRef context_ref);
 ZIG_EXTERN_C bool ZigLLVMGetBrokenDebugInfo(LLVMContextRef context_ref);
 
+ZIG_EXTERN_C void ZigLLVMInitializeAllTargets();
+
 enum ZigLLVMTailCallKind {
     ZigLLVMTailCallKindNone,
     ZigLLVMTailCallKindTail,

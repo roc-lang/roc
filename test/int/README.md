@@ -1,4 +1,4 @@
-# Test Platform 
+# Test Platform
 
 This directory contains a primitive test platform for Roc and demonstrates how to pass multiple arguments from the host.
 
@@ -6,7 +6,7 @@ This directory contains a primitive test platform for Roc and demonstrates how t
 - **Description**: Takes two random integers from the host and returns their product
 
 ```bash
-zig build -Dllvm
+zig build
 
 # Run (ignore cached files)
 ./zig-out/bin/roc --no-cache test/int/app.roc

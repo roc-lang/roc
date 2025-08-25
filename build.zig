@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
+    const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -335,16 +335,19 @@ fn addMainExe(
     });
 
     // Create test platform host static library (str)
-    const test_platform_host_lib = b.addStaticLibrary(.{
+    const test_platform_host_lib = b.addLibrary(.{
         .name = "test_platform_str_host",
-        .root_source_file = b.path("test/str/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/str/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
     });
-    test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;
 
@@ -355,16 +358,20 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
-    const test_platform_int_host_lib = b.addStaticLibrary(.{
+    const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
-        .root_source_file = b.path("test/int/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/int/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
     });
-    test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_int_host_lib.bundle_compiler_rt = true;
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
@@ -373,46 +380,44 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_lib = b.addStaticLibrary(.{
+    const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_source_file = b.path("src/builtins/static_lib.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
+        .strip = true,
         .pic = true, // Enable Position Independent Code for PIE compatibility
     });
-    // Add the builtins module so it can import "builtins"
-    builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Force bundle compiler-rt to resolve math symbols
-    builtins_lib.bundle_compiler_rt = true;
 
-    // Create shim static library at build time
-    const shim_lib = b.addStaticLibrary(.{
-        .name = "roc_shim",
-        .root_source_file = b.path("src/interpreter_shim/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+    // Create shim static library at build time - fully static without libc
+    //
+    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
+    const shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
     });
-    shim_lib.linkLibC();
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
-    shim_lib.linkLibrary(builtins_lib);
-    // Force bundle compiler-rt to resolve math symbols
+    shim_lib.addObject(builtins_obj);
+    // Bundle compiler-rt for our math symbols
     shim_lib.bundle_compiler_rt = true;
-
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
-
-    // We need to copy the shim library to the src/ directory for embedding as binary data
+    // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
-    const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", shim_filename }));
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();

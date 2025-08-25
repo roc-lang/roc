@@ -606,6 +606,8 @@ pub const Diagnostic = struct {
         expected_provides,
         expected_provides_close_square,
         expected_provides_open_square,
+        expected_provides_close_curly,
+        expected_provides_open_curly,
         expected_requires,
         expected_requires_rigids_close_curly,
         expected_requires_rigids_open_curly,
@@ -1646,12 +1648,13 @@ pub const Header = union(enum) {
 
                 // Provides
                 const provides = ast.store.getCollection(a.provides);
+                const provides_items = ast.store.recordFieldSlice(.{ .span = provides.span });
                 const provides_begin = tree.beginNode();
                 try tree.pushStaticAtom("provides");
                 try ast.appendRegionInfoToSexprTree(env, tree, provides.region);
                 const attrs6 = tree.beginNode();
-                for (ast.store.exposedItemSlice(.{ .span = provides.span })) |exposed| {
-                    const item = ast.store.getExposedItem(exposed);
+                for (provides_items) |item_idx| {
+                    const item = ast.store.getRecordField(item_idx);
                     try item.pushToSExprTree(gpa, env, ast, tree);
                 }
                 try tree.endNode(provides_begin, attrs6);

@@ -287,16 +287,16 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "utils." ++ func_name);
 }
 
-// Custom panic function, as builtin Zig version errors during LLVM verification
-/// Panic function for the Roc builtins C interface.
-/// This function handles runtime errors and panics in a way that's compatible
-/// with the C ABI and doesn't interfere with LLVM verification.
-pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    if (comptime builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });
-        std.process.abort();
-    } else {
-        // Can't call abort or print from wasm. Just leave it as unreachable.
-        unreachable;
-    }
-}
+// // Custom panic function, as builtin Zig version errors during LLVM verification
+// /// Panic function for the Roc builtins C interface.
+// /// This function handles runtime errors and panics in a way that's compatible
+// /// with the C ABI and doesn't interfere with LLVM verification.
+// pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+//     if (comptime builtin.target.cpu.arch != .wasm32) {
+//         std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });
+//         std.process.abort();
+//     } else {
+//         // Can't call abort or print from wasm. Just leave it as unreachable.
+//         unreachable;
+//     }
+// }
