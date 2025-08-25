@@ -25,7 +25,9 @@ MultilineStringStart(2:1-2:4),StringPart(2:4-2:23),EndOfFile(2:23-2:23),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"""This is a string
+"""With multiple lines
+
 ~~~
 # CANONICALIZE
 ~~~clojure

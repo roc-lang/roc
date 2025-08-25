@@ -1659,8 +1659,8 @@ main! = |_| { # Yeah Ie
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
 	list = [
-		, # afarg
-		,
+				, # afarg
+				,
 		456, # ee
 	]
 	for n in list {
