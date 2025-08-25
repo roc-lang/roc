@@ -87,8 +87,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpenRound Underscore CloseRound OpCol
 ~~~roc
 module []
 
-
-# Type with underscore in parameter position
 MyType(_): Str
 
 # Type with underscore and regular parameter
@@ -101,6 +99,8 @@ MyType3((a, _)): a
 ComplexType((_, b)): {
 	field: b
 }
+
+# Type with multiple underscores
 MultiType((_, _, c)): c
 ~~~
 # EXPECTED

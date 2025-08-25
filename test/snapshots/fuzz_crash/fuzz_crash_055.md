@@ -35,7 +35,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
 ~~~roc
 module []
 
-r: (a where a() | .h: s)
+r: (a where module(a) | .h: s)
 ~~~
 # EXPECTED
 NIL

@@ -57,7 +57,6 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-
 import Data exposing [Person]
 expectsPerson: (Person -> Str)
 expectsPerson = \p -> "Got a person"

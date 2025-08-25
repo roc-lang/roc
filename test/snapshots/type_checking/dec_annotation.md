@@ -30,7 +30,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~roc
 module []
 
-
 x: Dec
 x = 123.456
 ~~~

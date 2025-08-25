@@ -16,7 +16,7 @@ OpBang LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-blah!
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -115,50 +115,53 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result1")
-        (apply_lc
-          (lc "add")
-          (num_literal_i32 5)
-        )
-      )
-      (binop_equals
-        (lc "result2")
-        (apply_lc
-          (lc "multiply")
-          (num_literal_i32 3)
-        )
-      )
-      (binop_equals
-        (lc "result3")
-        (apply_lc
-          (lc "process")
-          (num_literal_i32 7)
-        )
-      )
-      (binop_equals
-        (lc "result4")
-        (apply_lc
-          (lc "double")
-          (num_literal_i32 4)
-        )
-      )
-      (binop_plus
-        (binop_plus
-          (binop_plus
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
             (lc "result1")
-            (lc "result2")
+            (apply_lc
+              (lc "add")
+              (num_literal_i32 5)
+            )
           )
-          (lc "result3")
+          (binop_equals
+            (lc "result2")
+            (apply_lc
+              (lc "multiply")
+              (num_literal_i32 3)
+            )
+          )
+          (binop_equals
+            (lc "result3")
+            (apply_lc
+              (lc "process")
+              (num_literal_i32 7)
+            )
+          )
+          (binop_equals
+            (lc "result4")
+            (apply_lc
+              (lc "double")
+              (num_literal_i32 4)
+            )
+          )
+          (binop_plus
+            (binop_plus
+              (binop_plus
+                (lc "result1")
+                (lc "result2")
+              )
+              (lc "result3")
+            )
+            (lc "result4")
+          )
         )
-        (lc "result4")
+      )
+      (args
+        (underscore)
       )
     )
   )
@@ -166,7 +169,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 add: (U64 -> U64)
 add = \unused -> 42
@@ -183,8 +191,7 @@ process = \_input -> 100
 double: (U64 -> U64)
 double = \value -> value * 2
 
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	result1 = add(5)
 	result2 = multiply(3)
 	result3 = process(7)
@@ -195,9 +202,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 19:7 to 19:7
-
 **Unsupported Node**
 at 4:7 to 4:17
 
@@ -223,7 +227,10 @@ at 16:10 to 16:20
 at 17:10 to 17:18
 
 **Unsupported Node**
-at 19:5 to 19:7
+at 19:1 to 19:6
+
+**Unsupported Node**
+at 19:9 to 19:13
 
 # CANONICALIZE
 ~~~clojure
@@ -248,13 +255,12 @@ at 19:5 to 19:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

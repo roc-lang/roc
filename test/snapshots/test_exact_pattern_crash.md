@@ -197,7 +197,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 Pair((a, b)): (a, b)
 
@@ -207,7 +212,11 @@ swap_pair = \(x, y) -> (y, x)
 
 # Another polymorphic function to create more complex instantiation
 map_pair: (Pair((a, b)) -> ((a -> c) -> ((b -> d) -> Pair((c, d)))))
-map_pair = \((x, y), f, g) -> (f(x), g(y))
+map_pair = \(
+	(x, y),
+	f,
+	g
+) -> (f(x), g(y))
 main = {
 	p1 = swap_pair((1, 2))
 	p2 = map_pair((3, 4, \x -> x + 1, \y -> y * 2))

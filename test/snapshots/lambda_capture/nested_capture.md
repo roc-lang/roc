@@ -55,7 +55,7 @@ OpenCurly LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar OpBar LowerIdent 
 ~~~roc
 f = \a -> \b -> a + b
 g = f(10)
-g(5)
+g(5) # Expect: 15
 ~~~
 # EXPECTED
 NIL

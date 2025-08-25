@@ -26,9 +26,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Int LowerIdent ~~~
 ~~~roc
 module []
 
-
-x = 0xFF
-xFF
+x = 0xFFxFF
 ~~~
 # EXPECTED
 NIL

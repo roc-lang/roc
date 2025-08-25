@@ -22,15 +22,15 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~roc
 when shape is {
 	Circle(radius)
-	<malformed>
+	=>
 	(3.14 * radius) * radius
 	Rectangle((width, height))
-	<malformed>
+	=>
 	width * height
 	Triangle((base, height))
-	<malformed>
+	=>
 	(0.5 * base) * height
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

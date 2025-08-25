@@ -33,47 +33,57 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 # PARSE
 ~~~clojure
 (block
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "unused_var")
-        (num_literal_i32 42)
-      )
-      (binop_equals
-        (lc "used_var")
-        (num_literal_i32 100)
-      )
-      (binop_equals
-        (lc "another_unused")
-        (str_literal_big "hello")
-      )
-      (binop_equals
-        (lc "_ignored")
-        (num_literal_i32 999)
-      )
-      (binop_equals
-        (lc "result")
-        (binop_plus
-          (lc "used_var")
-          (num_literal_i32 10)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "unused_var")
+            (num_literal_i32 42)
+          )
+          (binop_equals
+            (lc "used_var")
+            (num_literal_i32 100)
+          )
+          (binop_equals
+            (lc "another_unused")
+            (str_literal_big "hello")
+          )
+          (binop_equals
+            (lc "_ignored")
+            (num_literal_i32 999)
+          )
+          (binop_equals
+            (lc "result")
+            (binop_plus
+              (lc "used_var")
+              (num_literal_i32 10)
+            )
+          )
+          (binop_colon
+            (lc "result")
+            (lc "result")
+          )
         )
       )
-      (lc "result")
+      (args
+        (underscore)
+      )
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	unused_var = 42
 	
 
@@ -92,28 +102,27 @@ _ignored # Comment 1 =  # Comment 2
 
 # Use only the used_var
 result = used_var + 10
-	result
+	result: result
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:7 to 3:7
+**Unsupported Node**
+at 3:1 to 3:6
 
 **Unsupported Node**
-at 3:5 to 3:7
+at 3:9 to 3:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

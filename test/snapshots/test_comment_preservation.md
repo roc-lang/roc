@@ -43,12 +43,11 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpA
 ~~~roc
 module [
 	# First comment
-	foo, # inline comment after foo
-	bar, # inline comment after bar
+	foo,
+	# inline comment after foo
+	bar,
 ]
 
-
-# Comment before function
 foo = 42 # inline comment after value
 
 # Comment between functions

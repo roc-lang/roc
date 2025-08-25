@@ -33,15 +33,13 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
       )
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "ok")
-        )
-        (apply_uc
-          (uc "Err")
-          (lc "err")
-        )
+      (apply_uc
+        (uc "Ok")
+        (lc "ok")
+      )
+      (apply_uc
+        (uc "Err")
+        (lc "err")
       )
     )
   )
@@ -104,22 +102,25 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
 # FORMATTED
 ~~~roc
 module [
-	MyResult, ok, is_ok
+	MyResult,
+	ok,
+	is_ok,
 ]
 
+MyResult((ok, err)) := [Ok(ok), Err(err)]
 
-MyResult((ok, err)) := [(Ok(ok), Err(err))]
 ok: (ok -> MyResult((ok, _)))
 ok = \a -> MyResult.Ok(a)
+
 is_ok: (MyResult((_ok, _err)) -> Bool)
 is_ok = \result -> when result is {
 	MyResult.Ok(_)
-	<malformed>
+	=>
 	Bool.True
 	MyResult.Err(_)
-	<malformed>
+	=>
 	Bool.False
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL
@@ -140,7 +141,7 @@ at 9:18 to 12:2
 at 12:2 to 12:2
 
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:40
 
 **Unsupported Node**
 at 5:6 to 6:1

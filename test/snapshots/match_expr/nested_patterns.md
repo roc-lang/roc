@@ -23,24 +23,24 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenCurly LowerIdent OpColon O
 ~~~roc
 when data is {
 	Container({
-		items: [(First(x), <unary_double_dot>)]
+		items: [First(x), ..as]
 		rest
-		<malformed>
+		] })
 	})
-	<malformed>
-	x + List | .len(rest)
+	=>
+	x + List.len(rest)
 	Container({
 		items: []
 	})
-	<malformed>
+	=>
 	0
-	Wrapper([(Tag(value), Other(y))])
-	<malformed>
+	Wrapper([Tag(value), Other(y)])
+	=>
 	value + y
 	Simple(x)
-	<malformed>
+	=>
 	x
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

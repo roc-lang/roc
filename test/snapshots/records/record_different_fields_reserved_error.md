@@ -25,7 +25,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~
 # FORMATTED
 ~~~roc
-if <malformed> ((
+if : ((
 	(
 		(
 			(
@@ -33,14 +33,10 @@ if <malformed> ((
 					"conditional",
 					when,
 				): "pattern match",
-				<malformed>,
 			): "test assertion",
-			<malformed>,
 		): "module load",
-		<malformed>,
-	): Bool | .true,
-	<malformed>,
-): Bool | .false, <malformed>)
+	): Bool.true,
+): Bool.false)
 ~~~
 # EXPECTED
 NIL

@@ -45,10 +45,10 @@ module [
 	foo,
 ]
 
-"users.json"<malformed>data: Str
+"users.json"asdata: Str
 import Json
 
-foo = Json | .parse(data)
+foo = Json.parse(data)
 ~~~
 # EXPECTED
 NIL

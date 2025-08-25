@@ -47,62 +47,75 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "print_number")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (lc "n")
-    )
-    (binop_pipe
-      (uc "Stdout")
-      (dot_lc "line")
+  (binop_equals
+    (not_lc "print_number")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "Stdout")
+            (not_lc "line")
+          )
+          (lc "n")
+        )
+      )
+      (args
+        (lc "n")
+      )
     )
   )
-  (unary_not <unary>)
-  (lc "process")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (lc "x")
+  (binop_equals
+    (not_lc "process")
+    (lambda
+      (body
+        (apply_anon
+          (not_lc "print_number")
+          (apply_lc
+            (lc "multiply")
+            (tuple_literal
+              (lc "x")
+              (num_literal_i32 2)
+            )
+          )
+        )
+      )
+      (args
+        (lc "x")
+      )
     )
-    (lc "print_number")
   )
-  (unary_not <unary>)
-  (lc "main")
-  (unary_not <unary>)
-  (lc "process")
-  (unary_not <unary>)
+  (binop_equals
+    (not_lc "main")
+    (apply_anon
+      (not_lc "process")
+      (num_literal_i32 42)
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout]
+import pf.Stdout
 
 # Pure function with no annotation
-multiply = \(x, y) -> x * y
-print_number
-(<malformed>! | n) | (Stdout | .line)
-n!
-process
-(<malformed>! | x) | print_number
-multiply((x, 2))!
-main<malformed>!
-process42!
+multiply = \(
+	x,
+	y
+) -> x * y
+print_number! = \n -> Stdout.line!(n)
+process! = \x -> print_number!(multiply((x, 2)))
+main! = process!(42)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 9:15 to 9:15
-
-**Parse Error**
-at 12:10 to 12:10
-
-**Parse Error**
-at 14:7 to 14:7
-
 **Unsupported Node**
 at 3:1 to 3:17
 
@@ -110,37 +123,33 @@ at 3:1 to 3:17
 at 6:12 to 6:19
 
 **Unsupported Node**
-at 9:13 to 9:15
+at 9:1 to 9:14
 
 **Unsupported Node**
-at 9:21 to 9:27
+at 9:17 to 9:21
 
 **Unsupported Node**
-at 12:8 to 12:10
+at 12:1 to 12:9
 
 **Unsupported Node**
-at 14:7 to 14:7
+at 12:12 to 12:16
+
+**Unsupported Node**
+at 14:1 to 14:6
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "print_number")
-  (Expr.lambda)
-  (Expr.unary_not)
-  (Expr.lookup "process")
-  (Expr.lambda)
-  (Expr.unary_not)
-  (Expr.lookup "main")
-  (Expr.unary_not)
-  (Expr.lookup "process")
-  (Expr.unary_not)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[True, False]_others")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

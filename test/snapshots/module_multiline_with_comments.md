@@ -22,8 +22,9 @@ KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
 ~~~roc
 module # Comment after module keyword [
 	# Comment After exposes open
-	something, # Comment after exposed item
-	SomeType, # Comment after final exposed item
+	something,
+	# Comment after exposed item
+	SomeType,
 ]
 
 ~~~

@@ -58,7 +58,7 @@ module [
 ]
 
 import Decode exposing [Decode]
-decodeThings # After member name: (List(List(U8)) -> List(a) where a() | Decode)
+decodeThings # After member name: (List(List(U8)) -> List(a) # After anno where module(a) | Decode)
 ~~~
 # EXPECTED
 NIL

@@ -26,7 +26,7 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 package [
 	something,
 	SomeType,
-] packages {somePkg, ("../main.roc", <malformed>)}
+] packages {somePkg, ("../main.roc")}
 
 ~~~
 # EXPECTED

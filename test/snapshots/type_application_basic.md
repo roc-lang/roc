@@ -44,20 +44,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (apply_lc
-      (lc "processList")
-      (list_literal
-        (tuple_literal
-          (str_literal_small "one")
-          (str_literal_small "two")
-          (str_literal_big "three")
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processList")
+          (list_literal
+            (str_literal_small "one")
+            (str_literal_small "two")
+            (str_literal_big "three")
+          )
         )
+      )
+      (args
+        (underscore)
       )
     )
   )
@@ -65,19 +66,20 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 processList: (List(Str) -> U64)
-processList = \list -> list | .len()
-main
-(<malformed>! | _) | processList([("one", "two", "three")])
+processList = \list -> list.len()
+main! = \_ -> processList(["one", "two", "three"])
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 6:7 to 6:7
-
 **Unsupported Node**
 at 3:15 to 3:31
 
@@ -85,10 +87,10 @@ at 3:15 to 3:31
 at 4:15 to 4:22
 
 **Unsupported Node**
-at 6:5 to 6:7
+at 6:1 to 6:6
 
 **Unsupported Node**
-at 6:25 to 6:46
+at 6:9 to 6:13
 
 # CANONICALIZE
 ~~~clojure
@@ -98,13 +100,12 @@ at 6:25 to 6:46
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

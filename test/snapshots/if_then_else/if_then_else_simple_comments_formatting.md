@@ -18,9 +18,12 @@ KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if bool {
-	A # Comment after expr
-} else B
+if bool
+	{
+		A # Comment after expr
+	}
+else
+	B
 ~~~
 # EXPECTED
 NIL

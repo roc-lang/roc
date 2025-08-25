@@ -30,8 +30,9 @@ module []
 
 C: k || when 0 is {
 	0 | 0
-	<malformed>
-} -> <malformed>
+	"
+}
+} -> 
 ~~~
 # EXPECTED
 NIL

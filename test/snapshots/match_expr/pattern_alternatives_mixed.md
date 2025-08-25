@@ -25,23 +25,23 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
 ~~~roc
 when ... is {
 	(1 | 2) | 3
-	<malformed>
+	=>
 	"small numbers"
 	"hello" | "world"
-	<malformed>
+	=>
 	"greetings"
 	Ok(_) | Some(_)
-	<malformed>
+	=>
 	"success value"
 	[] | [_]
-	<malformed>
+	=>
 	"short list"((0, _)) | (_, 0)
-	<malformed>
+	=>
 	"has zero"
 	_
-	<malformed>
+	=>
 	"other"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

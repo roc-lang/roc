@@ -247,20 +247,27 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIden
 ~~~roc
 module []
 
-
-import json exposing [Parser, Config]
-import http exposing [Client, Auth, HttpAuth]
-import utils exposing [String, Format, padLeft]
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 parseConfig: (Config.Settings -> Str)
-parseConfig = \settings -> Config | .toString(settings)
+parseConfig = \settings -> Config.toString(settings)
+
+# Test multi-level value qualification
 authenticate: (Str -> (Str -> HttpAuth.Token))
-authenticate = \(user, pass) -> HttpAuth | .login((user, pass))
-processData: ((Config.Parser) | Advanced -> (Str -> Result((Str, (Config.Parser) | Error))))
-processData = \(advancedConfig, input) -> ((Config.Parser) | Advanced) | .parseWith((advancedConfig, input))
+authenticate = \(
+	user,
+	pass
+) -> HttpAuth.login((user, pass))
+processData: (Config.Parser | Advanced -> (Str -> Result((Str, Config.Parser | Error))))
+processData = \(
+	advancedConfig,
+	input
+) -> (Config.Parser | Advanced) | .parseWith((advancedConfig, input))
 formatOutput: (Str -> Str)
-formatOutput = \text -> padLeft((text, Config | .defaultPadding))
+formatOutput = \text -> padLeft((text, Config.defaultPadding))
 validateAuth: (HttpAuth.Credentials -> Result((HttpAuth.Token, HttpAuth.Error)))
-validateAuth = \creds -> HttpAuth | .validate(creds)
+validateAuth = \creds -> HttpAuth.validate(creds)
 ~~~
 # EXPECTED
 NIL

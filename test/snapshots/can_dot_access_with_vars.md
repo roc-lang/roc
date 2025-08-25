@@ -20,11 +20,9 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
   (binop_equals
     (lc "list")
     (list_literal
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
     )
   )
   (binop_equals
@@ -52,15 +50,15 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-list = [(1, 2, 3)]
+list = [1, 2, 3]
 fn = \x -> x + 1
-list | .map(fn)
+list.map(fn)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 2:12 to 3:1
+at 2:12 to 2:21
 
 **Unsupported Node**
 at 3:10 to 3:14

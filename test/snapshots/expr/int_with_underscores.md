@@ -16,7 +16,7 @@ Int Underscore Int Underscore Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-1_000_000
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

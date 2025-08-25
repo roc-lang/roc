@@ -23,22 +23,22 @@ KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatAr
 # FORMATTED
 ~~~roc
 when sequence is {
-	[(0, count)]
-	<malformed>
+	[0, count]
+	=>
 	count
-	[(1, x, 3)]
-	<malformed>
+	[1, x, 3]
+	=>
 	x
-	[(42, value)]
-	<malformed>
+	[42, value]
+	=>
 	value
-	[(first, 99)]
-	<malformed>
+	[first, 99]
+	=>
 	first
 	[]
-	<malformed>
+	=>
 	0
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

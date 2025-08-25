@@ -73,19 +73,27 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 process: (List(elem) -> elem)
 process = \list -> {
@@ -94,12 +102,14 @@ process = \list -> {
 
 # type variable 'elem' still refers to the function annotation's type parameter
 result: elem
-	List | .first(list)
-	<malformed> | .withDefault(elem)
-	result
+	List.first(list)
+	Result | .withDefault(elem)
+	
+
+result
 }
-main
-(<malformed>! | _) | {  }
+
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
@@ -110,9 +120,6 @@ at 11:32 to 11:32
 **Parse Error**
 at 11:34 to 11:34
 
-**Parse Error**
-at 16:7 to 16:7
-
 **Unsupported Node**
 at 4:11 to 4:29
 
@@ -120,7 +127,10 @@ at 4:11 to 4:29
 at 5:11 to 5:18
 
 **Unsupported Node**
-at 16:5 to 16:7
+at 16:1 to 16:6
+
+**Unsupported Node**
+at 16:9 to 16:13
 
 # CANONICALIZE
 ~~~clojure
@@ -130,13 +140,12 @@ at 16:5 to 16:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

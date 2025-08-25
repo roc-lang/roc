@@ -22,7 +22,7 @@ LowerIdent Dot LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(person | .address) | .street
+person.address | .street
 ~~~
 # EXPECTED
 NIL

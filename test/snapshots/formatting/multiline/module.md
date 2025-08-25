@@ -36,7 +36,6 @@ module [
 	b,
 ]
 
-
 a = 'a'
 b = 'a'
 b = 'a'

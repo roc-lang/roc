@@ -16,7 +16,7 @@ OpenRound CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-()
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

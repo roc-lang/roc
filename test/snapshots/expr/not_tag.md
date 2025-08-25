@@ -16,7 +16,7 @@ OpBang OpenRound UpperIdent OpenRound Int CloseRound CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-C(2)!
+!C(2)
 ~~~
 # EXPECTED
 NIL

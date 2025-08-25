@@ -102,11 +102,9 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
     )
     (tuple_literal
       (list_literal
-        (tuple_literal
-          (num_literal_i32 1)
-          (num_literal_i32 2)
-          (num_literal_i32 3)
-        )
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+        (num_literal_i32 3)
       )
       (str_literal_big "hello")
     )
@@ -116,7 +114,7 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
 ~~~
 # FORMATTED
 ~~~roc
-(((((x, y) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([(1, 2, 3)], "hello")
+(((((x, y) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([1, 2, 3], "hello")
 
 {  }
 ~~~

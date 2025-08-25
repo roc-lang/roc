@@ -32,7 +32,7 @@ module [
 	foo,
 ]
 
-<malformed>"foo"
+dbg"foo"
 
 foo = ...
 ~~~

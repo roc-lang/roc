@@ -39,10 +39,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
         (block
           (binop_colon
             (lc "inner")
-            (binop_thin_arrow
-              (lc "a")
-              (lc "a")
-            )
+            (lc "a")
+          )
+          (malformed malformed:expr_unexpected_token)
+          (binop_colon
+            (lc "a")
+            (lc "a")
           )
           (binop_equals
             (lc "inner")
@@ -66,36 +68,46 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 outer: (a -> a)
 outer = \x -> {
-	inner: (a -> a)
+	inner: a
+	->
+	a: a
 	inner = \y -> y
 	
 
 inner(x)
 }
-main
-(<malformed>! | _) | {  }
+
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 13:7 to 13:7
+at 7:15 to 7:15
 
 **Unsupported Node**
 at 4:9 to 4:15
@@ -104,7 +116,10 @@ at 4:9 to 4:15
 at 5:9 to 5:13
 
 **Unsupported Node**
-at 13:5 to 13:7
+at 13:1 to 13:6
+
+**Unsupported Node**
+at 13:9 to 13:13
 
 # CANONICALIZE
 ~~~clojure
@@ -114,13 +129,12 @@ at 13:5 to 13:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

@@ -108,76 +108,86 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "num")
-        (apply_lc
-          (lc "identity")
-          (num_literal_i32 42)
-        )
-      )
-      (binop_equals
-        (lc "text")
-        (apply_lc
-          (lc "identity")
-          (str_literal_big "hello")
-        )
-      )
-      (binop_equals
-        (lc "pair")
-        (apply_lc
-          (lc "combine")
-          (tuple_literal
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
             (lc "num")
+            (apply_lc
+              (lc "identity")
+              (num_literal_i32 42)
+            )
+          )
+          (binop_equals
             (lc "text")
+            (apply_lc
+              (lc "identity")
+              (str_literal_big "hello")
+            )
+          )
+          (binop_equals
+            (lc "pair")
+            (apply_lc
+              (lc "combine")
+              (tuple_literal
+                (lc "num")
+                (lc "text")
+              )
+            )
+          )
+          (binop_equals
+            (lc "result")
+            (apply_lc
+              (lc "addOne")
+              (num_literal_i32 5)
+            )
+          )
+          (binop_colon
+            (lc "result")
+            (lc "result")
           )
         )
       )
-      (binop_equals
-        (lc "result")
-        (apply_lc
-          (lc "addOne")
-          (num_literal_i32 5)
-        )
+      (args
+        (underscore)
       )
-      (lc "result")
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 identity: (a -> a)
 identity = \x -> x
 
 # Test function with multiple type parameters
 combine: (a -> (b -> (a, b)))
-combine = \(first, second) -> (first, second)
+combine = \(
+	first,
+	second
+) -> (first, second)
 addOne: (U64 -> U64)
 addOne = \n -> n + 1
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	num = identity(42)
 	text = identity("hello")
 	pair = combine((num, text))
 	result = addOne(5)
-	result
+	result: result
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 15:7 to 15:7
-
 **Unsupported Node**
 at 4:12 to 4:18
 
@@ -197,7 +207,10 @@ at 12:10 to 12:20
 at 13:10 to 13:14
 
 **Unsupported Node**
-at 15:5 to 15:7
+at 15:1 to 15:6
+
+**Unsupported Node**
+at 15:9 to 15:13
 
 # CANONICALIZE
 ~~~clojure
@@ -217,13 +230,12 @@ at 15:5 to 15:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

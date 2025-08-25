@@ -170,28 +170,23 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~roc
 module []
 
-
-import json exposing [Json]
-import http exposing [Client, Http]
+import json.Json
+import http.Client as Http
 
 # Test unresolved qualified value
-main = (Json.NonExistent) | .method
-
-# Test unresolved qualified type in annotation
+main = Json.NonExistent | .method
 parseData: (Json.InvalidType -> Str)
-parseData = \data -> Json | .stringify(data)
-processRequest: ((Http.Server) | Request -> (Http.Server) | Response)
-processRequest = \req -> (Http.Server) | .defaultResponse
+parseData = \data -> Json.stringify(data)
 
-# Test typo in qualified name
-result = Json | .prase("test")
-config = (Unknown.Module) | .config
+# Test unresolved nested qualification
+processRequest: (Http.Server | Request -> Http.Server | Response)
+processRequest = \req -> Http.Server | .defaultResponse
+result = Json.prase("test")
 
-# Test valid module but invalid member
-client = Http | .invalidMethod
-
-# Test deeply nested invalid qualification
-parser = (((Json.Parser) | Advanced) | NonExistent) | .create
+# Test unknown module qualification
+config = Unknown.Module | .config
+client = Http.invalidMethod
+parser = ((Json.Parser | Advanced) | NonExistent) | .create
 ~~~
 # EXPECTED
 NIL

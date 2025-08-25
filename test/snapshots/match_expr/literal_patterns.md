@@ -23,18 +23,18 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 ~~~roc
 when Answer is {
 	Answer
-	<malformed>
+	=>
 	1
 	Zero
-	<malformed>
+	=>
 	"hello"
 	Greeting
-	<malformed>
+	=>
 	3
 	10
-	<malformed>
+	=>
 	4
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

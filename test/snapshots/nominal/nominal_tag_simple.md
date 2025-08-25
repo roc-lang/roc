@@ -24,11 +24,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
   (binop_colon_equals
     (uc "Color")
     (list_literal
-      (tuple_literal
-        (uc "Red")
-        (uc "Green")
-        (uc "Blue")
-      )
+      (uc "Red")
+      (uc "Green")
+      (uc "Blue")
     )
   )
   (binop_colon
@@ -58,11 +56,12 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 # FORMATTED
 ~~~roc
 module [
-	Color, blue
+	Color,
+	blue,
 ]
 
+Color := [Red, Green, Blue]
 
-Color := [(Red, Green, Blue)]
 blue: Color
 blue = Color.Blue
 yellow: Color
@@ -72,7 +71,7 @@ yellow = Color.Yellow
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:28
 
 **Unsupported Node**
 at 6:8 to 6:13

@@ -16,7 +16,7 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-"abc\u(zzzz)def"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

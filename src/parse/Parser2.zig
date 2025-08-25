@@ -168,13 +168,13 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     const ident = self.currentIdent();
                     const pos = self.currentPosition();
                     self.advance();
-                    
+
                     // Check for ! suffix for effectful functions/values
                     const is_effectful = self.peek() == .OpBang;
                     if (is_effectful) {
                         self.advance(); // consume the !
                     }
-                    
+
                     if (ident) |id| {
                         const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
                         break :blk try self.ast.appendNode(self.gpa, pos, node_tag, .{ .ident = id });
@@ -398,7 +398,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     if (self.peek() == .LowerIdent) {
                         const ident = self.currentIdent();
                         self.advance();
-                        
+
                         // Check for ! suffix for effectful functions/values
                         const is_effectful = self.peek() == .OpBang;
                         if (is_effectful) {
@@ -755,30 +755,30 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         if (self.peek() == .String) {
             // This is a package or platform string
             const string_value = try self.parseExpr();
-            
+
             // Check if followed by 'platform' keyword
             if (self.peek() == .KwPlatform) {
                 self.advance(); // consume 'platform' keyword
-                
+
                 // Parse provides list after platform keyword
                 self.expect(.OpenSquare) catch {
                     try self.pushDiagnostic(.header_expected_open_square, field_start, self.currentPosition());
                     continue;
                 };
-                
+
                 const provides_idx = try self.parseExposedList(.CloseSquare);
-                
+
                 self.expect(.CloseSquare) catch {
                     try self.pushDiagnostic(.header_expected_close_square, field_start, self.currentPosition());
                 };
-                
+
                 // Create the provides list node (use block as a container for the exposed items)
                 const provides_node = try self.ast.appendNode(self.gpa, self.currentPosition(), .block, .{ .nodes = provides_idx });
-                
+
                 // Create the platform binop: string_value platform provides_node
                 const platform_binop_idx = try self.ast.appendBinOp(self.gpa, string_value, provides_node);
                 const platform_node = try self.ast.appendNode(self.gpa, field_start, .binop_platform, .{ .binop = platform_binop_idx });
-                
+
                 // Create the record field: field_name : platform_node
                 if (field_name) |name| {
                     const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
@@ -818,7 +818,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     const packages_idx = if (packages_nodes.len > 0)
         try self.ast.appendNodeSlice(self.gpa, packages_nodes)
     else
-        @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(0));
+        collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
     return AST.Header{ .app = .{
         .packages = packages_idx,
@@ -871,7 +871,7 @@ fn parsePackageHeader(self: *Parser, start_pos: Position) Error!AST.Header {
             try self.pushDiagnostic(.expected_packages_close_curly, start_pos, self.currentPosition());
         };
         break :blk idx;
-    } else @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(0));
+    } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
     return AST.Header{ .package = .{
         .exposes = exposes_idx,
@@ -890,11 +890,11 @@ fn parsePlatformHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         try self.pushDiagnostic(.expected_requires, start_pos, self.currentPosition());
         return AST.Header{ .platform = .{
             .name = name_idx,
-            .requires_rigids = @enumFromInt(0),
-            .requires_signatures = @enumFromInt(0),
-            .exposes = @enumFromInt(0),
-            .packages = @enumFromInt(0),
-            .provides = @enumFromInt(0),
+            .requires_rigids = collections.NodeSlices(AST.Node.Idx).Idx.NIL,
+            .requires_signatures = @as(Node.Idx, @enumFromInt(std.math.minInt(i32))),
+            .exposes = collections.NodeSlices(AST.Node.Idx).Idx.NIL,
+            .packages = collections.NodeSlices(AST.Node.Idx).Idx.NIL,
+            .provides = collections.NodeSlices(AST.Node.Idx).Idx.NIL,
             .region = start_pos,
         } };
     };
@@ -1101,7 +1101,7 @@ fn parsePackageList(self: *Parser) Error!collections.NodeSlices(AST.Node.Idx).Id
 
     const packages = self.getScratchNodesSince(scratch_marker);
     if (packages.len == 0) {
-        return @enumFromInt(0);
+        return collections.NodeSlices(AST.Node.Idx).Idx.NIL;
     }
     return try self.ast.appendNodeSlice(self.gpa, packages);
 }
@@ -1123,9 +1123,10 @@ fn parseExposedList(self: *Parser, end_token: Token.Tag) Error!collections.NodeS
 
     const items = self.getScratchNodesSince(scratch_marker);
     if (items.len == 0) {
-        return @enumFromInt(0);
+        return collections.NodeSlices(AST.Node.Idx).Idx.NIL;
     }
-    return try self.ast.appendNodeSlice(self.gpa, items);
+    const result = try self.ast.appendNodeSlice(self.gpa, items);
+    return result;
 }
 
 fn parseExposedItem(self: *Parser) Error!Node.Idx {
@@ -1181,7 +1182,7 @@ fn parseTypeVariableList(self: *Parser) Error!collections.NodeSlices(AST.Node.Id
 
     const vars = self.getScratchNodesSince(scratch_marker);
     if (vars.len == 0) {
-        return @enumFromInt(0);
+        return collections.NodeSlices(AST.Node.Idx).Idx.NIL;
     }
     return try self.ast.appendNodeSlice(self.gpa, vars);
 }
@@ -1192,6 +1193,44 @@ pub fn parseTopLevelStatement(self: *Parser) Error!?Node.Idx {
 }
 
 /// Parse a statement
+/// Parse a statement or expression that might be a record field
+/// When in_potential_record is true, we parse colons more carefully to avoid tuple issues
+fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.Idx {
+    switch (self.peek()) {
+        .EndOfFile => return null,
+        .KwImport => return self.parseImport(),
+        .KwExpect => return self.parseExpect(),
+        else => {
+            // Parse the left-hand side as an expression first
+            // We need to stop at colons to avoid consuming them
+            // Colons have bp=3, so we use min_bp=3 to stop at them
+            const lhs = try self.parseExprWithPrecedence(3);
+
+            // Check if this is followed by : or := (making it a type annotation/declaration)
+            if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
+                const is_opaque = self.peek() == .OpColonEqual;
+                const colon_pos = self.currentPosition();
+                self.advance(); // consume : or :=
+
+                // Parse the right-hand side
+                // If we're in a potential record, use higher precedence to stop at commas
+                const rhs = if (in_potential_record)
+                    try self.parseExprWithPrecedence(10) // Stop at commas (precedence 4)
+                else
+                    try self.parseExpr(); // Normal parsing
+
+                // Create type annotation/declaration node
+                const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
+                const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
+                return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
+            }
+
+            // Otherwise, it's just a regular expression/statement
+            return lhs;
+        },
+    }
+}
+
 pub fn parseStmt(self: *Parser) Error!?Node.Idx {
     switch (self.peek()) {
         .EndOfFile => return null,
@@ -1516,8 +1555,13 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
+    // Parse list elements at a higher precedence than comma (4) to prevent
+    // them from being parsed as tuples. We use precedence 10, same as
+    // COMMA_ITEM_PRECEDENCE in parseExprWithPrecedence.
+    const LIST_ELEM_PRECEDENCE = 10;
+
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-        const elem = try self.parseExpr();
+        const elem = try self.parseExprWithPrecedence(LIST_ELEM_PRECEDENCE);
         try self.scratch_nodes.append(self.gpa, elem);
 
         if (self.peek() == .Comma) {
@@ -1592,12 +1636,31 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         } else {
             // Parse an element (could be expr or statement)
             const elem_opt = if (is_record) blk: {
-                // If we already know it's a record, parse as expression
-                const expr = try self.parseExpr();
-                break :blk expr;
+                // If we already know it's a record, parse a record field properly
+                // We need to handle name: value as a unit, stopping only at commas
+                // First parse the field name/expression with precedence to stop at colon
+                const lhs = try self.parseExprWithPrecedence(3); // Stop at colon (precedence 3)
+
+                // Check if we have a colon for a field definition
+                if (self.peek() == .OpColon) {
+                    const colon_pos = self.currentPosition();
+                    self.advance(); // consume :
+
+                    // Parse the value with higher precedence to stop at comma
+                    const FIELD_VALUE_PRECEDENCE = 10; // Higher than comma (4)
+                    const rhs = try self.parseExprWithPrecedence(FIELD_VALUE_PRECEDENCE);
+
+                    // Create the field node
+                    const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
+                    break :blk try self.ast.appendNode(self.gpa, colon_pos, .binop_colon, .{ .binop = binop_idx });
+                } else {
+                    // No colon, just a bare identifier or expression
+                    break :blk lhs;
+                }
             } else blk: {
-                // Otherwise parse as statement to allow both blocks and records
-                const stmt = try self.parseStmt();
+                // Parse as statement but be careful with colons in case this is a record
+                // We pass true to indicate we're in a potential record context
+                const stmt = try self.parseStmtOrRecordField(true);
                 break :blk stmt;
             };
 

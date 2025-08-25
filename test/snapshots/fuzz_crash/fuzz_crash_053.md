@@ -24,13 +24,12 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 # FORMATTED
 ~~~roc
 module [
-	<malformed>,
+	),
 ]
 
- {
+{
 	_,
-}0<malformed>
-<malformed>
+}0
 ~~~
 # EXPECTED
 NIL

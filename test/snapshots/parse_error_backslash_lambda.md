@@ -22,7 +22,7 @@ OpBackslash LowerIdent OpArrow LowerIdent OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-<malformed> -> x + 1
+x -> x + 1
 ~~~
 # EXPECTED
 NIL

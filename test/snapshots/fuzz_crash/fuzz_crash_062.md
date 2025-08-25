@@ -20,10 +20,9 @@ KwModule OpenSquare CloseCurly OpBar Int KwAs LowerIdent OpOr OpBar Int ~~~
 # FORMATTED
 ~~~roc
 module [
-	<malformed>,
+	}|,
 ]
 
-<malformed>
 ~~~
 # EXPECTED
 NIL

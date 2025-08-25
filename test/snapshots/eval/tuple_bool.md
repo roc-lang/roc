@@ -37,7 +37,16 @@ OpenRound UpperIdent Comma UpperIdent Comma UpperIdent Dot UpperIdent Comma Uppe
 ~~~
 # FORMATTED
 ~~~roc
-(True, False, Bool.True, Bool.False, True!, False!, True && False, True! || True!)
+(
+	True,
+	False,
+	Bool.True,
+	Bool.False,
+	!True,
+	!False,
+	True && False,
+	!True || !True
+)
 ~~~
 # EXPECTED
 NIL

@@ -21,12 +21,12 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~roc
 when isReady is {
 	True
-	<malformed>
+	=>
 	"ready to go!"
 	False
-	<malformed>
+	=>
 	"not ready yet"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

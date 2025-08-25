@@ -30,8 +30,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int C
 ~~~roc
 module []
 
-
-f = <malformed>
+f = ||
 {
 	crash 1
 }

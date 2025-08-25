@@ -113,17 +113,15 @@ module [
 	json_encoder,
 ]
 
-import json exposing [Core, Utf8, Encoder]
+import json.Core.Utf8 exposing [Encoder]
 json_encoder: Encoder
-json_encoder = ((Json.Core) | Utf8) | .defaultEncoder
-
-# Test with qualified type in annotation
-process: (((json.Core) | Utf8) | Encoder -> Str)
+json_encoder = (Json.Core | Utf8) | .defaultEncoder
+process: ((json.Core | Utf8) | Encoder -> Str)
 process = \encoder -> "processing"
 
 # Test with multiple qualifiers
-data: ((json.Core) | Utf8) | EncodedData
-data = ((json.Core) | Utf8) | .encode("hello")
+data: (json.Core | Utf8) | EncodedData
+data = (json.Core | Utf8) | .encode("hello")
 ~~~
 # EXPECTED
 NIL

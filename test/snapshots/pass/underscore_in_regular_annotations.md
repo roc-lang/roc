@@ -103,16 +103,14 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
   (binop_colon
     (lc "get_data")
     (binop_thin_arrow
-      (block
+      (record_literal
         (binop_colon
           (lc "field")
-          (binop_colon
-            (tuple_literal
-              (underscore)
-              (lc "other")
-            )
-            (uc "U32")
-          )
+          (underscore)
+        )
+        (binop_colon
+          (lc "other")
+          (uc "U32")
         )
       )
       (uc "U32")
@@ -200,7 +198,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
 ~~~roc
 module []
 
-
 main: (_ -> _)
 main = \x -> x
 
@@ -212,18 +209,19 @@ process: (List(_) -> Str)
 process = \list -> "processed"
 
 # Record with underscore
-get_data: ({
-	field: ((_, other): U32)
-} -> U32)
-get_data = \record -> record | .other
+get_data: ({ field: _, other: U32 } -> U32)
+get_data = \record -> record.other
 handle_result: (Result((_, Str)) -> Str)
-handle_result = \result -> when result is  {
-	Ok(_),
-	<malformed>,
-	"success",
-	(Err(msg) => msg, <malformed>),
-} -> map: (a -> b) -> (List(a) -> List(b))
-map = \(_, _) -> []
+handle_result = \result -> when result is (
+	{
+		Ok(_),
+		"success",
+		Err(msg),
+	} => msg
+) -> map: (a -> b) -> (List(a) -> List(b))map = \(
+	_,
+	_
+) -> []
 transform: ((_a -> _b) -> _b)
 transform = \(_, b) -> b
 ~~~
@@ -237,10 +235,10 @@ at 20:5 to 20:18
 at 21:15 to 21:15
 
 **Parse Error**
-at 23:5 to 23:5
+at 20:18 to 22:18
 
 **Parse Error**
-at 20:18 to 26:1
+at 23:5 to 23:5
 
 **Parse Error**
 at 20:5 to 26:1

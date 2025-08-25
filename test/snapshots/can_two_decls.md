@@ -31,7 +31,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 a = 5
 b = a + 1

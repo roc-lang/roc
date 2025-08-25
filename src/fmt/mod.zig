@@ -19,9 +19,6 @@ pub const moduleFmtsStable = fmt.moduleFmtsStable;
 pub const FormatOptions = fmt2.FormatOptions;
 pub const formatAst2 = fmt2.formatAst;
 pub const formatAst2WithOptions = fmt2.formatAstWithOptions;
-// Legacy compatibility - these now require AST2
-pub const formatSource = fmt2.formatSource;
-pub const formatSourceWithOptions = fmt2.formatSourceWithOptions;
 
 test "fmt tests" {
     std.testing.refAllDecls(@This());

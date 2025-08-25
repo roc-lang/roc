@@ -14,20 +14,18 @@ OpenSquare OpenRound Int Comma String CloseRound Comma OpenRound Float Comma Str
 ~~~clojure
 (list_literal
   (tuple_literal
-    (tuple_literal
-      (num_literal_i32 1)
-      (str_literal_small "a")
-    )
-    (tuple_literal
-      (frac_literal_small 2.5)
-      (str_literal_small "b")
-    )
+    (num_literal_i32 1)
+    (str_literal_small "a")
+  )
+  (tuple_literal
+    (frac_literal_small 2.5)
+    (str_literal_small "b")
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-[((1, "a"), (2.5, "b"))]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

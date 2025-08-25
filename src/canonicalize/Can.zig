@@ -2680,7 +2680,6 @@ pub fn canonicalizeExpr(
                 .OpBinaryMinus => .sub,
                 .OpStar => .mul,
                 .OpSlash => .div,
-                .OpPercent => .rem,
                 .OpLessThan => .lt,
                 .OpGreaterThan => .gt,
                 .OpLessThanOrEq => .le,

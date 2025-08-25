@@ -33,14 +33,18 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app {  }
+app
+{
+	f,
+	platform,
+}
 
 []{
-	f: <malformed>
+	f: platform
 	""
-}
-import S exposing [c]<malformed>
-f<malformed>
+}import S exposing [c]
+as
+f
 ~~~
 # EXPECTED
 NIL

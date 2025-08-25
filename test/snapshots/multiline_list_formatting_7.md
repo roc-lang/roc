@@ -17,29 +17,22 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
 (list_literal
-  (tuple_literal
-    (num_literal_i32 1)
-    (num_literal_i32 2)
-    (num_literal_i32 3)
-    (malformed malformed:expr_unexpected_token)
-  )
+  (num_literal_i32 1)
+  (num_literal_i32 2)
+  (num_literal_i32 3)
 )
 ~~~
 # FORMATTED
 ~~~roc
 [
-	(1, 2, 3, <malformed>),
+	1,
+	2,	# Foo
+	3,
 ]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:1 to 5:1
-
-**Parse Error**
-at 1:1 to 5:2
-
 **Unsupported Node**
 at 1:1 to 5:1
 

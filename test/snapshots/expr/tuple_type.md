@@ -20,15 +20,16 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 (block
   (binop_colon
     (lc "f")
-    (binop_thin_arrow
-      (tuple_literal
-        (uc "Str")
-        (uc "Str")
-      )
-      (tuple_literal
-        (uc "Str")
-        (uc "Str")
-      )
+    (tuple_literal
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (tuple_literal
+      (uc "Str")
+      (uc "Str")
     )
   )
   (binop_equals
@@ -53,7 +54,8 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-f: ((Str, Str) -> (Str, Str))
+f: (Str, Str)
+-> (((Str, Str))
 f = \x -> x
 
 f((1, 2))
@@ -61,8 +63,14 @@ f((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
+**Parse Error**
+at 2:20 to 2:20
+
 **Unsupported Node**
-at 2:18 to 2:33
+at 2:18 to 2:19
+
+**Unsupported Node**
+at 2:20 to 2:20
 
 **Unsupported Node**
 at 3:9 to 3:13
@@ -74,6 +82,7 @@ at 3:9 to 3:13
     (Expr.lookup "f")
     (Expr.malformed)
   )
+  (Expr.apply_ident)
   (Expr.malformed)
   (Expr.apply_ident)
 )

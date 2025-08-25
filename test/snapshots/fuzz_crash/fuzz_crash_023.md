@@ -330,19 +330,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (uc "Some")
       (lc "a")
     )
-    (block
+    (record_literal
       (binop_colon
         (lc "foo")
-        (binop_colon
-          (tuple_literal
-            (apply_uc
-              (uc "Ok")
-              (lc "a")
-            )
-            (lc "bar")
-          )
-          (uc "Something")
+        (apply_uc
+          (uc "Ok")
+          (lc "a")
         )
+      )
+      (binop_colon
+        (lc "bar")
+        (uc "Something")
       )
     )
   )
@@ -351,243 +349,295 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (uc "SomeMl")
       (lc "a")
     )
-    (binop_as
-      (block
-        (binop_colon
-          (lc "foo")
-          (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (apply_uc
-                  (uc "Ok")
-                  (lc "a")
-                )
-                (lc "bar")
-              )
-              (uc "Something")
-            )
-            (malformed malformed:expr_unexpected_token)
-          )
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (apply_uc
+          (uc "Ok")
+          (lc "a")
         )
-        (binop_colon
-          (apply_uc
-            (uc "SomeMultiline")
-            (lc "a")
-          )
-          (binop_thin_arrow
-            (binop_thick_arrow
-              (block
-                (binop_colon
-                  (lc "foo")
-                  (tuple_literal
-                    (binop_colon
-                      (tuple_literal
-                        (apply_uc
-                          (uc "Ok")
-                          (lc "a")
-                        )
-                        (lc "bar")
-                      )
-                      (uc "Something")
-                    )
-                    (malformed malformed:expr_unexpected_token)
-                  )
-                )
-                (binop_colon
-                  (apply_uc
-                    (uc "Maybe")
-                    (lc "a")
-                  )
-                  (list_literal
-                    (tuple_literal
-                      (apply_uc
-                        (uc "Some")
-                        (lc "a")
-                      )
-                      (uc "None")
-                    )
-                  )
-                )
-                (binop_colon
-                  (apply_uc
-                    (uc "MaybeMultiline")
-                    (lc "a")
-                  )
-                  (list_literal
-                    (tuple_literal
-                      (apply_uc
-                        (uc "Some")
-                        (lc "a")
-                      )
-                      (uc "None")
-                      (malformed malformed:expr_unexpected_token)
-                    )
-                  )
-                )
-                (binop_colon
-                  (apply_uc
-                    (uc "SomeFunc")
-                    (lc "a")
-                  )
-                  (binop_thin_arrow
-                    (apply_uc
-                      (uc "Maybe")
-                      (lc "a")
-                    )
-                    (binop_thin_arrow
-                      (lc "a")
-                      (apply_uc
-                        (uc "Maybe")
-                        (lc "a")
-                      )
-                    )
-                  )
-                )
-                (binop_equals
-                  (lc "add_one_oneline")
-                  (lambda
-                    (body
-                      (if_else <130 branches>)
-                    )
-                    (args
-                      (lc "num")
-                    )
-                  )
-                )
-                (binop_colon
-                  (lc "add_one")
-                  (binop_thin_arrow
-                    (uc "U64")
-                    (uc "U64")
-                  )
-                )
-                (binop_equals
-                  (lc "add_one")
-                  (lambda
-                    (body
-                      (block
-                        (binop_equals
-                          (lc "other")
-                          (num_literal_i32 1)
-                        )
-                        (if_else <151 branches>)
-                      )
-                    )
-                    (args
-                      (lc "num")
-                    )
-                  )
-                )
-                (binop_equals
-                  (lc "match_time")
-                  (malformed malformed:expr_unexpected_token)
-                )
-                (binop_colon
-                  (lc "foo")
-                  (tuple_literal
-                    (binop_colon
-                      (tuple_literal
-                        (num_literal_i32 1)
-                        (lc "bar")
-                      )
-                      (num_literal_i32 2)
-                    )
-                    (unary_double_dot <unary>)
-                  )
-                )
-              )
-              (num_literal_i32 12)
-            )
-            (apply_lc
-              (lc "add")
-              (num_literal_i32 34)
-            )
-          )
+      )
+      (binop_colon
+        (lc "bar")
+        (uc "Something")
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "SomeMultiline")
+      (lc "a")
+    )
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (apply_uc
+          (uc "Ok")
+          (lc "a")
         )
+      )
+      (binop_colon
+        (lc "bar")
+        (uc "Something")
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Maybe")
+      (lc "a")
+    )
+    (list_literal
+      (apply_uc
+        (uc "Some")
+        (lc "a")
+      )
+      (uc "None")
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "MaybeMultiline")
+      (lc "a")
+    )
+    (list_literal
+      (apply_uc
+        (uc "Some")
+        (lc "a")
+      )
+      (uc "None")
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "SomeFunc")
+      (lc "a")
+    )
+    (binop_thin_arrow
+      (apply_uc
+        (uc "Maybe")
+        (lc "a")
+      )
+      (binop_thin_arrow
+        (lc "a")
+        (apply_uc
+          (uc "Maybe")
+          (lc "a")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "add_one_oneline")
+    (lambda
+      (body
+        (if_else <129 branches>)
+      )
+      (args
+        (lc "num")
+      )
+    )
+  )
+  (binop_colon
+    (lc "add_one")
+    (binop_thin_arrow
+      (uc "U64")
+      (uc "U64")
+    )
+  )
+  (binop_equals
+    (lc "add_one")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "other")
+            (num_literal_i32 1)
+          )
+          (if_else <150 branches>)
+        )
+      )
+      (args
+        (lc "num")
+      )
+    )
+  )
+  (binop_equals
+    (lc "match_time")
+    (malformed malformed:expr_unexpected_token)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (binop_pipe
+    (num_literal_i32 2)
+    (num_literal_i32 5)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 3)
+  (malformed malformed:expr_unexpected_token)
+  (unary_double_dot <unary>)
+  (lc "rest")
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 123)
+  (frac_literal_small 3.14)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 314)
+  (binop_pipe
+    (frac_literal_small 3.14)
+    (frac_literal_small 6.28)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (num_literal_i32 314)
+    (tuple_literal
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (num_literal_i32 123)
+    (tuple_literal
+      (binop_pipe
+        (tuple_literal
+          (num_literal_i32 1)
+          (num_literal_i32 2)
+        )
+        (num_literal_i32 5)
+      )
+      (num_literal_i32 3)
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 123)
+  (record_literal
+    (binop_colon
+      (lc "foo")
+      (num_literal_i32 1)
+    )
+    (binop_colon
+      (lc "bar")
+      (num_literal_i32 2)
+    )
+    (double_dot_lc "rest")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
+  (malformed malformed:expr_unexpected_token)
+  (apply_lc
+    (lc "add")
+    (num_literal_i32 34)
+  )
+  (record_literal
+    (binop_colon
+      (lc "foo")
+      (num_literal_i32 1)
+    )
+    (binop_colon
+      (lc "bar")
+      (num_literal_i32 2)
+    )
+    (double_dot_lc "rest")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
+  (binop_pipe
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (num_literal_i32 1)
+      )
+      (binop_colon
+        (lc "bar")
+        (num_literal_i32 2)
+      )
+    )
+    (num_literal_i32 7)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
+  (binop_pipe
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (num_literal_i32 1)
+      )
+      (binop_colon
+        (lc "bar")
+        (num_literal_i32 2)
+      )
+    )
+    (num_literal_i32 7)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
+  (apply_uc
+    (uc "Ok")
+    (num_literal_i32 123)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 123)
+  (apply_uc
+    (uc "Ok")
+    (apply_uc
+      (uc "Some")
+      (lc "dude")
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (lc "dude")
+  (apply_uc
+    (uc "TwoArgs")
+    (tuple_literal
+      (str_literal_big "hello")
+      (apply_uc
+        (uc "Some")
+        (str_literal_big "world")
+      )
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 1000)
+  (malformed malformed:expr_unexpected_token)
+  (expect
+    (binop_double_equals
+      (lc "blah")
+      (num_literal_i32 1)
+    )
+  )
+  (binop_colon
+    (not_lc "main")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (uc "String")
+      )
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (record_literal)
+          (underscore)
+        )
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
         (record_literal
-          (binop_colon
-            (lc "foo")
-            (binop_thick_arrow
-              (binop_colon
-                (tuple_literal
-                  (num_literal_i32 1)
-                  (lc "bar")
-                )
-                (num_literal_i32 2)
-              )
-              (binop_thick_arrow
-                (unary_double_dot <unary>)
-                (binop_thick_arrow
-                  (malformed malformed:expr_unexpected_token)
-                  (num_literal_i32 12)
-                )
-              )
-            )
+          (binop_equals
+            (lc "world")
+            (str_literal_big "World")
           )
-          (block
-            (binop_colon
-              (lc "foo")
-              (binop_colon
-                (tuple_literal
-                  (num_literal_i32 1)
-                  (lc "bar")
-                )
-                (binop_pipe
-                  (num_literal_i32 2)
-                  (num_literal_i32 7)
-                )
-              )
-            )
-          )
-          (malformed malformed:expr_unexpected_token)
-          (num_literal_i32 12)
-          (block
-            (binop_colon
-              (lc "foo")
-              (binop_thick_arrow
-                (binop_colon
-                  (tuple_literal
-                    (num_literal_i32 1)
-                    (lc "bar")
-                  )
-                  (binop_pipe
-                    (num_literal_i32 2)
-                    (num_literal_i32 7)
-                  )
-                )
-                (binop_thick_arrow
-                  (malformed malformed:expr_unexpected_token)
-                  (num_literal_i32 12)
-                )
-              )
-            )
-            (apply_uc
-              (uc "Ok")
-              (num_literal_i32 123)
-            )
-            (malformed malformed:expr_unexpected_token)
+          (binop_equals
+            (var_lc "number")
             (num_literal_i32 123)
-            (apply_uc
-              (uc "Ok")
-              (apply_uc
-                (uc "Some")
-                (lc "dude")
-              )
-            )
-            (malformed malformed:expr_unexpected_token)
-            (lc "dude")
-            (apply_uc
-              (uc "TwoArgs")
-              (tuple_literal
-                (str_literal_big "hello")
-                (apply_uc
-                  (uc "Some")
-                  (str_literal_big "world")
-                )
-              )
-            )
-            (malformed malformed:expr_unexpected_token)
-            (num_literal_i32 1000)
           )
           (expect
             (binop_double_equals
@@ -595,279 +645,248 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
               (num_literal_i32 1)
             )
           )
-          (lc "main")
-          (unary_not <unary>)
-          (apply_uc
-            (uc "List")
-            (uc "String")
+          (binop_equals
+            (lc "tag")
+            (uc "Blue")
           )
-          (malformed malformed:expr_unexpected_token)
-          (apply_uc
-            (uc "Result")
+          (ret <statement>)
+          (ellipsis)
+          (apply_lc
+            (lc "match_time")
             (tuple_literal
-              (record_literal)
-              (underscore)
-            )
-          )
-          (lc "main")
-          (binop_pipe
-            (binop_pipe
-              (unary_not <unary>)
-              (underscore)
-            )
-            (record_literal
-              (binop_equals
-                (lc "world")
-                (str_literal_big "World")
-              )
-              (binop_equals
-                (var_lc "number")
-                (num_literal_i32 123)
-              )
-              (expect
-                (binop_double_equals
-                  (lc "blah")
-                  (num_literal_i32 1)
-                )
-              )
-              (binop_equals
-                (lc "tag")
-                (uc "Blue")
-              )
-              (ret <statement>)
               (ellipsis)
-              (apply_lc
-                (lc "match_time")
-                (tuple_literal
-                  (ellipsis)
-                  (malformed malformed:expr_unexpected_token)
-                )
-              )
-              (apply_lc
-                (lc "some_func")
-                (malformed malformed:expr_unexpected_token)
-              )
-              (num_literal_i32 42)
               (malformed malformed:expr_unexpected_token)
             )
           )
-          (crash <statement>)
-          (binop_equals
-            (lc "tag_with_payload")
-            (apply_uc
-              (uc "Ok")
-              (lc "number")
-            )
-          )
-          (binop_equals
-            (lc "interpolated")
-            (str_literal_big "Hello, ${world}")
-          )
-          (binop_equals
-            (lc "list")
-            (list_literal
-              (apply_lc
-                (lc "add_one")
-                (malformed malformed:expr_unexpected_token)
-              )
-            )
-          )
-          (lc "number")
-          (tuple_literal
-            (malformed malformed:expr_unexpected_token)
-            (num_literal_i32 456)
-            (num_literal_i32 789)
-            (malformed malformed:expr_unexpected_token)
-          )
-        )
-        (for_loop
-          (lc "n")
-          (lc "list")
-          (block
-            (binop_pipe
-              (uc "Stdout")
-              (dot_lc "line")
-            )
-            (unary_not <unary>)
-            (binop_equals
-              (lc "number")
-              (binop_plus
-                (lc "number")
-                (lc "n")
-              )
-            )
-          )
-        )
-        (binop_equals
-          (lc "record")
-          (block
-            (binop_colon
-              (lc "foo")
-              (tuple_literal
-                (binop_colon
-                  (tuple_literal
-                    (num_literal_i32 123)
-                    (lc "bar")
-                  )
-                  (str_literal_big "Hello")
-                )
-                (malformed malformed:expr_unexpected_token)
-              )
-            )
-            (binop_colon
-              (lc "az")
-              (tuple_literal
-                (binop_colon
-                  (tuple_literal
-                    (lc "tag")
-                    (lc "qux")
-                  )
-                  (apply_uc
-                    (uc "Ok")
-                    (lc "world")
-                  )
-                )
-                (lc "punned")
-              )
-            )
-          )
-        )
-        (binop_equals
-          (lc "tuple")
-          (tuple_literal
-            (num_literal_i32 123)
-            (str_literal_big "World")
-            (lc "tag")
-            (apply_uc
-              (uc "Ok")
-              (lc "world")
-            )
-            (tuple_literal
-              (lc "nested")
-              (lc "tuple")
-            )
-            (list_literal
-              (tuple_literal
-                (num_literal_i32 1)
-                (num_literal_i32 2)
-                (num_literal_i32 3)
-              )
-            )
-          )
-        )
-        (binop_equals
-          (lc "multiline_tuple")
-          (tuple_literal
-            (num_literal_i32 123)
-            (str_literal_big "World")
-            (lc "tag1")
-            (apply_uc
-              (uc "Ok")
-              (lc "world")
-            )
-            (tuple_literal
-              (lc "nested")
-              (lc "tuple")
-            )
-            (list_literal
-              (tuple_literal
-                (num_literal_i32 1)
-                (num_literal_i32 2)
-                (num_literal_i32 3)
-              )
-            )
-            (malformed malformed:expr_unexpected_token)
-          )
-        )
-        (binop_equals
-          (lc "bin_op_result")
-          (binop_or
-            (binop_or
-              (binop_gt
-                (binop_double_question
-                  (apply_uc
-                    (uc "Err")
-                    (lc "foo")
-                  )
-                  (num_literal_i32 12)
-                )
-                (binop_star
-                  (num_literal_i32 5)
-                  (num_literal_i32 5)
-                )
-              )
-              (binop_and
-                (binop_lt
-                  (binop_plus
-                    (num_literal_i32 13)
-                    (num_literal_i32 2)
-                  )
-                  (num_literal_i32 5)
-                )
-                (binop_gte
-                  (binop_minus
-                    (num_literal_i32 10)
-                    (num_literal_i32 1)
-                  )
-                  (num_literal_i32 16)
-                )
-              )
-            )
-            (binop_lte
-              (num_literal_i32 12)
-              (binop_slash
-                (num_literal_i32 3)
-                (num_literal_i32 5)
-              )
-            )
-          )
-        )
-        (binop_equals
-          (lc "static_dispatch_style")
           (apply_lc
-            (lc "some_fn")
-            (lc "arg1")
-          )
-        )
-        (apply_anon
-          (binop_pipe
+            (lc "some_func")
             (malformed malformed:expr_unexpected_token)
-            (dot_lc "static_dispatch_method")
           )
-        )
-        (apply_anon
-          (binop_pipe
-            (malformed malformed:expr_unexpected_token)
-            (dot_lc "next_static_dispatch_method")
-          )
-        )
-        (binop_pipe
+          (num_literal_i32 42)
           (malformed malformed:expr_unexpected_token)
-          (dot_lc "record_field")
-        )
-        (malformed malformed:expr_unexpected_token)
-        (binop_pipe
-          (uc "Stdout")
-          (dot_lc "line")
-        )
-        (unary_not <unary>)
-        (malformed malformed:expr_unexpected_token)
-        (binop_pipe
-          (uc "Stdout")
-          (dot_lc "line")
-        )
-        (unary_not <unary>)
-        (apply_anon
-          (binop_pipe
-            (uc "Num")
-            (dot_lc "toStr")
-          )
-          (lc "number")
         )
       )
-      (lc "a")
+      (args
+        (underscore)
+      )
     )
   )
+  (crash <statement>)
+  (binop_equals
+    (lc "tag_with_payload")
+    (apply_uc
+      (uc "Ok")
+      (lc "number")
+    )
+  )
+  (binop_equals
+    (lc "interpolated")
+    (str_literal_big "Hello, ${world}")
+  )
+  (binop_equals
+    (lc "list")
+    (list_literal
+      (apply_lc
+        (lc "add_one")
+        (malformed malformed:expr_unexpected_token)
+      )
+    )
+  )
+  (lc "number")
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 456)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 789)
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (for_loop
+    (lc "n")
+    (lc "list")
+    (block
+      (apply_anon
+        (binop_pipe
+          (uc "Stdout")
+          (not_lc "line")
+        )
+        (str_literal_big "Adding ${n} to ${number}")
+      )
+      (binop_equals
+        (lc "number")
+        (binop_plus
+          (lc "number")
+          (lc "n")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "record")
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (num_literal_i32 123)
+      )
+      (binop_colon
+        (lc "bar")
+        (str_literal_big "Hello")
+      )
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+  (binop_colon
+    (lc "az")
+    (tuple_literal
+      (binop_colon
+        (tuple_literal
+          (lc "tag")
+          (lc "qux")
+        )
+        (apply_uc
+          (uc "Ok")
+          (lc "world")
+        )
+      )
+      (lc "punned")
+    )
+  )
+  (malformed malformed:expr_unexpected_token)
+  (binop_equals
+    (lc "tuple")
+    (tuple_literal
+      (num_literal_i32 123)
+      (str_literal_big "World")
+      (lc "tag")
+      (apply_uc
+        (uc "Ok")
+        (lc "world")
+      )
+      (tuple_literal
+        (lc "nested")
+        (lc "tuple")
+      )
+      (list_literal
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+        (num_literal_i32 3)
+      )
+    )
+  )
+  (binop_equals
+    (lc "multiline_tuple")
+    (tuple_literal
+      (num_literal_i32 123)
+      (str_literal_big "World")
+      (lc "tag1")
+      (apply_uc
+        (uc "Ok")
+        (lc "world")
+      )
+      (tuple_literal
+        (lc "nested")
+        (lc "tuple")
+      )
+      (list_literal
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+        (num_literal_i32 3)
+      )
+      (malformed malformed:expr_unexpected_token)
+    )
+  )
+  (binop_equals
+    (lc "bin_op_result")
+    (binop_or
+      (binop_or
+        (binop_gt
+          (binop_double_question
+            (apply_uc
+              (uc "Err")
+              (lc "foo")
+            )
+            (num_literal_i32 12)
+          )
+          (binop_star
+            (num_literal_i32 5)
+            (num_literal_i32 5)
+          )
+        )
+        (binop_and
+          (binop_lt
+            (binop_plus
+              (num_literal_i32 13)
+              (num_literal_i32 2)
+            )
+            (num_literal_i32 5)
+          )
+          (binop_gte
+            (binop_minus
+              (num_literal_i32 10)
+              (num_literal_i32 1)
+            )
+            (num_literal_i32 16)
+          )
+        )
+      )
+      (binop_lte
+        (num_literal_i32 12)
+        (binop_slash
+          (num_literal_i32 3)
+          (num_literal_i32 5)
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "static_dispatch_style")
+    (apply_lc
+      (lc "some_fn")
+      (lc "arg1")
+    )
+  )
+  (apply_anon
+    (binop_pipe
+      (malformed malformed:expr_unexpected_token)
+      (dot_lc "static_dispatch_method")
+    )
+  )
+  (apply_anon
+    (binop_pipe
+      (malformed malformed:expr_unexpected_token)
+      (dot_lc "next_static_dispatch_method")
+    )
+  )
+  (binop_pipe
+    (malformed malformed:expr_unexpected_token)
+    (dot_lc "record_field")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (binop_pipe
+      (uc "Stdout")
+      (not_lc "line")
+    )
+    (lc "interpolated")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (binop_pipe
+      (uc "Stdout")
+      (not_lc "line")
+    )
+    (malformed malformed:expr_unexpected_token)
+  )
+  (apply_anon
+    (binop_pipe
+      (uc "Num")
+      (dot_lc "toStr")
+    )
+    (lc "number")
+  )
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (lc "a")
   (lc "string")
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
@@ -913,97 +932,198 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 # FORMATTED
 ~~~roc
 # This is a module comment!
-app { # This is a module comment!
-pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	# This is a module comment!
+	# This is a module comment!
+pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout, line, write]
-import pf # Comment after qualifier exposing [StdoutMultiline # Comment after ident, line, write]
-import pkg exposing [Something, func]<malformed>function<malformed>
+import pf.Stdout exposing [line, write]
+import pf # Comment after qualifier.StdoutMultiline # Comment after ident exposing [line, write]
+import pkg.Something exposing [func]
+asfunction
 Type
-<malformed>ValueCategory<malformed>
-<malformed>
-<malformed>
-import BadName exposing [GoodName]
-import BadNameMultiline exposing [GoodNameMultiline]
+asValueCategory
+.*
+]
+
+import BadName as GoodName
+import BadNameMultiline.GoodNameMultiline
 
 Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
-MapML((a, b, <malformed>): List(a -> (<malformed> -> ((a -> b) -> List((b, <malformed>))))))
-Foo: (Bar, Baz)
-FooMultiline: (Bar, Baz, <malformed>)
-Some(a): {
-	foo: ((Ok(a), bar): Something)
+MapML((
+	a,
+	b
+): List(a -> (),
+		( -> ((a -> b) -> List((
+	b
+))))))Foo: (Bar, Baz)
+FooMultiline: (
+	Bar,
+	Baz
+)Some(a): { foo: Ok(a), bar: Something }
+SomeMl(a): {
+	foo: Ok(a),
+	bar: Something
 }
-SomeMl(a): ({
-	foo: ((Ok(a), bar): Something, <malformed>)
-	SomeMultiline(a): (({
-		foo # After field name: ((Ok(a), bar): Something, <malformed>)
-		Maybe(a): [(Some(a), None)]
-		MaybeMultiline(a): [(Some(a), None, <malformed>)]
-		SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
-		add_one_oneline = \num -> if num 2 else 5
-		add_one: (U64 -> U64)
-		add_one = \num -> {
-			other = 1
-			if num {
-				<malformed>
-				some_func()
-				0
-			} else {
-				<malformed>
-				123
-				other: other
-			}
-		}
-		match_time = <malformed>
-		foo: ((1, bar): 2, <unary_double_dot>)
-	} => 12-) -> add(34))
-	{ foo # After pattern record field name: ((1, bar): 2 => (<unary_double_dot> => (<malformed> => 12))), {
-		foo: ((1, bar): 2 | 7)
-	}, <malformed>, 12, {
-		foo: ((1, bar): 2 | 7 => (<malformed> => 12))
-		Ok(123)
-		<malformed>
-		123
-		Ok(Some(dude))
-		<malformed>
-		dude
-		TwoArgs(("hello", Some("world")))
-		<malformed>
-		1000
-	}, expect blah == 1, main, <malformed>!, List(String), <malformed>, Result(({  }, _)), main, (<malformed>! | _) | { world = "World", var number = 123, expect blah == 1, tag = Blue, <ret>, ..., match_time((..., <malformed>)), some_func(<malformed>), 42, <malformed> }, crash "Unreachable!", tag_with_payload = Ok(number), interpolated = "Hello, ${world}", list = [add_one(<malformed>)], number, (<malformed>, 456, 789, <malformed>) }
-	for n in list {
+SomeMultiline(a): {
+	foo # After field name: Ok(a),	# Comment after pattern record field
+	bar: Something# Another after pattern record field
+} # Comment after pattern record close
+
+Maybe(a): [Some(a), None]
+
+MaybeMultiline(a): [	# Comment after tag union open
+	Some(a),	# Comment after tag union member
+	None# Another after tag union member
+] # Comment after tag union close
+
+SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
+
+add_one_oneline = \num -> if num 2 else 5
+
+add_one: (U64 -> U64)
+add_one = \num -> {
+	other = 1
+	if num
 		{
-			Stdout | .line
-			"Adding ${n} to ${number}"!
-			number = number + n
+			dbg # After debug
+			some_func()
+			0
 		}
-	}
-	record = {
-		foo: ((123, bar): "Hello", <malformed>)
-		az: ((tag, qux): Ok(world), punned)
-	}
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [(1, 2, 3)])
-	multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [(
-		1,
-		2,
-		3,
-	)], <malformed>)
-	bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
-	static_dispatch_style = some_fn(arg1)
-	<malformed> | .static_dispatch_method()
-	<malformed> | .next_static_dispatch_method()
-	<malformed> | .record_field
-	<malformed>
-	Stdout | .line
-	interpolated!
-	<malformed>
-	Stdout | .line
-	<malformed>!
-	Num | .toStr(number)
-} as a)
-string<malformed><malformed>
-<malformed>
-<malformed>
+	else
+		{
+			dbg
+			123
+			other: other
+		}
+}
+
+match_time = 1
+2 | 5
+3
+..as # Before alias
+rest, # After last pattern in list
+]
+=>
+123
+3.14
+=>
+314
+3.14 | 6.28
+=>
+314((1, 2, 3))
+=>
+123(((1, 2) | 5, 3))
+=>
+123
+{ foo: 1, bar: 2, ..rest }
+=>
+12-->
+add(34)
+{	# After pattern record open
+	# After pattern record field name
+	foo # After pattern record field name: 1,	# After pattern record field
+	bar: 2,
+	..rest# After spread operator
+# After last field
+}
+=>
+12
+{ foo: 1, bar: 2 } | 7
+}
+=>
+12
+{
+	foo: 1,
+	bar: 2# After last record field
+} | 7, # After last record field
+}
+=>
+12
+Ok(123)
+=>
+123
+Ok(Some(dude))
+=>
+dude
+TwoArgs(("hello", Some("world")))
+=>
+1000
+}
+
+expect blah == 1 # Comment after expect statement
+
+main!: (List(String) -> Result(({  }, _)))
+main! = \_ -> {	# Yeah I can leave a comment here
+	world = "World",
+	var number = 123,
+	expect blah == 1,
+	tag = Blue,
+	return tag # Comment after return statement,	# Just a random comment!
+	
+
+# Just a random comment!
+...,
+	match_time((
+		...
+	)),
+	some_func(dbg # After debug),
+	42
+}crash "Unreachable!"
+tag_with_payload = Ok(number)
+interpolated = "Hello, ${world}"
+list = [
+	add_one(dbg # After dbg in list)
+]number, # after dbg expr as arg
+)
+, # Comment one
+456, # Comment two
+789, # Comment three
+]
+for n in list { {
+	Stdout.line!("Adding ${n} to ${number}")
+	number = number + n
+} }
+record = { foo: 123, bar: "Hello" }az: (
+	(
+		tag,
+		qux
+	): Ok(world),
+	punned
+)}
+tuple = (
+	123,
+	"World",
+	tag,
+	Ok(world),
+	(nested, tuple),
+	[1, 2, 3]
+)
+multiline_tuple = (
+	123,
+	"World",
+	tag1,
+	Ok(world),
+	(nested, tuple),
+	[1, 2, 3]
+)bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
+static_dispatch_style = some_fn(arg1)
+? | .static_dispatch_method()
+? | .next_static_dispatch_method()
+? | .record_field
+?
+Stdout.line!(interpolated)?
+Stdout.line!("How about ${ # Comment after string interpolation open)
+Num.toStr(number)
+}
+asa
+string?"
+)
+} # Comment after top-level decl
 empty: {  }
 empty = {  }
 tuple: Value((a, b, c))
@@ -1059,18 +1179,6 @@ at 41:1 to 41:1
 at 43:1 to 43:1
 
 **Parse Error**
-at 47:1 to 47:1
-
-**Parse Error**
-at 54:1 to 54:1
-
-**Parse Error**
-at 61:1 to 61:1
-
-**Parse Error**
-at 58:21 to 63:1
-
-**Parse Error**
 at 65:25 to 65:32
 
 **Parse Error**
@@ -1110,46 +1218,85 @@ at 102:23 to 102:23
 at 103:4 to 103:4
 
 **Parse Error**
-at 108:20 to 108:20
+at 108:3 to 108:9
 
 **Parse Error**
-at 108:3 to 108:23
+at 84:10 to 108:20
+
+**Parse Error**
+at 84:2 to 108:27
 
 **Parse Error**
 at 108:27 to 108:27
 
 **Parse Error**
-at 108:29 to 108:29
+at 109:3 to 109:3
+
+**Parse Error**
+at 110:4 to 110:4
+
+**Parse Error**
+at 110:5 to 110:5
+
+**Parse Error**
+at 111:9 to 111:9
+
+**Parse Error**
+at 112:5 to 112:5
 
 **Parse Error**
 at 114:5 to 114:5
 
 **Parse Error**
-at 109:3 to 115:6
+at 115:10 to 115:10
 
 **Parse Error**
 at 116:3 to 116:3
 
 **Parse Error**
-at 84:10 to 117:3
+at 116:5 to 116:5
 
 **Parse Error**
-at 84:2 to 117:3
+at 117:8 to 117:8
 
 **Parse Error**
-at 118:3 to 118:3
+at 118:15 to 118:15
 
 **Parse Error**
-at 121:3 to 121:3
+at 119:13 to 119:13
 
 **Parse Error**
-at 129:3 to 129:3
+at 120:17 to 120:17
+
+**Parse Error**
+at 121:30 to 121:30
+
+**Parse Error**
+at 121:35 to 121:35
+
+**Parse Error**
+at 129:5 to 129:5
+
+**Parse Error**
+at 130:3 to 130:20
+
+**Parse Error**
+at 130:24 to 130:24
 
 **Parse Error**
 at 130:26 to 130:26
 
 **Parse Error**
+at 131:3 to 133:11
+
+**Parse Error**
+at 133:14 to 133:14
+
+**Parse Error**
 at 134:3 to 134:3
+
+**Parse Error**
+at 134:5 to 134:5
 
 **Parse Error**
 at 135:11 to 135:11
@@ -1161,13 +1308,7 @@ at 136:18 to 136:18
 at 137:35 to 137:35
 
 **Parse Error**
-at 143:7 to 143:7
-
-**Parse Error**
-at 143:22 to 143:22
-
-**Parse Error**
-at 144:7 to 144:7
+at 138:2 to 138:2
 
 **Parse Error**
 at 157:2 to 157:2
@@ -1197,16 +1338,31 @@ at 167:3 to 169:5
 at 166:9 to 169:5
 
 **Parse Error**
+at 169:11 to 169:11
+
+**Parse Error**
 at 170:3 to 170:3
+
+**Parse Error**
+at 170:4 to 170:4
+
+**Parse Error**
+at 171:6 to 171:6
+
+**Parse Error**
+at 172:6 to 172:6
 
 **Parse Error**
 at 173:2 to 173:2
 
 **Parse Error**
-at 122:3 to 174:2
+at 178:37 to 178:37
 
 **Parse Error**
-at 178:37 to 178:37
+at 178:11 to 178:38
+
+**Parse Error**
+at 178:70 to 178:70
 
 **Parse Error**
 at 187:2 to 187:2
@@ -1233,7 +1389,13 @@ at 190:28 to 190:28
 at 192:3 to 192:3
 
 **Parse Error**
-at 193:4 to 193:4
+at 191:8 to 193:4
+
+**Parse Error**
+at 194:3 to 194:3
+
+**Parse Error**
+at 194:5 to 194:5
 
 **Parse Error**
 at 194:16 to 194:16
@@ -1296,10 +1458,202 @@ at 36:16 to 36:17
 at 1:1 to 1:1
 
 **Unsupported Node**
-at 43:30 to 43:30
+at 56:12 to 56:27
 
 **Unsupported Node**
-at 44:13 to 194:9
+at 58:21 to 60:7
+
+**Unsupported Node**
+at 63:15 to 63:38
+
+**Unsupported Node**
+at 65:19 to 65:25
+
+**Unsupported Node**
+at 67:11 to 67:21
+
+**Unsupported Node**
+at 68:11 to 68:17
+
+**Unsupported Node**
+at 110:4 to 110:4
+
+**Unsupported Node**
+at 110:5 to 110:5
+
+**Unsupported Node**
+at 111:9 to 111:9
+
+**Unsupported Node**
+at 112:5 to 112:5
+
+**Unsupported Node**
+at 113:4 to 114:5
+
+**Unsupported Node**
+at 115:10 to 115:10
+
+**Unsupported Node**
+at 116:3 to 116:3
+
+**Unsupported Node**
+at 116:5 to 116:5
+
+**Unsupported Node**
+at 117:8 to 117:8
+
+**Unsupported Node**
+at 118:3 to 118:7
+
+**Unsupported Node**
+at 118:15 to 118:15
+
+**Unsupported Node**
+at 119:13 to 119:13
+
+**Unsupported Node**
+at 120:9 to 120:9
+
+**Unsupported Node**
+at 120:17 to 120:17
+
+**Unsupported Node**
+at 121:19 to 121:25
+
+**Unsupported Node**
+at 121:30 to 121:30
+
+**Unsupported Node**
+at 121:35 to 121:35
+
+**Unsupported Node**
+at 127:2 to 127:8
+
+**Unsupported Node**
+at 129:5 to 129:5
+
+**Unsupported Node**
+at 130:3 to 130:20
+
+**Unsupported Node**
+at 130:24 to 130:24
+
+**Unsupported Node**
+at 130:26 to 130:26
+
+**Unsupported Node**
+at 131:3 to 133:11
+
+**Unsupported Node**
+at 133:14 to 133:14
+
+**Unsupported Node**
+at 134:3 to 134:3
+
+**Unsupported Node**
+at 134:5 to 134:5
+
+**Unsupported Node**
+at 135:11 to 135:11
+
+**Unsupported Node**
+at 136:18 to 136:18
+
+**Unsupported Node**
+at 137:35 to 137:35
+
+**Unsupported Node**
+at 138:2 to 138:2
+
+**Unsupported Node**
+at 140:1 to 141:11
+
+**Unsupported Node**
+at 143:9 to 144:1
+
+**Unsupported Node**
+at 144:1 to 144:6
+
+**Unsupported Node**
+at 144:9 to 144:13
+
+**Unsupported Node**
+at 162:2 to 163:17
+
+**Unsupported Node**
+at 166:9 to 168:6
+
+**Unsupported Node**
+at 169:11 to 169:11
+
+**Unsupported Node**
+at 170:3 to 170:3
+
+**Unsupported Node**
+at 170:4 to 170:4
+
+**Unsupported Node**
+at 171:6 to 171:6
+
+**Unsupported Node**
+at 172:6 to 172:6
+
+**Unsupported Node**
+at 173:2 to 173:2
+
+**Unsupported Node**
+at 174:2 to 177:2
+
+**Unsupported Node**
+at 178:37 to 178:37
+
+**Unsupported Node**
+at 178:70 to 178:70
+
+**Unsupported Node**
+at 178:70 to 178:70
+
+**Unsupported Node**
+at 179:67 to 179:68
+
+**Unsupported Node**
+at 1:1 to 1:1
+
+**Unsupported Node**
+at 188:18 to 188:32
+
+**Unsupported Node**
+at 189:39 to 189:39
+
+**Unsupported Node**
+at 189:65 to 189:65
+
+**Unsupported Node**
+at 189:96 to 189:96
+
+**Unsupported Node**
+at 189:110 to 189:110
+
+**Unsupported Node**
+at 190:2 to 190:8
+
+**Unsupported Node**
+at 190:28 to 190:28
+
+**Unsupported Node**
+at 191:2 to 191:8
+
+**Unsupported Node**
+at 192:3 to 192:3
+
+**Unsupported Node**
+at 193:4 to 193:7
+
+**Unsupported Node**
+at 194:3 to 194:3
+
+**Unsupported Node**
+at 194:5 to 194:5
 
 **Unsupported Node**
 at 194:16 to 194:16
@@ -1351,10 +1705,37 @@ at 203:1 to 207:1
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "foo")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
       )
     )
   )
@@ -1362,6 +1743,130 @@ at 203:1 to 207:1
     (Expr.apply_tag)
     (Expr.malformed)
   )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.num_literal_i32 3)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "rest")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.num_literal_i32 314)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.lookup "dude")
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 1000)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "number")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 456)
+  (Expr.malformed)
+  (Expr.num_literal_i32 789)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "az")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "a")
   (Expr.lookup "string")
   (Expr.malformed)
   (Expr.malformed)

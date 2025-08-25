@@ -23,11 +23,10 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 (block
   (binop_colon
     (lc "identity")
-    (binop_thin_arrow
-      (lc "a")
-      (lc "a")
-    )
+    (lc "a")
   )
+  (malformed malformed:expr_unexpected_token)
+  (lc "a")
   (binop_equals
     (lc "identity")
     (lambda
@@ -73,18 +72,24 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~
 # FORMATTED
 ~~~roc
-identity: (a -> a)
+identity: a
+->
+a
 identity = \x -> x
 
 needs_string: ((Str -> Str) -> Str)
 needs_string = \f -> f(["hello"])
+
 needs_string(identity)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
+**Parse Error**
+at 2:18 to 2:18
+
 **Unsupported Node**
-at 2:16 to 2:22
+at 2:18 to 2:18
 
 **Unsupported Node**
 at 3:16 to 3:20
@@ -100,8 +105,10 @@ at 6:20 to 6:24
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "identity")
-    (Expr.malformed)
+    (Expr.lookup "a")
   )
+  (Expr.malformed)
+  (Expr.lookup "a")
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "needs_string")

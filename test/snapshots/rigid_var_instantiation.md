@@ -49,67 +49,71 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "num")
-        (apply_lc
-          (lc "identity")
-          (num_literal_i32 42)
-        )
-      )
-      (binop_equals
-        (lc "str")
-        (apply_lc
-          (lc "identity")
-          (str_literal_big "hello")
-        )
-      )
-      (binop_equals
-        (lc "lst")
-        (apply_lc
-          (lc "identity")
-          (list_literal
-            (tuple_literal
-              (num_literal_i32 1)
-              (num_literal_i32 2)
-              (num_literal_i32 3)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "num")
+            (apply_lc
+              (lc "identity")
+              (num_literal_i32 42)
             )
           )
+          (binop_equals
+            (lc "str")
+            (apply_lc
+              (lc "identity")
+              (str_literal_big "hello")
+            )
+          )
+          (binop_equals
+            (lc "lst")
+            (apply_lc
+              (lc "identity")
+              (list_literal
+                (num_literal_i32 1)
+                (num_literal_i32 2)
+                (num_literal_i32 3)
+              )
+            )
+          )
+          (record_literal)
         )
       )
-      (record_literal)
+      (args
+        (underscore)
+      )
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 identity: (a -> a)
 identity = \x -> x
 
 # Use identity at different call sites with different types
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	num = identity(42)
-	str = identity("hello")
-	lst = identity([(1, 2, 3)])
+	# Second call with string
+str = identity("hello")
+	# Third call with list
+lst = identity([1, 2, 3])
 	{  }
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 8:7 to 8:7
-
 **Unsupported Node**
 at 4:12 to 4:18
 
@@ -117,10 +121,10 @@ at 4:12 to 4:18
 at 5:12 to 5:16
 
 **Unsupported Node**
-at 8:5 to 8:7
+at 8:1 to 8:6
 
 **Unsupported Node**
-at 16:20 to 16:30
+at 8:9 to 8:13
 
 # CANONICALIZE
 ~~~clojure
@@ -130,13 +134,12 @@ at 16:20 to 16:30
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

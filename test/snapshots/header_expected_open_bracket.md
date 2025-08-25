@@ -16,7 +16,8 @@ KwModule ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [
+]
 
 ~~~
 # EXPECTED

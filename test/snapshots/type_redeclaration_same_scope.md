@@ -22,13 +22,11 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Close
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Some")
-          (lc "a")
-        )
-        (uc "None")
+      (apply_uc
+        (uc "Some")
+        (lc "a")
       )
+      (uc "None")
     )
   )
   (binop_colon
@@ -37,13 +35,11 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Close
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-        (uc "Err")
+      (apply_uc
+        (uc "Ok")
+        (lc "a")
       )
+      (uc "Err")
     )
   )
 )
@@ -54,14 +50,14 @@ module [
 	Maybe,
 ]
 
-Maybe(a): [(Some(a), None)]
-Maybe(a): [(Ok(a), Err)]
+Maybe(a): [Some(a), None]
+Maybe(a): [Ok(a), Err]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:12 to 4:1
+at 3:12 to 3:27
 
 **Unsupported Node**
 at 4:12 to 4:23

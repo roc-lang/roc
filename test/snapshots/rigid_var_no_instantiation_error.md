@@ -74,79 +74,87 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result1")
-        (apply_lc
-          (lc "swap")
-          (tuple_literal
-            (num_literal_i32 42)
-            (str_literal_big "hello")
-          )
-        )
-      )
-      (binop_equals
-        (lc "result2")
-        (apply_lc
-          (lc "swap")
-          (tuple_literal
-            (binop_pipe
-              (uc "Bool")
-              (dot_lc "true")
-            )
-            (list_literal
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "result1")
+            (apply_lc
+              (lc "swap")
               (tuple_literal
-                (num_literal_i32 1)
-                (num_literal_i32 2)
-                (num_literal_i32 3)
+                (num_literal_i32 42)
+                (str_literal_big "hello")
               )
             )
           )
-        )
-      )
-      (binop_equals
-        (lc "result3")
-        (apply_lc
-          (lc "swap")
-          (tuple_literal
-            (str_literal_small "foo")
-            (str_literal_small "bar")
+          (binop_equals
+            (lc "result2")
+            (apply_lc
+              (lc "swap")
+              (tuple_literal
+                (binop_pipe
+                  (uc "Bool")
+                  (dot_lc "true")
+                )
+                (list_literal
+                  (num_literal_i32 1)
+                  (num_literal_i32 2)
+                  (num_literal_i32 3)
+                )
+              )
+            )
           )
+          (binop_equals
+            (lc "result3")
+            (apply_lc
+              (lc "swap")
+              (tuple_literal
+                (str_literal_small "foo")
+                (str_literal_small "bar")
+              )
+            )
+          )
+          (record_literal)
         )
       )
-      (record_literal)
+      (args
+        (underscore)
+      )
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 swap: ((a, b) -> (b, a))
 swap = \pair -> {
 	(x, y) = pair((y, x))
 }
-main
-(<malformed>! | _) | {
+
+# Multiple uses that would conflict if 'a' and 'b' weren't instantiated
+main! = \_ -> {
 	result1 = swap((42, "hello"))
-	result2 = swap((Bool | .true, [(1, 2, 3)]))
-	result3 = swap(("foo", "bar"))
+	# Second use: swap (Bool, List Int)
+# This would fail if 'a' and 'b' from the first call were reused
+result2 = swap((Bool.true, [1, 2, 3]))
+	# Third use: swap (Str, Str) 
+# This shows even when both types are the same, we still need fresh vars
+result3 = swap(("foo", "bar"))
 	{  }
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 11:7 to 11:7
-
 **Unsupported Node**
 at 4:13 to 4:24
 
@@ -154,13 +162,10 @@ at 4:13 to 4:24
 at 5:8 to 5:15
 
 **Unsupported Node**
-at 11:5 to 11:7
+at 11:1 to 11:6
 
 **Unsupported Node**
-at 17:21 to 17:25
-
-**Unsupported Node**
-at 17:32 to 17:42
+at 11:9 to 11:13
 
 # CANONICALIZE
 ~~~clojure
@@ -170,13 +175,12 @@ at 17:32 to 17:42
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

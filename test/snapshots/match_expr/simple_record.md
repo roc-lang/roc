@@ -23,14 +23,14 @@ when person is {
 	{
 		name
 	}
-	<malformed>
+	=>
 	name
 	{
 		age
 	}
-	<malformed>
+	=>
 	age
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

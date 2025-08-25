@@ -69,138 +69,43 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (lc "map_result")
     (lambda
       (body
-        (block
-          (match <38 branches>)
-          (binop_colon
-            (lc "identity")
-            (binop_thin_arrow
+        (binop_thin_arrow
+          (record_literal
+            (match <38 branches>)
+            (binop_colon
+              (lc "identity")
+              (lc "a")
+            )
+            (malformed malformed:expr_unexpected_token)
+            (binop_colon
               (lc "a")
               (lc "a")
             )
-          )
-          (binop_equals
-            (lc "identity")
-            (lambda
-              (body
-                (lc "x")
-              )
-              (args
-                (lc "x")
-              )
-            )
-          )
-          (binop_colon
-            (lc "make_pair")
-            (binop_thin_arrow
-              (lc "a")
-              (binop_thin_arrow
-                (lc "b")
-                (block
-                  (binop_colon
-                    (lc "first")
-                    (binop_colon
-                      (tuple_literal
-                        (lc "a")
-                        (lc "second")
-                      )
-                      (lc "b")
-                    )
-                  )
-                )
-              )
-            )
-          )
-          (binop_equals
-            (lc "make_pair")
-            (lambda
-              (body
-                (block
-                  (binop_colon
-                    (lc "first")
-                    (binop_colon
-                      (tuple_literal
-                        (lc "x")
-                        (lc "second")
-                      )
-                      (lc "y")
-                    )
-                  )
-                )
-              )
-              (args
-                (tuple_literal
+            (binop_equals
+              (lc "identity")
+              (lambda
+                (body
                   (lc "x")
-                  (lc "y")
+                )
+                (args
+                  (lc "x")
                 )
               )
             )
-          )
-          (binop_colon
-            (lc "list_length")
-            (binop_thin_arrow
-              (apply_uc
-                (uc "List")
-                (lc "_a")
-              )
-              (uc "U64")
-            )
-          )
-          (binop_equals
-            (lc "list_length")
-            (lambda
-              (body
-                (num_literal_i32 42)
-              )
-              (args
-                (lc "_lst")
-              )
-            )
-          )
-          (binop_colon
-            (lc "wrap_in_result")
-            (binop_thin_arrow
+            (binop_colon
+              (lc "make_pair")
               (lc "a")
-              (apply_uc
-                (uc "Result")
-                (tuple_literal
-                  (apply_uc
-                    (uc "Result")
-                    (tuple_literal
-                      (lc "a")
-                      (uc "Str")
-                    )
-                  )
-                  (uc "Str")
-                )
-              )
             )
+            (lc "b")
           )
-          (binop_equals
-            (lc "wrap_in_result")
-            (lambda
-              (body
-                (apply_uc
-                  (uc "Ok")
-                  (apply_uc
-                    (uc "Ok")
-                    (lc "value")
-                  )
-                )
-              )
-              (args
-                (lc "value")
-              )
+          (record_literal
+            (binop_colon
+              (lc "first")
+              (lc "a")
             )
-          )
-          (binop_equals
-            (lc "main")
-            (lambda
-              (body
-                (str_literal_small "done")
-              )
-              (args
-                (underscore)
-              )
+            (binop_colon
+              (lc "second")
+              (lc "b")
             )
           )
         )
@@ -213,36 +118,138 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
       )
     )
   )
+  (binop_equals
+    (lc "make_pair")
+    (lambda
+      (body
+        (record_literal
+          (binop_colon
+            (lc "first")
+            (lc "x")
+          )
+          (binop_colon
+            (lc "second")
+            (lc "y")
+          )
+        )
+      )
+      (args
+        (tuple_literal
+          (lc "x")
+          (lc "y")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "list_length")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (lc "_a")
+      )
+      (uc "U64")
+    )
+  )
+  (binop_equals
+    (lc "list_length")
+    (lambda
+      (body
+        (num_literal_i32 42)
+      )
+      (args
+        (lc "_lst")
+      )
+    )
+  )
+  (binop_colon
+    (lc "wrap_in_result")
+    (binop_thin_arrow
+      (lc "a")
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (lc "a")
+              (uc "Str")
+            )
+          )
+          (uc "Str")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "wrap_in_result")
+    (lambda
+      (body
+        (apply_uc
+          (uc "Ok")
+          (apply_uc
+            (uc "Ok")
+            (lc "value")
+          )
+        )
+      )
+      (args
+        (lc "value")
+      )
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (lambda
+      (body
+        (str_literal_small "done")
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("platform.roc" platform [main]) }
+app
+{
+	pf: "platform.roc" platform [
+		main,
+	],
+}
 
 map_result: (Result((a, e)) -> ((a -> b) -> Result((b, e))))
-map_result = \(result, transform) -> {
+map_result = \(
+	result,
+	transform
+) -> {
 	when result is {
 		Ok(value)
-		<malformed>
+		=>
 		Ok(transform(value))
 		Err(error)
-		<malformed>
+		=>
 		Err(error)
-	} -> <malformed>
-	identity: (a -> a)
-	identity = \x -> x
-	make_pair: (a -> (b -> {
-		first: ((a, second): b)
-	}))
-	make_pair = \(x, y) -> {
-		first: ((x, second): y)
-	}
-	list_length: (List(_a) -> U64)
-	list_length = \_lst -> 42
-	wrap_in_result: (a -> Result((Result((a, Str)), Str)))
-	wrap_in_result = \value -> Ok(Ok(value))
-	main = \_ -> "done"
-}
+	} -> }
+
+# Simple identity function with type variable,
+	identity: a,
+	a: a,
+	identity = \x -> x,
+	make_pair: a,
+	b
+} -> { first: a, second: b }
+make_pair = \(
+	x,
+	y
+) -> { first: x, second: y }
+list_length: (List(_a) -> U64)
+list_length = \_lst -> 42
+wrap_in_result: (a -> Result((Result((a, Str)), Str)))
+wrap_in_result = \value -> Ok(Ok(value))
+main = \_ -> "done"
 ~~~
 # EXPECTED
 NIL
@@ -263,13 +270,34 @@ at 6:5 to 10:1
 at 10:1 to 10:1
 
 **Parse Error**
-at 5:34 to 28:18
+at 13:14 to 13:14
+
+**Parse Error**
+at 5:34 to 17:18
 
 **Unsupported Node**
 at 4:14 to 5:1
 
 **Unsupported Node**
 at 5:14 to 5:34
+
+**Unsupported Node**
+at 18:13 to 18:20
+
+**Unsupported Node**
+at 21:15 to 21:30
+
+**Unsupported Node**
+at 22:15 to 22:22
+
+**Unsupported Node**
+at 25:18 to 26:1
+
+**Unsupported Node**
+at 26:18 to 26:26
+
+**Unsupported Node**
+at 28:8 to 28:12
 
 # CANONICALIZE
 ~~~clojure
@@ -278,6 +306,18 @@ at 5:14 to 5:34
     (Expr.lookup "map_result")
     (Expr.malformed)
   )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "list_length")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "wrap_in_result")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

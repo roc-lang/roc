@@ -84,7 +84,11 @@ const Formatter = struct {
 
     /// Helper to get a node from an index - eliminates massive boilerplate
     fn getNode(self: *const Formatter, idx: Node.Idx) Node {
-        return self.ast.nodes.get(@as(collections.SafeMultiList(Node).Idx, @enumFromInt(@as(u32, @intCast(@intFromEnum(idx))))));
+        // Node.Idx is i32, SafeMultiList.Idx expects u32
+        const idx_val = @intFromEnum(idx);
+        const u32_idx = @as(u32, @intCast(idx_val));
+        const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(u32_idx));
+        return self.ast.nodes.get(multi_list_idx);
     }
 
     fn collectTokens(self: *Formatter) !void {
@@ -131,56 +135,150 @@ const Formatter = struct {
                 _ = try self.flushCommentsBefore(a.region);
                 try self.pushAll("app");
 
-                // Format packages (which now includes platform with provides)
-                try self.pushAll(" { ");
+                // Check if we need multiline formatting
                 const packages_idx = a.packages;
-                if (@intFromEnum(packages_idx) != 0) {
-                    var it = self.ast.node_slices.nodes(&packages_idx);
-                    var first = true;
-                    while (it.next()) |pkg| {
-                        if (!first) try self.pushAll(", ");
-                        first = false;
-                        // Check if this is a binop_colon (field: value)
+                var needs_multiline = false;
+
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    // Use multiline if:
+                    // 1. We have multiple packages
+                    // 2. Any package has a platform clause (complex structure)
+                    // 3. There are comments in the header region
+
+                    var package_count: usize = 0;
+                    var has_platform_clause = false;
+
+                    var check_it = self.ast.node_slices.nodes(&packages_idx);
+                    while (check_it.next()) |pkg| {
+                        package_count += 1;
                         const pkg_node = self.getNode(pkg);
                         if (pkg_node.tag == .binop_colon) {
-                            // Format field: value without extra parentheses around value
                             const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
-                            try self.formatNode(binop.lhs); // field name
-                            try self.pushAll(": ");
-                            // Format the value directly without considering it needs parentheses
                             const value_node = self.getNode(binop.rhs);
                             if (value_node.tag == .binop_platform) {
-                                // Format platform expression without parentheses
-                                const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
-                                try self.formatNode(platform_binop.lhs); // platform string
-                                try self.pushAll(" platform ");
-                                
-                                // Format the provides list - it might be a block node that should be formatted as a list
-                                const rhs_node = self.getNode(platform_binop.rhs);
-                                if (rhs_node.tag == .block) {
-                                    // Format as a list with square brackets
-                                    try self.push('[');
-                                    const nodes_idx = rhs_node.payload.nodes;
-                                    var provides_it = self.ast.node_slices.nodes(&nodes_idx);
-                                    var provides_first = true;
-                                    while (provides_it.next()) |item| {
-                                        if (!provides_first) try self.pushAll(", ");
-                                        provides_first = false;
-                                        try self.formatNode(item);
-                                    }
-                                    try self.push(']');
-                                } else {
-                                    try self.formatNode(platform_binop.rhs);
-                                }
-                            } else {
-                                try self.formatNode(binop.rhs);
+                                has_platform_clause = true;
                             }
-                        } else {
-                            try self.formatNode(pkg);
                         }
                     }
+
+                    // Check for comments by examining if tokens were collected
+                    // (tokens are only collected when comments are present)
+                    const has_comments = self.tokens.items.len > 0;
+
+                    needs_multiline = package_count > 1 or has_platform_clause or has_comments;
                 }
-                try self.pushAll(" }");
+
+                if (needs_multiline) {
+                    // Multiline format with proper comment preservation
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                    try self.push('{');
+                    try self.ensureNewline();
+                    self.curr_indent += 1;
+
+                    if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                        var it = self.ast.node_slices.nodes(&packages_idx);
+                        while (it.next()) |pkg| {
+                            const pkg_node = self.getNode(pkg);
+
+                            // Flush any comments before this package
+                            _ = try self.flushCommentsBefore(pkg_node.start);
+
+                            try self.pushIndent();
+
+                            if (pkg_node.tag == .binop_colon) {
+                                const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
+                                try self.formatNode(binop.lhs);
+                                try self.pushAll(": ");
+
+                                const value_node = self.getNode(binop.rhs);
+                                if (value_node.tag == .binop_platform) {
+                                    const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
+                                    try self.formatNode(platform_binop.lhs);
+                                    try self.pushAll(" platform ");
+
+                                    const rhs_node = self.getNode(platform_binop.rhs);
+                                    if (rhs_node.tag == .block) {
+                                        try self.push('[');
+                                        try self.ensureNewline();
+                                        self.curr_indent += 1;
+
+                                        const nodes_idx = rhs_node.payload.nodes;
+                                        var provides_it = self.ast.node_slices.nodes(&nodes_idx);
+                                        while (provides_it.next()) |item| {
+                                            const item_node = self.getNode(item);
+                                            _ = try self.flushCommentsBefore(item_node.start);
+                                            try self.pushIndent();
+                                            try self.formatNode(item);
+                                            try self.push(',');
+                                            try self.ensureNewline();
+                                        }
+
+                                        self.curr_indent -= 1;
+                                        try self.pushIndent();
+                                        try self.push(']');
+                                    } else {
+                                        try self.formatNode(platform_binop.rhs);
+                                    }
+                                } else {
+                                    try self.formatNode(binop.rhs);
+                                }
+                            } else {
+                                try self.formatNode(pkg);
+                            }
+
+                            try self.push(',');
+                            try self.ensureNewline();
+                        }
+                    }
+
+                    self.curr_indent -= 1;
+                    try self.pushIndent();
+                    try self.push('}');
+                } else {
+                    // Single line format (simpler case)
+                    try self.pushAll(" { ");
+                    if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                        var it = self.ast.node_slices.nodes(&packages_idx);
+                        var first = true;
+                        while (it.next()) |pkg| {
+                            if (!first) try self.pushAll(", ");
+                            first = false;
+                            const pkg_node = self.getNode(pkg);
+                            if (pkg_node.tag == .binop_colon) {
+                                const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
+                                try self.formatNode(binop.lhs);
+                                try self.pushAll(": ");
+                                const value_node = self.getNode(binop.rhs);
+                                if (value_node.tag == .binop_platform) {
+                                    const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
+                                    try self.formatNode(platform_binop.lhs);
+                                    try self.pushAll(" platform ");
+                                    const rhs_node = self.getNode(platform_binop.rhs);
+                                    if (rhs_node.tag == .block) {
+                                        try self.push('[');
+                                        const nodes_idx = rhs_node.payload.nodes;
+                                        var provides_it = self.ast.node_slices.nodes(&nodes_idx);
+                                        var provides_first = true;
+                                        while (provides_it.next()) |item| {
+                                            if (!provides_first) try self.pushAll(", ");
+                                            provides_first = false;
+                                            try self.formatNode(item);
+                                        }
+                                        try self.push(']');
+                                    } else {
+                                        try self.formatNode(platform_binop.rhs);
+                                    }
+                                } else {
+                                    try self.formatNode(binop.rhs);
+                                }
+                            } else {
+                                try self.formatNode(pkg);
+                            }
+                        }
+                    }
+                    try self.pushAll(" }");
+                }
             },
             .package => |p| {
                 _ = try self.flushCommentsBefore(p.region);
@@ -191,7 +289,7 @@ const Formatter = struct {
 
                 // Format packages
                 const packages_idx = p.packages;
-                if (@intFromEnum(packages_idx) != 0) {
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
                     try self.pushAll(" packages ");
                     try self.push('{');
                     var it = self.ast.node_slices.nodes(&packages_idx);
@@ -213,12 +311,12 @@ const Formatter = struct {
                 try self.formatNode(p.name);
 
                 // Format requires if present
-                if (@intFromEnum(p.requires_rigids) != 0 or @intFromEnum(p.requires_signatures) != @as(i32, -2147483648)) {
+                if (p.requires_rigids != collections.NodeSlices(Node.Idx).Idx.NIL or @intFromEnum(p.requires_signatures) != std.math.minInt(i32)) {
                     try self.pushAll(" requires ");
 
                     // Format rigids
                     const rigids_idx = p.requires_rigids;
-                    if (@intFromEnum(rigids_idx) != 0) {
+                    if (rigids_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
                         try self.push('{');
                         var it = self.ast.node_slices.nodes(&rigids_idx);
                         var first = true;
@@ -240,7 +338,7 @@ const Formatter = struct {
 
                 // Format packages
                 const packages_idx = p.packages;
-                if (@intFromEnum(packages_idx) != 0) {
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
                     try self.pushAll(" packages ");
                     try self.push('{');
                     var it = self.ast.node_slices.nodes(&packages_idx);
@@ -276,79 +374,10 @@ const Formatter = struct {
 
     fn formatExposedList(self: *Formatter, exposes_idx: collections.NodeSlices(Node.Idx).Idx) !void {
         try self.pushAll(" [");
-        
-        // Debug: Print the exposes_idx value
-        const idx_val = @intFromEnum(exposes_idx);
-        
-        // Check if we have exposed items (0 means empty list)
-        if (idx_val == 0) {
-            // Empty list - but let's check if there's content in the source
-            // This is a temporary workaround until we figure out why the parser isn't capturing exposed items
-            const bracket_start = self.last_formatted_pos;
-            
-            // Find the opening bracket in the source
-            var open_pos = bracket_start;
-            while (open_pos < self.source.len and self.source[open_pos] != '[') {
-                open_pos += 1;
-            }
-            
-            if (open_pos < self.source.len) {
-                open_pos += 1; // Skip the [
-                
-                // Find the closing bracket
-                var close_pos = open_pos;
-                var depth: i32 = 1;
-                while (close_pos < self.source.len and depth > 0) {
-                    if (self.source[close_pos] == '[') {
-                        depth += 1;
-                    } else if (self.source[close_pos] == ']') {
-                        depth -= 1;
-                    }
-                    close_pos += 1;
-                }
-                
-                if (depth == 0) {
-                    close_pos -= 1; // Back up to the ]
-                    
-                    // Get the content between brackets
-                    const content = self.source[open_pos..close_pos];
-                    
-                    // Check if there's any non-whitespace content
-                    var has_content = false;
-                    for (content) |c| {
-                        if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
-                            has_content = true;
-                            break;
-                        }
-                    }
-                    
-                    if (has_content) {
-                        // Format as multiline and preserve everything
-                        self.curr_indent += 1;
-                        try self.ensureNewline();
-                        
-                        // Parse and format the content line by line
-                        var lines = std.mem.tokenizeAny(u8, content, "\n\r");
-                        while (lines.next()) |line| {
-                            // Trim leading/trailing whitespace
-                            const trimmed = std.mem.trim(u8, line, " \t");
-                            if (trimmed.len > 0) {
-                                try self.pushIndent();
-                                try self.pushAll(trimmed);
-                                try self.ensureNewline();
-                            }
-                        }
-                        
-                        self.curr_indent -= 1;
-                        try self.pushIndent();
-                        try self.push(']');
-                        
-                        self.last_formatted_pos = close_pos + 1; // Skip past the ]
-                        return;
-                    }
-                }
-            }
-            
+
+        // Check if we have exposed items
+        // NodeSlices uses NIL (minInt(i32)) for empty, all other values are valid indices
+        if (exposes_idx == collections.NodeSlices(Node.Idx).Idx.NIL) {
             // Truly empty list
             try self.push(']');
             return;
@@ -505,10 +534,34 @@ const Formatter = struct {
             .if_without_else => try self.formatIfWithoutElse(node_idx),
             .match => try self.formatMatch(node_idx),
             .lambda => try self.formatLambda(node_idx),
-            .lambda_no_args => try self.formatLambdaNoArgs(node_idx),
+            .lambda_no_args => {
+                // Lambda with no args should just be a lambda with empty args
+                // Format as ||
+                try self.pushAll("||");
+                // The body is in the nodes payload
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |body_idx| {
+                    try self.pushAll(" ");
+                    try self.formatNode(body_idx);
+                }
+            },
 
             // Application
-            .apply_lc, .apply_uc, .apply_anon, .apply_module => try self.formatApply(node_idx),
+            .apply_lc, .apply_uc, .apply_anon => try self.formatApply(node_idx),
+            .apply_module => {
+                // Module application in where clauses
+                try self.pushAll("module(");
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                var first = true;
+                while (iter.next()) |arg_idx| {
+                    if (!first) {
+                        try self.pushAll(", ");
+                    }
+                    try self.formatNode(arg_idx);
+                    first = false;
+                }
+                try self.push(')');
+            },
 
             // Unary operators
             .unary_not => try self.formatUnaryNot(node_idx),
@@ -523,16 +576,68 @@ const Formatter = struct {
             // Statements
             .crash => try self.formatCrash(node_idx),
 
-            // Malformed nodes
-            .malformed => {
-                try self.pushAll("<malformed>");
+            // Unary double dot operator
+            .unary_double_dot => {
+                try self.pushAll("..");
+                // The expression follows in the nodes payload
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |expr_idx| {
+                    try self.formatNode(expr_idx);
+                }
             },
 
-            else => {
-                // For unhandled nodes, try to output something reasonable
-                try self.pushAll("<");
-                try self.pushAll(@tagName(node.tag));
-                try self.pushAll(">");
+            // Return statements
+            .ret => {
+                try self.pushAll("return");
+                // Return has nodes payload with the expression
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |expr_idx| {
+                    // Check if expression needs space before it
+                    const expr_node = self.getNode(expr_idx);
+                    const needs_space = switch (expr_node.tag) {
+                        // No space for parenthesized expressions or certain literals
+                        .tuple_literal => false,
+                        .list_literal => false,
+                        .record_literal => false,
+                        .block => false,
+                        else => true,
+                    };
+
+                    if (needs_space) {
+                        try self.push(' ');
+                    }
+
+                    try self.formatNode(expr_idx);
+                }
+            },
+
+            // Malformed nodes - preserve source bytes with diagnostic-aware recovery
+            .malformed => |diagnostic| {
+                // For malformed nodes, we preserve the original source text
+                // to avoid losing what the user wrote
+                const start = node.start.offset;
+
+                // Find the end of this malformed node using diagnostic information
+                // The diagnostic gives us hints about what went wrong
+                const end = self.findMalformedEndSmart(node_idx, diagnostic);
+
+                if (start < end and end <= self.source.len) {
+                    // Get the source text for this malformed node
+                    var source_text = self.source[start..end];
+
+                    // Apply diagnostic-aware trimming
+                    source_text = self.trimMalformedTextSmart(source_text, diagnostic);
+
+                    // Output the preserved source
+                    if (source_text.len > 0) {
+                        try self.pushAll(source_text);
+                    }
+
+                    // Update our position
+                    if (end > self.last_formatted_pos) {
+                        self.last_formatted_pos = end;
+                    }
+                }
             },
         }
 
@@ -556,24 +661,24 @@ const Formatter = struct {
 
         const lhs = binop.lhs;
         const rhs = binop.rhs;
-        
+
         // Special case for binop_platform: format as "string" platform [provides]
         if (node.tag == .binop_platform) {
             try self.formatNode(lhs); // The platform string
             try self.pushAll(" platform ");
-            
+
             // The RHS is a block containing the provides list - format it as a list
             const rhs_node = self.getNode(rhs);
             if (rhs_node.tag == .block) {
                 // Format as a list with square brackets
                 const multiline = self.collectionIsMultiline(rhs);
-                
+
                 try self.pushAll("[");
-                
+
                 if (multiline) {
                     self.curr_indent += 1;
                 }
-                
+
                 var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
                 var first_elem = true;
                 while (it.next()) |elem| {
@@ -591,7 +696,7 @@ const Formatter = struct {
                     first_elem = false;
                     try self.formatNode(elem);
                 }
-                
+
                 if (multiline) {
                     // Preserve trailing comma if it exists
                     if (self.hasTrailingComma(rhs)) {
@@ -601,7 +706,7 @@ const Formatter = struct {
                     try self.ensureNewline();
                     try self.pushIndent();
                 }
-                
+
                 try self.pushAll("]");
             } else {
                 // Shouldn't happen but fall back to regular formatting
@@ -623,7 +728,7 @@ const Formatter = struct {
                 // This is actually field access or a qualified name, not a pipe operator
                 try self.formatNode(lhs);
                 try self.push('.');
-                
+
                 // For dot_lc, we already have the dot, so just format the identifier part
                 // For not_lc, format it as identifier followed by !
                 if (rhs_node.tag == .dot_lc) {
@@ -689,7 +794,6 @@ const Formatter = struct {
             while (equals_pos < self.source.len and self.source[equals_pos] != '=') {
                 equals_pos += 1;
             }
-            // DEBUG: Always output marker if we find equals
             if (equals_pos < self.source.len) {
                 equals_pos += 1; // Move past the =
 
@@ -863,59 +967,106 @@ const Formatter = struct {
 
         try self.pushAll("import ");
 
-        // Import statements store the module path and exposed items in import_nodes
+        // The parser creates import nodes in this exact order:
+        // 1. Module path components (series of lc/uc nodes, potentially with dots)
+        // 2. Optional alias (single uc/lc node after encountering "as" keyword)
+        // 3. Optional exposed items (nodes after encountering "exposing" keyword)
+
+        // The parser tracks the position where it sees "as" and "exposing" keywords,
+        // so we can detect the structure by looking at the source between nodes
+
         var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
+        var nodes = std.ArrayList(Node.Idx).init(self.allocator);
+        defer nodes.deinit();
 
-        // Collect all nodes to determine structure
-        var nodes_buf: [100]Node.Idx = undefined;
-        var nodes_count: usize = 0;
         while (it.next()) |item| {
-            if (nodes_count < nodes_buf.len) {
-                nodes_buf[nodes_count] = item;
-                nodes_count += 1;
-            }
+            try nodes.append(item);
         }
 
-        // Check if this is a qualified import (e.g., pf.Stdout) or has exposing clause
-        // If we have exactly 2 nodes and both are identifiers, it's likely a qualified import
-        // unless the second starts after significant whitespace/newline
-        var is_qualified_import = false;
-        if (nodes_count == 2) {
-            const first_node = self.getNode(nodes_buf[0]);
-            const second_node = self.getNode(nodes_buf[1]);
-            
-            // If both are identifiers (lc/uc), this is likely Module.Type format
-            if ((first_node.tag == .lc or first_node.tag == .uc) and
-                (second_node.tag == .lc or second_node.tag == .uc))
-            {
-                // Assume it's qualified unless proven otherwise
-                // TODO: Better heuristic based on source positions
-                is_qualified_import = true;
-            }
-        }
+        if (nodes.items.len == 0) return;
 
-        if (is_qualified_import and nodes_count == 2) {
-            // Format as qualified import (e.g., pf.Stdout)
-            try self.formatNode(nodes_buf[0]);
-            try self.push('.');
-            try self.formatNode(nodes_buf[1]);
-        } else {
-            // Format with exposing clause
-            if (nodes_count > 0) {
-                try self.formatNode(nodes_buf[0]);
-            }
+        // To determine the structure properly, we need to check the source text
+        // between nodes for the "as" and "exposing" keywords
+        var path_components = std.ArrayList(Node.Idx).init(self.allocator);
+        defer path_components.deinit();
+        var alias_node: ?Node.Idx = null;
+        var exposing_items = std.ArrayList(Node.Idx).init(self.allocator);
+        defer exposing_items.deinit();
 
-            if (nodes_count > 1) {
-                try self.pushAll(" exposing [");
-                var i: usize = 1;
-                while (i < nodes_count) : (i += 1) {
-                    if (i > 1) {
-                        try self.pushAll(", ");
+        // State machine for parsing import structure
+        const State = enum { path, after_as, after_exposing };
+        var state: State = .path;
+
+        for (nodes.items, 0..) |node_idx_item, idx| {
+            const curr_node = self.getNode(node_idx_item);
+
+            // Check source between previous node and current node for keywords
+            if (idx > 0) {
+                const prev_node_idx = nodes.items[idx - 1];
+                const prev_end = self.findNodeEnd(prev_node_idx);
+                const curr_start = curr_node.start.offset;
+
+                if (prev_end < curr_start) {
+                    const between = self.source[prev_end..curr_start];
+
+                    // Look for "as" keyword
+                    if (std.mem.indexOf(u8, between, " as ") != null) {
+                        state = .after_as;
                     }
-                    try self.formatNode(nodes_buf[i]);
+                    // Look for "exposing" keyword
+                    else if (std.mem.indexOf(u8, between, " exposing") != null) {
+                        state = .after_exposing;
+                    }
                 }
-                try self.pushAll("]");
             }
+
+            // Place node in appropriate category based on state
+            switch (state) {
+                .path => try path_components.append(node_idx_item),
+                .after_as => {
+                    if (alias_node == null) {
+                        alias_node = node_idx_item;
+                        // After alias, check if we have exposing
+                        state = .path; // Reset to look for exposing
+                    } else {
+                        // This shouldn't happen but handle it
+                        try exposing_items.append(node_idx_item);
+                    }
+                },
+                .after_exposing => try exposing_items.append(node_idx_item),
+            }
+        }
+
+        // Format the module path
+        for (path_components.items, 0..) |path_node, idx| {
+            if (idx > 0) {
+                const curr = self.getNode(path_node);
+                // Only add dot if not a string literal (they include their own dot)
+                if (curr.tag != .str_literal_small and curr.tag != .str_literal_big) {
+                    try self.push('.');
+                }
+            }
+            try self.formatNode(path_node);
+        }
+
+        // Format alias if present
+        if (alias_node) |alias| {
+            try self.pushAll(" as ");
+            try self.formatNode(alias);
+        }
+
+        // Format exposing clause if present
+        if (exposing_items.items.len > 0) {
+            try self.pushAll(" exposing [");
+
+            for (exposing_items.items, 0..) |exposed, idx| {
+                if (idx > 0) {
+                    try self.pushAll(", ");
+                }
+                try self.formatNode(exposed);
+            }
+
+            try self.push(']');
         }
     }
 
@@ -960,10 +1111,16 @@ const Formatter = struct {
 
         var first_elem = true;
         while (it.next()) |elem| {
+            const elem_node = self.getNode(elem);
+
             if (multiline) {
                 if (!first_elem) {
                     try self.push(',');
+                    // Check for inline comments after the comma
+                    _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
+                // Flush any comments before this element
+                _ = try self.flushCommentsBefore(elem_node.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -973,18 +1130,27 @@ const Formatter = struct {
             }
             first_elem = false;
             try self.formatNode(elem);
+
+            // After formatting the element, check for inline comments
+            if (multiline) {
+                _ = try self.flushInlineComment(self.last_formatted_pos);
+            }
         }
 
         if (multiline) {
             // Preserve trailing comma if it exists
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
+                // Check for comment after trailing comma
+                _ = try self.flushInlineComment(self.last_formatted_pos);
             }
             self.curr_indent -= 1;
+            // Flush any remaining comments before the closing bracket
+            _ = try self.flushCommentsBeforePosition(self.findClosingBracket(node_idx));
             try self.ensureNewline();
             try self.pushIndent();
         }
-        
+
         try self.pushAll("]");
     }
 
@@ -995,7 +1161,7 @@ const Formatter = struct {
         const multiline = self.collectionIsMultiline(node_idx);
 
         if (multiline) {
-            try self.pushAll(" {");
+            try self.push('{');
             self.curr_indent += 1;
         } else {
             try self.pushAll("{ ");
@@ -1006,10 +1172,21 @@ const Formatter = struct {
 
         var first_field = true;
         while (it.next()) |field| {
+            const field_node = self.getNode(field);
+
+            // Skip malformed nodes
+            if (field_node.tag == .malformed) {
+                continue;
+            }
+
             if (multiline) {
                 if (!first_field) {
                     try self.push(',');
+                    // Check for inline comments after the comma
+                    _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
+                // Flush any comments before this field
+                _ = try self.flushCommentsBefore(field_node.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1019,14 +1196,23 @@ const Formatter = struct {
             }
             first_field = false;
             try self.formatNode(field);
+
+            // After formatting the field, check for inline comments
+            if (multiline) {
+                _ = try self.flushInlineComment(self.last_formatted_pos);
+            }
         }
 
         if (multiline) {
             // Preserve trailing comma if it exists
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
+                // Check for comment after trailing comma
+                _ = try self.flushInlineComment(self.last_formatted_pos);
             }
             self.curr_indent -= 1;
+            // Flush any remaining comments before the closing brace
+            _ = try self.flushCommentsBeforePosition(self.findClosingBrace(node_idx));
             try self.ensureNewline();
             try self.pushIndent();
             try self.pushAll("}");
@@ -1050,10 +1236,27 @@ const Formatter = struct {
         var iter = self.ast.node_slices.nodes(&node.payload.nodes);
         var first = true;
         while (iter.next()) |child_idx| {
+            const child_node = self.getNode(child_idx);
+
+            // Skip malformed nodes
+            if (child_node.tag == .malformed) {
+                continue;
+            }
+
+            // Skip malformed nodes - they shouldn't be part of the formatted output
+            // The parser adds malformed nodes when it encounters syntax errors
+            if (child_node.tag == .malformed) {
+                continue;
+            }
+
             if (multiline) {
                 if (!first) {
                     try self.push(',');
+                    // Check for inline comments after the comma
+                    _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
+                // Flush any comments before this element
+                _ = try self.flushCommentsBefore(child_node.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1062,6 +1265,11 @@ const Formatter = struct {
                 }
             }
             try self.formatNode(child_idx);
+
+            // After formatting the element, check for inline comments
+            if (multiline) {
+                _ = try self.flushInlineComment(self.last_formatted_pos);
+            }
             first = false;
         }
 
@@ -1173,28 +1381,95 @@ const Formatter = struct {
         // Get the nodes for this if-else
         var it = self.ast.node_slices.nodes(&nodes_idx);
 
+        // Collect all nodes for analysis
+        var condition: ?Node.Idx = null;
+        var then_branch: ?Node.Idx = null;
+        var else_branch: ?Node.Idx = null;
+
+        if (it.next()) |c| condition = c;
+        if (it.next()) |t| then_branch = t;
+        if (it.next()) |e| else_branch = e;
+
+        if (condition == null or then_branch == null) return; // Malformed
+
+        // Check if multiline formatting is needed
+        const multiline = self.shouldIfElseBeMultiline(node_idx, condition.?, then_branch.?, else_branch);
+
         try self.pushAll("if ");
+        try self.formatNode(condition.?);
 
-        // For now, just format as a simple if-else
-        // Parse shows "(if_else <0 branches>)" which means no if branches, just condition, then, else
+        if (multiline) {
+            // Roc doesn't use 'then', just space before the block
+            try self.ensureNewline();
+            self.curr_indent += 1;
+            try self.pushIndent();
+            try self.formatNode(then_branch.?);
+            self.curr_indent -= 1;
 
-        // Format condition
-        if (it.next()) |cond| {
-            try self.formatNode(cond);
+            if (else_branch) |eb| {
+                try self.ensureNewline();
+                try self.pushIndent();
+
+                // Check for else-if chain
+                const eb_node = self.getNode(eb);
+                if (eb_node.tag == .if_else) {
+                    try self.pushAll("else ");
+                    try self.formatIfElse(eb);
+                } else {
+                    try self.pushAll("else");
+                    try self.ensureNewline();
+                    self.curr_indent += 1;
+                    try self.pushIndent();
+                    try self.formatNode(eb);
+                    self.curr_indent -= 1;
+                }
+            }
+        } else {
+            // Single-line formatting
+            try self.pushAll(" ");
+            try self.formatNode(then_branch.?);
+
+            if (else_branch) |eb| {
+                try self.pushAll(" else ");
+                try self.formatNode(eb);
+            }
+        }
+    }
+
+    fn shouldIfElseBeMultiline(self: *Formatter, _: Node.Idx, condition: Node.Idx, then_branch: Node.Idx, else_branch: ?Node.Idx) bool {
+        // Check if condition is complex
+        if (self.nodeWillBeMultiline(condition)) return true;
+
+        // Check if then branch is complex
+        if (self.nodeWillBeMultiline(then_branch)) return true;
+
+        // Check if else branch exists and is complex
+        if (else_branch) |eb| {
+            if (self.nodeWillBeMultiline(eb)) return true;
         }
 
-        try self.pushAll(" ");
-
-        // Format then branch
-        if (it.next()) |then_branch| {
-            try self.formatNode(then_branch);
+        // Check for comments between parts
+        const cond_end = self.findNodeEnd(condition);
+        const then_node = self.getNode(then_branch);
+        const then_start = then_node.start.offset;
+        if (cond_end < then_start) {
+            const between = self.source[cond_end..then_start];
+            for (between) |c| {
+                if (c == '\n' or c == '#') return true;
+            }
         }
 
-        // Format else branch if present
-        if (it.next()) |else_branch| {
-            try self.pushAll(" else ");
-            try self.formatNode(else_branch);
+        // Check estimated total length
+        const cond_node = self.getNode(condition);
+        const estimated_len = 20 + (cond_end - cond_node.start.offset) +
+            (self.findNodeEnd(then_branch) - then_start);
+        if (else_branch) |eb| {
+            const eb_node = self.getNode(eb);
+            const estimated_else = 6 + (self.findNodeEnd(eb) - eb_node.start.offset);
+            if (estimated_len + estimated_else > 80) return true;
         }
+
+        return estimated_len > 80;
     }
 
     fn formatMatch(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1225,7 +1500,7 @@ const Formatter = struct {
 
         // Format branches (pattern -> expr pairs)
         var first_branch = true;
-        while (it.next()) |pattern| {
+        while (it.next()) |pattern_idx| {
             if (!first_branch) {
                 if (multiline) {
                     try self.ensureNewline();
@@ -1236,22 +1511,78 @@ const Formatter = struct {
             first_branch = false;
 
             if (multiline) {
+                const pattern_node = self.getNode(pattern_idx);
+                // Flush any comments before this pattern
+                _ = try self.flushCommentsBefore(pattern_node.start);
                 try self.pushIndent();
             }
 
-            // Format pattern
-            try self.formatNode(pattern);
+            // Format pattern - handle pattern alternatives (|) specially
+            const pattern_node = self.getNode(pattern_idx);
+            if (pattern_node.tag == .binop_pipe) {
+                // This is a pattern alternative like Ok(x) | Err(x)
+                try self.formatPatternWithAlternatives(pattern_idx);
+            } else {
+                try self.formatNode(pattern_idx);
+            }
+
             try self.pushAll(" -> ");
 
             // Format body
-            if (it.next()) |body| {
-                try self.formatNode(body);
+            if (it.next()) |body_idx| {
+                const body_node = self.getNode(body_idx);
+
+                // Complex bodies get their own line
+                const needs_indent = switch (body_node.tag) {
+                    .block, .if_else, .match, .lambda => true,
+                    else => false,
+                };
+
+                if (needs_indent and multiline) {
+                    try self.ensureNewline();
+                    self.curr_indent += 1;
+                    try self.pushIndent();
+                    try self.formatNode(body_idx);
+                    self.curr_indent -= 1;
+                } else {
+                    try self.formatNode(body_idx);
+                }
+
+                // Check for inline comments
+                if (multiline) {
+                    _ = try self.flushInlineComment(self.last_formatted_pos);
+                }
             }
         }
 
         if (multiline) {
             self.curr_indent -= 1;
         }
+    }
+
+    fn formatPatternWithAlternatives(self: *Formatter, node_idx: Node.Idx) !void {
+        // Format pattern alternatives like Ok(x) | Err(x)
+        const node = self.getNode(node_idx);
+
+        if (node.tag != .binop_pipe) {
+            // Not a pattern alternative, format normally
+            try self.formatNode(node_idx);
+            return;
+        }
+
+        // Recursively format pattern alternatives
+        const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+        // Check if left side is also a pipe (chained alternatives)
+        const lhs_node = self.getNode(binop.lhs);
+        if (lhs_node.tag == .binop_pipe) {
+            try self.formatPatternWithAlternatives(binop.lhs);
+        } else {
+            try self.formatNode(binop.lhs);
+        }
+
+        try self.pushAll(" | ");
+        try self.formatNode(binop.rhs);
     }
 
     fn formatLambdaNoArgs(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1418,23 +1749,49 @@ const Formatter = struct {
     }
 
     fn formatLoopBody(self: *Formatter, it: *collections.NodeSlices(Node.Idx).Iterator) !void {
-        // Body nodes
-        self.curr_indent += 1;
-        var first_stmt = true;
+        // Collect body nodes to check if single-line is appropriate
+        var body_nodes = std.ArrayList(Node.Idx).init(self.allocator);
+        defer body_nodes.deinit();
+
         while (it.next()) |stmt| {
-            if (!first_stmt) {
+            try body_nodes.append(stmt);
+        }
+
+        // Check if body should be single-line
+        const single_line = body_nodes.items.len == 1 and
+            !self.nodeWillBeMultiline(body_nodes.items[0]);
+
+        if (single_line) {
+            // Single line: { expr }
+            try self.push(' ');
+            try self.formatNode(body_nodes.items[0]);
+            try self.pushAll(" }");
+        } else {
+            // Multi-line body
+            self.curr_indent += 1;
+            for (body_nodes.items, 0..) |stmt, idx| {
                 try self.ensureNewline();
+                try self.pushIndent();
+                try self.formatNode(stmt);
+
+                // Add blank line between complex statements
+                if (idx < body_nodes.items.len - 1) {
+                    const stmt_node = self.getNode(stmt);
+                    const is_complex = switch (stmt_node.tag) {
+                        .binop_equals, .if_else, .match, .for_loop, .while_loop => true,
+                        else => false,
+                    };
+                    if (is_complex) {
+                        try self.ensureNewline();
+                    }
+                }
             }
+            self.curr_indent -= 1;
+
             try self.ensureNewline();
             try self.pushIndent();
-            try self.formatNode(stmt);
-            first_stmt = false;
+            try self.push('}');
         }
-        self.curr_indent -= 1;
-
-        try self.ensureNewline();
-        try self.pushIndent();
-        try self.push('}');
     }
 
     fn formatIdent(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1444,6 +1801,239 @@ const Formatter = struct {
         const ident_idx = node.payload.ident;
         const ident_text = self.ident_store.getText(ident_idx);
         try self.pushAll(ident_text);
+    }
+
+    fn findQualifiedIdentifierEnd(self: *const Formatter, start: usize) usize {
+        var end = start;
+        while (end < self.source.len) {
+            const c = self.source[end];
+            if (std.ascii.isAlphanumeric(c) or c == '_' or c == '!') {
+                end += 1;
+            } else if (c == '.' and end + 1 < self.source.len and
+                (std.ascii.isAlphabetic(self.source[end + 1]) or self.source[end + 1] == '_'))
+            {
+                end += 1; // Include the dot
+            } else {
+                break;
+            }
+        }
+        return end;
+    }
+
+    fn findStringEnd(self: *const Formatter, start: usize) usize {
+        var end = start;
+        if (end < self.source.len and self.source[end] == '"') {
+            end += 1; // Skip opening quote
+            while (end < self.source.len) {
+                if (self.source[end] == '"' and (end == 0 or self.source[end - 1] != '\\')) {
+                    return end + 1;
+                }
+                end += 1;
+            }
+        }
+        return end;
+    }
+
+    fn findNumberEnd(self: *const Formatter, start: usize) usize {
+        var end = start;
+        while (end < self.source.len) {
+            const c = self.source[end];
+            if (std.ascii.isHex(c) or c == '_' or c == '.' or c == 'x' or c == 'e' or c == 'E' or c == '+' or c == '-') {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        return end;
+    }
+
+    fn findIfEnd(self: *const Formatter, node_idx: Node.Idx) usize {
+        const node = self.getNode(node_idx);
+        var pos = node.start.offset;
+
+        // Scan for the end of the if expression
+        // Look for the last relevant token after "else"
+        var found_else = false;
+        var depth: usize = 0;
+        var in_string = false;
+        var escape_next = false;
+        var last_relevant_pos = pos;
+
+        while (pos < self.source.len) {
+            const ch = self.source[pos];
+
+            if (in_string) {
+                if (escape_next) {
+                    escape_next = false;
+                } else if (ch == '\\') {
+                    escape_next = true;
+                } else if (ch == '"') {
+                    in_string = false;
+                    last_relevant_pos = pos + 1;
+                }
+            } else {
+                switch (ch) {
+                    '"' => {
+                        in_string = true;
+                    },
+                    '{' => {
+                        depth += 1;
+                        last_relevant_pos = pos + 1;
+                    },
+                    '}' => {
+                        if (depth > 0) {
+                            depth -= 1;
+                            last_relevant_pos = pos + 1;
+                        } else if (found_else) {
+                            // End of if expression
+                            return pos + 1;
+                        }
+                    },
+                    '(' => {
+                        depth += 1;
+                    },
+                    ')' => {
+                        if (depth > 0) {
+                            depth -= 1;
+                            last_relevant_pos = pos + 1;
+                        } else if (found_else) {
+                            // End of if expression
+                            return pos + 1;
+                        }
+                    },
+                    '\n', ' ', '\t', '\r' => {},
+                    else => {
+                        // Check for "else" keyword
+                        if (!found_else and pos + 4 <= self.source.len) {
+                            if (std.mem.eql(u8, self.source[pos .. pos + 4], "else")) {
+                                found_else = true;
+                                pos += 3; // Will be incremented again at loop end
+                            }
+                        }
+                        if (depth == 0 and found_else) {
+                            last_relevant_pos = pos + 1;
+                        }
+                    },
+                }
+            }
+            pos += 1;
+
+            // If we've found else and we're at depth 0, check for end of expression
+            if (found_else and depth == 0 and pos < self.source.len) {
+                const next_ch = self.source[pos];
+                if (next_ch == '\n' or next_ch == ',' or next_ch == '}' or next_ch == ')' or next_ch == ']') {
+                    return last_relevant_pos;
+                }
+            }
+        }
+
+        return last_relevant_pos;
+    }
+
+    fn findMatchEnd(self: *const Formatter, node_idx: Node.Idx) usize {
+        const node = self.getNode(node_idx);
+        var pos = node.start.offset;
+
+        // Scan for the closing brace of the match expression
+        var brace_depth: usize = 0;
+        var in_string = false;
+        var escape_next = false;
+
+        while (pos < self.source.len) {
+            const ch = self.source[pos];
+
+            if (in_string) {
+                if (escape_next) {
+                    escape_next = false;
+                } else if (ch == '\\') {
+                    escape_next = true;
+                } else if (ch == '"') {
+                    in_string = false;
+                }
+            } else {
+                switch (ch) {
+                    '"' => in_string = true,
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        if (brace_depth == 0) {
+                            // Found the closing brace
+                            return pos + 1;
+                        }
+                        brace_depth -= 1;
+                    },
+                    else => {},
+                }
+            }
+            pos += 1;
+        }
+
+        return pos;
+    }
+
+    fn findMaxChildEnd(self: *const Formatter, node_idx: Node.Idx) usize {
+        const node = self.getNode(node_idx);
+        var max_end: usize = node.start.offset;
+
+        // Get appropriate iterator based on node type
+        switch (node.tag) {
+            .import => {
+                var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
+                while (it.next()) |child| {
+                    const child_end = self.findNodeEnd(child);
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+            .match => {
+                // Match nodes store branch count, not nodes
+                // We need to scan the source to find the end
+                return self.findMatchEnd(node_idx);
+            },
+            .if_else, .if_without_else => {
+                // If expressions store branch count in if_branches
+                // Scan for the end of the if expression
+                return self.findIfEnd(node_idx);
+            },
+            .lambda => {
+                // Lambda uses body_then_args
+                var it = self.ast.node_slices.nodes(&node.payload.body_then_args);
+                while (it.next()) |child| {
+                    const child_end = self.findNodeEnd(child);
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+            .binop_colon, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_lt, .binop_gt, .binop_lte, .binop_gte, .binop_double_equals, .binop_not_equals, .binop_and, .binop_or, .binop_pipe, .binop_dot, .binop_colon_equals, .binop_as, .binop_where, .binop_thick_arrow, .binop_thin_arrow, .binop_platform => {
+                // Binary operators use binop payload
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                const lhs_end = self.findNodeEnd(binop.lhs);
+                const rhs_end = self.findNodeEnd(binop.rhs);
+                return @max(lhs_end, rhs_end);
+            },
+            else => {
+                var it = self.ast.node_slices.nodes(&node.payload.nodes);
+                while (it.next()) |child| {
+                    const child_end = self.findNodeEnd(child);
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+        }
+
+        // Check for closing paren if this is an application
+        switch (node.tag) {
+            .apply_lc, .apply_uc, .apply_anon, .apply_module => {
+                if (max_end < self.source.len and self.source[max_end] == ')') {
+                    return max_end + 1;
+                }
+            },
+            else => {},
+        }
+
+        return max_end;
     }
 
     fn findIdentifierEnd(self: *const Formatter, start: usize) usize {
@@ -1461,15 +2051,6 @@ const Formatter = struct {
         }
 
         return end;
-    }
-
-    fn getSmallStr(self: *Formatter, small_str: *const [4]u8) []const u8 {
-        _ = self;
-        // Small strings are null-terminated ASCII in 4 bytes
-        for (small_str, 0..) |b, i| {
-            if (b == 0) return small_str[0..i];
-        }
-        return small_str;
     }
 
     fn formatNumberFromSource(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1510,46 +2091,54 @@ const Formatter = struct {
     fn formatStringInterpolation(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // String interpolation stores alternating string parts and expressions in nodes
+        // String interpolation is handled by preserving source with expression formatting
+        // For now, extract from source and format embedded expressions
+        const start = node.start.offset;
+        const end = self.findNodeEnd(node_idx);
+
+        if (start >= end or end > self.source.len) {
+            try self.pushAll("\"\"");
+            return;
+        }
+
+        // Start the interpolated string
         try self.push('"');
-        
+
+        // Process the interpolation nodes
         var iter = self.ast.node_slices.nodes(&node.payload.nodes);
         var is_string_part = true;
-        
+
         while (iter.next()) |part_idx| {
-            const part = self.getNode(part_idx);
-            
             if (is_string_part) {
-                // This is a string literal part
-                if (part.tag == .str_literal_small or part.tag == .str_literal_big) {
-                    // Extract the string content without quotes
-                    const start = part.start.offset;
-                    if (start < self.source.len and self.source[start] == '"') {
-                        // Skip opening quote
-                        var pos = start + 1;
-                        while (pos < self.source.len and self.source[pos] != '"') {
-                            if (self.source[pos] == '\\' and pos + 1 < self.source.len) {
-                                // Output escape sequence
-                                try self.push(self.source[pos]);
-                                try self.push(self.source[pos + 1]);
-                                pos += 2;
-                            } else {
-                                try self.push(self.source[pos]);
-                                pos += 1;
-                            }
-                        }
+                // String parts - extract from source
+                const part = self.getNode(part_idx);
+                const part_start = part.start.offset;
+                const part_end = self.findNodeEnd(part_idx);
+
+                // Copy the string content (without quotes)
+                if (part_start < part_end and part_end <= self.source.len) {
+                    var content = self.source[part_start..part_end];
+
+                    // Skip quotes if present
+                    if (content.len > 0 and content[0] == '"') {
+                        content = content[1..];
                     }
+                    if (content.len > 0 and content[content.len - 1] == '"') {
+                        content = content[0 .. content.len - 1];
+                    }
+
+                    try self.pushAll(content);
                 }
             } else {
-                // This is an interpolated expression
+                // Expression part
                 try self.pushAll("${");
                 try self.formatNode(part_idx);
                 try self.push('}');
             }
-            
+
             is_string_part = !is_string_part;
         }
-        
+
         try self.push('"');
     }
 
@@ -1580,13 +2169,13 @@ const Formatter = struct {
     fn nodeRegion(self: *const Formatter, node_idx: Node.Idx) base.Region {
         const node = self.getNode(node_idx);
         const end_offset = self.findNodeEnd(node_idx);
-        
+
         // Calculate the end position based on the offset
         // We need to count lines and columns from the start
         var line = node.start.line;
         var column = node.start.column;
         var pos = node.start.offset;
-        
+
         while (pos < end_offset and pos < self.source.len) {
             if (self.source[pos] == '\n') {
                 line += 1;
@@ -1596,7 +2185,7 @@ const Formatter = struct {
             }
             pos += 1;
         }
-        
+
         return .{
             .start = node.start,
             .end = .{
@@ -1635,8 +2224,80 @@ const Formatter = struct {
     }
 
     fn collectionIsMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
-        // Collections are multiline if they have a trailing comma
-        return self.hasTrailingComma(node_idx);
+        // Collections are multiline if they:
+        // 1. Have a trailing comma
+        // 2. Contain comments
+        // 3. Have newlines between elements
+        // 4. Are too long to fit on one line (>80 chars)
+        // 5. Contain malformed nodes
+
+        // Check for trailing comma first (cheapest check)
+        if (self.hasTrailingComma(node_idx)) {
+            return true;
+        }
+
+        const node = self.getNode(node_idx);
+
+        // Check if any child is malformed - those should be multiline to be clearer
+        var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        var element_count: usize = 0;
+        while (iter.next()) |child_idx| {
+            element_count += 1;
+            const child = self.getNode(child_idx);
+            if (child.tag == .malformed) {
+                // Skip malformed nodes in formatting
+                continue;
+            }
+        }
+
+        // If we have many elements, format as multiline
+        if (element_count > 4) {
+            return true;
+        }
+
+        // Check for comments or newlines in the collection
+        const start = node.start.offset;
+        const end = self.findNodeEnd(node_idx);
+
+        if (start >= end or end > self.source.len) {
+            return false;
+        }
+
+        // Estimate the line length if formatted on one line
+        const estimated_length = end - start;
+        if (estimated_length > 60) { // Conservative estimate for line length
+            return true;
+        }
+
+        // Scan the source for comments or newlines
+        var i = start;
+        while (i < end) {
+            const c = self.source[i];
+            if (c == '#') {
+                // Found a comment - definitely multiline
+                return true;
+            }
+            if (c == '\n') {
+                // Found a newline - check if it's between elements (not just after opening bracket)
+                // Look back to see if we've seen any content
+                var j = i;
+                while (j > start) {
+                    j -= 1;
+                    const prev = self.source[j];
+                    if (prev != ' ' and prev != '\t' and prev != '\n' and prev != '[' and prev != '{' and prev != '(') {
+                        // Found content before the newline - this is multiline
+                        return true;
+                    }
+                    if (prev == '[' or prev == '{' or prev == '(') {
+                        // Newline right after opening - not necessarily multiline
+                        break;
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        return false;
     }
 
     fn hasTrailingComma(self: *const Formatter, node_idx: Node.Idx) bool {
@@ -1650,26 +2311,26 @@ const Formatter = struct {
             return false;
         }
 
-        const source_text = self.source[start..end_estimate];
+        // Single backward scan to find both delimiter and comma
+        var i = end_estimate;
+        var found_delimiter = false;
 
-        // Find closing delimiter and check for comma before it
-        var i = source_text.len;
-        while (i > 0) {
+        while (i > start) {
             i -= 1;
-            const c = source_text[i];
-            if (c == ']' or c == '}' or c == ')') {
-                // Found closing delimiter, look backwards for comma
-                var j = i;
-                while (j > 0) {
-                    j -= 1;
-                    const prev = source_text[j];
-                    if (prev == ',') {
-                        return true; // Found trailing comma
-                    } else if (prev != ' ' and prev != '\t' and prev != '\n' and prev != '\r') {
-                        return false; // Found non-whitespace, no trailing comma
-                    }
+            const c = self.source[i];
+
+            if (!found_delimiter) {
+                if (c == ']' or c == '}' or c == ')') {
+                    found_delimiter = true;
                 }
-                break;
+            } else {
+                // We've found the delimiter, now looking for comma
+                if (c == ',') {
+                    return true;
+                } else if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
+                    // Found non-whitespace that's not a comma
+                    return false;
+                }
             }
         }
 
@@ -1682,6 +2343,20 @@ const Formatter = struct {
         // Only binary operators need parentheses based on precedence
         if (!std.mem.startsWith(u8, @tagName(child.tag), "binop_")) {
             return false;
+        }
+
+        // Special case: binop_pipe that's actually module/field access never needs parens
+        if (child.tag == .binop_pipe) {
+            const binop = self.ast.node_slices.binOp(child.payload.binop);
+            const lhs_node = self.getNode(binop.lhs);
+            const rhs_node = self.getNode(binop.rhs);
+
+            // Check if this is module/field access (Bool.True, Stdout.line, etc.)
+            if ((lhs_node.tag == .uc or lhs_node.tag == .lc) and
+                (rhs_node.tag == .uc or rhs_node.tag == .lc or rhs_node.tag == .dot_lc or rhs_node.tag == .not_lc))
+            {
+                return false; // Module/field access never needs parentheses
+            }
         }
 
         const parent_prec = self.getOperatorPrecedence(parent_tag);
@@ -1708,8 +2383,7 @@ const Formatter = struct {
         return false;
     }
 
-    fn getOperatorPrecedence(self: *const Formatter, tag: Node.Tag) struct { left: u8, right: u8 } {
-        _ = self;
+    fn getOperatorPrecedence(_: *const Formatter, tag: Node.Tag) struct { left: u8, right: u8 } {
         // Based on getBindingPower from Parser2.zig
         return switch (tag) {
             .binop_pipe => .{ .left = 10, .right = 11 },
@@ -1731,8 +2405,7 @@ const Formatter = struct {
         };
     }
 
-    fn hasBlankLine(self: *const Formatter, text: []const u8) bool {
-        _ = self;
+    fn hasBlankLine(_: *const Formatter, text: []const u8) bool {
         var newline_count: u32 = 0;
         for (text) |c| {
             if (c == '\n') {
@@ -1749,148 +2422,55 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         switch (node.tag) {
-            // Identifiers
+            // Simple identifiers - scan for end of identifier
             .lc, .uc, .dot_lc, .var_lc, .neg_lc, .not_lc, .double_dot_lc => {
                 return self.findIdentifierEnd(node.start.offset);
             },
-            
-            // Qualified identifiers
+
+            // Qualified identifiers - scan including dots
             .uc_dot_ucs, .lc_dot_ucs => {
-                // Find the end of the qualified identifier (e.g., Module.Type)
-                var end = node.start.offset;
-                while (end < self.source.len) {
-                    const c = self.source[end];
-                    if (std.ascii.isAlphanumeric(c) or c == '_' or c == '!') {
-                        end += 1;
-                    } else if (c == '.' and end + 1 < self.source.len and 
-                              (std.ascii.isAlphabetic(self.source[end + 1]) or self.source[end + 1] == '_')) {
-                        end += 1; // Include the dot
-                    } else {
-                        break;
-                    }
-                }
-                return end;
+                return self.findQualifiedIdentifierEnd(node.start.offset);
             },
 
-            // String literals
+            // String literals - scan for closing quote
             .str_literal_small => {
-                // Scan for closing quote
-                var end = node.start.offset;
-                if (end < self.source.len and self.source[end] == '"') {
-                    end += 1; // Skip opening quote
-                    while (end < self.source.len) {
-                        if (self.source[end] == '"' and (end == 0 or self.source[end - 1] != '\\')) {
-                            return end + 1;
-                        }
-                        end += 1;
-                    }
-                }
-                return end;
+                return self.findStringEnd(node.start.offset);
             },
 
-            // Number literals
-            .num_literal_i32, .num_literal_big => {
-                var end = node.start.offset;
-                while (end < self.source.len) {
-                    const c = self.source[end];
-                    if (std.ascii.isHex(c) or c == '_' or c == '.' or c == 'x' or c == 'e' or c == 'E' or c == '+' or c == '-') {
-                        end += 1;
-                    } else {
-                        break;
-                    }
-                }
-                return end;
+            // Number literals - scan for end of number
+            .num_literal_i32, .num_literal_big, .int_literal_i32, .int_literal_big, .frac_literal_small, .frac_literal_big => {
+                return self.findNumberEnd(node.start.offset);
             },
 
-            // For compound nodes, scan for the closing delimiter
-            .list_literal => {
-                return self.scanForClosingDelimiter(node.start.offset, '[', ']');
-            },
-            .record_literal => {
-                return self.scanForClosingDelimiter(node.start.offset, '{', '}');
-            },
-            .tuple_literal => {
-                return self.scanForClosingDelimiter(node.start.offset, '(', ')');
-            },
+            // Delimited collections
+            .list_literal => return self.scanForClosingDelimiter(node.start.offset, '[', ']'),
+            .record_literal, .block => return self.scanForClosingDelimiter(node.start.offset, '{', '}'),
+            .tuple_literal => return self.scanForClosingDelimiter(node.start.offset, '(', ')'),
 
-            // Binary operators - find the end of the right operand
-            .binop_equals, .binop_double_equals, .binop_not_equals,
-            .binop_colon, .binop_colon_equals, .binop_dot,
-            .binop_plus, .binop_minus, .binop_star, .binop_slash,
-            .binop_double_slash, .binop_double_question,
-            .binop_gt, .binop_gte, .binop_lt, .binop_lte,
-            .binop_thick_arrow, .binop_thin_arrow,
-            .binop_and, .binop_or, .binop_as, .binop_where,
-            .binop_platform, .binop_pipe => {
+            // All binary operators - return end of RHS
+            .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_platform, .binop_pipe => {
                 const binop = self.ast.node_slices.binOp(node.payload.binop);
                 return self.findNodeEnd(binop.rhs);
             },
-            
-            // Blocks and compound structures
-            .block => {
-                return self.scanForClosingDelimiter(node.start.offset, '{', '}');
+
+            // Nodes with children - find max end of all children
+            .apply_lc, .apply_uc, .apply_anon, .apply_module, .import, .expect, .crash, .for_loop, .while_loop, .match, .if_else, .if_without_else => {
+                return self.findMaxChildEnd(node_idx);
             },
-            
-            // Applications
-            .apply_lc, .apply_uc, .apply_anon, .apply_module => {
-                // Find the end of the last argument
-                var max_end: usize = node.start.offset;
+
+            // Lambda - find end of body
+            .lambda => {
+                const lambda = self.ast.lambda(node_idx);
+                return self.findNodeEnd(lambda.body);
+            },
+            .lambda_no_args => {
                 var it = self.ast.node_slices.nodes(&node.payload.nodes);
-                while (it.next()) |arg| {
-                    const arg_end = self.findNodeEnd(arg);
-                    if (arg_end > max_end) {
-                        max_end = arg_end;
-                    }
+                if (it.next()) |body| {
+                    return self.findNodeEnd(body);
                 }
-                // Scan for closing paren if present
-                if (max_end < self.source.len and self.source[max_end] == ')') {
-                    return max_end + 1;
-                }
-                return max_end;
+                return node.start.offset;
             },
-            
-            // Lambda
-            .lambda, .lambda_no_args => {
-                // Find the end of the body
-                if (node.tag == .lambda) {
-                    const lambda = self.ast.lambda(node_idx);
-                    return self.findNodeEnd(lambda.body);
-                } else {
-                    // lambda_no_args stores body in nodes
-                    var it = self.ast.node_slices.nodes(&node.payload.nodes);
-                    if (it.next()) |body| {
-                        return self.findNodeEnd(body);
-                    }
-                    return node.start.offset;
-                }
-            },
-            
-            // Statements
-            .import => {
-                // Find the end of the last node in the import statement
-                var max_end: usize = node.start.offset;
-                var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
-                while (it.next()) |n| {
-                    const n_end = self.findNodeEnd(n);
-                    if (n_end > max_end) {
-                        max_end = n_end;
-                    }
-                }
-                return max_end;
-            },
-            .expect => {
-                // Find the end of the last node in the expect statement
-                var max_end: usize = node.start.offset;
-                var it = self.ast.node_slices.nodes(&node.payload.nodes);
-                while (it.next()) |n| {
-                    const n_end = self.findNodeEnd(n);
-                    if (n_end > max_end) {
-                        max_end = n_end;
-                    }
-                }
-                return max_end;
-            },
-            
+
             else => {
                 // For unknown node types, scan forward to find a reasonable end
                 // Look for common delimiters or whitespace that would end most constructs
@@ -1972,37 +2552,269 @@ const Formatter = struct {
         return self.source.len;
     }
 
-    fn findNextToken(self: *const Formatter, char: u8) ?Position {
-        // Find the next occurrence of a character in the source after last_formatted_pos
-        var pos = self.last_formatted_pos;
-        while (pos < self.source.len) {
-            if (self.source[pos] == char) {
-                // Calculate line and column
-                var line: u32 = 0;
-                var column: u32 = 0;
-                var i: usize = 0;
-                while (i < pos) : (i += 1) {
-                    if (self.source[i] == '\n') {
-                        line += 1;
-                        column = 0;
-                    } else {
-                        column += 1;
-                    }
+    /// Flush comments and blank lines before a position
+    /// Returns true if there was at least one newline
+    fn findLineEnd(self: *const Formatter, start: usize) usize {
+        var i = start;
+        while (i < self.source.len and self.source[i] != '\n') {
+            i += 1;
+        }
+        return i;
+    }
+
+    fn findMalformedEndSmart(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
+        // The best way to find where a malformed node ends is to look at the next node in the AST
+        const node = self.getNode(node_idx);
+        const start = node.start.offset;
+
+        // Try to find the next sibling node in the AST by checking all nodes
+        // and finding the one with the smallest start position that's after this node
+        var next_node_start: ?usize = null;
+
+        // Iterate through all nodes to find the next one after this malformed node
+        // This is more reliable than string matching
+        var i: u32 = 0;
+        const node_count = self.ast.nodes.len();
+        while (i < node_count) : (i += 1) {
+            const idx = @as(Node.Idx, @enumFromInt(i));
+            if (idx == node_idx) continue; // Skip self
+
+            const other_node = self.getNode(idx);
+            const other_start = other_node.start.offset;
+
+            // Is this node after ours and before our current best candidate?
+            if (other_start > start) {
+                if (next_node_start == null or other_start < next_node_start.?) {
+                    next_node_start = other_start;
                 }
-                
-                return Position{
-                    .offset = @intCast(pos),
-                    .line = line,
-                    .column = column,
-                };
+            }
+        }
+
+        // If we found a next node, use its start as our end
+        if (next_node_start) |next_start| {
+            // Back up to remove any whitespace between nodes
+            var end = next_start;
+            while (end > start and (self.source[end - 1] == ' ' or
+                self.source[end - 1] == '\t' or
+                self.source[end - 1] == '\n' or
+                self.source[end - 1] == '\r'))
+            {
+                end -= 1;
+            }
+            return end;
+        }
+
+        // No next node found, try using diagnostic information
+        const has_missing_close = @hasField(@TypeOf(diagnostic), "missing_close");
+        const has_unexpected_token = @hasField(@TypeOf(diagnostic), "unexpected_token");
+
+        if (has_missing_close) {
+            // Look for the next matching closing delimiter
+            var depth: i32 = 1;
+            var pos = start + 1;
+            while (pos < self.source.len) {
+                switch (self.source[pos]) {
+                    '{', '[', '(' => depth += 1,
+                    '}', ']', ')' => {
+                        depth -= 1;
+                        if (depth == 0) return pos + 1;
+                    },
+                    else => {},
+                }
+                pos += 1;
+            }
+        }
+
+        if (has_unexpected_token) {
+            // Stop at the unexpected token
+            return self.findNextTokenBoundary(start);
+        }
+
+        // Fall back to finding the end based on heuristics
+        return self.findMalformedEndHeuristic(node_idx, diagnostic);
+    }
+
+    fn trimMalformedTextSmart(self: *const Formatter, text: []const u8, diagnostic: anytype) []const u8 {
+        // Apply smarter trimming based on diagnostic
+        const has_incomplete = @hasField(@TypeOf(diagnostic), "incomplete");
+        const has_trailing_comma = @hasField(@TypeOf(diagnostic), "trailing_comma");
+
+        var result = text;
+
+        // Always trim trailing whitespace
+        while (result.len > 0) {
+            const last = result[result.len - 1];
+            if (last == ' ' or last == '\t' or last == '\n' or last == '\r') {
+                result = result[0 .. result.len - 1];
+            } else {
+                break;
+            }
+        }
+
+        if (has_incomplete or has_trailing_comma) {
+            // Remove trailing comma
+            if (result.len > 0 and result[result.len - 1] == ',') {
+                result = result[0 .. result.len - 1];
+            }
+        }
+
+        // Fall back to original trimming
+        return self.trimMalformedText(result, diagnostic);
+    }
+
+    fn findNextTokenBoundary(self: *const Formatter, start: usize) usize {
+        var pos = start;
+        var in_identifier = false;
+
+        while (pos < self.source.len) {
+            const c = self.source[pos];
+
+            const is_id_char = (c >= 'a' and c <= 'z') or
+                (c >= 'A' and c <= 'Z') or
+                (c >= '0' and c <= '9') or
+                c == '_';
+
+            if (in_identifier) {
+                if (!is_id_char) return pos;
+            } else {
+                if (is_id_char) {
+                    in_identifier = true;
+                } else if (c != ' ' and c != '\t') {
+                    // Found a non-whitespace, non-identifier character
+                    return pos;
+                }
             }
             pos += 1;
         }
-        return null;
+
+        return self.source.len;
     }
 
-    /// Flush comments and blank lines before a position
-    /// Returns true if there was at least one newline
+    fn findMalformedEndHeuristic(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
+        const node = self.getNode(node_idx);
+        const start = node.start.offset;
+        var pos = start;
+        var depth: i32 = 0;
+        var in_string = false;
+        var escape_next = false;
+
+        // Since diagnostic is a generic tag, we'll use a simple heuristic
+        // Look for natural boundaries like unmatched delimiters or new statements
+        _ = diagnostic; // Unused for now, but could be used for smarter recovery
+
+        while (pos < self.source.len) {
+            const c = self.source[pos];
+
+            // Handle string literals to avoid false positives
+            if (escape_next) {
+                escape_next = false;
+                pos += 1;
+                continue;
+            }
+
+            if (c == '\\' and in_string) {
+                escape_next = true;
+                pos += 1;
+                continue;
+            }
+
+            if (c == '"') {
+                in_string = !in_string;
+                pos += 1;
+                continue;
+            }
+
+            if (!in_string) {
+                switch (c) {
+                    '{', '[', '(' => depth += 1,
+                    '}', ']', ')' => {
+                        // If depth goes negative, we found an unmatched closer
+                        depth -= 1;
+                        if (depth < 0) {
+                            // Unmatched closer - stop here
+                            return pos;
+                        }
+                    },
+                    '\n' => {
+                        if (depth == 0) {
+                            // Check if next line starts a new statement
+                            var next_pos = pos + 1;
+                            while (next_pos < self.source.len and
+                                (self.source[next_pos] == ' ' or self.source[next_pos] == '\t'))
+                            {
+                                next_pos += 1;
+                            }
+
+                            if (next_pos < self.source.len) {
+                                const next_char = self.source[next_pos];
+                                // Check for statement keywords or identifiers at column 0-4 indentation
+                                const indent = next_pos - (pos + 1);
+                                if (indent <= 4 and
+                                    ((next_char >= 'a' and next_char <= 'z') or
+                                        (next_char >= 'A' and next_char <= 'Z') or
+                                        next_char == '_'))
+                                {
+                                    // At low indentation with an identifier - likely a new statement
+                                    // Stop here rather than continuing into the next statement
+                                    return pos;
+                                }
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            pos += 1;
+        }
+
+        return self.source.len;
+    }
+
+    fn trimMalformedText(_: *const Formatter, text: []const u8, diagnostic: anytype) []const u8 {
+        var result = text;
+
+        // Trim trailing whitespace
+        while (result.len > 0) {
+            const last = result[result.len - 1];
+            if (last == ' ' or last == '\t' or last == '\n' or last == '\r') {
+                result = result[0 .. result.len - 1];
+            } else {
+                break;
+            }
+        }
+
+        // Also trim trailing commas if present (often incomplete)
+        if (result.len > 0 and result[result.len - 1] == ',') {
+            result = result[0 .. result.len - 1];
+        }
+
+        _ = diagnostic; // Not used currently but could enable smarter trimming
+
+        return result;
+    }
+
+    fn findClosingBracket(self: *const Formatter, node_idx: Node.Idx) usize {
+        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '[', ']');
+    }
+
+    fn findClosingBrace(self: *const Formatter, node_idx: Node.Idx) usize {
+        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '{', '}');
+    }
+
+    fn findClosingParen(self: *const Formatter, node_idx: Node.Idx) usize {
+        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '(', ')');
+    }
+
+    fn flushCommentsBeforePosition(self: *Formatter, position: usize) !bool {
+        if (position <= self.last_formatted_pos or position > self.source.len) {
+            return false;
+        }
+
+        const between = self.source[self.last_formatted_pos..position];
+        return self.flushComments(between);
+    }
+
     fn flushCommentsBefore(self: *Formatter, pos: Position) !bool {
         // If we haven't collected tokens, can't flush comments
         if (self.tokens.items.len == 0) {
@@ -2011,7 +2823,6 @@ const Formatter = struct {
 
         // Find the range of source text to check for comments
         const start_offset = self.last_formatted_pos;
-
         const end_offset = pos.offset;
         if (end_offset <= start_offset) return false;
 
@@ -2036,9 +2847,17 @@ const Formatter = struct {
             const c = between[i];
 
             if (c == '#') {
-                // Found a comment - output it
+                // Found a comment - check if it's a doc comment (##)
+                const is_doc_comment = (i + 1 < between.len and between[i + 1] == '#');
+
+                // Output the comment marker(s)
                 try self.push('#');
                 i += 1;
+
+                if (is_doc_comment) {
+                    try self.push('#');
+                    i += 1;
+                }
 
                 // Output the rest of the line
                 while (i < between.len and between[i] != '\n') {
@@ -2046,10 +2865,15 @@ const Formatter = struct {
                     i += 1;
                 }
 
-                // Output the newline if present
+                // Doc comments should be preserved with proper spacing
                 if (i < between.len and between[i] == '\n') {
                     try self.ensureNewline();
                     i += 1;
+
+                    // For doc comments, preserve blank line after if present
+                    if (is_doc_comment and i < between.len and between[i] == '\n') {
+                        try self.ensureBlankLine();
+                    }
                 }
             } else if (c == '\n') {
                 // Preserve blank lines
@@ -2084,9 +2908,6 @@ const Formatter = struct {
             var i: usize = 0;
             var found_comment = false;
             var newline_count: u32 = 0;
-
-            // Debug: show what we're looking at
-            // std.debug.print("flushCommentsToEnd: remaining = {s}\n", .{remaining[0..@min(50, remaining.len)]});
 
             while (i < remaining.len) {
                 const c = remaining[i];
@@ -2260,15 +3081,3 @@ pub fn formatAstWithOptions(allocator: std.mem.Allocator, ast: *const AST2, sour
 }
 
 // Keep the old interface for compatibility
-pub fn formatSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
-    _ = allocator;
-    _ = source;
-    return error.RequiresAst2;
-}
-
-pub fn formatSourceWithOptions(allocator: std.mem.Allocator, source: []const u8, options: FormatOptions) ![]u8 {
-    _ = allocator;
-    _ = source;
-    _ = options;
-    return error.RequiresAst2;
-}

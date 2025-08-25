@@ -23,10 +23,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign KwIf LowerIdent Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-
-foo = if tru 0
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

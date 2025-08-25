@@ -16,7 +16,7 @@ KwIf Int OpGreaterThan Int Int KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if 5 > 3 1 else 2
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

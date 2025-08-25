@@ -12,38 +12,35 @@ type=expr
 OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
+(record_literal
   (binop_colon
     (lc "name")
-    (binop_colon
-      (tuple_literal
-        (str_literal_big "Alice")
-        (lc "age")
-      )
-      (num_literal_i32 30)
-    )
+    (str_literal_big "Alice")
+  )
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 30)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-name: (("Alice", age): 30)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:21 to 1:22
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
     (Expr.lookup "name")
-    (Expr.binop_colon
-      (Expr.malformed)
-      (Expr.num_literal_i32 30)
-    )
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
   )
 )
 ~~~

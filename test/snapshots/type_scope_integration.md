@@ -46,11 +46,10 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon U
 # FORMATTED
 ~~~roc
 module [
-	Foo, Bar
+	Foo,
+	Bar,
 ]
 
-
-# First declare a type
 Foo: U64
 
 # Try to redeclare the same type (should error)

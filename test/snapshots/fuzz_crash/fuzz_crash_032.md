@@ -31,10 +31,8 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
       (binop_equals
         (uc "Loc")
         (list_literal
-          (tuple_literal
-            (uc "Pending")
-            (uc "Complete")
-          )
+          (uc "Pending")
+          (uc "Complete")
         )
       )
     )
@@ -68,25 +66,28 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
 # FORMATTED
 ~~~roc
 module [
-	tus,r
+	tus,
+	r,
 ]
 
+LocalStatus: (lue => Loc = [Pending, Complete])
 
-LocalStatus: (lue => Loc = [(Pending, Complete)])
 olor: (_ -> tus)
 olor = \color -> {
-	import Color exposing [RGB]
-	when color is {
+	import Color.RGB
+	
+
+when color is {
 		RGB
-		<malformed>
+		=>
 		LocalStatus.Pending
 		Green
-		<malformed>
+		=>
 		LocalStatus - Complete
 		B.Blue
-		<malformed>
+		=>
 		LocalStatus.Pending
-	} -> <malformed>
+	} -> 
 }
 ~~~
 # EXPECTED
@@ -114,7 +115,7 @@ at 12:1 to 12:1
 at 6:16 to 12:2
 
 **Unsupported Node**
-at 3:14 to 4:1
+at 3:14 to 3:45
 
 **Unsupported Node**
 at 5:8 to 5:16

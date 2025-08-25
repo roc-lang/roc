@@ -127,166 +127,39 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
     (lc "handleRequest")
     (lambda
       (body
-        (block
-          (binop_equals
-            (lc "result")
-            (apply_anon
-              (binop_pipe
-                (uc "Json")
-                (dot_lc "decode")
-              )
-              (binop_pipe
-                (lc "req")
-                (dot_lc "body")
+        (binop_thin_arrow
+          (record_literal
+            (binop_equals
+              (lc "result")
+              (apply_anon
+                (binop_pipe
+                  (uc "Json")
+                  (dot_lc "decode")
+                )
+                (binop_pipe
+                  (lc "req")
+                  (dot_lc "body")
+                )
               )
             )
-          )
-          (match <60 branches>)
-          (binop_colon
-            (lc "processData")
-            (binop_thin_arrow
+            (match <60 branches>)
+            (binop_colon
+              (lc "processData")
               (uc "Config")
-              (binop_thin_arrow
-                (apply_uc
-                  (uc "List")
-                  (uc "Value")
-                )
-                (apply_uc
-                  (uc "Result")
-                  (tuple_literal
-                    (apply_uc
-                      (uc "List")
-                      (uc "Value")
-                    )
-                    (uc "Error")
-                  )
-                )
-              )
+            )
+            (apply_uc
+              (uc "List")
+              (uc "Value")
             )
           )
-          (binop_equals
-            (lc "processData")
-            (lambda
-              (body
-                (apply_anon
-                  (binop_pipe
-                    (uc "List")
-                    (dot_lc "mapTry")
-                  )
-                  (tuple_literal
-                    (lc "values")
-                    (lambda
-                      (body
-                        (tuple_literal
-                          (apply_anon
-                            (binop_pipe
-                              (uc "Json")
-                              (dot_lc "validateWith")
-                            )
-                            (tuple_literal
-                              (lc "config")
-                              (lc "v")
-                            )
-                          )
-                          (malformed malformed:expr_unexpected_token)
-                        )
-                      )
-                      (args
-                        (lc "v")
-                      )
-                    )
-                  )
-                )
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (apply_uc
+                (uc "List")
+                (uc "Value")
               )
-              (args
-                (tuple_literal
-                  (lc "config")
-                  (lc "values")
-                )
-              )
-            )
-          )
-          (binop_colon
-            (uc "ServerConfig")
-            (block
-              (binop_colon
-                (lc "jsonConfig")
-                (tuple_literal
-                  (binop_colon
-                    (tuple_literal
-                      (binop_colon
-                        (tuple_literal
-                          (uc "Config")
-                          (lc "httpStatus")
-                        )
-                        (uc "Status")
-                      )
-                      (lc "defaultResponse")
-                    )
-                    (uc "Response")
-                  )
-                  (malformed malformed:expr_unexpected_token)
-                )
-              )
-              (binop_colon
-                (lc "createClient")
-                (binop_thin_arrow
-                  (uc "Config")
-                  (binop_pipe
-                    (uc "Http")
-                    (uc "Client")
-                  )
-                )
-              )
-              (binop_equals
-                (lc "createClient")
-                (lambda
-                  (body
-                    (apply_anon
-                      (binop_pipe
-                        (uc "Http")
-                        (dot_lc "clientWith")
-                      )
-                      (lc "config")
-                    )
-                  )
-                  (args
-                    (lc "config")
-                  )
-                )
-              )
-              (binop_colon
-                (lc "handleResponse")
-                (binop_thin_arrow
-                  (uc "Response")
-                  (uc "Str")
-                )
-              )
-              (binop_equals
-                (lc "handleResponse")
-                (lambda
-                  (body
-                    (match <163 branches>)
-                  )
-                  (args
-                    (lc "response")
-                  )
-                )
-              )
-              (binop_equals
-                (lc "combineResults")
-                (lambda
-                  (body
-                    (match <196 branches>)
-                  )
-                  (args
-                    (tuple_literal
-                      (lc "jsonResult")
-                      (lc "httpStatus")
-                    )
-                  )
-                )
-              )
+              (uc "Error")
             )
           )
         )
@@ -296,56 +169,187 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
       )
     )
   )
+  (binop_equals
+    (lc "processData")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "List")
+            (dot_lc "mapTry")
+          )
+          (tuple_literal
+            (lc "values")
+            (lambda
+              (body
+                (tuple_literal
+                  (apply_anon
+                    (binop_pipe
+                      (uc "Json")
+                      (dot_lc "validateWith")
+                    )
+                    (tuple_literal
+                      (lc "config")
+                      (lc "v")
+                    )
+                  )
+                  (malformed malformed:expr_unexpected_token)
+                )
+              )
+              (args
+                (lc "v")
+              )
+            )
+          )
+        )
+      )
+      (args
+        (tuple_literal
+          (lc "config")
+          (lc "values")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (uc "ServerConfig")
+    (record_literal
+      (binop_colon
+        (lc "jsonConfig")
+        (uc "Config")
+      )
+      (binop_colon
+        (lc "httpStatus")
+        (uc "Status")
+      )
+      (binop_colon
+        (lc "defaultResponse")
+        (uc "Response")
+      )
+    )
+  )
+  (binop_colon
+    (lc "createClient")
+    (binop_thin_arrow
+      (uc "Config")
+      (binop_pipe
+        (uc "Http")
+        (uc "Client")
+      )
+    )
+  )
+  (binop_equals
+    (lc "createClient")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "Http")
+            (dot_lc "clientWith")
+          )
+          (lc "config")
+        )
+      )
+      (args
+        (lc "config")
+      )
+    )
+  )
+  (binop_colon
+    (lc "handleResponse")
+    (binop_thin_arrow
+      (uc "Response")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "handleResponse")
+    (lambda
+      (body
+        (match <168 branches>)
+      )
+      (args
+        (lc "response")
+      )
+    )
+  )
+  (binop_equals
+    (lc "combineResults")
+    (lambda
+      (body
+        (match <201 branches>)
+      )
+      (args
+        (tuple_literal
+          (lc "jsonResult")
+          (lc "httpStatus")
+        )
+      )
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
-
-import json exposing [Json, Value, Error, Config]
-import http exposing [Client, Http, Request, Response, Status]
-import utils exposing [Result, Result]
+import json.Json exposing [Value, Error, Config]
+import http.Client as Http exposing [Request, Response, Status]
+import utils.Result exposing [Result]
 parseJson: (Str -> Result((Value, Error)))
-parseJson = \input -> Json | .parse(input)
+parseJson = \input -> Json.parse(input)
+
+# Test mixing exposed types with qualified access
 handleRequest: (Request -> Response)
 handleRequest = \req -> {
-	result = Json | .decode(req | .body)
+	result = Json.decode(req.body),
 	when result is {
 		Ok(value)
-		<malformed>
-		Http | .ok(value)
+		=>
+		Http.ok(value)
 		Err(error)
-		<malformed>
-		Http | .badRequest(error)
-	} -> <malformed>
-	processData: (Config -> (List(Value) -> Result((List(Value), Error))))
-	processData = \(config, values) -> List | .mapTry((values, \v -> (Json | .validateWith((config, v)), <malformed>)))
-	ServerConfig: {
-		jsonConfig: (((Config, httpStatus): Status, defaultResponse): Response, <malformed>)
-		createClient: (Config -> Http.Client)
-		createClient = \config -> Http | .clientWith(config)
-		handleResponse: (Response -> Str)
-		handleResponse = \response -> when response | .status is {
-			Ok(status)
-			<malformed>
-			Http | .statusToString(status)
-			Err(error)
-			<malformed>
-			Error | .toString(error)
-		} -> combineResults: Result((Value, Error)) -> (Status -> Result((Response, Error)))
-		combineResults = \(jsonResult, httpStatus) -> when jsonResult is {
-			Ok(value)
-			<malformed>
-			Ok({
-				body: ((Json | .encode(value), status): httpStatus)
-			})
-			Err(error)
-			<malformed>
-			Err(error)
-		} -> <malformed>
-	}
+		=>
+		Http.badRequest(error)
+	} -> }
+
+# Test using exposed types in complex signatures,
+	processData: Config,
+	List(Value)
+} -> Result((List(Value), Error))
+processData = \(
+	config,
+	values
+) -> List.mapTry((
+	values,
+	\v -> (
+		Json.validateWith((config, v))
+	)
+))ServerConfig: {
+	jsonConfig: Config,
+	httpStatus: Status,
+	defaultResponse: Response,
 }
+createClient: (Config -> Http.Client)
+createClient = \config -> Http.clientWith(config)
+handleResponse: (Response -> Str)
+handleResponse = \response -> when response.status is {
+	Ok(status)
+	=>
+	Http.statusToString(status)
+	Err(error)
+	=>
+	Error.toString(error)
+} -> combineResults: Result((Value, Error)) -> (Status -> Result((Response, Error)))combineResults = \(
+	jsonResult,
+	httpStatus
+) -> when jsonResult is {
+	Ok(value)
+	=>
+	Ok({ body: Json.encode(value), status: httpStatus })
+	Err(error)
+	=>
+	Err(error)
+} -> 
 ~~~
 # EXPECTED
 NIL
@@ -366,13 +370,13 @@ at 15:5 to 19:1
 at 19:1 to 19:1
 
 **Parse Error**
+at 13:23 to 22:35
+
+**Parse Error**
 at 27:5 to 27:5
 
 **Parse Error**
 at 24:9 to 30:1
-
-**Parse Error**
-at 34:1 to 34:1
 
 **Parse Error**
 at 43:5 to 43:27
@@ -401,12 +405,6 @@ at 51:5 to 54:6
 **Parse Error**
 at 54:6 to 54:6
 
-**Parse Error**
-at 30:16 to 54:6
-
-**Parse Error**
-at 13:23 to 54:6
-
 **Unsupported Node**
 at 3:1 to 3:48
 
@@ -428,6 +426,24 @@ at 12:17 to 12:36
 **Unsupported Node**
 at 13:17 to 13:23
 
+**Unsupported Node**
+at 23:15 to 24:5
+
+**Unsupported Node**
+at 37:16 to 37:36
+
+**Unsupported Node**
+at 38:16 to 38:25
+
+**Unsupported Node**
+at 41:18 to 41:33
+
+**Unsupported Node**
+at 42:18 to 43:5
+
+**Unsupported Node**
+at 50:18 to 51:5
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -443,6 +459,35 @@ at 13:17 to 13:23
     (Expr.lookup "handleRequest")
     (Expr.malformed)
   )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "jsonConfig")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "httpStatus")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "defaultResponse")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "createClient")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "handleResponse")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

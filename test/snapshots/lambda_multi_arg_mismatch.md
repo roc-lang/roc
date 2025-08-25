@@ -102,10 +102,8 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent C
         (frac_literal_small 1.5)
         (frac_literal_small 3.14)
         (list_literal
-          (tuple_literal
-            (num_literal_i32 1)
-            (num_literal_i32 2)
-          )
+          (num_literal_i32 1)
+          (num_literal_i32 2)
         )
         (uc "True")
         (str_literal_small "done")
@@ -119,11 +117,39 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent C
 ~~~roc
 module []
 
-
-# Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
-multi_arg_fn: (a -> (b -> (a -> (c -> (a -> (d -> (a -> (e -> (a, b, c, d, e)))))))))
-multi_arg_fn = \(x1, x2, x3, x4, x5, x6, x7, x8) -> (x1, x2, x4, x6, x8)
-result = multi_arg_fn((42, "hello", "world", 1.5, 3.14, [(1, 2)], True, "done", <malformed>))
+multi_arg_fn: (a -> (b -> (a -> (c -> (a -> (d -> (a -> (e -> (
+	a,
+	b,
+	c,
+	d,
+	e
+)))))))))
+multi_arg_fn = \(
+	x1,
+	x2,
+	x3,
+	x4,
+	x5,
+	x6,
+	x7,
+	x8
+) -> (
+	x1,
+	x2,
+	x4,
+	x6,
+	x8
+)
+result = multi_arg_fn((
+	42,
+	"hello",
+	"world",
+	1.5,
+	3.14,
+	[1, 2],
+	True,
+	"done"
+))
 ~~~
 # EXPECTED
 NIL
@@ -141,7 +167,7 @@ at 4:16 to 4:57
 at 5:16 to 6:5
 
 **Unsupported Node**
-at 16:5 to 16:12
+at 16:5 to 16:11
 
 **Unsupported Node**
 at 19:1 to 19:1

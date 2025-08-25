@@ -68,11 +68,14 @@ module [
 
 foo: (U64 -> Result((Str, [TooBig])))
 foo = \num -> {
-	str = if num > 10 {
-		<ret>
-	} else {
-		"SMALL"
-	}
+	str = if num > 10
+		{
+			return Err(TooBig)
+		}
+	else
+		{
+			"SMALL"
+		}
 	Ok(str)
 }
 ~~~

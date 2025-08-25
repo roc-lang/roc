@@ -16,7 +16,7 @@ KwIf UpperIdent Int KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if True 1 else 2
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

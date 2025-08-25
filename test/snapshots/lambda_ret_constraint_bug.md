@@ -71,7 +71,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("platform/main.roc" platform [main]) }
+app
+{
+	pf: "platform/main.roc" platform [
+		main,
+	],
+}
 
 helper: (I64 -> I64)
 helper = \n -> n * 2

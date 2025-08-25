@@ -16,7 +16,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [a1, a2]), a: ("a", <malformed>) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		a1,
+		a2,
+	],
+	a: ("a"),
+}
 
 ~~~
 # EXPECTED

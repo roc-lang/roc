@@ -97,8 +97,8 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
 ~~~roc
 module []
 
-
-x = ('a',
+x = (
+	'a',
     'é',
     '🚀',
     '\u',
@@ -117,19 +117,17 @@ x = ('a',
 y = 'u
 
 # Test backslash before EOF
-'\, <malformed>)
-<malformed><malformed>
-<malformed><malformed><malformed><malformed><malformed>
-<malformed><malformed>
-<malformed><malformed>
-<malformed>
-<malformed>(<malformed>)
-<malformed>()
-<malformed>
-<malformed>(1F680)F680<malformed>
-<malformed>
-<malformed>(K)
-<malformed>
+'\
+)�'
+'🚀'
+'\u'
+'\u)
+'
+'\u((')
+'\u()()'
+'\u((1F680)F680)
+'
+'\u((K)'
 '\\',
     '\'',
     '',
@@ -141,7 +139,6 @@ y = 'u
 
 # Test backslash before EOF
 '\
-<malformed>
 '\'',
     '',
     'long',
@@ -152,15 +149,15 @@ y = 'u
 
 # Test backslash before EOF
 '\
-<malformed>
-<malformed><malformed>
-<malformed>ong<malformed>
-<malformed><malformed>
-<malformed>
-y = <malformed>
+''
+'long'
+'\'
+)
+
+y = 'u
 
 # Test backslash before EOF
-<malformed>
+'\
 ~~~
 # EXPECTED
 NIL

@@ -15,7 +15,7 @@ type=expr
 OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
+(record_literal
   (binop_pipe
     (binop_pipe
       (uc "Foo")
@@ -26,38 +26,27 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
   (malformed malformed:expr_unexpected_token)
   (binop_colon
     (lc "x")
-    (tuple_literal
-      (binop_colon
-        (tuple_literal
-          (num_literal_i32 5)
-          (lc "y")
-        )
-        (num_literal_i32 0)
-      )
-      (malformed malformed:expr_unexpected_token)
-    )
+    (num_literal_i32 5)
+  )
+  (binop_colon
+    (lc "y")
+    (num_literal_i32 0)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-(Foo.Bar) | .baz<malformed>
-x: ((
-	5,
-	y,
-): 0, <malformed>)
+{
+	Foo.Bar | .baz,
+	x: 5,
+	y: 0,
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
 at 1:15 to 1:15
-
-**Parse Error**
-at 4:1 to 4:1
-
-**Parse Error**
-at 1:1 to 4:2
 
 **Unsupported Node**
 at 1:3 to 1:6
@@ -68,24 +57,26 @@ at 1:6 to 1:9
 **Unsupported Node**
 at 1:15 to 1:15
 
-**Unsupported Node**
-at 1:1 to 1:1
-
 # CANONICALIZE
 ~~~clojure
-(Expr.block
+(Expr.record_literal
   (Expr.lambda)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "x")
-    (Expr.malformed)
+    (Expr.num_literal_i32 5)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "y")
+    (Expr.num_literal_i32 0)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
+{}
 ~~~

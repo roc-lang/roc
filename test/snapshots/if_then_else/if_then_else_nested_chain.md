@@ -47,11 +47,15 @@ module [
 ]
 
 checkNumber = \num -> {
-	if num < 0 {
-		"negative"
-	} else if num == 0 {
-		"zero"
-	} else if num > 100 {
+	if num < 0
+		{
+			"negative"
+		}
+	else if num == 0
+		{
+			"zero"
+		}
+	else if num > 100 {
 		"large"
 	} else {
 		"positive"

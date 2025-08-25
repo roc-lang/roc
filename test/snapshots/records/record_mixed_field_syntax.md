@@ -14,37 +14,46 @@ OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerId
 ~~~clojure
 (record_literal
   (lc "name")
-  (tuple_literal
-    (binop_colon
-      (tuple_literal
-        (binop_colon
-          (lc "age")
-          (num_literal_i32 30)
-        )
-        (lc "email")
-        (lc "status")
-      )
-      (str_literal_big "active")
-    )
-    (lc "balance")
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 30)
   )
+  (lc "email")
+  (binop_colon
+    (lc "status")
+    (str_literal_big "active")
+  )
+  (lc "balance")
 )
 ~~~
 # FORMATTED
 ~~~roc
-{ name, ((age: 30, email, status): "active", balance) }
+{
+	name,
+	age: 30,
+	email,
+	status: "active",
+	balance
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:51 to 1:51
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
+  (Expr.lookup "email")
+  (Expr.binop_colon
+    (Expr.lookup "status")
+    (Expr.str_literal_big)
+  )
+  (Expr.lookup "balance")
 )
 ~~~
 # SOLVED

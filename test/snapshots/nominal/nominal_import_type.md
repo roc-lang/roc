@@ -49,7 +49,7 @@ module [
 import Color
 
 red: Color.RGB
-red = (Color.RGB) | Red
+red = Color.RGB | Red
 ~~~
 # EXPECTED
 NIL

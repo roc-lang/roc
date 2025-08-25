@@ -20,13 +20,16 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
     (lc "pf")
     (uc "Stdout")
   )
-  (lc "hello")
-  (unary_not <unary>)
-  (binop_pipe
-    (uc "Stdout")
-    (dot_lc "line")
+  (binop_equals
+    (not_lc "hello")
+    (apply_anon
+      (binop_pipe
+        (uc "Stdout")
+        (not_lc "line")
+      )
+      (str_literal_big "Hello")
+    )
   )
-  (unary_not <unary>)
   (binop_equals
     (lc "world")
     (str_literal_big "World")
@@ -36,25 +39,22 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 # FORMATTED
 ~~~roc
 module [
-	hello!, world
+	hello,
+	world,
 ]
 
-import pf exposing [Stdout]
-hello<malformed>!
-Stdout | .line"Hello"!
+import pf.Stdout
+hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:8 to 3:8
-
 **Unsupported Node**
 at 2:1 to 2:17
 
 **Unsupported Node**
-at 3:8 to 3:8
+at 3:1 to 3:7
 
 **Unsupported Node**
 at 3:10 to 3:16
@@ -63,10 +63,7 @@ at 3:10 to 3:16
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.lookup "hello")
-  (Expr.unary_not)
-  (Expr.lambda)
-  (Expr.unary_not)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

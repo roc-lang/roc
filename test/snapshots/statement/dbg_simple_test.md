@@ -41,7 +41,7 @@ module [
 
 test = {
 	x = 42
-	<malformed>(x)
+	dbg((x)
 }
 ~~~
 # EXPECTED

@@ -16,7 +16,7 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-"hello world"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -20,11 +20,10 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIde
 (block
   (binop_colon
     (lc "launchTheNukes")
-    (binop_thick_arrow
-      (record_literal)
-      (uc "Result")
-    )
+    (record_literal)
   )
+  (malformed malformed:expr_unexpected_token)
+  (uc "Result")
   (uc "Bool")
   (uc "LaunchNukeErr")
   (binop_equals
@@ -46,7 +45,9 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-launchTheNukes: ({  } => Result)
+launchTheNukes: {  }
+=>
+Result
 Bool
 LaunchNukeErr
 launchTheNukes = \{  } -> ...
@@ -56,8 +57,11 @@ launchTheNukes({  })
 # EXPECTED
 NIL
 # PROBLEMS
+**Parse Error**
+at 2:25 to 2:25
+
 **Unsupported Node**
-at 2:22 to 2:34
+at 2:25 to 2:25
 
 **Unsupported Node**
 at 3:22 to 3:25
@@ -67,8 +71,11 @@ at 3:22 to 3:25
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "launchTheNukes")
-    (Expr.malformed)
+    (Expr.record_literal
+    )
   )
+  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.apply_tag)
   (Expr.apply_tag)
   (Expr.malformed)

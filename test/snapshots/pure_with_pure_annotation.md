@@ -38,16 +38,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lambda
       (body
         (binop_pipe
-          (block
+          (record_literal
             (binop_colon
               (lc "x")
-              (binop_colon
-                (tuple_literal
-                  (lc "x")
-                  (lc "y")
-                )
-                (lc "y")
-              )
+              (lc "x")
+            )
+            (binop_colon
+              (lc "y")
+              (lc "y")
             )
           )
           (dot_lc "x")
@@ -85,36 +83,39 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (unary_not <unary>)
-  (apply_lc
-    (lc "add")
-    (tuple_literal
-      (num_literal_i32 1)
-      (num_literal_i32 2)
+  (binop_equals
+    (not_lc "main")
+    (apply_lc
+      (lc "add")
+      (tuple_literal
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+      )
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 add: (I32 -> (I32 -> I32))
-add = \(x, y) -> {
-	x: ((x, y): y)
-} | .x
+add = \(
+	x,
+	y
+) -> { x: x, y: y } | .x
 double: (I32 -> I32)
 double = \x -> add((x, x))
-main<malformed>!
-add((1, 2))
+main! = add((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 11:7 to 11:7
-
 **Unsupported Node**
 at 4:7 to 4:22
 
@@ -128,7 +129,7 @@ at 8:10 to 8:20
 at 9:10 to 9:14
 
 **Unsupported Node**
-at 11:7 to 11:7
+at 11:1 to 11:6
 
 # CANONICALIZE
 ~~~clojure
@@ -143,14 +144,12 @@ at 11:7 to 11:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.unary_not)
-  (Expr.apply_ident)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

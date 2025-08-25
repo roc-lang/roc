@@ -30,7 +30,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~roc
 module []
 
-
 x: U8
 x = 500
 ~~~

@@ -19,7 +19,7 @@ UpperIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-Json | .utf8
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -34,13 +34,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "process")
     (binop_thin_arrow
       (list_literal
-        (tuple_literal
-          (apply_uc
-            (uc "Some")
-            (uc "Str")
-          )
-          (uc "None")
+        (apply_uc
+          (uc "Some")
+          (uc "Str")
         )
+        (uc "None")
       )
       (uc "Str")
     )
@@ -60,15 +58,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "is_ok_ret_unqualified_bool")
     (binop_thin_arrow
       (list_literal
-        (tuple_literal
-          (apply_uc
-            (uc "Ok")
-            (lc "_ok")
-          )
-          (apply_uc
-            (uc "Err")
-            (lc "_err")
-          )
+        (apply_uc
+          (uc "Ok")
+          (lc "_ok")
+        )
+        (apply_uc
+          (uc "Err")
+          (lc "_err")
         )
       )
       (uc "Bool")
@@ -89,46 +85,45 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "is_ok_ret_bool")
     (lambda
       (body
-        (match <67 branches>)
+        (match <71 branches>)
       )
       (args
         (lc "result")
       )
     )
   )
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (record_literal)
-  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
-process: ([(Some(Str), None)] -> Str)
+process: ([Some(Str), None] -> Str)
 process = \maybe -> "result"
-is_ok_ret_unqualified_bool: ([(Ok(_ok), Err(_err))] -> Bool)
+
+is_ok_ret_unqualified_bool: ([Ok(_ok), Err(_err)] -> Bool)
 is_ok_ret_unqualified_bool = \result -> when result is {
 	Ok(_)
-	<malformed>
+	=>
 	True
 	Err(_)
-	<malformed>
+	=>
 	False
-} -> is_ok_ret_bool: [(Ok(_ok2), Err(_err2))] -> Bool
-is_ok_ret_bool = \result -> when result is {
+} -> 
+
+is_ok_ret_bool: [Ok(_ok2), Err(_err2)] -> Boolis_ok_ret_bool = \result -> when result is {
 	Ok(_)
-	<malformed>
+	=>
 	Bool.True
 	Err(_)
-	<malformed>
+	=>
 	Bool.False
-} -> main
-(<malformed>! | _) | {  }
+} -> main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
@@ -157,9 +152,6 @@ at 15:12 to 15:12
 **Parse Error**
 at 13:27 to 18:1
 
-**Parse Error**
-at 18:7 to 18:7
-
 **Unsupported Node**
 at 3:11 to 3:35
 
@@ -175,9 +167,6 @@ at 7:30 to 7:39
 **Unsupported Node**
 at 13:18 to 13:27
 
-**Unsupported Node**
-at 18:5 to 18:7
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -192,12 +181,11 @@ at 18:5 to 18:7
   )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lambda)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

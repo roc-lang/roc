@@ -53,9 +53,9 @@ module [
 ]
 
 foo = \num -> {
-	<malformed>
-	num | .to_str()
-	<malformed>(num)
+	dbg
+	num.to_str()
+	dbg((num)
 }
 ~~~
 # EXPECTED

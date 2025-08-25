@@ -91,39 +91,39 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 # FORMATTED
 ~~~roc
 module [
-	value1, value2, value3, value4
+	value1,
+	value2,
+	value3,
+	value4,
 ]
-
 
 value1 = ""
 This
 is
 a
-"string"<malformed>just
+"string"withjust
 one
 line
 
-value2 = ""
-This
+value2 = ""This
 is
 a
-"string"<malformed>just
+"string"withjust
 one
 line
 
-value3 = ""
-This
+value3 = ""This
 is
 a
 string
 ""With
 multiple
 lines
-""<malformed>{
+""${
 	value1
 }
-value4 = ""
-This
+
+value4 = ""This
 is
 a
 string
@@ -131,7 +131,7 @@ string
 ""With
 multiple
 lines
-""<malformed>{
+""${
 	value2
 }
 ~~~

@@ -94,42 +94,50 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result1")
-        (apply_lc
-          (lc "testEllipsis")
-          (num_literal_i32 42)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "result1")
+            (apply_lc
+              (lc "testEllipsis")
+              (num_literal_i32 42)
+            )
+          )
+          (binop_equals
+            (lc "result2")
+            (apply_lc
+              (lc "testCrash")
+              (num_literal_i32 42)
+            )
+          )
+          (binop_equals
+            (lc "result3")
+            (apply_lc
+              (lc "testCrashSimple")
+              (num_literal_i32 42)
+            )
+          )
+          (list_literal)
         )
       )
-      (binop_equals
-        (lc "result2")
-        (apply_lc
-          (lc "testCrash")
-          (num_literal_i32 42)
-        )
+      (args
+        (underscore)
       )
-      (binop_equals
-        (lc "result3")
-        (apply_lc
-          (lc "testCrashSimple")
-          (num_literal_i32 42)
-        )
-      )
-      (list_literal)
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 testEllipsis: (U64 -> U64)
 testEllipsis = \_ -> ...
@@ -139,12 +147,14 @@ testCrash: (U64 -> U64)
 testCrash = \_ -> {
 	crash "This is a crash message"
 }
+
+# Test crash with different message
 testCrashSimple: (U64 -> U64)
 testCrashSimple = \_ -> {
 	crash "oops"
 }
-main
-(<malformed>! | _) | {
+
+main! = \_ -> {
 	result1 = testEllipsis(42)
 	result2 = testCrash(42)
 	result3 = testCrashSimple(42)
@@ -154,9 +164,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 19:7 to 19:7
-
 **Unsupported Node**
 at 4:16 to 4:26
 
@@ -176,10 +183,10 @@ at 14:19 to 14:29
 at 15:19 to 15:23
 
 **Unsupported Node**
-at 19:5 to 19:7
+at 19:1 to 19:6
 
 **Unsupported Node**
-at 23:5 to 23:6
+at 19:9 to 19:13
 
 # CANONICALIZE
 ~~~clojure
@@ -199,13 +206,12 @@ at 23:5 to 23:6
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> Error")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

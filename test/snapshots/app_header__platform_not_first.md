@@ -17,10 +17,15 @@ KwApp OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String KwPlat
 ~~~
 # FORMATTED
 ~~~roc
-app { somePkg: ((
-	"../main.roc",
-	pf,
-): "../main.roc" platform [main]) }
+app
+{
+	somePkg: (
+		"../main.roc",
+		pf,
+	): "../main.roc" platform [
+		main,
+	],
+}
 
 ~~~
 # EXPECTED

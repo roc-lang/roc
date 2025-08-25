@@ -21,16 +21,16 @@ KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatA
 # FORMATTED
 ~~~roc
 when color is {
-	(Blue.Green) | Red
-	<malformed>
+	Blue.Green | Red
+	=>
 	1
 	Black
-	<malformed>
+	=>
 	2
 	White
-	<malformed>
+	=>
 	3
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -28,7 +28,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign LowerIdent Dot Int ~~~
 ~~~roc
 module []
 
-
 foo = asd | 0
 ~~~
 # EXPECTED

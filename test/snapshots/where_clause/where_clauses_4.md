@@ -60,7 +60,7 @@ module [
 ]
 
 import Decode exposing [Decode]
-decodeThings: (List(List(U8)) -> List(a) where a() | Decode)
+decodeThings: (List(List(U8)) -> List(a) where module(a) | Decode)
 decodeThings = ...
 ~~~
 # EXPECTED

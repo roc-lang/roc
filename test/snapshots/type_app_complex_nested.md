@@ -118,25 +118,26 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (apply_lc
-      (lc "processComplex")
-      (apply_uc
-        (uc "Ok")
-        (list_literal
-          (tuple_literal
-            (apply_uc
-              (uc "Some")
-              (num_literal_i32 42)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processComplex")
+          (apply_uc
+            (uc "Ok")
+            (list_literal
+              (apply_uc
+                (uc "Some")
+                (num_literal_i32 42)
+              )
+              (uc "None")
             )
-            (uc "None")
           )
         )
+      )
+      (args
+        (underscore)
       )
     )
   )
@@ -144,24 +145,29 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 processComplex: (Result((List(Maybe(a)), Dict((Str, Error(_b))))) -> List(a))
 processComplex = \result -> when result is {
 	Ok(maybeList)
-	<malformed>
+	=>
 	[]
 	Err(_)
-	<malformed>
+	=>
 	[]
-} -> deepNested: Maybe(Result((List(Dict((Str, a))), _b))) -> a
-deepNested = \_ -> {
+} -> 
+
+# Test multiple levels of nesting
+deepNested: Maybe(Result((List(Dict((Str, a))), _b))) -> adeepNested = \_ -> {
 	crash "not implemented"
 }
 ComplexType((a, b)): Result((List(Maybe(a)), Dict((Str, Error(b)))))
-
-main
-(<malformed>! | _) | processComplex(Ok([(Some(42), None)]))
+main! = \_ -> processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 NIL
@@ -178,9 +184,6 @@ at 8:16 to 8:16
 **Parse Error**
 at 6:5 to 12:1
 
-**Parse Error**
-at 20:7 to 20:7
-
 **Unsupported Node**
 at 4:18 to 4:73
 
@@ -191,10 +194,10 @@ at 5:18 to 6:5
 at 13:14 to 13:18
 
 **Unsupported Node**
-at 20:5 to 20:7
+at 20:1 to 20:6
 
 **Unsupported Node**
-at 20:31 to 20:48
+at 20:9 to 20:13
 
 # CANONICALIZE
 ~~~clojure
@@ -209,13 +212,12 @@ at 20:31 to 20:48
     (Expr.apply_tag)
     (Expr.apply_tag)
   )
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

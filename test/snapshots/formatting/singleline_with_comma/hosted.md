@@ -17,42 +17,39 @@ KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare 
 ~~~clojure
 (block
   (list_literal
-    (lc "a")
+    (not_lc "a")
+    (not_lc "b")
   )
-  (unary_not <unary>)
-  (lc "b")
-  (unary_not <unary>)
-  (malformed malformed:expr_unexpected_token)
-  (lc "a")
-  (unary_not <unary>)
-  (uc "Str")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Str")
-  (lc "b")
-  (unary_not <unary>)
-  (uc "Str")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Str")
+  (binop_colon
+    (not_lc "a")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (binop_colon
+    (not_lc "b")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
 hosted [
-	a!, b!,
+	a!,
+	b!,
 ]
 
 [
-	a,
-]<malformed>!
-b<malformed>!
-<malformed>
+	a!,
+	b!,
+]
 
-a<malformed>!Str
-<malformed>
-Str
-b<malformed>!Str
-<malformed>
-Str
+a!: (Str => Str)
+b!: (Str => Str)
 ~~~
 # EXPECTED
 NIL
@@ -60,77 +57,32 @@ NIL
 **Expected Exposes**
 at 1:1 to 1:8
 
-**Parse Error**
-at 1:8 to 1:10
-
-**Parse Error**
-at 1:11 to 1:11
-
-**Parse Error**
-at 1:15 to 1:15
-
-**Parse Error**
-at 1:16 to 1:16
-
-**Parse Error**
-at 3:4 to 3:4
-
-**Parse Error**
-at 3:10 to 3:10
-
-**Parse Error**
-at 4:4 to 4:4
-
-**Parse Error**
-at 4:10 to 4:10
+**Unsupported Node**
+at 1:8 to 1:16
 
 **Unsupported Node**
-at 1:8 to 1:11
+at 3:6 to 3:16
 
 **Unsupported Node**
-at 1:11 to 1:11
-
-**Unsupported Node**
-at 1:15 to 1:15
-
-**Unsupported Node**
-at 1:16 to 1:16
-
-**Unsupported Node**
-at 3:4 to 3:4
-
-**Unsupported Node**
-at 3:10 to 3:10
-
-**Unsupported Node**
-at 4:4 to 4:4
-
-**Unsupported Node**
-at 4:10 to 4:10
+at 4:6 to 4:16
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.unary_not)
-  (Expr.lookup "b")
-  (Expr.unary_not)
-  (Expr.malformed)
-  (Expr.lookup "a")
-  (Expr.unary_not)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "b")
-  (Expr.unary_not)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

@@ -26,13 +26,13 @@ KwModule OpenSquare CloseCurly OpenCurly Int Int CloseRound OpenRound Int CloseC
 # FORMATTED
 ~~~roc
 module [
-	<malformed>,
+	},
 ]
 
 {
 	0
 	0
-	<malformed>(0)
+	)((0)
 }
 ~~~
 # EXPECTED

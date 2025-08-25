@@ -13,25 +13,19 @@ OpenSquare OpenSquare Int Comma String CloseSquare Comma OpenSquare Int Comma In
 # PARSE
 ~~~clojure
 (list_literal
-  (tuple_literal
-    (list_literal
-      (tuple_literal
-        (num_literal_i32 1)
-        (str_literal_big "hello")
-      )
-    )
-    (list_literal
-      (tuple_literal
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
-    )
+  (list_literal
+    (num_literal_i32 1)
+    (str_literal_big "hello")
+  )
+  (list_literal
+    (num_literal_i32 2)
+    (num_literal_i32 3)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-[([(1, "hello")], [(2, 3)])]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -33,15 +33,13 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
       )
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-        (apply_uc
-          (uc "Err")
-          (lc "b")
-        )
+      (apply_uc
+        (uc "Ok")
+        (lc "a")
+      )
+      (apply_uc
+        (uc "Err")
+        (lc "b")
       )
     )
   )
@@ -69,10 +67,8 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
       (binop_colon
         (uc "Result")
         (list_literal
-          (tuple_literal
-            (uc "Success")
-            (uc "Failure")
-          )
+          (uc "Success")
+          (uc "Failure")
         )
       )
     )
@@ -82,22 +78,25 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 # FORMATTED
 ~~~roc
 module [
-	Result, processData
+	Result,
+	processData,
 ]
 
+Result((a, b)): [Ok(a), Err(b)]
 
-Result((a, b)): [(Ok(a), Err(b))]
 processData: (Str -> Str)
 processData = \data -> "processed"
+
+# In a nested module scope, redeclare Result
 InnerModule: {
-	Result: [(Success, Failure)]
+	Result: [Success, Failure]
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:16 to 4:1
+at 3:16 to 3:31
 
 **Unsupported Node**
 at 5:15 to 5:25
@@ -106,7 +105,7 @@ at 5:15 to 5:25
 at 6:15 to 7:5
 
 **Unsupported Node**
-at 11:14 to 12:1
+at 11:14 to 11:32
 
 # CANONICALIZE
 ~~~clojure

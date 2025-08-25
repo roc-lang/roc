@@ -37,7 +37,7 @@ OpenCurly LowerIdent OpAssign Int OpenRound OpBar LowerIdent OpBar LowerIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-x = 5(\x -> x)(10)
+x = 5(\x -> x)(10) # Should not capture outer `x` -- this should give a shadowing warning
 ~~~
 # EXPECTED
 NIL

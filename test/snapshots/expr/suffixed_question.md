@@ -22,7 +22,7 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(Stdout | .line) ?? <malformed>
+Stdout.line ?? ?
 ~~~
 # EXPECTED
 NIL

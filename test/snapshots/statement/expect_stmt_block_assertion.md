@@ -61,7 +61,7 @@ module [
 
 foo: (Bool -> Bool)
 foo = \a -> {
-	expect a == (Bool.True)
+	expect a == Bool.True
 	a: a
 }
 ~~~

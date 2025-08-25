@@ -17,7 +17,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../main.roc" platform [main]), somePkg: ("../main.roc", <malformed>) }
+app
+{
+	pf: "../main.roc" platform [
+		main,
+	],
+	somePkg: ("../main.roc"),
+}
 
 ~~~
 # EXPECTED

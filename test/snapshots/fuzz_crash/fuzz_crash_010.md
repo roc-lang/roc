@@ -30,7 +30,9 @@ UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-H{ o, <malformed> }foo = <malformed>
+H{
+	o
+}foo = "on        (string 'onmo %')))
 ~~~
 # EXPECTED
 NIL

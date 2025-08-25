@@ -39,13 +39,17 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 # FORMATTED
 ~~~roc
 module [
-	<malformed>,
+	module ],
 ]
 
 {
-	pf: <malformed>
-	<malformed>
-	var t = <malformed>
+	pf: platform
+	".-/main._]where # A
+
+#el
+	var t = ]
+
+#el
 	var t = 0
 }
 ~~~

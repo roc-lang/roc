@@ -33,12 +33,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Float LowerIdent OpAssign Fl
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-
-x = 3.14
-y = 1.23e45
-z = 0.5
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

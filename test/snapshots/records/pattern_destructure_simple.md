@@ -20,9 +20,9 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly Op
 ~~~roc
 when person is {
 	{ name, age }
-	<malformed>
+	=>
 	name
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

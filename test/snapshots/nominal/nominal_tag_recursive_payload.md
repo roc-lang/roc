@@ -24,14 +24,12 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (uc "Nil")
+      (uc "Nil")
+      (apply_uc
+        (uc "Node")
         (apply_uc
-          (uc "Node")
-          (apply_uc
-            (uc "ConsList")
-            (lc "a")
-          )
+          (uc "ConsList")
+          (lc "a")
         )
       )
     )
@@ -55,11 +53,12 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 # FORMATTED
 ~~~roc
 module [
-	ConsList, empty
+	ConsList,
+	empty,
 ]
 
+ConsList(a) := [Nil, Node(ConsList(a))]
 
-ConsList(a) := [(Nil, Node(ConsList(a)))]
 empty: ConsList(_a)
 empty = ConsList.Nil
 ~~~
@@ -67,7 +66,7 @@ empty = ConsList.Nil
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:40
 
 **Unsupported Node**
 at 6:9 to 6:17

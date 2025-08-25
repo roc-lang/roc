@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 /// Creates a parameterized NodeSlices type for a given index type
 pub fn NodeSlices(comptime NodeIdx: type) type {
     return struct {
-        entries: collections.SafeList(Entry),
+        entries: collections.SafeList(NodeIdx),
 
         const Self = @This();
 
@@ -25,12 +25,6 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
             pub fn isNil(self: Idx) bool {
                 return self == NIL;
             }
-        };
-
-        pub const Entry = union {
-            node_idx: NodeIdx, // An individual NodeIdx in a slice. The last one will be negative to mark the end.
-            binop_lhs: NodeIdx, // This is a BinOp's lhs node, and its rhs will be stored immediately after this entry.
-            binop_rhs: NodeIdx, // This is a BinOp's rhs node, and its lhs will be stored immediately before this entry.
         };
 
         pub fn append(self: *Self, allocator: Allocator, node_slice: []const NodeIdx) Allocator.Error!Idx {
@@ -59,7 +53,7 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
 
             // Append all nodes except the last one
             for (node_slice[0 .. node_slice.len - 1]) |node| {
-                self.entries.items.appendAssumeCapacity(.{ .node_idx = node });
+                self.entries.items.appendAssumeCapacity(node);
             }
 
             // Append the last node with sign bit set to mark the end
@@ -69,7 +63,7 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
             const sign_bit = std.math.minInt(i32);
             const marked_val = last_val | sign_bit;
             const marked_last = @as(NodeIdx, @enumFromInt(marked_val));
-            self.entries.items.appendAssumeCapacity(.{ .node_idx = marked_last });
+            self.entries.items.appendAssumeCapacity(marked_last);
 
             return idx;
         }
@@ -80,14 +74,22 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
             // Reserve capacity for both nodes
             try self.entries.items.ensureUnusedCapacity(allocator, 2);
 
-            self.entries.items.appendAssumeCapacity(.{ .binop_lhs = lhs });
-            self.entries.items.appendAssumeCapacity(.{ .binop_rhs = rhs });
+            // Store binop as two consecutive nodes
+            // First node is lhs, second is rhs with sign bit set to mark end
+            self.entries.items.appendAssumeCapacity(lhs);
+
+            // Mark rhs as the last element with sign bit
+            const rhs_val = @intFromEnum(rhs);
+            const sign_bit = std.math.minInt(i32);
+            const marked_val = rhs_val | sign_bit;
+            const marked_rhs = @as(NodeIdx, @enumFromInt(marked_val));
+            self.entries.items.appendAssumeCapacity(marked_rhs);
 
             return idx;
         }
 
         pub const Iterator = struct {
-            entries: []const Entry,
+            entries: []const NodeIdx,
             index: usize,
             done: bool,
             single_element: ?NodeIdx, // For single-element optimization
@@ -112,7 +114,7 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
                     return null;
                 }
 
-                const node_idx = it.entries[it.index].node_idx;
+                const node_idx = it.entries[it.index];
                 const node_val = @intFromEnum(node_idx);
 
                 it.index += 1;
@@ -177,10 +179,17 @@ pub fn NodeSlices(comptime NodeIdx: type) type {
             std.debug.assert(@intFromEnum(idx) >= 0); // Not encoded directly
 
             const entry_idx = @as(usize, @intCast(@intFromEnum(idx)));
-            // The binop entries are stored as .binop_lhs and .binop_rhs
-            // We need to extract the actual node indices from these entries
-            const lhs = self.entries.items.items[entry_idx].binop_lhs;
-            const rhs = self.entries.items.items[entry_idx + 1].binop_rhs;
+            // The binop entries are stored as two consecutive nodes
+            // First is lhs, second is rhs (with sign bit set)
+            const lhs = self.entries.items.items[entry_idx];
+            const rhs_marked = self.entries.items.items[entry_idx + 1];
+
+            // Clear the sign bit from rhs to get the original value
+            const rhs_val = @intFromEnum(rhs_marked);
+            const sign_bit = std.math.minInt(i32);
+            const rhs_cleared = rhs_val & ~@as(i32, sign_bit);
+            const rhs = @as(NodeIdx, @enumFromInt(rhs_cleared));
+
             return .{
                 .lhs = lhs,
                 .rhs = rhs,

@@ -24,77 +24,60 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenC
 # PARSE
 ~~~clojure
 (block
-  (lc "a")
-  (unary_not <unary>)
-  (uc "Str")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Str")
-  (lc "b")
-  (unary_not <unary>)
-  (uc "Str")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Str")
+  (binop_colon
+    (not_lc "a")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (binop_colon
+    (not_lc "b")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
 package [
-	a!,
-	b!
-] packages {a, ("a", b): "b"}
+	a,
+	b,
+] packages {a, (
+	"a",
+	b
+): "b"}
 
-a<malformed>!Str
-<malformed>
-Str
-b<malformed>!Str
-<malformed>
-Str
+a!: (Str => Str)
+b!: (Str => Str)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 11:4 to 11:4
-
-**Parse Error**
-at 11:10 to 11:10
-
-**Parse Error**
-at 12:4 to 12:4
-
-**Parse Error**
-at 12:10 to 12:10
+**Unsupported Node**
+at 11:6 to 11:16
 
 **Unsupported Node**
-at 11:4 to 11:4
-
-**Unsupported Node**
-at 11:10 to 11:10
-
-**Unsupported Node**
-at 12:4 to 12:4
-
-**Unsupported Node**
-at 12:10 to 12:10
+at 12:6 to 12:16
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "a")
-  (Expr.unary_not)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "b")
-  (Expr.unary_not)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

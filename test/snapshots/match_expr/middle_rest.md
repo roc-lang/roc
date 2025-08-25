@@ -17,11 +17,19 @@ match items {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <25 branches>)
+(match <24 branches>)
 ~~~
 # FORMATTED
 ~~~roc
-when items is { [(first, <unary_double_dot>)], last, <malformed>, <malformed>, first + last, [(a, b, <unary_double_dot>)], middle, (x, y) } -> <malformed> => ((a + b) + x) + y
+when items is {
+	[first, ..],
+	last,
+	first + last,
+	[a, b, ..as],
+	middle,
+	x,
+	y
+} -> ] => ((a + b) + x) + y
 ~~~
 # EXPECTED
 NIL
@@ -57,7 +65,7 @@ at 1:1 to 3:30
 at 3:30 to 3:30
 
 **Unsupported Node**
-at 1:13 to 3:32
+at 1:13 to 3:31
 
 **Unsupported Node**
 at 3:30 to 3:48

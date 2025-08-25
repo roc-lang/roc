@@ -61,8 +61,8 @@ module [
 	stringify,
 ]
 
-stringify: ((a -> Str where a() | .to_str: a) -> Str)
-stringify = \value -> value | .to_str()
+stringify: ((a -> Str where module(a) | .to_str: a) -> Str)
+stringify = \value -> value.to_str()
 ~~~
 # EXPECTED
 NIL

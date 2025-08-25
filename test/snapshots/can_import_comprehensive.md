@@ -137,34 +137,31 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~roc
 module []
 
-
-import json exposing [Json]
-import http exposing [Client, Http, get, post]
-import utils exposing [String, Str]
+import json.Json
+import http.Client as Http exposing [get, post]
+import utils.String as Str
 
 main = {
-	client = Http | .get
-	parser = Json | .utf8
-	helper = Str | .trim
-	
-
-# Test direct module access
-result1 = Json | .parse
-	
-
-# Test aliased module access
-result2 = Http | .post
-	
-
-# Test exposed items (should work without module prefix)
-result3 = get
+	client = Http.get
+	parser = Json.utf8
+	helper = Str.trim
+	result1 = Json.parse
+	result2 = Http.post
+	result3 = get
 	result4 = post
 	
 
 # Test multiple qualified access
-combined = Str | .concat(
-
-(client, parser, helper, result1, result2, result3, result4, combined, <malformed>))
+combined = Str.concat((
+		client,
+		parser,
+		helper,
+		result1,
+		result2,
+		result3,
+		result4,
+		combined
+	))
 }
 ~~~
 # EXPECTED

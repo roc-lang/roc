@@ -24,21 +24,21 @@ KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Flo
 ~~~roc
 when x is {
 	1e100
-	<malformed>
+	=>
 	"very large number"
 	1e-40
-	<malformed>
+	=>
 	"very small number"
 	1.7976931348623157e308
-	<malformed>
+	=>
 	"near f64 max"
 	0.0
-	<malformed>
+	=>
 	"zero"
 	value
-	<malformed>
+	=>
 	"other"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

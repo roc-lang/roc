@@ -51,7 +51,7 @@ module [
 	convert_me,
 ]
 
-convert_me: ((a -> b where a() | .convert: a) -> b)
+convert_me: ((a -> b where module(a) | .convert: a) -> b)
 convert_me = ...
 ~~~
 # EXPECTED

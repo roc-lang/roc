@@ -9,7 +9,7 @@ mo|%
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpBar OpPercent ~~~
+LowerIdent OpBar MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
 (block
@@ -21,7 +21,7 @@ LowerIdent OpBar OpPercent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-mo | <malformed>
+mo | %
 ~~~
 # EXPECTED
 NIL

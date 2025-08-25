@@ -33,9 +33,8 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 ~~~roc
 module [
 	a,
-	b
+	b,
 ]
-
 
 a = 'a'
 b = 'a'

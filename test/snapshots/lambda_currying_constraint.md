@@ -146,19 +146,24 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 # FORMATTED
 ~~~roc
 module [
-	makeAdder, curriedAdd, applyTwice
+	makeAdder,
+	curriedAdd,
+	applyTwice,
 ]
 
-
-# Function that returns a function with polymorphic type
 makeAdder: (a -> (a -> a))
 makeAdder = \x -> \y -> x + y
 
 # Should constrain the literal 5 to I64
 curriedAdd: (I64 -> I64)
 curriedAdd = makeAdder(5)
+
+# Higher-order function that applies a function twice
 applyTwice: ((a -> a) -> (a -> a))
-applyTwice = \(f, x) -> f(f(x))
+applyTwice = \(
+	f,
+	x
+) -> f(f(x))
 addThreeTwice: (I64 -> I64)
 addThreeTwice = \n -> applyTwice(\x -> (x + 3, n))
 ~~~

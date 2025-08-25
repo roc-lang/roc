@@ -24,14 +24,12 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 ~~~roc
 when ... is {
 	{ name, address: { city, country } }
-	<malformed>
+	=>
 	"${name} lives in ${city}, ${country}"
-	{
-		person: (({ name, age }, location): {
-			city
-		})
-	}
-	<malformed>
+	{ person: { name, age }, location: {
+		city
+	} }
+	=>
 	"${name} (${age.to_str()}) from ${city}"
 	{
 		data: {
@@ -40,17 +38,17 @@ when ... is {
 			}
 		}
 	}
-	<malformed>
+	=>
 	"Deep nested: ${value}"
 	{
 		simple
 	}
-	<malformed>
+	=>
 	"Simple: ${simple}"
 	{  }
-	<malformed>
+	=>
 	"empty"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -20,22 +20,18 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 (block
   (binop_equals
     (lc "person")
-    (block
+    (record_literal
       (binop_colon
         (lc "name")
-        (binop_colon
-          (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (str_literal_big "Alice")
-                (lc "age")
-              )
-              (num_literal_i32 30)
-            )
-            (lc "city")
-          )
-          (str_literal_big "Boston")
-        )
+        (str_literal_big "Alice")
+      )
+      (binop_colon
+        (lc "age")
+        (num_literal_i32 30)
+      )
+      (binop_colon
+        (lc "city")
+        (str_literal_big "Boston")
       )
     )
   )
@@ -83,20 +79,15 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 # FORMATTED
 ~~~roc
 module [
-	person, final
+	person,
+	final,
 ]
 
-
-person = {
-	name: ((("Alice", age): 30, city): "Boston")
+person = { name: "Alice", age: 30, city: "Boston" }
+updated_one = { ..person }age: 31
 }
-updated_one = { ..person }
-age: 31<malformed>
-updated2 = { ..updated_one }
-city: "New York"<malformed>
-final = { ..updated2 }
-name: (("Alice Smith", age): 32)
-<malformed>
+updated2 = { ..updated_one }city: "New York"}
+final = { ..updated2 }name: (("Alice Smith", age): 32)
 ~~~
 # EXPECTED
 NIL
@@ -118,9 +109,6 @@ at 6:9 to 6:23
 
 **Parse Error**
 at 6:52 to 6:52
-
-**Unsupported Node**
-at 3:40 to 3:41
 
 **Unsupported Node**
 at 4:15 to 4:23

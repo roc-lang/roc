@@ -44,16 +44,14 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
   )
   (binop_colon_equals
     (uc "RecordType")
-    (block
+    (record_literal
       (binop_colon
         (lc "field")
-        (binop_colon
-          (tuple_literal
-            (underscore)
-            (lc "other")
-          )
-          (uc "U32")
-        )
+        (underscore)
+      )
+      (binop_colon
+        (lc "other")
+        (uc "U32")
       )
     )
   )
@@ -75,13 +73,11 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
   (binop_colon_equals
     (uc "TagType")
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Some")
-          (underscore)
-        )
-        (uc "None")
+      (apply_uc
+        (uc "Some")
+        (underscore)
       )
+      (uc "None")
     )
   )
 )
@@ -90,18 +86,19 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
 ~~~roc
 module []
 
-
 MyType: _
 
 OtherType := _
 
 ComplexType := List(_)
-RecordType := {
-	field: ((_, other): U32)
-}
+
+RecordType := { field: _, other: U32 }
+
 FunctionType := _ -> _
+
 TupleType := (_, U32, _)
-TagType := [(Some(_), None)]
+
+TagType := [Some(_), None]
 ~~~
 # EXPECTED
 NIL

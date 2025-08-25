@@ -20,9 +20,13 @@ KwModule UpperIdent CloseSquare UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [
+	P,
+	],
+	F,
+]
 
-P<malformed>
+P]
 F
 ~~~
 # EXPECTED

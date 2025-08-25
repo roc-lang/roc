@@ -58,9 +58,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon U
 # FORMATTED
 ~~~roc
 module [
-	MyType, processValue
+	MyType,
+	processValue,
 ]
-
 
 MyType: UnknownType
 
@@ -68,6 +68,7 @@ processValue: (UndeclaredResult -> Str)
 processValue = \value -> {
 	"processed"
 }
+
 AnotherType: SomeModule.MissingType
 ~~~
 # EXPECTED

@@ -114,8 +114,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenC
 ~~~roc
 module []
 
-
-# Regular function with var usage
 processItems = \items -> {
 	var count_ = 0
 	var total_ = 0
@@ -132,7 +130,9 @@ nestedFunc = \_ -> {
 		total_ = total_ * 2 # Should cause error - different function
 		count_: count_
 	}
-	result = nestedFunc({  })
+	
+
+result = nestedFunc({  })
 	total_ + result
 }
 ~~~

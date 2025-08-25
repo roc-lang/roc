@@ -12,25 +12,33 @@ get_name!({}) ?? "Bob"
 LowerIdent OpBang OpenRound OpenCurly CloseCurly CloseRound OpDoubleQuestion String ~~~
 # PARSE
 ~~~clojure
-(lc "get_name")
+(binop_double_question
+  (apply_anon
+    (not_lc "get_name")
+    (record_literal)
+  )
+  (str_literal_small "Bob")
+)
 ~~~
 # FORMATTED
 ~~~roc
-get_name
+get_name!({  }) ?? "Bob"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:1 to 1:23
+
 # CANONICALIZE
 ~~~clojure
-(Expr.lookup "get_name")
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lookup :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

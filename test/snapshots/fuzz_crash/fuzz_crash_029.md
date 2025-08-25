@@ -30,32 +30,17 @@ KwPlatform String KwRequires OpenCurly LowerIdent OpBang OpColon UpperIdent Open
 ~~~clojure
 (block
   (malformed malformed:expr_unexpected_token)
+  (str_literal_small "..l")
   (malformed malformed:expr_unexpected_token)
-  (record_literal)
+  (lc "mmen")
   (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (list_literal)
-  (malformed malformed:expr_unexpected_token)
-  (lc "vides")
-  (block
-    (binop_colon
-      (lc "pkg")
-      (tuple_literal
-        (str_literal_small "..l")
-        (lc "mmen")
-      )
-    )
-  )
   (malformed malformed:expr_unexpected_token)
   (list_literal
-    (tuple_literal
-      (apply_uc
-        (uc "Ok")
-        (lc "world")
-      )
-      (lc "n")
+    (apply_uc
+      (uc "Ok")
+      (lc "world")
     )
+    (lc "n")
   )
   (lc "ar")
   (malformed malformed:expr_unexpected_token)
@@ -64,99 +49,70 @@ KwPlatform String KwRequires OpenCurly LowerIdent OpBang OpColon UpperIdent Open
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" # Ce requires {n} <malformed>! exposes  [
-	# Cd
-	# Ce
-	# Co		{	} #ose
-	# d
-	List,
-]
+platform "foo" # Ce requires {(
+	n!: List(Str) => {  },
+)} exposes #rd
+		[ #
+		] # Cse
+	packages # Cd
+		vides # Cd exposes  []
 
-<malformed>
-<malformed>
-{  }<malformed>
-<malformed>
-<malformed>
-[] # Cse
-<malformed>
-vides # Cd
-{
-	pkg: (
-		"..l",
-		mmen,
-	)
-}
-<malformed>
+:"..l"
+mmen
+} # Cose
+provides # Cd
 [
-	(
-		Ok(world),
-		n,
-	),
-]ar<malformed>
-<malformed>
+	Ok(world),
+	n,
+]ar
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 5:5
-
-**Parse Error**
-at 1:1 to 5:5
-
-**Parse Error**
-at 5:7 to 5:7
-
-**Parse Error**
-at 1:1 to 5:9
-
-**Expected Exposes**
-at 1:1 to 5:9
-
-**Expected Open Square Bracket**
-at 1:1 to 5:9
-
-**Expected Close Square Bracket**
-at 1:1 to 5:13
-
-**Expected Packages**
-at 1:1 to 5:13
-
-**Parse Error**
-at 1:1 to 5:13
-
-**Parse Error**
-at 5:13 to 5:13
-
-**Expected Close Curly Brace**
-at 1:1 to 5:14
-
-**Parse Error**
-at 1:1 to 5:14
-
-**Parse Error**
-at 1:1 to 5:14
-
-**Parse Error**
-at 1:1 to 5:17
-
-**Parse Error**
-at 5:17 to 5:17
-
-**Parse Error**
-at 5:19 to 5:19
-
-**Parse Error**
-at 5:24 to 5:24
-
-**Parse Error**
 at 6:4 to 6:4
+
+**Parse Error**
+at 1:1 to 7:2
+
+**Parse Error**
+at 1:1 to 7:2
 
 **Parse Error**
 at 7:2 to 7:2
 
 **Parse Error**
-at 10:2 to 10:2
+at 1:1 to 8:3
+
+**Expected Exposes**
+at 1:1 to 8:3
+
+**Parse Error**
+at 1:1 to 11:3
+
+**Parse Error**
+at 12:3 to 12:3
+
+**Expected Close Curly Brace**
+at 1:1 to 13:1
+
+**Parse Error**
+at 1:1 to 13:1
+
+**Parse Error**
+at 1:1 to 13:1
+
+**Parse Error**
+at 1:1 to 13:4
+
+**Parse Error**
+at 13:4 to 13:4
+
+**Parse Error**
+at 13:11 to 13:11
+
+**Parse Error**
+at 13:19 to 13:19
 
 **Parse Error**
 at 14:2 to 14:2
@@ -174,34 +130,19 @@ at 16:3 to 16:3
 at 17:3 to 17:3
 
 **Unsupported Node**
-at 5:17 to 5:17
+at 13:4 to 13:4
 
 **Unsupported Node**
-at 5:19 to 5:19
+at 13:11 to 13:11
 
 **Unsupported Node**
-at 5:24 to 5:24
-
-**Unsupported Node**
-at 6:4 to 6:4
-
-**Unsupported Node**
-at 7:2 to 7:2
-
-**Unsupported Node**
-at 8:3 to 8:4
-
-**Unsupported Node**
-at 10:2 to 10:2
-
-**Unsupported Node**
-at 1:1 to 1:1
+at 13:19 to 13:19
 
 **Unsupported Node**
 at 14:2 to 14:2
 
 **Unsupported Node**
-at 15:3 to 15:20
+at 15:3 to 15:19
 
 **Unsupported Node**
 at 16:3 to 16:3
@@ -213,21 +154,10 @@ at 17:3 to 17:3
 ~~~clojure
 (Expr.block
   (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.record_literal
-  )
+  (Expr.lookup "mmen")
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.lookup "vides")
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "pkg")
-      (Expr.malformed)
-    )
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.lookup "ar")

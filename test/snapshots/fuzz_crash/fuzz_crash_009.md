@@ -31,10 +31,9 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-f {
+f{
 	o,
-	<malformed>,
-}foo = <malformed>
+}foo = "onmo %
 ~~~
 # EXPECTED
 NIL

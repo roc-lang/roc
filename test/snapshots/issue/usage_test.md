@@ -42,7 +42,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~roc
 module []
 
-
 UnusedType := _
 
 UsedType := _

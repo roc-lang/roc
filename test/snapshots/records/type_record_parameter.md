@@ -15,22 +15,18 @@ LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpCo
 (binop_colon
   (lc "process_things")
   (binop_thin_arrow
-    (block
+    (record_literal
       (binop_colon
         (lc "name")
-        (binop_colon
-          (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (uc "Str")
-                (lc "age")
-              )
-              (uc "U32")
-            )
-            (lc "thing")
-          )
-          (lc "a")
-        )
+        (uc "Str")
+      )
+      (binop_colon
+        (lc "age")
+        (uc "U32")
+      )
+      (binop_colon
+        (lc "thing")
+        (lc "a")
       )
     )
     (binop_thin_arrow
@@ -45,9 +41,7 @@ LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpCo
 ~~~
 # FORMATTED
 ~~~roc
-process_things: ({
-	name: (((Str, age): U32, thing): a)
-} -> ((a -> Str) -> Str))
+process_things: ({ name: Str, age: U32, thing: a } -> ((a -> Str) -> Str))
 ~~~
 # EXPECTED
 NIL

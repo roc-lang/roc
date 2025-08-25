@@ -59,7 +59,7 @@ OpenCurly LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerId
 ~~~
 # FORMATTED
 ~~~roc
- {
+{
 	u8: 123,
 	u8,
 	u16: 123,

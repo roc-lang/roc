@@ -19,7 +19,7 @@ UpperIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-List | .map
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

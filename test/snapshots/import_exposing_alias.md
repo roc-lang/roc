@@ -39,16 +39,14 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
     (block
       (binop_equals
         (lc "data")
-        (block
+        (record_literal
           (binop_colon
             (lc "name")
-            (binop_colon
-              (tuple_literal
-                (str_literal_small "Bob")
-                (lc "age")
-              )
-              (num_literal_i32 25)
-            )
+            (str_literal_small "Bob")
+          )
+          (binop_colon
+            (lc "age")
+            (num_literal_i32 25)
           )
         )
       )
@@ -77,13 +75,13 @@ module [
 	main,
 ]
 
-import json exposing [Json, decode]<malformed>fromJson<malformed>
+import json.Json exposing [decode]
+asfromJson
 encode
-<malformed>toJson<malformed>
+astoJson]
+
 main = {
-	data = {
-		name: (("Bob", age): 25)
-	}
+	data = { name: "Bob", age: 25 }
 	encoded = toJson(data)
 	decoded = fromJson(encoded)
 	decoded
@@ -118,9 +116,6 @@ at 3:55 to 3:55
 
 **Unsupported Node**
 at 3:64 to 3:64
-
-**Unsupported Node**
-at 6:27 to 6:28
 
 # CANONICALIZE
 ~~~clojure

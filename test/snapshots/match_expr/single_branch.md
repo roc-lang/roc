@@ -20,9 +20,9 @@ KwMatch LowerIdent OpenCurly LowerIdent OpFatArrow LowerIdent OpPlus Int CloseCu
 ~~~roc
 when value is {
 	x
-	<malformed>
+	=>
 	x + 1
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

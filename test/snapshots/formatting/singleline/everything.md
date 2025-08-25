@@ -172,26 +172,22 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
   )
   (binop_colon
     (uc "E")
-    (block
+    (record_literal
       (binop_colon
         (lc "a")
-        (binop_colon
-          (tuple_literal
-            (uc "Str")
-            (lc "b")
-          )
-          (uc "Str")
-        )
+        (uc "Str")
+      )
+      (binop_colon
+        (lc "b")
+        (uc "Str")
       )
     )
   )
   (binop_colon
     (uc "F")
     (list_literal
-      (tuple_literal
-        (uc "A")
-        (uc "B")
-      )
+      (uc "A")
+      (uc "B")
     )
   )
   (binop_colon
@@ -224,31 +220,25 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
         (block
           (binop_equals
             (lc "h1")
-            (block
+            (record_literal
               (binop_colon
                 (lc "h11")
-                (binop_colon
-                  (tuple_literal
-                    (binop_colon
-                      (tuple_literal
-                        (lc "x")
-                        (lc "h12")
-                      )
-                      (lc "x")
-                    )
-                    (lc "h13")
+                (lc "x")
+              )
+              (binop_colon
+                (lc "h12")
+                (lc "x")
+              )
+              (binop_colon
+                (lc "h13")
+                (record_literal
+                  (binop_colon
+                    (lc "h131")
+                    (lc "x")
                   )
-                  (block
-                    (binop_colon
-                      (lc "h131")
-                      (binop_colon
-                        (tuple_literal
-                          (lc "x")
-                          (lc "h132")
-                        )
-                        (lc "y")
-                      )
-                    )
+                  (binop_colon
+                    (lc "h132")
+                    (lc "y")
                   )
                 )
               )
@@ -277,10 +267,8 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
           (binop_equals
             (lc "h4")
             (list_literal
-              (tuple_literal
-                (lc "x")
-                (lc "y")
-              )
+              (lc "x")
+              (lc "y")
             )
           )
           (binop_equals
@@ -290,7 +278,7 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
               (lc "y")
             )
           )
-          (match <175 branches>)
+          (match <174 branches>)
         )
       )
       (args
@@ -307,45 +295,51 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-
-# Import exposing
 import I1 exposing [I11, I12]
-import I2 exposing [I21]<malformed>Ias1<malformed>
+import I2 exposing [I21]
+asIas1
 I22
-<malformed>Ias2<malformed>
-A(a): (((a where a() | .a1: (a, a)) -> Str, a() | .a2): (a, a) -> Str)
-B(b): (((b where b() | .b1: (b, b)) -> Str, b() | .b2): (b, b) -> Str)
+asIas2]
+
+# Where constraint
+A(a): ((
+	(a where module(a) | .a1: (a, a)) -> Str,
+	module(a) | .a2
+): (a, a) -> Str)
+B(b): ((
+	(b where module(b) | .b1: (b, b)) -> Str,
+	module(b) | .b2
+): (b, b) -> Str)
 C((a, b)): (a, b)
 D((a, b)): C((a, b))
-E: {
-	a: ((Str, b): Str)
-}
-F: [(A, B)]
-g: (e -> e where e() | A, e() | B)
-h = \(x, y) -> {
-	h1 = {
-		h11: (((x, h12): x, h13): {
-			h131: ((x, h132): y)
-		})
-	}
+E: { a: Str, b: Str }
+F: [A, B]
+g: (
+	e -> e where module(e) | A,
+	module(e) | B
+)h = \(
+	x,
+	y
+) -> {
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 	h2 = h((x, y))
 	h3 = A((x, y))
-	h4 = [(x, y)]
+	h4 = [x, y]
 	h5 = (x, y)
 	when x is {
 		Z1((a, b))
-		<malformed>
+		=>
 		a: a
 		Z2((a, b))
-		<malformed>
+		=>
 		a: a
 		Z3({ a: a, b: b })
-		<malformed>
+		=>
 		a: a
-		Z4([(a, b)])
-		<malformed>
+		Z4([a, b])
+		=>
 		a: a
-	} -> <malformed>
+	} -> 
 }
 ~~~
 # EXPECTED
@@ -415,10 +409,7 @@ at 9:59 to 9:74
 at 11:16 to 11:17
 
 **Unsupported Node**
-at 13:18 to 13:18
-
-**Unsupported Node**
-at 14:5 to 15:1
+at 14:5 to 14:11
 
 **Unsupported Node**
 at 1:1 to 1:1
@@ -459,10 +450,11 @@ at 18:5 to 18:12
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "a")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "b")
+        (Expr.apply_tag)
       )
     )
   )

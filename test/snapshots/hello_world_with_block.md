@@ -28,22 +28,27 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "pf")
     (uc "Stdout")
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "world")
-        (str_literal_big "World")
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "world")
+            (str_literal_big "World")
+          )
+          (apply_anon
+            (binop_pipe
+              (uc "Stdout")
+              (not_lc "line")
+            )
+            (str_literal_big "Hello, world!")
+          )
+        )
       )
-      (binop_pipe
-        (uc "Stdout")
-        (dot_lc "line")
+      (args
+        (underscore)
       )
-      (unary_not <unary>)
     )
   )
 )
@@ -52,46 +57,47 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 # Hello world!
 # Multiline comments?
-app { # Hello world!
+app
+{
+	# Hello world!
+	# Multiline comments?
+	# Hello world!
 # Multiline comments?
-pf: ("../basic-cli/platform.roc" platform [main]) }
+pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout]
+import pf.Stdout
 
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	world = "World"
 	# Hello
-Stdout | .line
-	"Hello, world!"!
+Stdout.line!("Hello, world!")
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 8:7 to 8:7
-
 **Unsupported Node**
 at 6:1 to 6:17
 
 **Unsupported Node**
-at 8:5 to 8:7
+at 8:1 to 8:6
 
 **Unsupported Node**
-at 11:2 to 11:8
+at 8:9 to 8:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> [True, False]_others")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

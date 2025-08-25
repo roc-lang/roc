@@ -68,13 +68,13 @@ import MyResultModule
 handleResult: (MyResultModule.MyResultType((Str, I32)) -> Str)
 handleResult = \result -> {
 	when result is {
-		(MyResultModule.MyResultType) | Ok(value)
-		<malformed>
+		MyResultModule.MyResultType | Ok(value)
+		=>
 		value: value
-		(MyResultModule.MyResultType) | Err(code)
-		<malformed>
+		MyResultModule.MyResultType | Err(code)
+		=>
 		"Error: $(code.toStr())"
-	} -> <malformed>
+	} -> 
 }
 ~~~
 # EXPECTED

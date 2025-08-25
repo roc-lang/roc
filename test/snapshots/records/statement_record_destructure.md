@@ -18,10 +18,8 @@ KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma Lowe
   (binop_equals
     (record_literal
       (lc "name")
-      (tuple_literal
-        (lc "age")
-        (lc "email")
-      )
+      (lc "age")
+      (lc "email")
     )
     (lc "person")
   )
@@ -29,16 +27,13 @@ KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma Lowe
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-
-{ name, (age, email) } = person
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 3:21
+at 3:1 to 3:20
 
 # CANONICALIZE
 ~~~clojure

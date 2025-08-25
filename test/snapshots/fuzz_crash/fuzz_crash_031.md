@@ -32,7 +32,7 @@ mule
 
 #el
 vavar
-t = <malformed>
+t = '
 ~~~
 # EXPECTED
 NIL

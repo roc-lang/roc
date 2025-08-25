@@ -18,11 +18,11 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
 ~~~roc
 package [] packages {d, {
 	{
-		d: <malformed>
+		d: ||
 		{
 			0
 		}
-		<malformed>
+		->
 		R
 	}
 }}

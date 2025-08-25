@@ -20,11 +20,7 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if bool {
-	1
-} else {
-	2
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

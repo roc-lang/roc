@@ -95,8 +95,10 @@ module [
 	Hash,
 ]
 
-Hash((a, hasher)): ((a # After var where a() | .hash: hasher) -> hasher, hasher() | Hasher)
-Decode(a): (a where a() | .decode(List(U8) -> (<malformed> -> a)))
+Hash((a, hasher)) # After header: (
+	(a # After var where module(a) | .hash: hasher # After method) # After method -> hasher,	# After first clause
+	module(hasher) | Hasher
+)Decode(a): (a where module(a) | .decode(List(U8) -> () -> a)))
 ~~~
 # EXPECTED
 NIL

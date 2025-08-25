@@ -14,38 +14,30 @@ LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon
 ~~~clojure
 (binop_equals
   (lc "person")
-  (block
+  (record_literal
     (binop_colon
       (lc "name")
-      (binop_colon
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (str_literal_big "Alice")
-              (lc "age")
-            )
-            (num_literal_i32 30)
-          )
-          (lc "email")
-        )
-        (str_literal_big "alice@example.com")
-      )
+      (str_literal_big "Alice")
+    )
+    (binop_colon
+      (lc "age")
+      (num_literal_i32 30)
+    )
+    (binop_colon
+      (lc "email")
+      (str_literal_big "alice@example.com")
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-person = {
-	name: ((("Alice", age): 30, email): "alice@example.com")
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:41 to 1:42
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.assign)

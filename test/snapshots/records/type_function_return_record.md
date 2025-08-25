@@ -12,23 +12,51 @@ create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 LowerIdent OpBang OpColon UpperIdent Comma UpperIdent OpFatArrow OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(lc "create_user")
+(binop_colon
+  (not_lc "create_user")
+  (binop_thick_arrow
+    (uc "Str")
+    (binop_thick_arrow
+      (uc "U32")
+      (record_literal
+        (binop_colon
+          (lc "name")
+          (uc "Str")
+        )
+        (binop_colon
+          (lc "age")
+          (uc "U32")
+        )
+        (binop_colon
+          (lc "id")
+          (uc "U64")
+        )
+        (binop_colon
+          (lc "active")
+          (uc "Bool")
+        )
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-create_user
+create_user!: (Str => (U32 => { name: Str, age: U32, id: U64, active: Bool }))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:1 to 1:77
+
 # CANONICALIZE
 ~~~clojure
-(Expr.lookup "create_user")
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lookup :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc

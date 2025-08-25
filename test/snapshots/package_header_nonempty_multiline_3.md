@@ -19,8 +19,9 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 # FORMATTED
 ~~~roc
 package [
-	something, SomeType,
-] packages {somePkg, ("../main.roc", <malformed>)}
+	something,
+	SomeType,
+] packages {somePkg, ("../main.roc")}
 
 ~~~
 # EXPECTED

@@ -86,33 +86,30 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
   (binop_colon_equals
     (uc "Color")
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "RGB")
-          (tuple_literal
-            (uc "U8")
-            (uc "U8")
-            (uc "U8")
-          )
+      (apply_uc
+        (uc "RGB")
+        (tuple_literal
+          (uc "U8")
+          (uc "U8")
+          (uc "U8")
         )
-        (apply_uc
-          (uc "RGBA")
-          (tuple_literal
-            (uc "U8")
-            (uc "U8")
-            (uc "U8")
-            (uc "Dec")
-          )
+      )
+      (apply_uc
+        (uc "RGBA")
+        (tuple_literal
+          (uc "U8")
+          (uc "U8")
+          (uc "U8")
+          (uc "Dec")
         )
-        (apply_uc
-          (uc "Named")
-          (uc "Str")
-        )
-        (apply_uc
-          (uc "Hex")
-          (uc "Str")
-        )
-        (malformed malformed:expr_unexpected_token)
+      )
+      (apply_uc
+        (uc "Named")
+        (uc "Str")
+      )
+      (apply_uc
+        (uc "Hex")
+        (uc "Str")
       )
     )
   )
@@ -287,19 +284,18 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
               )
             )
           )
-          (match <180 branches>)
+          (match <179 branches>)
           (binop_colon
             (lc "to_str")
-            (binop_thin_arrow
-              (uc "Color")
-              (uc "Str")
-            )
+            (uc "Color")
           )
+          (malformed malformed:expr_unexpected_token)
+          (uc "Str")
           (binop_equals
             (lc "to_str")
             (lambda
               (body
-                (match <226 branches>)
+                (match <223 branches>)
               )
               (args
                 (lc "color")
@@ -361,18 +357,17 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
           )
           (binop_colon
             (lc "named")
-            (binop_thin_arrow
-              (uc "Str")
-              (apply_uc
-                (uc "Result")
-                (tuple_literal
-                  (uc "Color")
-                  (list_literal
-                    (apply_uc
-                      (uc "UnknownColor")
-                      (uc "Str")
-                    )
-                  )
+            (uc "Str")
+          )
+          (malformed malformed:expr_unexpected_token)
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (uc "Color")
+              (list_literal
+                (apply_uc
+                  (uc "UnknownColor")
+                  (uc "Str")
                 )
               )
             )
@@ -381,7 +376,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
             (lc "named")
             (lambda
               (body
-                (if_else <284 branches>)
+                (if_else <279 branches>)
               )
               (args
                 (lc "str")
@@ -401,11 +396,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
                         (dot_lc "from_list")
                       )
                       (list_literal
-                        (tuple_literal
-                          (str_literal_big "AliceBlue")
-                          (str_literal_big "AntiqueWhite")
-                          (str_literal_small "Aqua")
-                        )
+                        (str_literal_big "AliceBlue")
+                        (str_literal_big "AntiqueWhite")
+                        (str_literal_small "Aqua")
                       )
                     )
                   )
@@ -443,20 +436,32 @@ module [
 	named,
 ]
 
-
 Color := [
-	(RGB((U8, U8, U8)), RGBA((U8, U8, U8, Dec)), Named(Str), Hex(Str), <malformed>),
+	RGB((U8, U8, U8)),
+	RGBA((U8, U8, U8, Dec)),
+	Named(Str),
+	Hex(Str),
 ]
+
 rgb: (U8 -> (U8 -> (U8 -> Color)))
-rgb = \(r, g, b) -> Color.RGB((r, g, b))
+rgb = \(
+	r,
+	g,
+	b
+) -> Color.RGB((r, g, b))
 rgba: (U8 -> (U8 -> (U8 -> (U8 -> Color))))
-rgba = \(r, g, b, a) -> {
-	rounded = a | .to_frac() / 255.0
+rgba = \(
+	r,
+	g,
+	b,
+	a
+) -> {
+	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
 hex: (Str -> Result((Color, [InvalidHex(Str)])))
 hex = \str -> {
-	bytes = str | .to_utf8()
+	bytes = str.to_utf8()
 	is_char_in_hex_range = \b -> (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
     match bytes {
@@ -531,7 +536,8 @@ hex = \str -> {
 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("
 	when bytes is {
-		[('#', a, b, c, d, e, f] => {
+		[
+			'#', a, b, c, d, e, f] => {
             is_valid =
                 a.is_char_in_hex_range()
                 and b.is_char_in_hex_range()
@@ -540,51 +546,62 @@ hex = \str -> {
                 and e.is_char_in_hex_range()
                 and f.is_char_in_hex_range()
 
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex(", a, b, c, d, e, f)]
-		<malformed>
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex(",
+			a,
+			b,
+			c,
+			d,
+			e,
+			f
+		]
+		=>
 		{
-			is_valid = ((((a | .is_char_in_hex_range() && b | .is_char_in_hex_range()) && c | .is_char_in_hex_range()) && d | .is_char_in_hex_range()) && e | .is_char_in_hex_range()) && f | .is_char_in_hex_range()
-			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+			is_valid = ((((a.is_char_in_hex_range() && b.is_char_in_hex_range()) && c.is_char_in_hex_range()) && d.is_char_in_hex_range()) && e.is_char_in_hex_range()) && f.is_char_in_hex_range()
+			if is_valid
+				Ok(Color.Hex(str))
+			else
+				Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
 		_
-		<malformed>
+		=>
 		Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-	} -> <malformed>
-	to_str: (Color -> Str)
+	} -> }
+	to_str: Color
+	->
+	Str
 	to_str = \color -> when color is {
 		Color.RGB((r, g, b))
-		<malformed>
+		=>
 		"rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
 		Color.RGBA((r, g, b, a))
-		<malformed>
+		=>
 		"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
 		Color.Named(inner)
-		<malformed>
+		=>
 		inner: inner
 		Color.Hex(inner)
-		<malformed>
+		=>
 		inner: inner
-	} -> <malformed>
+	} -> expect
 	rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 	expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 	expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
-	named: (Str -> Result((Color, [UnknownColor(Str)])))
-	named = \str -> if str | .is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
+	named: Str
+	->
+	Result((Color, [UnknownColor(Str)]))
+	named = \str -> if str.is_named_color()
+		Ok(Color.Named(str))
+	else
+		Err(UnknownColor("Unknown color ${str}"))
 	is_named_color = \str -> {
-		colors = Set | .from_list([("AliceBlue", "AntiqueWhite", "Aqua")])
-		colors | .contains(str)
+		colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
+		colors.contains(str)
 	}
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 15:1 to 15:1
-
-**Parse Error**
-at 10:10 to 17:1
-
 **Parse Error**
 at 32:5 to 32:17
 
@@ -602,6 +619,9 @@ at 32:5 to 46:1
 
 **Parse Error**
 at 46:1 to 46:1
+
+**Parse Error**
+at 48:16 to 48:16
 
 **Parse Error**
 at 49:18 to 49:30
@@ -625,13 +645,16 @@ at 49:18 to 56:1
 at 56:1 to 56:1
 
 **Parse Error**
+at 60:13 to 60:13
+
+**Parse Error**
 at 62:5 to 63:9
 
 **Parse Error**
 at 27:13 to 72:1
 
 **Unsupported Node**
-at 10:1 to 16:1
+at 10:1 to 15:1
 
 **Unsupported Node**
 at 17:7 to 17:26

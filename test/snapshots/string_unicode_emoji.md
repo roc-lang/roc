@@ -32,11 +32,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 # FORMATTED
 ~~~roc
 module [
-	message, greet
+	message,
+	greet,
 ]
 
-
-# Test that Unicode emojis are properly handled in string literals
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
 
 # Test other Unicode characters

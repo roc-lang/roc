@@ -22,15 +22,15 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~roc
 when value is {
 	Answer
-	<malformed>
+	=>
 	"the answer"
 	Zero
-	<malformed>
+	=>
 	"zero"
 	other
-	<malformed>
+	=>
 	"something else"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

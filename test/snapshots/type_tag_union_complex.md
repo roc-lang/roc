@@ -39,31 +39,27 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (binop_colon
     (uc "Status")
     (list_literal
-      (tuple_literal
-        (uc "Loading")
-        (uc "Complete")
-        (uc "Failed")
-      )
+      (uc "Loading")
+      (uc "Complete")
+      (uc "Failed")
     )
   )
   (binop_colon
     (uc "Result")
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Success")
+      (apply_uc
+        (uc "Success")
+        (uc "Str")
+      )
+      (apply_uc
+        (uc "Error")
+        (uc "Str")
+      )
+      (apply_uc
+        (uc "Warning")
+        (tuple_literal
           (uc "Str")
-        )
-        (apply_uc
-          (uc "Error")
-          (uc "Str")
-        )
-        (apply_uc
-          (uc "Warning")
-          (tuple_literal
-            (uc "Str")
-            (uc "I32")
-          )
+          (uc "I32")
         )
       )
     )
@@ -71,42 +67,36 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (binop_colon
     (uc "Response")
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (uc "Result")
-        )
-        (uc "NetworkError")
-        (uc "ParseError")
+      (apply_uc
+        (uc "Ok")
+        (uc "Result")
       )
+      (uc "NetworkError")
+      (uc "ParseError")
     )
   )
   (binop_colon
     (uc "UserState")
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Active")
-          (uc "Str")
-        )
-        (uc "Inactive")
-        (apply_uc
-          (uc "Suspended")
-          (uc "Str")
-        )
+      (apply_uc
+        (uc "Active")
+        (uc "Str")
+      )
+      (uc "Inactive")
+      (apply_uc
+        (uc "Suspended")
+        (uc "Str")
       )
     )
   )
   (binop_colon
     (uc "ConnectionState")
     (list_literal
-      (tuple_literal
-        (uc "Active")
-        (uc "Disconnected")
-        (apply_uc
-          (uc "Connecting")
-          (uc "Str")
-        )
+      (uc "Active")
+      (uc "Disconnected")
+      (apply_uc
+        (uc "Connecting")
+        (uc "Str")
       )
     )
   )
@@ -146,52 +136,67 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
-Status: [(Loading, Complete, Failed)]
-Result: [(Success(Str), Error(Str), Warning((Str, I32)))]
-Response: [(Ok(Result), NetworkError, ParseError)]
-UserState: [(Active(Str), Inactive, Suspended(Str))]
-ConnectionState: [(Active, Disconnected, Connecting(Str))]
+Status: [Loading, Complete, Failed]
+
+# Tag union with mixed argument types
+Result: [Success(Str), Error(Str), Warning((Str, I32))]
+
+# Nested tag unions
+Response: [Ok(Result), NetworkError, ParseError]
+
+# Multiple tag unions using similar tag names
+UserState: [Active(Str), Inactive, Suspended(Str)]
+ConnectionState: [Active, Disconnected, Connecting(Str)]
+
+# Function using tag unions
 processResult: (Result -> Str)
 processResult = \_result -> "processed"
+
+# Function with nested tag union
 handleResponse: (Response -> Str)
 handleResponse = \_response -> "handled"
-main
-(<malformed>! | _) | {  }
+
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 24:7 to 24:7
+**Unsupported Node**
+at 4:10 to 4:37
 
 **Unsupported Node**
-at 4:10 to 5:1
+at 7:10 to 8:1
 
 **Unsupported Node**
-at 7:10 to 9:1
+at 10:12 to 10:50
 
 **Unsupported Node**
-at 10:12 to 11:1
+at 13:13 to 13:52
 
 **Unsupported Node**
-at 13:13 to 14:1
-
-**Unsupported Node**
-at 14:19 to 15:1
+at 14:19 to 14:58
 
 **Unsupported Node**
 at 17:17 to 17:30
@@ -206,7 +211,10 @@ at 21:18 to 21:33
 at 22:18 to 22:30
 
 **Unsupported Node**
-at 24:5 to 24:7
+at 24:1 to 24:6
+
+**Unsupported Node**
+at 24:9 to 24:13
 
 # CANONICALIZE
 ~~~clojure
@@ -241,13 +249,12 @@ at 24:5 to 24:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

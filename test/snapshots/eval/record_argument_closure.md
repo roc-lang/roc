@@ -33,34 +33,27 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
       )
     )
   )
-  (block
+  (record_literal
     (binop_colon
       (lc "x")
-      (binop_colon
-        (tuple_literal
-          (num_literal_i32 10)
-          (lc "y")
-        )
-        (num_literal_i32 20)
-      )
+      (num_literal_i32 10)
+    )
+    (binop_colon
+      (lc "y")
+      (num_literal_i32 20)
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-\{ x: x, y: y } -> x * y({
-	x: ((10, y): 20)
-})
+\{ x: x, y: y } -> x * y({ x: 10, y: 20 })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
 at 1:2 to 1:11
-
-**Unsupported Node**
-at 1:30 to 1:31
 
 # CANONICALIZE
 ~~~clojure

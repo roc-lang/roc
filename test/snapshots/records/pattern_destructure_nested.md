@@ -14,15 +14,15 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly CloseCurly OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <11 branches>)
+(match <10 branches>)
 ~~~
 # FORMATTED
 ~~~roc
 when person is {
-	{ name, address: { street, (city, zipCode) } }
-	<malformed>
+	{ name, address: { street, city, zipCode } }
+	=>
 	"${name} lives on ${street} in ${city}"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

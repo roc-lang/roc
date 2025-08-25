@@ -38,7 +38,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon
 ~~~roc
 module []
 
-
 FirstType: U64
 SecondType: Str
 ThirdType: List(U8)

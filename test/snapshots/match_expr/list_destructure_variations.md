@@ -25,30 +25,30 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare Lo
 ~~~roc
 when list is {
 	[]
-	<malformed>
+	=>
 	0
 	[x]
-	<malformed>
+	=>
 	x
-	[(first, second)]
-	<malformed>
+	[first, second]
+	=>
 	first + second
-	[(head, <unary_double_dot>)]
+	[head, ..as]
 	tail
-	<malformed>
-	<malformed>
+	]
+	=>
 	head
-	[(One, Two, <unary_double_dot>)]
+	[One, Two, ..as]
 	rest
-	<malformed>
-	<malformed>
+	]
+	=>
 	3
-	[(x, y, z, <unary_double_dot>)]
+	[x, y, z, ..as]
 	more
-	<malformed>
-	<malformed>
+	]
+	=>
 	(x + y) + z
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -20,11 +20,11 @@ KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma 
 ~~~roc
 when (1, 2) is {
 	(x, y)
-	<malformed>
+	as
 	point
-	<malformed>
+	=>
 	point
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -42,7 +42,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~roc
 module []
 
-
 BadBase := _
 
 GoodAlias := BadBase

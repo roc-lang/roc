@@ -20,15 +20,15 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 # FORMATTED
 ~~~roc
 when numbers is {
-	[(first, <unary_double_dot>)]
+	[first, ..as]
 	restNums
-	<malformed>
-	<malformed>
+	]
+	=>
 	restNums
 	[]
-	<malformed>
+	=>
 	[]
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

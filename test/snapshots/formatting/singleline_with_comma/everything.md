@@ -193,57 +193,49 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
   )
   (binop_colon
     (uc "E")
-    (block
+    (record_literal
       (binop_colon
         (lc "a")
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (uc "Str")
-              (lc "b")
-            )
-            (uc "Str")
-          )
-          (malformed malformed:expr_unexpected_token)
-        )
+        (uc "Str")
       )
       (binop_colon
-        (uc "F")
-        (list_literal
-          (tuple_literal
+        (lc "b")
+        (uc "Str")
+      )
+    )
+  )
+  (binop_colon
+    (uc "F")
+    (list_literal
+      (uc "A")
+      (uc "B")
+    )
+  )
+  (binop_colon
+    (lc "g")
+    (binop_equals
+      (tuple_literal
+        (binop_where
+          (binop_thin_arrow
+            (lc "e")
+            (lc "e")
+          )
+          (binop_pipe
+            (apply_module
+              (lc "e")
+            )
             (uc "A")
-            (uc "B")
-            (malformed malformed:expr_unexpected_token)
           )
         )
-      )
-      (binop_colon
-        (lc "g")
-        (binop_equals
-          (tuple_literal
-            (binop_where
-              (binop_thin_arrow
-                (lc "e")
-                (lc "e")
-              )
-              (binop_pipe
-                (apply_module
-                  (lc "e")
-                )
-                (uc "A")
-              )
-            )
-            (binop_pipe
-              (apply_module
-                (lc "e")
-              )
-              (uc "B")
-            )
-            (lc "h")
+        (binop_pipe
+          (apply_module
+            (lc "e")
           )
-          (malformed malformed:expr_unexpected_token)
+          (uc "B")
         )
+        (lc "h")
       )
+      (malformed malformed:expr_unexpected_token)
     )
   )
 )
@@ -252,22 +244,51 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-
-# Import exposing
 import I1 exposing [I11, I12]
-import I2 exposing [I21]<malformed>Ias1<malformed>
+import I2 exposing [I21]
+asIas1
 I22
-<malformed>Ias2<malformed>
-<malformed>
-A(a): (a where a() | .a1: (a -> (a -> (<malformed> -> (Str, a() | .a2): (a -> (a -> (<malformed> -> ((Str, B(b)): b where b() | .b1: (b -> (b -> (<malformed> -> (Str, b() | .b2): (b -> (b -> (<malformed> -> (Str, C((a, b, <malformed>): (a, b, <malformed>)))))))))))))))))
-D((a, b, <malformed>): C((a, b, <malformed>)))
-E: {
-	a: ((Str, b): Str, <malformed>)
-	F: [
-		(A, B, <malformed>),
-	]
-	g: (e -> e where e() | A, e() | B, h) = <malformed>
+asIas2
+]
+
+# Where constraint
+A(a): (a where module(a) | .a1: (a -> (a -> () -> (
+	Str,
+	module(a) | .a2
+): (a -> (a -> () -> ((
+	Str,
+	B(b)
+): b where module(b) | .b1: (b -> (b -> () -> (
+	Str,
+	module(b) | .b2
+): (b -> (b -> () -> (
+	Str,
+	C((
+		a,
+		b
+	): (
+		a,
+		b
+	))
+)))))))))))))))D((
+	a,
+	b
+): C((
+	a,
+	b
+)))E: {
+	a: Str,
+	b: Str,
 }
+F: [
+	A,
+	B,
+]
+g: (
+	e -> e where module(e) | A,
+	module(e) | B,
+	h
+) = 
 ~~~
 # EXPECTED
 NIL
@@ -336,21 +357,6 @@ at 12:12 to 13:1
 at 12:1 to 13:1
 
 **Parse Error**
-at 13:25 to 13:25
-
-**Parse Error**
-at 14:11 to 14:11
-
-**Parse Error**
-at 14:5 to 16:1
-
-**Parse Error**
-at 19:50 to 19:50
-
-**Parse Error**
-at 19:53 to 19:53
-
-**Parse Error**
 at 20:14 to 20:14
 
 **Parse Error**
@@ -361,12 +367,6 @@ at 21:14 to 21:14
 
 **Parse Error**
 at 21:7 to 22:2
-
-**Parse Error**
-at 22:13 to 22:13
-
-**Parse Error**
-at 22:7 to 23:2
 
 **Parse Error**
 at 23:13 to 23:13
@@ -390,19 +390,7 @@ at 27:11 to 27:11
 at 27:3 to 28:3
 
 **Parse Error**
-at 28:14 to 28:14
-
-**Parse Error**
-at 28:6 to 28:15
-
-**Parse Error**
 at 28:17 to 28:17
-
-**Parse Error**
-at 29:12 to 29:12
-
-**Parse Error**
-at 29:6 to 29:13
 
 **Parse Error**
 at 29:15 to 29:15
@@ -414,12 +402,6 @@ at 25:2 to 31:1
 at 31:1 to 31:1
 
 **Parse Error**
-at 19:30 to 31:2
-
-**Parse Error**
-at 19:7 to 31:2
-
-**Parse Error**
 at 18:13 to 31:2
 
 **Parse Error**
@@ -427,9 +409,6 @@ at 31:2 to 31:2
 
 **Parse Error**
 at 31:2 to 31:2
-
-**Parse Error**
-at 13:5 to 31:2
 
 **Unsupported Node**
 at 4:1 to 4:29
@@ -462,10 +441,7 @@ at 1:1 to 1:1
 at 12:19 to 12:19
 
 **Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 14:5 to 15:1
+at 14:5 to 14:11
 
 **Unsupported Node**
 at 18:3 to 18:3
@@ -493,29 +469,33 @@ at 31:2 to 31:2
   (Expr.apply_tag)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.block
+    (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "a")
-        (Expr.malformed)
-      )
-      (Expr.binop_colon
         (Expr.apply_tag)
-        (Expr.malformed)
       )
       (Expr.binop_colon
-        (Expr.lookup "g")
-        (Expr.binop_equals
-          (Expr.malformed)
-          (Expr.malformed)
-        )
+        (Expr.lookup "b")
+        (Expr.apply_tag)
       )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.binop_equals
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

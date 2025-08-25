@@ -28,7 +28,8 @@ module [
 	nums,
 ]
 
-nums: ListU8
+nums: List
+U8
 ~~~
 # EXPECTED
 NIL

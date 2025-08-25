@@ -68,11 +68,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 # FORMATTED
 ~~~roc
 module [
-	addTwo, addTwoF64
+	addTwo,
+	addTwoF64,
 ]
 
-
-# Should successfully constrain literal 2 to I64
 addTwo: (I64 -> I64)
 addTwo = \x -> x + 2
 

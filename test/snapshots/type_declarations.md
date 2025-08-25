@@ -64,19 +64,17 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
       (uc "Some")
       (lc "a")
     )
-    (block
+    (record_literal
       (binop_colon
         (lc "foo")
-        (binop_colon
-          (tuple_literal
-            (apply_uc
-              (uc "Ok")
-              (lc "a")
-            )
-            (lc "bar")
-          )
-          (uc "Something")
+        (apply_uc
+          (uc "Ok")
+          (lc "a")
         )
+      )
+      (binop_colon
+        (lc "bar")
+        (uc "Something")
       )
     )
   )
@@ -86,13 +84,11 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Some")
-          (lc "a")
-        )
-        (uc "None")
+      (apply_uc
+        (uc "Some")
+        (lc "a")
       )
+      (uc "None")
     )
   )
   (binop_colon
@@ -130,19 +126,27 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 # FORMATTED
 ~~~roc
 module [
-	Map, Foo, Some, Maybe, SomeFunc, add_one, main!
+	Map,
+	Foo,
+	Some,
+	Maybe,
+	SomeFunc,
+	add_one,
+	main,
 ]
 
-
 Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
+
 Foo: (Bar, Baz)
 
-Some(a): {
-	foo: ((Ok(a), bar): Something)
-}
-Maybe(a): [(Some(a), None)]
+Some(a): { foo: Ok(a), bar: Something }
+
+Maybe(a): [Some(a), None]
+
 SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
+
 MyType: U64
+
 MyType2: Module.Thingy
 ~~~
 # EXPECTED
@@ -155,10 +159,7 @@ at 3:13 to 3:41
 at 5:16 to 5:17
 
 **Unsupported Node**
-at 7:30 to 7:30
-
-**Unsupported Node**
-at 9:12 to 10:1
+at 9:12 to 9:27
 
 **Unsupported Node**
 at 11:15 to 11:38
@@ -182,10 +183,11 @@ at 15:11 to 15:17
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "foo")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
       )
     )
   )

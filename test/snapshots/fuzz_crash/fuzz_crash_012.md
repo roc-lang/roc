@@ -28,7 +28,7 @@ OpOr OpenRound OpBar OpenRound LowerIdent OpBar ~~~
 ~~~
 # FORMATTED
 ~~~roc
-<malformed>(\l888888888 -> <malformed>)
+((\l888888888 -> )
 ~~~
 # EXPECTED
 NIL

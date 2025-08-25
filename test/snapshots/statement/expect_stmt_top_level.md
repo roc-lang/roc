@@ -42,8 +42,7 @@ module [
 ]
 
 foo = Bool.True
-
-expect foo != (Bool.False)
+expect foo != Bool.False
 ~~~
 # EXPECTED
 NIL

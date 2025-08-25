@@ -14,28 +14,26 @@ OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseCur
 ~~~clojure
 (record_literal
   (lc "name")
-  (tuple_literal
-    (lc "age")
-    (lc "email")
-    (lc "active")
-  )
+  (lc "age")
+  (lc "email")
+  (lc "active")
 )
 ~~~
 # FORMATTED
 ~~~roc
-{ name, (age, email, active) }
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:28 to 1:28
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.malformed)
+  (Expr.lookup "age")
+  (Expr.lookup "email")
+  (Expr.lookup "active")
 )
 ~~~
 # SOLVED

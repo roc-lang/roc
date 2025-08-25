@@ -37,32 +37,36 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 identity: (a -> a)
 identity = \a -> a
 
-main
-(<malformed>! | _) | {  }
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 7:7 to 7:7
-
 **Unsupported Node**
 at 4:12 to 4:18
 
@@ -70,7 +74,10 @@ at 4:12 to 4:18
 at 5:12 to 5:16
 
 **Unsupported Node**
-at 7:5 to 7:7
+at 7:1 to 7:6
+
+**Unsupported Node**
+at 7:9 to 7:13
 
 # CANONICALIZE
 ~~~clojure
@@ -80,13 +87,12 @@ at 7:5 to 7:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

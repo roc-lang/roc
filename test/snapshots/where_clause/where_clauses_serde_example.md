@@ -79,7 +79,7 @@ module [
 	deserialize,
 ]
 
-deserialize: ((List(U8) -> Result((a, [DecodeErr])) where a() | .decode: List(U8)) -> Result((a, [DecodeErr])))
+deserialize: ((List(U8) -> Result((a, [DecodeErr])) where module(a) | .decode: List(U8)) -> Result((a, [DecodeErr])))
 deserialize = \_ -> ...
 ~~~
 # EXPECTED

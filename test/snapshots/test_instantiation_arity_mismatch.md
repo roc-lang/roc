@@ -20,15 +20,16 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 (block
   (binop_colon
     (lc "identity")
-    (binop_thin_arrow
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
+    (tuple_literal
+      (lc "a")
+      (lc "b")
+    )
+  )
+  (apply_anon
+    (malformed malformed:expr_unexpected_token)
+    (tuple_literal
+      (lc "a")
+      (lc "b")
     )
   )
   (binop_equals
@@ -53,7 +54,8 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-identity: ((a, b) -> (a, b))
+identity: (a, b)
+-> (((a, b))
 identity = \pair -> pair
 
 identity((1, 2))
@@ -61,8 +63,14 @@ identity((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
+**Parse Error**
+at 2:23 to 2:23
+
 **Unsupported Node**
-at 2:21 to 2:32
+at 2:21 to 2:22
+
+**Unsupported Node**
+at 2:23 to 2:23
 
 **Unsupported Node**
 at 3:16 to 3:23
@@ -74,6 +82,7 @@ at 3:16 to 3:23
     (Expr.lookup "identity")
     (Expr.malformed)
   )
+  (Expr.apply_ident)
   (Expr.malformed)
   (Expr.apply_ident)
 )

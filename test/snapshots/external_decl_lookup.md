@@ -30,52 +30,57 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "json")
     (uc "Json")
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result")
-        (apply_anon
-          (binop_pipe
-            (uc "Json")
-            (dot_lc "utf8")
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "result")
+            (apply_anon
+              (binop_pipe
+                (uc "Json")
+                (dot_lc "utf8")
+              )
+              (str_literal_big "Hello from external module!")
+            )
           )
-          (str_literal_big "Hello from external module!")
+          (apply_anon
+            (binop_pipe
+              (uc "Stdout")
+              (not_lc "line")
+            )
+            (lc "result")
+          )
         )
       )
-      (binop_pipe
-        (uc "Stdout")
-        (dot_lc "line")
+      (args
+        (underscore)
       )
-      (unary_not <unary>)
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout]
-import json exposing [Json]
+import pf.Stdout
+import json.Json
 
-main
-(<malformed>! | _) | {
-	result = Json | .utf8("Hello from external module!")
-	Stdout | .line
-	result!
+main! = \_ -> {
+	result = Json.utf8("Hello from external module!")
+	Stdout.line!(result)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 6:7 to 6:7
-
 **Unsupported Node**
 at 3:1 to 3:17
 
@@ -83,26 +88,22 @@ at 3:1 to 3:17
 at 4:1 to 4:17
 
 **Unsupported Node**
-at 6:5 to 6:7
+at 6:1 to 6:6
 
 **Unsupported Node**
-at 8:14 to 8:18
-
-**Unsupported Node**
-at 9:5 to 9:11
+at 6:9 to 6:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> [True, False]_others")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

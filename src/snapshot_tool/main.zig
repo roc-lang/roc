@@ -2657,8 +2657,9 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     const formatted_output = try fmt.formatAst2(output.gpa, ast, content.source, ident_store, root_node);
     defer output.gpa.free(formatted_output);
 
-    // Always use the formatted output
-    const display_content = formatted_output;
+    // Check if formatting changed the source
+    const is_changed = !std.mem.eql(u8, formatted_output, content.source);
+    const display_content = if (is_changed) formatted_output else "NO CHANGE";
 
     try output.md_writer.writeAll(display_content);
     if (!std.mem.endsWith(u8, display_content, "\n")) {
@@ -3040,42 +3041,42 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
                                 if (provides_block.tag == .block) {
                                     var provides_iter = cir.ast.node_slices.nodes(&provides_block.payload.nodes);
                                     while (provides_iter.next()) |node_idx| {
-                        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
-                        // After canonicalization, nodes might have been converted to expressions
-                        // Check the tag to see what we have
-                        const tag_int = @intFromEnum(node.tag);
+                                        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+                                        // After canonicalization, nodes might have been converted to expressions
+                                        // Check the tag to see what we have
+                                        const tag_int = @intFromEnum(node.tag);
 
-                        // Check if this node has been canonicalized to an expression
-                        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
-                            // It's an expression - we can infer its type
-                            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                                        // Check if this node has been canonicalized to an expression
+                                        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+                                            // It's an expression - we can infer its type
+                                            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
 
-                            // Get the identifier name from the node
-                            const ident_idx = node.payload.ident;
-                            const name = env.idents.getText(ident_idx);
+                                            // Get the identifier name from the node
+                                            const ident_idx = node.payload.ident;
+                                            const name = env.idents.getText(ident_idx);
 
-                            // Infer the type
-                            const inferred_type = infer_ctx.inferExpr(expr_idx) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
+                                            // Infer the type
+                                            const inferred_type = infer_ctx.inferExpr(expr_idx) catch {
+                                                try output.md_writer.print("{s} : ?\n", .{name});
+                                                continue;
+                                            };
 
-                            // Format the type using TypeWriter
-                            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
-                            defer type_writer.deinit();
+                                            // Format the type using TypeWriter
+                                            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                                                try output.md_writer.print("{s} : ?\n", .{name});
+                                                continue;
+                                            };
+                                            defer type_writer.deinit();
 
-                            type_writer.write(inferred_type) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
+                                            type_writer.write(inferred_type) catch {
+                                                try output.md_writer.print("{s} : ?\n", .{name});
+                                                continue;
+                                            };
 
-                            const type_str = type_writer.get();
-                            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
-                        }
-                    }
+                                            const type_str = type_writer.get();
+                                            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+                                        }
+                                    }
                                 }
                             }
                         }

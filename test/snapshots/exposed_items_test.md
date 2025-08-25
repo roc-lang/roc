@@ -35,7 +35,7 @@ module [
 	main,
 ]
 
-import pf exposing [Stdout, line, write]
+import pf.Stdout exposing [line, write]
 main = 42
 ~~~
 # EXPECTED

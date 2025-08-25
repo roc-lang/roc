@@ -48,9 +48,16 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma Strin
 ~~~roc
 module []
 
-
-x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)", <malformed>)
-<malformed>
+x = (
+	"one",
+	"two",
+	"\u",
+	"\u)",
+	"\u(",
+	"\u()",
+	"\u(K)",
+	"\u(1F680)"
+)"\
 ~~~
 # EXPECTED
 NIL

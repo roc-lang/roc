@@ -9,7 +9,7 @@ modu:;::::::::::::::le[%
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon LowerIdent OpenSquare OpPercent ~~~
+LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon LowerIdent OpenSquare MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
 (block
@@ -46,8 +46,7 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
 ~~~
 # FORMATTED
 ~~~roc
-modu: (((((((<malformed>: <malformed>): <malformed>): <malformed>): <malformed>): <malformed>): <malformed>): <malformed>)
-le[<malformed>]
+modu: (((((((;: :): :): :): :): :): :): :)le[%]
 ~~~
 # EXPECTED
 NIL

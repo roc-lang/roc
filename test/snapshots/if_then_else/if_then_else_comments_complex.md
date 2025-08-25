@@ -24,11 +24,14 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if bool # Comment after cond {
-	1
-} else {
-	2
-}
+if bool # Comment after cond
+	{
+		1
+	} # Comment after then close
+else
+	{
+		2
+	}
 ~~~
 # EXPECTED
 NIL

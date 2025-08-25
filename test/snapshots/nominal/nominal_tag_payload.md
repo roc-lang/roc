@@ -31,13 +31,11 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Some")
-          (lc "a")
-        )
-        (uc "None")
+      (apply_uc
+        (uc "Some")
+        (lc "a")
       )
+      (uc "None")
     )
   )
   (binop_colon
@@ -110,23 +108,29 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 # FORMATTED
 ~~~roc
 module [
-	Maybe, some1, none1, some2, none2
+	Maybe,
+	some1,
+	none1,
+	some2,
+	none2,
 ]
 
+Maybe(a) := [Some(a), None]
 
-Maybe(a) := [(Some(a), None)]
 some1: (a -> Maybe(a))
 some1 = \a -> Maybe.Some(a)
+
 none1: Maybe(_a)
 none1 = Maybe.None
 some2 = \a -> Maybe.Some(a)
+
 none2 = Maybe.None
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:28
 
 **Unsupported Node**
 at 5:9 to 5:22

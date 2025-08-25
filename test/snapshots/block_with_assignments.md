@@ -68,27 +68,23 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign
   )
   (binop_equals
     (lc "record")
-    (block
+    (record_literal
       (binop_colon
         (lc "age")
-        (binop_colon
-          (tuple_literal
-            (num_literal_i32 30)
-            (lc "city")
-          )
-          (str_literal_small "NYC")
-        )
+        (num_literal_i32 30)
+      )
+      (binop_colon
+        (lc "city")
+        (str_literal_small "NYC")
       )
     )
   )
   (binop_equals
     (lc "list")
     (list_literal
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
     )
   )
   (binop_equals
@@ -105,13 +101,14 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign
 x = 42
 name = "Alice"
 pi = 3.14159
-isActive = Bool | .true
-add = \(a, b) -> a + b
+isActive = Bool.true
+add = \(
+	a,
+	b
+) -> a + b
 pair = (1, "hello")
-record = {
-	age: ((30, city): "NYC")
-}
-list = [(1, 2, 3)]
+record = { age: 30, city: "NYC" }
+list = [1, 2, 3]
 y = x + 10
 ~~~
 # EXPECTED
@@ -127,10 +124,7 @@ at 6:11 to 6:18
 at 7:23 to 7:24
 
 **Unsupported Node**
-at 8:29 to 8:30
-
-**Unsupported Node**
-at 9:12 to 10:1
+at 9:12 to 9:21
 
 # CANONICALIZE
 ~~~clojure

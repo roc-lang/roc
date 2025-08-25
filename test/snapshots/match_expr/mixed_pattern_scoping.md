@@ -22,19 +22,19 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenSquare LowerIdent Comma Lo
 # FORMATTED
 ~~~roc
 when data is {
-	Ok([(x, y)])
-	<malformed>
+	Ok([x, y])
+	=>
 	x + y
 	Err(x)
-	<malformed>
+	=>
 	x - 1
 	Ok([x])
-	<malformed>
+	=>
 	x * 2
 	Err(y)
-	<malformed>
+	=>
 	y / 2
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

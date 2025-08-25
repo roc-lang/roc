@@ -29,16 +29,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (binop_colon
     (lc "printName")
     (binop_thick_arrow
-      (block
+      (record_literal
         (binop_colon
           (lc "name")
-          (binop_colon
-            (tuple_literal
-              (uc "Str")
-              (lc "age")
-            )
-            (uc "U64")
-          )
+          (uc "Str")
+        )
+        (binop_colon
+          (lc "age")
+          (uc "U64")
         )
       )
       (uc "Str")
@@ -49,11 +47,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lambda
       (body
         (block
-          (binop_pipe
-            (uc "Stdout")
-            (dot_lc "line")
+          (apply_anon
+            (binop_pipe
+              (uc "Stdout")
+              (not_lc "line")
+            )
+            (binop_pipe
+              (lc "person")
+              (dot_lc "name")
+            )
           )
-          (unary_not <unary>)
           (binop_pipe
             (lc "person")
             (dot_lc "name")
@@ -65,39 +68,40 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
-
-import pf exposing [Stdout]
-
-printName: ({
-	name: ((Str, age): U64)
-} => Str)
-printName = \person -> {
-	Stdout | .line
-	person | .name!
-	person | .name
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
 }
-main
-(<malformed>! | _) | {  }
+
+import pf.Stdout
+
+printName: ({ name: Str, age: U64 } => Str)
+printName = \person -> {
+	Stdout.line!(person.name)
+	person.name
+}
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 10:7 to 10:7
-
 **Unsupported Node**
 at 3:1 to 3:17
 
@@ -108,7 +112,10 @@ at 5:13 to 5:43
 at 6:13 to 6:22
 
 **Unsupported Node**
-at 10:5 to 10:7
+at 10:1 to 10:6
+
+**Unsupported Node**
+at 10:9 to 10:13
 
 # CANONICALIZE
 ~~~clojure
@@ -119,13 +126,12 @@ at 10:5 to 10:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

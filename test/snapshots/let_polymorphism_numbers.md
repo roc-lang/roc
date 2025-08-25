@@ -133,7 +133,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 num = 42
 frac = 4.2
@@ -156,6 +161,7 @@ double = \x -> x * 2
 # Used with different numeric types
 int_doubled = double(5)
 float_doubled = double(2.5)
+
 main = \_ -> {
 	int_add + int_multiply
 }

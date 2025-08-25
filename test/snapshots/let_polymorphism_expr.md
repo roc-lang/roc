@@ -14,17 +14,15 @@ match [] {
 KwMatch OpenSquare CloseSquare OpenCurly LowerIdent OpFatArrow OpenCurly LowerIdent OpColon OpenSquare Int Comma Int Comma Int CloseSquare Comma LowerIdent OpColon OpenSquare String Comma String Comma String CloseSquare Comma LowerIdent OpColon LowerIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <19 branches>)
+(match <18 branches>)
 ~~~
 # FORMATTED
 ~~~roc
 when [] is {
 	empty
-	<malformed>
-	{
-		ints: ((([(1, 2, 3)], strs): [("a", "b", "c")], empty): empty)
-	}
-} -> <malformed>
+	=>
+	{ ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
+} -> 
 ~~~
 # EXPECTED
 NIL

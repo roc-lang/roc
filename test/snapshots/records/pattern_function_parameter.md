@@ -24,8 +24,12 @@ LowerIdent OpAssign OpBar OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent
           (lc "name")
           (lc "name")
         )
-        (tuple_literal
+        (binop_colon
           (lc "age")
+          (lc "age")
+        )
+        (binop_colon
+          (lc "email")
           (lc "email")
         )
       )
@@ -35,13 +39,13 @@ LowerIdent OpAssign OpBar OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-formatUser = \{ name: name, (age, email) } -> "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
+formatUser = \{ name: name, age: age, email: email } -> "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 1:14 to 1:37
+at 1:14 to 1:35
 
 # CANONICALIZE
 ~~~clojure

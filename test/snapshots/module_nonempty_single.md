@@ -17,7 +17,8 @@ KwModule OpenSquare LowerIdent Comma UpperIdent CloseSquare ~~~
 # FORMATTED
 ~~~roc
 module [
-	something, SomeType
+	something,
+	SomeType,
 ]
 
 ~~~

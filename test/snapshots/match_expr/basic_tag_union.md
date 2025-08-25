@@ -22,15 +22,15 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int
 ~~~roc
 when color is {
 	Red
-	<malformed>
+	=>
 	1
 	Blue
-	<malformed>
+	=>
 	2
 	Green
-	<malformed>
+	=>
 	"3"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -21,16 +21,16 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
 # FORMATTED
 ~~~roc
 when nestedList is {
-	[([x], [y])]
-	<malformed>
+	[[x], [y]]
+	=>
 	x + y
-	[[(x, y)]]
-	<malformed>
+	[[x, y]]
+	=>
 	x - y
-	[(x, [y])]
-	<malformed>
+	[x, [y]]
+	=>
 	x * y
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

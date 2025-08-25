@@ -48,30 +48,24 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
   (binop_equals
     (lc "int_list")
     (list_literal
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
     )
   )
   (binop_equals
     (lc "str_list")
     (list_literal
-      (tuple_literal
-        (str_literal_big "hello")
-        (str_literal_big "world")
-      )
+      (str_literal_big "hello")
+      (str_literal_big "world")
     )
   )
   (binop_equals
     (lc "float_list")
     (list_literal
-      (tuple_literal
-        (frac_literal_small 1.1)
-        (frac_literal_small 2.2)
-        (frac_literal_small 3.3)
-      )
+      (frac_literal_small 1.1)
+      (frac_literal_small 2.2)
+      (frac_literal_small 3.3)
     )
   )
   (binop_equals
@@ -176,27 +170,39 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 my_empty_list = []
 
 # Empty list used in different contexts
-int_list = [(1, 2, 3)]
-str_list = [("hello", "world")]
-float_list = [(1.1, 2.2, 3.3)]
-all_int_list = int_list + <malformed>
+int_list = [1, 2, 3]
+str_list = ["hello", "world"]
+float_list = [1.1, 2.2, 3.3]
+
+# Append empty list (polymorphic use)
+all_int_list = int_list + +
 my_empty_list
-all_str_list = str_list + <malformed>
+all_str_list = str_list + +
 my_empty_list
-all_float_list = float_list + <malformed>
+all_float_list = float_list + +
 my_empty_list
+
+# Function returning empty list
 get_empty = \_ -> []
+
+# Used at different types
 empty_int_list = get_empty(42)
 empty_str_list = get_empty("test")
+
 main = \_ -> {
-	len1 = List | .len(all_int_list)
-	len2 = List | .len(all_str_list)
-	len3 = List | .len(all_float_list)
+	len1 = List.len(all_int_list)
+	len2 = List.len(all_str_list)
+	len3 = List.len(all_float_list)
 	(len1 + len2) + len3
 }
 ~~~
@@ -216,13 +222,13 @@ at 14:30 to 14:30
 at 4:17 to 4:18
 
 **Unsupported Node**
-at 7:12 to 8:1
+at 7:12 to 7:21
 
 **Unsupported Node**
-at 8:12 to 9:1
+at 8:12 to 8:30
 
 **Unsupported Node**
-at 9:14 to 10:1
+at 9:14 to 9:29
 
 **Unsupported Node**
 at 12:26 to 12:26

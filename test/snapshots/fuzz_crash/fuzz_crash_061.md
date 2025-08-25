@@ -19,8 +19,9 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-platform <malformed> requires n: 0 exposes  [
-	<malformed>,
+platform "
+requires{}{ requires n: 0 exposes  [
+	import,
 ]
 
 []

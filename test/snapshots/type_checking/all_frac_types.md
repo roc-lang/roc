@@ -52,7 +52,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~roc
 module []
 
-
 a: F32
 a = 3.14
 

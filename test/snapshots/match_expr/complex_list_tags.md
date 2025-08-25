@@ -25,30 +25,30 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
 ~~~roc
 when events is {
 	[]
-	<malformed>
+	=>
 	"no events"
 	[Click((x, y))]
-	<malformed>
+	=>
 	"single click at (${Num.toStr(x)}, ${Num.toStr(y)})"
-	[(KeyPress(key), <unary_double_dot>)]
+	[KeyPress(key), ..as]
 	rest
-	<malformed>
-	<malformed>
+	]
+	=>
 	"key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
-	[(Move((dx, dy)), Move((dx2, dy2)), <unary_double_dot>)]
+	[Move((dx, dy)), Move((dx2, dy2)), ..as]
 	others
-	<malformed>
-	<malformed>
+	]
+	=>
 	"moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
-	[(Scroll(amount), Click((x, y)), <unary_double_dot>)]
+	[Scroll(amount), Click((x, y)), ..as]
 	remaining
-	<malformed>
-	<malformed>
+	]
+	=>
 	"scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
 	_
-	<malformed>
+	=>
 	"other event pattern"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

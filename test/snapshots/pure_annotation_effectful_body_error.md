@@ -36,9 +36,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "bad_function")
     (lambda
       (body
-        (binop_pipe
-          (uc "Stdout")
-          (dot_lc "line")
+        (apply_anon
+          (binop_pipe
+            (uc "Stdout")
+            (not_lc "line")
+          )
+          (lc "msg")
         )
       )
       (args
@@ -46,34 +49,35 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (unary_not <unary>)
-  (lc "main")
-  (unary_not <unary>)
-  (apply_lc
-    (lc "bad_function")
-    (str_literal_big "This should fail")
+  (binop_equals
+    (not_lc "main")
+    (apply_lc
+      (lc "bad_function")
+      (str_literal_big "This should fail")
+    )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout]
+import pf.Stdout
 
 # This should be a type error: pure annotation but effectful body
 bad_function: (Str -> {  })
-bad_function = \msg -> Stdout | .line
-msg!
-main<malformed>!
-bad_function("This should fail")
+bad_function = \msg -> Stdout.line!(msg)
+
+main! = bad_function("This should fail")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 9:7 to 9:7
-
 **Unsupported Node**
 at 3:1 to 3:17
 
@@ -84,7 +88,7 @@ at 6:16 to 6:24
 at 7:16 to 7:22
 
 **Unsupported Node**
-at 9:7 to 9:7
+at 9:1 to 9:6
 
 # CANONICALIZE
 ~~~clojure
@@ -95,15 +99,12 @@ at 9:7 to 9:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.unary_not)
-  (Expr.lookup "main")
-  (Expr.unary_not)
-  (Expr.apply_ident)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

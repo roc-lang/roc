@@ -16,7 +16,7 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-"Hello ${name}!"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

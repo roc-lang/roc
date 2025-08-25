@@ -18,7 +18,11 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 ~~~
 # FORMATTED
 ~~~roc
-when numbers is { [<unary_double_dot>], middle, _ } -> <malformed> => ...
+when numbers is {
+	[..],
+	middle,
+	_# error, multiple rest patterns not allowed
+} -> ] => ...
 ~~~
 # EXPECTED
 NIL

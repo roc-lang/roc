@@ -21,10 +21,8 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColonEqual OpenSquare Up
   (binop_colon_equals
     (uc "MyType")
     (list_literal
-      (tuple_literal
-        (uc "TagA")
-        (uc "TagB")
-      )
+      (uc "TagA")
+      (uc "TagB")
     )
   )
   (binop_colon
@@ -46,7 +44,8 @@ module [
 	value,
 ]
 
-MyType := [(TagA, TagB)]
+MyType := [TagA, TagB]
+
 value: MyType
 value = MyType.TagA
 ~~~
@@ -54,7 +53,7 @@ value = MyType.TagA
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:23
 
 **Unsupported Node**
 at 6:9 to 6:15

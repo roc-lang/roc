@@ -64,25 +64,21 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
   (binop_equals
     (lc "bar")
     (list_literal
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
     )
   )
   (binop_colon_equals
     (uc "BadRecord")
-    (block
+    (record_literal
       (binop_colon
         (lc "field")
-        (binop_colon
-          (tuple_literal
-            (underscore)
-            (lc "other")
-          )
-          (uc "U32")
-        )
+        (underscore)
+      )
+      (binop_colon
+        (lc "other")
+        (uc "U32")
       )
     )
   )
@@ -92,16 +88,14 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
   )
   (binop_equals
     (lc "baz")
-    (block
+    (record_literal
       (binop_colon
         (lc "field")
-        (binop_colon
-          (tuple_literal
-            (str_literal_small "hi")
-            (lc "other")
-          )
-          (num_literal_i32 5)
-        )
+        (str_literal_small "hi")
+      )
+      (binop_colon
+        (lc "other")
+        (num_literal_i32 5)
       )
     )
   )
@@ -151,26 +145,28 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
 ~~~roc
 module []
 
-
 BadType := _
 
 foo: BadType
 foo = 42
 
 BadList := List(_)
+
 bar: BadList
-bar = [(1, 2, 3)]
-BadRecord := {
-	field: ((_, other): U32)
-}
+bar = [1, 2, 3]
+
+BadRecord := { field: _, other: U32 }
+
 baz: BadRecord
-baz = {
-	field: (("hi", other): 5)
-}
+baz = { field: "hi", other: 5 }
+
 BadFunction := _ -> _
+
 qux: BadFunction
 qux = \x -> x
+
 BadTuple := (_, U32)
+
 quux: BadTuple
 quux = ("hello", 42)
 ~~~
@@ -184,13 +180,10 @@ at 3:1 to 3:13
 at 8:1 to 8:19
 
 **Unsupported Node**
-at 11:7 to 12:1
+at 11:7 to 11:16
 
 **Unsupported Node**
 at 13:1 to 13:37
-
-**Unsupported Node**
-at 16:27 to 16:28
 
 **Unsupported Node**
 at 18:1 to 18:22

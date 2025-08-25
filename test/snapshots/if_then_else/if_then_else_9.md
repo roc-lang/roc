@@ -22,13 +22,18 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse KwIf Int OpenCurly UpperIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-if bool {
-	1
-} else if 10 {
-	A
-} else {
-	3
-}
+if bool
+	{
+		1
+	}
+else if 10
+	{
+		A
+	}
+else
+	{
+		3
+	}
 ~~~
 # EXPECTED
 NIL

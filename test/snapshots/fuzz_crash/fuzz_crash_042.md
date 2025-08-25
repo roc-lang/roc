@@ -37,8 +37,8 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~roc
 module []
 
-import u exposing [R]<malformed>
-g: (r -> (R | .a) | E)
+import u.R}
+g: (r -> R.a | E)
 ~~~
 # EXPECTED
 NIL

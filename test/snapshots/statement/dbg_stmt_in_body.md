@@ -44,7 +44,7 @@ module [
 
 main = {
 	x = 42
-	<malformed>
+	dbg
 	x
 	x + 1
 }

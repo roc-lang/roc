@@ -121,7 +121,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~roc
 module []
 
-
 a: U8
 a = 255
 

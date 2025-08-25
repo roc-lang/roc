@@ -268,143 +268,122 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
   )
   (binop_colon
     (uc "E")
-    (block
+    (record_literal
       (binop_colon
         (lc "a")
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (uc "Str")
-              (lc "b")
-            )
-            (uc "Str")
-          )
-          (malformed malformed:expr_unexpected_token)
-        )
+        (uc "Str")
       )
       (binop_colon
-        (uc "F")
-        (list_literal
-          (tuple_literal
-            (uc "A")
-            (uc "B")
-            (malformed malformed:expr_unexpected_token)
+        (lc "b")
+        (uc "Str")
+      )
+    )
+  )
+  (binop_colon
+    (uc "F")
+    (list_literal
+      (uc "A")
+      (uc "B")
+    )
+  )
+  (binop_colon
+    (lc "g")
+    (tuple_literal
+      (binop_where
+        (binop_thin_arrow
+          (lc "e")
+          (lc "e")
+        )
+        (binop_pipe
+          (apply_module
+            (lc "e")
           )
+          (uc "A")
         )
       )
-      (binop_colon
-        (lc "g")
-        (tuple_literal
-          (binop_where
-            (binop_thin_arrow
-              (lc "e")
-              (lc "e")
-            )
-            (binop_pipe
-              (apply_module
-                (lc "e")
+      (binop_pipe
+        (apply_module
+          (lc "e")
+        )
+        (uc "B")
+      )
+    )
+  )
+  (binop_equals
+    (lc "h")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "h1")
+            (record_literal
+              (binop_colon
+                (lc "h11")
+                (lc "x")
               )
-              (uc "A")
-            )
-          )
-          (binop_pipe
-            (apply_module
-              (lc "e")
-            )
-            (uc "B")
-          )
-        )
-      )
-      (binop_equals
-        (lc "h")
-        (lambda
-          (body
-            (block
-              (binop_equals
-                (lc "h1")
-                (block
+              (binop_colon
+                (lc "h12")
+                (lc "x")
+              )
+              (binop_colon
+                (lc "h13")
+                (record_literal
                   (binop_colon
-                    (lc "h11")
-                    (binop_colon
-                      (tuple_literal
-                        (binop_colon
-                          (tuple_literal
-                            (lc "x")
-                            (lc "h12")
-                          )
-                          (lc "x")
-                        )
-                        (lc "h13")
-                      )
-                      (block
-                        (binop_colon
-                          (lc "h131")
-                          (tuple_literal
-                            (binop_colon
-                              (tuple_literal
-                                (lc "x")
-                                (lc "h132")
-                              )
-                              (lc "y")
-                            )
-                            (malformed malformed:expr_unexpected_token)
-                            (malformed malformed:expr_unexpected_token)
-                          )
-                        )
-                        (binop_equals
-                          (lc "h2")
-                          (apply_lc
-                            (lc "h")
-                            (tuple_literal
-                              (lc "x")
-                              (lc "y")
-                              (malformed malformed:expr_unexpected_token)
-                            )
-                          )
-                        )
-                        (binop_equals
-                          (lc "h3")
-                          (apply_uc
-                            (uc "A")
-                            (tuple_literal
-                              (lc "x")
-                              (lc "y")
-                              (malformed malformed:expr_unexpected_token)
-                            )
-                          )
-                        )
-                        (binop_equals
-                          (lc "h4")
-                          (list_literal
-                            (tuple_literal
-                              (lc "x")
-                              (lc "y")
-                              (malformed malformed:expr_unexpected_token)
-                            )
-                          )
-                        )
-                        (binop_equals
-                          (lc "h5")
-                          (tuple_literal
-                            (lc "x")
-                            (lc "y")
-                            (malformed malformed:expr_unexpected_token)
-                          )
-                        )
-                        (match <193 branches>)
-                      )
-                    )
+                    (lc "h131")
+                    (lc "x")
+                  )
+                  (binop_colon
+                    (lc "h132")
+                    (lc "y")
                   )
                 )
               )
             )
           )
-          (args
-            (tuple_literal
+          (binop_equals
+            (lc "h2")
+            (apply_lc
+              (lc "h")
+              (tuple_literal
+                (lc "x")
+                (lc "y")
+                (malformed malformed:expr_unexpected_token)
+              )
+            )
+          )
+          (binop_equals
+            (lc "h3")
+            (apply_uc
+              (uc "A")
+              (tuple_literal
+                (lc "x")
+                (lc "y")
+                (malformed malformed:expr_unexpected_token)
+              )
+            )
+          )
+          (binop_equals
+            (lc "h4")
+            (list_literal
               (lc "x")
               (lc "y")
             )
           )
+          (binop_equals
+            (lc "h5")
+            (tuple_literal
+              (lc "x")
+              (lc "y")
+              (malformed malformed:expr_unexpected_token)
+            )
+          )
+          (match <191 branches>)
+        )
+      )
+      (args
+        (tuple_literal
+          (lc "x")
+          (lc "y")
         )
       )
     )
@@ -415,48 +394,93 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-
-# Import exposing
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-<malformed>Ias1<malformed>
+asIas1
 I22
-<malformed>Ias2<malformed>
-<malformed>
-A(a): (a where a() | .a1: (a -> (a -> (<malformed> -> (Str, a() | .a2): (a -> (a -> (<malformed> -> Str)))))))
-B(b): (b where b() | .b1: (b -> (b -> (<malformed> -> (Str, b() | .b2): (b -> (b -> (<malformed> -> Str)))))))
-C((a, b, <malformed>): (a, b, <malformed>))
-D((a, b, <malformed>): C((a, b, <malformed>)))
-E: {
-	a: ((Str, b): Str, <malformed>)
-	F: [
-		(A, B, <malformed>),
-	]
-	g: (e -> e where e() | A, e() | B)
-	h = \(x, y) -> {
-		h1 = {
-			h11: (((x, h12): x, h13): {
-				h131: ((x, h132): y, <malformed>, <malformed>)
-				h2 = h((x, y, <malformed>))
-				h3 = A((x, y, <malformed>))
-				h4 = [
-					(x, y, <malformed>),
-				]
-				h5 = (x, y, <malformed>)
-				when x is {
-					Z1(a => (b => (<malformed> => (<malformed> => a))))
-					Z2(a => (b => (<malformed> => a)))
-					Z3( {
-						a: a,
-						b => (<malformed> => (<malformed> => a)),
-					})
-					Z4([
-						a => (b => (<malformed> => (<malformed> => a))),
-					])
-				} -> <malformed>
-			})
-		}
+asIas2
+]
+
+# Where constraint
+A(a): (a where module(a) | .a1: (a -> (a -> () -> (
+	Str,
+	module(a) | .a2
+): (a -> (a -> () -> Str)))))))
+B(b): (b where module(b) | .b1: (b -> (b -> () -> (
+	Str,
+	module(b) | .b2
+): (b -> (b -> () -> Str)))))))
+C((
+	a,
+	b
+): (
+	a,
+	b
+))D((
+	a,
+	b
+): C((
+	a,
+	b
+)))E: {
+	a: Str,
+	b: Str,
+}
+F: [
+	A,
+	B,
+]
+g: (
+	e -> e where module(e) | A,
+	module(e) | B
+)h = \(
+	x,
+	y
+) -> {
+	h1 = {
+		h11: x,
+		h12: x,
+		h13: {
+			h131: x,
+			h132: y,
+		},
 	}
+	h2 = h((
+		x,
+		y
+	))
+	h3 = A((
+		x,
+		y
+	))
+	h4 = [
+		x,
+		y,
+	]
+	h5 = (
+		x,
+		y
+	)
+	when x is {
+		Z1(
+			a => (b => () => () => a))),
+		)
+		Z2(
+			a => (b => () => a)),
+		)
+		Z3(
+			{
+				a: a,
+				b: b,
+			} => () => a),
+		)
+		Z4(
+			[
+				a,
+				b,
+			] => () => a),
+		)
+	} -> 
 }
 ~~~
 # EXPECTED
@@ -526,21 +550,6 @@ at 45:5 to 49:1
 at 42:1 to 49:1
 
 **Parse Error**
-at 52:1 to 52:1
-
-**Parse Error**
-at 56:1 to 56:1
-
-**Parse Error**
-at 53:5 to 58:1
-
-**Parse Error**
-at 67:3 to 67:3
-
-**Parse Error**
-at 68:2 to 68:2
-
-**Parse Error**
 at 72:2 to 72:2
 
 **Parse Error**
@@ -551,12 +560,6 @@ at 76:2 to 76:2
 
 **Parse Error**
 at 73:7 to 77:2
-
-**Parse Error**
-at 80:2 to 80:2
-
-**Parse Error**
-at 77:7 to 81:2
 
 **Parse Error**
 at 84:2 to 84:2
@@ -586,25 +589,13 @@ at 96:3 to 96:3
 at 93:3 to 97:3
 
 **Parse Error**
-at 101:4 to 101:4
-
-**Parse Error**
 at 102:3 to 102:3
-
-**Parse Error**
-at 98:4 to 103:3
 
 **Parse Error**
 at 97:3 to 103:3
 
 **Parse Error**
-at 107:4 to 107:4
-
-**Parse Error**
 at 108:3 to 108:3
-
-**Parse Error**
-at 104:4 to 109:2
 
 **Parse Error**
 at 103:3 to 109:2
@@ -616,16 +607,7 @@ at 86:2 to 110:1
 at 110:1 to 110:1
 
 **Parse Error**
-at 64:8 to 110:2
-
-**Parse Error**
-at 61:7 to 110:2
-
-**Parse Error**
 at 60:12 to 110:2
-
-**Parse Error**
-at 49:5 to 110:2
 
 **Unsupported Node**
 at 4:1 to 6:5
@@ -667,10 +649,7 @@ at 1:1 to 1:1
 at 48:1 to 48:1
 
 **Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 53:5 to 57:1
+at 53:5 to 56:1
 
 **Unsupported Node**
 at 1:1 to 1:1
@@ -703,27 +682,31 @@ at 60:5 to 60:12
   (Expr.apply_tag)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.block
+    (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "a")
-        (Expr.malformed)
-      )
-      (Expr.binop_colon
         (Expr.apply_tag)
-        (Expr.malformed)
       )
       (Expr.binop_colon
-        (Expr.lookup "g")
-        (Expr.malformed)
+        (Expr.lookup "b")
+        (Expr.apply_tag)
       )
-      (Expr.malformed)
     )
   )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

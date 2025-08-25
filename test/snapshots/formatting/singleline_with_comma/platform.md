@@ -24,13 +24,11 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma UpperIdent Comma CloseCu
 platform "pf" requires {(
 	R1,
 	R2,
-	<malformed>,
 )} (
 	(
 		r1: R1 -> R2,
 		r2,
 	): R1 -> R2,
-	<malformed>,
 ) exposes  [
 	E1,
 	E2,
@@ -39,7 +37,6 @@ platform "pf" requires {(
 		"pa1",
 		pa2,
 	): "pa2",
-	<malformed>,
 )}
 
 ~~~

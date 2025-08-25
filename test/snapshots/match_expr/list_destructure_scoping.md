@@ -21,12 +21,12 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
 ~~~roc
 when list is {
 	[first]
-	<malformed>
+	=>
 	first
-	[(first, second)]
-	<malformed>
+	[first, second]
+	=>
 	first + second
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

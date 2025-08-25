@@ -86,43 +86,46 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result1")
-        (apply_lc
-          (lc "identity")
-          (num_literal_i32 42)
-        )
-      )
-      (binop_equals
-        (lc "result2")
-        (apply_lc
-          (lc "identity2")
-          (str_literal_big "hello")
-        )
-      )
-      (binop_equals
-        (lc "result3")
-        (apply_lc
-          (lc "pair")
-          (tuple_literal
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
             (lc "result1")
+            (apply_lc
+              (lc "identity")
+              (num_literal_i32 42)
+            )
+          )
+          (binop_equals
             (lc "result2")
+            (apply_lc
+              (lc "identity2")
+              (str_literal_big "hello")
+            )
+          )
+          (binop_equals
+            (lc "result3")
+            (apply_lc
+              (lc "pair")
+              (tuple_literal
+                (lc "result1")
+                (lc "result2")
+              )
+            )
+          )
+          (binop_plus
+            (binop_plus
+              (lc "a")
+              (lc "b")
+            )
+            (lc "c")
           )
         )
       )
-      (binop_plus
-        (binop_plus
-          (lc "a")
-          (lc "b")
-        )
-        (lc "c")
+      (args
+        (underscore)
       )
     )
   )
@@ -130,7 +133,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 a = 1
 b = 2
@@ -143,9 +151,11 @@ identity = \x -> x
 identity2 = \y -> y
 
 # This function with two parameters should get types 'f, g -> (f, g)'
-pair = \(first, second) -> (first, second)
-main
-(<malformed>! | _) | {
+pair = \(
+	first,
+	second
+) -> (first, second)
+main! = \_ -> {
 	result1 = identity(42)
 	result2 = identity2("hello")
 	result3 = pair((result1, result2))
@@ -155,9 +165,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 17:7 to 17:7
-
 **Unsupported Node**
 at 9:12 to 9:16
 
@@ -168,7 +175,10 @@ at 12:13 to 12:17
 at 15:8 to 15:24
 
 **Unsupported Node**
-at 17:5 to 17:7
+at 17:1 to 17:6
+
+**Unsupported Node**
+at 17:9 to 17:13
 
 # CANONICALIZE
 ~~~clojure
@@ -179,13 +189,12 @@ at 17:5 to 17:7
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

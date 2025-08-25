@@ -20,9 +20,9 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma DoubleDot LowerIdent Clo
 ~~~roc
 when person is {
 	{ first_name, ..others }
-	<malformed>
-	Str | .len(first_name) > Str | .len(others | .last_name)
-} -> <malformed>
+	=>
+	Str.len(first_name) > Str.len(others.last_name)
+} -> 
 ~~~
 # EXPECTED
 NIL

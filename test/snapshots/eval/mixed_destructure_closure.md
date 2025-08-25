@@ -36,16 +36,14 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
           (lc "a")
         )
         (binop_colon
+          (lc "x")
           (tuple_literal
-            (binop_colon
-              (lc "x")
-              (tuple_literal
-                (lc "b")
-                (lc "c")
-              )
-            )
-            (lc "y")
+            (lc "b")
+            (lc "c")
           )
+        )
+        (binop_colon
+          (lc "y")
           (record_literal
             (binop_colon
               (lc "d")
@@ -60,34 +58,28 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
       )
     )
   )
-  (block
+  (record_literal
     (binop_colon
       (lc "a")
-      (binop_colon
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (num_literal_i32 1)
-              (lc "x")
-            )
-            (tuple_literal
-              (num_literal_i32 2)
-              (num_literal_i32 3)
-            )
-          )
-          (lc "y")
+      (num_literal_i32 1)
+    )
+    (binop_colon
+      (lc "x")
+      (tuple_literal
+        (num_literal_i32 2)
+        (num_literal_i32 3)
+      )
+    )
+    (binop_colon
+      (lc "y")
+      (record_literal
+        (binop_colon
+          (lc "d")
+          (num_literal_i32 4)
         )
-        (block
-          (binop_colon
-            (lc "d")
-            (binop_colon
-              (tuple_literal
-                (num_literal_i32 4)
-                (lc "e")
-              )
-              (num_literal_i32 5)
-            )
-          )
+        (binop_colon
+          (lc "e")
+          (num_literal_i32 5)
         )
       )
     )
@@ -96,11 +88,7 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-\{ a: a, (x: (b, c), y): { d: d, e: e } } -> (((a + b) + c) + d) + e({
-	a: (((1, x): (2, 3), y): {
-		d: ((4, e): 5)
-	})
-})
+\{ a: a, x: (b, c), y: { d: d, e: e } } -> (((a + b) + c) + d) + e({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })
 ~~~
 # EXPECTED
 NIL
@@ -109,10 +97,7 @@ NIL
 at 1:2 to 1:31
 
 **Unsupported Node**
-at 1:73 to 1:74
-
-**Unsupported Node**
-at 1:83 to 1:84
+at 1:69 to 1:70
 
 # CANONICALIZE
 ~~~clojure

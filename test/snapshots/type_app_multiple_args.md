@@ -45,28 +45,31 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (apply_lc
-      (lc "processDict")
-      (apply_anon
-        (binop_pipe
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processDict")
           (apply_anon
             (binop_pipe
-              (uc "Dict")
-              (dot_lc "empty")
+              (apply_anon
+                (binop_pipe
+                  (uc "Dict")
+                  (dot_lc "empty")
+                )
+              )
+              (dot_lc "insert")
+            )
+            (tuple_literal
+              (str_literal_small "one")
+              (num_literal_i32 1)
             )
           )
-          (dot_lc "insert")
         )
-        (tuple_literal
-          (str_literal_small "one")
-          (num_literal_i32 1)
-        )
+      )
+      (args
+        (underscore)
       )
     )
   )
@@ -74,20 +77,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 processDict: (Dict((Str, U64)) -> List(Str))
 processDict = \_dict -> []
 
-main
-(<malformed>! | _) | processDict(Dict | .empty() | .insert(("one", 1)))
+main! = \_ -> processDict(Dict.empty() | .insert(("one", 1)))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 6:7 to 6:7
-
 **Unsupported Node**
 at 3:15 to 3:42
 
@@ -95,10 +99,10 @@ at 3:15 to 3:42
 at 4:15 to 4:23
 
 **Unsupported Node**
-at 6:5 to 6:7
+at 6:1 to 6:6
 
 **Unsupported Node**
-at 6:25 to 6:35
+at 6:9 to 6:13
 
 # CANONICALIZE
 ~~~clojure
@@ -108,13 +112,12 @@ at 6:25 to 6:35
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

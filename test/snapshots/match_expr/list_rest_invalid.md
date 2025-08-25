@@ -21,16 +21,16 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 # FORMATTED
 ~~~roc
 when items is {
-	[(first, <unary_double_dot>)]
-	<malformed>
-	0
-	[(<unary_double_dot>, last)]
-	<malformed>
-	1
-	[(x, <unary_double_dot>, y)]
-	<malformed>
-	2
-} -> <malformed>
+	[first, ..rest]
+	=>
+	0 # invalid rest pattern should error
+	[..rest, last]
+	=>
+	1 # invalid rest pattern should error
+	[x, ..rest, y]
+	=>
+	2 # invalid rest pattern should error
+} -> 
 ~~~
 # EXPECTED
 NIL

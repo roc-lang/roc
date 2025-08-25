@@ -18,113 +18,97 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 # PARSE
 ~~~clojure
 (block
-  (lc "runEffect")
-  (unary_not <unary>)
-  (malformed malformed:expr_unexpected_token)
-  (lc "_a")
-  (malformed malformed:expr_unexpected_token)
-  (lc "_b")
-  (lc "runEffect")
-  (binop_pipe
-    (unary_not <unary>)
-    (lc "fn")
-  )
-  (unary_not <unary>)
-  (binop_pipe
-    (lc "x")
-    (lc "fn")
-  )
-  (unary_not <unary>)
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_colon
+    (not_lc "runEffect")
+    (binop_thick_arrow
+      (binop_thin_arrow
+        (binop_thick_arrow
+          (lc "_a")
+          (lc "_b")
+        )
+        (lc "_a")
+      )
+      (lc "_b")
     )
-    (record_literal)
+  )
+  (binop_equals
+    (not_lc "runEffect")
+    (lambda
+      (body
+        (apply_anon
+          (not_lc "fn")
+          (lc "x")
+        )
+      )
+      (args
+        (tuple_literal
+          (not_lc "fn")
+          (lc "x")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
-runEffect<malformed>(_a => _b)!
-<malformed>
-_a
-<malformed>
-_b
-runEffect
-<malformed>! | fn
-<malformed>!
-x.fn
-x!
-main
-(<malformed>! | _) | {  }
+runEffect!: ((_a => _b) -> _a => _b)
+runEffect! = \(
+	fn!,
+	x
+) -> fn!(x)
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:12 to 3:12
-
-**Parse Error**
-at 3:25 to 3:25
-
-**Parse Error**
-at 3:31 to 3:31
-
-**Parse Error**
-at 4:12 to 4:12
-
-**Parse Error**
-at 4:18 to 4:18
-
-**Parse Error**
-at 6:7 to 6:7
+**Unsupported Node**
+at 3:15 to 3:36
 
 **Unsupported Node**
-at 3:12 to 3:12
+at 4:1 to 4:11
 
 **Unsupported Node**
-at 3:15 to 3:23
+at 4:14 to 4:23
 
 **Unsupported Node**
-at 3:25 to 3:25
+at 6:1 to 6:6
 
 **Unsupported Node**
-at 3:31 to 3:31
-
-**Unsupported Node**
-at 4:10 to 4:12
-
-**Unsupported Node**
-at 4:18 to 4:18
-
-**Unsupported Node**
-at 6:5 to 6:7
+at 6:9 to 6:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "runEffect")
-  (Expr.unary_not)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
   (Expr.malformed)
-  (Expr.lookup "_a")
   (Expr.malformed)
-  (Expr.lookup "_b")
-  (Expr.lookup "runEffect")
-  (Expr.lambda)
-  (Expr.unary_not)
-  (Expr.lambda)
-  (Expr.unary_not)
-  (Expr.lookup "main")
-  (Expr.lambda)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

@@ -21,14 +21,14 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpArrow UpperIdent OpenRound
 ~~~roc
 when l is {
 	[]
-	<malformed>
+	->
 	Err(EmptyList)
-	[<unary_double_dot>]
+	[..]
 	e
-	<malformed>
-	<malformed>
+	]
+	->
 	Ok(e)
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

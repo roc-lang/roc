@@ -54,18 +54,20 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
       )
     )
   )
-  (lc "main")
-  (unary_not <unary>)
-  (apply_uc
-    (uc "List")
-    (uc "String")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (apply_uc
-    (uc "Result")
-    (tuple_literal
-      (record_literal)
-      (underscore)
+  (binop_colon
+    (not_lc "main")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "List")
+        (uc "String")
+      )
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (record_literal)
+          (underscore)
+        )
+      )
     )
   )
   (binop_colon
@@ -85,25 +87,16 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 ~~~roc
 module []
 
-
 foo: U64
 bar: Thing((a, b, _))
 biz: (a, b, c)
 add_one: (U8 -> (U16 -> U32))
-main<malformed>!List(String)
-<malformed>
-Result(({  }, _))
+main!: (List(String) -> Result(({  }, _)))
 tag_tuple: Value((a, b, c))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 8:7 to 8:7
-
-**Parse Error**
-at 8:22 to 8:22
-
 **Pattern in Expression Context**
 at 4:19 to 4:20
 
@@ -114,13 +107,7 @@ at 5:15 to 5:16
 at 7:1 to 7:15
 
 **Unsupported Node**
-at 8:7 to 8:7
-
-**Unsupported Node**
-at 8:22 to 8:22
-
-**Pattern in Expression Context**
-at 8:36 to 8:37
+at 8:9 to 9:1
 
 # CANONICALIZE
 ~~~clojure
@@ -141,11 +128,10 @@ at 8:36 to 8:37
     (Expr.lookup "add_one")
     (Expr.malformed)
   )
-  (Expr.lookup "main")
-  (Expr.unary_not)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.malformed)
+  )
   (Expr.binop_colon
     (Expr.lookup "tag_tuple")
     (Expr.apply_tag)

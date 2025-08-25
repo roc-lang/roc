@@ -24,7 +24,7 @@ OpenCurly LowerIdent OpAmpersand LowerIdent OpColon Int CloseCurly ~~~
 # FORMATTED
 ~~~roc
 person
-<malformed>
+&
 age: 31
 ~~~
 # EXPECTED

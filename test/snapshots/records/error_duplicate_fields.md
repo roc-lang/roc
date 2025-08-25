@@ -12,56 +12,65 @@ type=expr
 OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
+(record_literal
   (binop_colon
     (lc "name")
-    (binop_colon
-      (tuple_literal
-        (binop_colon
-          (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (binop_colon
-                  (tuple_literal
-                    (str_literal_big "Alice")
-                    (lc "age")
-                  )
-                  (num_literal_i32 30)
-                )
-                (lc "name")
-              )
-              (str_literal_small "Bob")
-            )
-            (lc "email")
-          )
-          (str_literal_big "alice@example.com")
-        )
-        (lc "age")
-      )
-      (num_literal_i32 25)
-    )
+    (str_literal_big "Alice")
+  )
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 30)
+  )
+  (binop_colon
+    (lc "name")
+    (str_literal_small "Bob")
+  )
+  (binop_colon
+    (lc "email")
+    (str_literal_big "alice@example.com")
+  )
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 25)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-name: ((((("Alice", age): 30, name): "Bob", email): "alice@example.com", age): 25)
+{
+	name: "Alice",
+	age: 30,
+	name: "Bob",
+	email: "alice@example.com",
+	age: 25
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:71 to 1:72
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
     (Expr.lookup "name")
-    (Expr.binop_colon
-      (Expr.malformed)
-      (Expr.num_literal_i32 25)
-    )
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_small)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "email")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 25)
   )
 )
 ~~~

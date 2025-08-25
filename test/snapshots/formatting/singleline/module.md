@@ -29,9 +29,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 # FORMATTED
 ~~~roc
 module [
-	a, b
+	a,
+	b,
 ]
-
 
 a = 'a'
 b = 'a'

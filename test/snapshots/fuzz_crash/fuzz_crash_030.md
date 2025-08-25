@@ -28,138 +28,65 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang Op
 # PARSE
 ~~~clojure
 (block
-  (uc "Str")
-  (malformed malformed:expr_unexpected_token)
-  (record_literal)
-  (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (list_literal
-    (malformed malformed:expr_unexpected_token)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (record_literal
-    (binop_colon
-      (lc "pkg")
-      (num_literal_i32 77)
-    )
-    (str_literal_small "..c")
-    (lc "mm")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (list_literal
-    (tuple_literal
-      (lc "ar")
-      (malformed malformed:expr_unexpected_token)
-    )
+    (lc "ar")
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" # Ce requires n exposes  [
-	# Cd
-	# Ce
-	# ose
-	<malformed>,
-]
+platform "foo" # Ce requires (
+	n!: List(Str) => {  },
+) exposes  [
+	.
+		] # Cse
+	packages # Cd
+		{ # pen,
+] packages {pkg, 77}
 
-Str
-<malformed>
-{  }<malformed>
-<malformed>
-<malformed>
-[<malformed>] # Cse
-<malformed>
-{ pkg: 77, "..c", mm } #
-<malformed>
+} #
+provides # Cd
 [
-	(ar, <malformed>),
+	ar,
 ]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 5:6
-
-**Expected Exposes**
-at 1:1 to 5:6
-
-**Expected Open Square Bracket**
-at 1:1 to 5:6
-
-**Parse Error**
-at 5:6 to 5:6
-
-**Expected Close Square Bracket**
-at 1:1 to 5:8
-
-**Expected Packages**
-at 1:1 to 5:8
-
-**Parse Error**
-at 1:1 to 5:8
-
-**Parse Error**
-at 5:8 to 5:8
-
-**Expected Close Curly Brace**
-at 1:1 to 5:10
-
-**Parse Error**
-at 1:1 to 5:10
-
-**Parse Error**
-at 1:1 to 5:10
-
-**Parse Error**
-at 1:1 to 5:14
-
-**Parse Error**
-at 5:20 to 5:20
-
-**Parse Error**
-at 5:25 to 5:25
-
-**Parse Error**
 at 6:4 to 6:4
 
 **Parse Error**
-at 7:2 to 7:2
+at 1:1 to 7:2
 
 **Parse Error**
 at 8:5 to 8:5
 
+**Expected Close Curly Brace**
+at 1:1 to 12:8
+
 **Parse Error**
-at 10:2 to 10:2
+at 1:1 to 12:8
+
+**Parse Error**
+at 1:1 to 12:8
+
+**Parse Error**
+at 12:8 to 12:8
+
+**Parse Error**
+at 1:1 to 12:17
+
+**Parse Error**
+at 12:17 to 12:17
 
 **Parse Error**
 at 13:2 to 13:2
 
-**Parse Error**
-at 16:3 to 16:3
-
-**Parse Error**
-at 14:3 to 16:4
-
 **Unsupported Node**
-at 5:20 to 5:20
-
-**Unsupported Node**
-at 5:25 to 5:25
-
-**Unsupported Node**
-at 6:4 to 6:4
-
-**Unsupported Node**
-at 7:2 to 7:2
-
-**Unsupported Node**
-at 8:3 to 9:3
-
-**Unsupported Node**
-at 10:2 to 10:2
+at 12:17 to 12:17
 
 **Unsupported Node**
 at 13:2 to 13:2
@@ -170,23 +97,7 @@ at 14:3 to 16:3
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.record_literal
-  )
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "pkg")
-      (Expr.num_literal_i32 77)
-    )
-    (Expr.str_literal_small)
-    (Expr.lookup "mm")
-  )
   (Expr.malformed)
   (Expr.malformed)
 )

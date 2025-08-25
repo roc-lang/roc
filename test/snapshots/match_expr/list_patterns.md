@@ -21,12 +21,12 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
 ~~~roc
 when numbers is {
 	[]
-	<malformed>
+	=>
 	acc
-	[(first, <unary_double_dot>)]
-	<malformed>
-	0
-} -> <malformed>
+	[first, ..rest]
+	=>
+	0 # invalid rest pattern should error
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -20,10 +20,10 @@ KwModule OpenSquare CloseCurly OpenRound MalformedSingleQuoteUnclosed CloseRound
 # FORMATTED
 ~~~roc
 module [
-	<malformed>,
+	}(,
 ]
 
-<malformed>
+'
 ~~~
 # EXPECTED
 NIL

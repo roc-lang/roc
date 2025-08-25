@@ -41,15 +41,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Good")
-          (lc "ok")
-        )
-        (apply_uc
-          (uc "Bad")
-          (lc "err")
-        )
+      (apply_uc
+        (uc "Good")
+        (lc "ok")
+      )
+      (apply_uc
+        (uc "Bad")
+        (lc "err")
       )
     )
   )
@@ -83,13 +81,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (lc "a")
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Some")
-          (lc "a")
-        )
-        (uc "None")
+      (apply_uc
+        (uc "Some")
+        (lc "a")
       )
+      (uc "None")
     )
   )
   (binop_colon
@@ -134,39 +130,51 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
     )
-    (record_literal)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
-MyResult((ok, err)): [(Good(ok), Bad(err))]
+MyResult((ok, err)): [Good(ok), Bad(err)]
+
+# Using the type alias
 process: (MyResult((Str, I32)) -> Str)
 process = \_result -> "processed"
-Option(a): [(Some(a), None)]
+
+# Another type alias with a single parameter
+Option(a): [Some(a), None]
+
+# Using it with different types
 getString: (Option(Str) -> Str)
 getString = \_opt -> "default"
+
 getNumber: (Option(I32) -> I32)
 getNumber = \_opt -> 0
-main
-(<malformed>! | _) | {  }
+
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 20:7 to 20:7
-
 **Unsupported Node**
-at 4:21 to 5:1
+at 4:21 to 4:41
 
 **Unsupported Node**
 at 7:11 to 7:36
@@ -175,7 +183,7 @@ at 7:11 to 7:36
 at 8:11 to 8:21
 
 **Unsupported Node**
-at 11:13 to 12:1
+at 11:13 to 11:28
 
 **Unsupported Node**
 at 14:13 to 14:31
@@ -190,7 +198,10 @@ at 17:13 to 17:31
 at 18:13 to 18:20
 
 **Unsupported Node**
-at 20:5 to 20:7
+at 20:1 to 20:6
+
+**Unsupported Node**
+at 20:9 to 20:13
 
 # CANONICALIZE
 ~~~clojure
@@ -218,13 +229,12 @@ at 20:5 to 20:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> {}")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

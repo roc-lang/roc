@@ -18,9 +18,7 @@ KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if bool {
-	A
-} else 2
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

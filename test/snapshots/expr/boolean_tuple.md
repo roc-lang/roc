@@ -19,7 +19,7 @@ OpenRound UpperIdent Comma UpperIdent CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(True, False)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

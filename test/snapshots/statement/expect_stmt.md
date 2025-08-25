@@ -21,7 +21,7 @@ KwExpect UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-expect Bool.True
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

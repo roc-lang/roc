@@ -64,30 +64,26 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "ok")
-        )
-        (apply_uc
-          (uc "Err")
-          (lc "err")
-        )
+      (apply_uc
+        (uc "Ok")
+        (lc "ok")
+      )
+      (apply_uc
+        (uc "Err")
+        (lc "err")
       )
     )
   )
   (binop_colon
     (uc "Person")
-    (block
+    (record_literal
       (binop_colon
         (lc "name")
-        (binop_colon
-          (tuple_literal
-            (uc "Str")
-            (lc "age")
-          )
-          (uc "U64")
-        )
+        (uc "Str")
+      )
+      (binop_colon
+        (lc "age")
+        (uc "U64")
       )
     )
   )
@@ -120,17 +116,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (binop_colon
     (uc "Color")
     (list_literal
-      (tuple_literal
-        (uc "Red")
-        (uc "Green")
-        (uc "Blue")
-        (apply_uc
-          (uc "Custom")
-          (tuple_literal
-            (uc "U8")
-            (uc "U8")
-            (uc "U8")
-          )
+      (uc "Red")
+      (uc "Green")
+      (uc "Blue")
+      (apply_uc
+        (uc "Custom")
+        (tuple_literal
+          (uc "U8")
+          (uc "U8")
+          (uc "U8")
         )
       )
     )
@@ -140,141 +134,145 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (uc "Container")
       (lc "item")
     )
-    (block
+    (record_literal
       (binop_colon
         (lc "contents")
-        (binop_colon
-          (tuple_literal
-            (apply_uc
-              (uc "List")
-              (lc "item")
-            )
-            (lc "metadata")
+        (apply_uc
+          (uc "List")
+          (lc "item")
+        )
+      )
+      (binop_colon
+        (lc "metadata")
+        (record_literal
+          (binop_colon
+            (lc "size")
+            (uc "U64")
           )
-          (block
-            (binop_colon
-              (lc "size")
-              (binop_colon
-                (tuple_literal
-                  (uc "U64")
-                  (lc "created")
-                )
-                (uc "Str")
-              )
-            )
+          (binop_colon
+            (lc "created")
+            (uc "Str")
           )
         )
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_colon
-        (lc "userId")
-        (uc "UserId")
-      )
-      (binop_equals
-        (lc "userId")
-        (num_literal_i32 123)
-      )
-      (binop_colon
-        (lc "person")
-        (uc "Person")
-      )
-      (binop_equals
-        (lc "person")
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
         (block
           (binop_colon
-            (lc "name")
-            (binop_colon
-              (tuple_literal
+            (lc "userId")
+            (uc "UserId")
+          )
+          (binop_equals
+            (lc "userId")
+            (num_literal_i32 123)
+          )
+          (binop_colon
+            (lc "person")
+            (uc "Person")
+          )
+          (binop_equals
+            (lc "person")
+            (record_literal
+              (binop_colon
+                (lc "name")
                 (str_literal_big "Alice")
-                (lc "age")
               )
-              (num_literal_i32 30)
+              (binop_colon
+                (lc "age")
+                (num_literal_i32 30)
+              )
             )
+          )
+          (binop_colon
+            (lc "color")
+            (uc "Color")
+          )
+          (binop_equals
+            (lc "color")
+            (uc "Red")
+          )
+          (binop_colon
+            (lc "userId")
+            (lc "userId")
           )
         )
       )
-      (binop_colon
-        (lc "color")
-        (uc "Color")
+      (args
+        (underscore)
       )
-      (binop_equals
-        (lc "color")
-        (uc "Red")
-      )
-      (lc "userId")
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 UserId: U64
 
 # Generic type alias
-Result((ok, err)): [(Ok(ok), Err(err))]
-Person: {
-	name: ((Str, age): U64)
-}
+Result((ok, err)): [Ok(ok), Err(err)]
+
+# Record type alias
+Person: { name: Str, age: U64 }
+
+# Function type alias
 MapFn((a, b)): (a -> b)
+
+# Complex nested type alias
 ApiResponse(data): Result((data, Str))
-Color: [(Red, Green, Blue, Custom((U8, U8, U8)))]
+
+# Type declaration with tag union
+Color: [Red, Green, Blue, Custom((U8, U8, U8))]
+
+# Type declaration with records and generics
 Container(item): {
-	contents: ((List(item), metadata): {
-		size: ((U64, created): Str)
-	})
+	contents: List(item),
+	metadata: { size: U64, created: Str }
 }
-main
-(<malformed>! | _) | {
+
+main! = \_ -> {
 	userId: UserId
 	userId = 123
-	person: Person
-	person = {
-		name: (("Alice", age): 30)
-	}
-	color: Color
+	
+
+person: Person
+	person = { name: "Alice", age: 30 }
+	
+
+color: Color
 	color = Red
-	userId
+	
+
+userId: userId
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 27:7 to 27:7
-
 **Unsupported Node**
-at 7:19 to 8:1
-
-**Unsupported Node**
-at 10:28 to 10:28
+at 7:19 to 7:37
 
 **Unsupported Node**
 at 13:15 to 13:21
 
 **Unsupported Node**
-at 19:9 to 21:1
+at 19:9 to 20:1
 
 **Unsupported Node**
-at 24:14 to 24:14
+at 27:1 to 27:6
 
 **Unsupported Node**
-at 24:38 to 24:38
-
-**Unsupported Node**
-at 27:5 to 27:7
-
-**Unsupported Node**
-at 33:34 to 33:35
+at 27:9 to 27:13
 
 # CANONICALIZE
 ~~~clojure
@@ -292,10 +290,11 @@ at 33:34 to 33:35
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "name")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.apply_tag)
       )
     )
   )
@@ -316,28 +315,29 @@ at 33:34 to 33:35
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "contents")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.record_literal
-            (Expr.binop_colon
-              (Expr.lookup "size")
-              (Expr.binop_colon
-                (Expr.malformed)
-                (Expr.apply_tag)
-              )
-            )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "metadata")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "size")
+            (Expr.apply_tag)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "created")
+            (Expr.apply_tag)
           )
         )
       )
     )
   )
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

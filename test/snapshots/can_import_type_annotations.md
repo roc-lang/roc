@@ -141,38 +141,38 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
     (lc "handleApi")
     (lambda
       (body
-        (block
-          (binop_equals
-            (lc "result")
-            (apply_anon
+        (binop_thin_arrow
+          (record_literal
+            (binop_equals
+              (lc "result")
+              (apply_anon
+                (binop_pipe
+                  (uc "Json")
+                  (dot_lc "decode")
+                )
+                (binop_pipe
+                  (lc "request")
+                  (dot_lc "body")
+                )
+              )
+            )
+            (match <74 branches>)
+            (binop_colon
+              (lc "config")
               (binop_pipe
                 (uc "Json")
-                (dot_lc "decode")
+                (uc "Config")
               )
+            )
+            (binop_equals
+              (lc "config")
               (binop_pipe
-                (lc "request")
-                (dot_lc "body")
+                (uc "Json")
+                (dot_lc "defaultConfig")
               )
             )
-          )
-          (match <74 branches>)
-          (binop_colon
-            (lc "config")
-            (binop_pipe
-              (uc "Json")
-              (uc "Config")
-            )
-          )
-          (binop_equals
-            (lc "config")
-            (binop_pipe
-              (uc "Json")
-              (dot_lc "defaultConfig")
-            )
-          )
-          (binop_colon
-            (lc "advancedParser")
-            (binop_thin_arrow
+            (binop_colon
+              (lc "advancedParser")
               (binop_pipe
                 (binop_pipe
                   (uc "Json")
@@ -180,95 +180,22 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
                 )
                 (uc "Config")
               )
-              (binop_thin_arrow
-                (uc "Str")
-                (apply_uc
-                  (uc "Result")
-                  (tuple_literal
-                    (binop_pipe
-                      (uc "Json")
-                      (uc "Value")
-                    )
-                    (binop_pipe
-                      (binop_pipe
-                        (uc "Json")
-                        (uc "Parser")
-                      )
-                      (uc "Error")
-                    )
-                  )
-                )
-              )
             )
+            (uc "Str")
           )
-          (binop_equals
-            (lc "advancedParser")
-            (lambda
-              (body
-                (apply_anon
-                  (binop_pipe
-                    (binop_pipe
-                      (uc "Json")
-                      (uc "Parser")
-                    )
-                    (dot_lc "parseWith")
-                  )
-                  (tuple_literal
-                    (lc "parserConfig")
-                    (lc "input")
-                  )
-                )
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (binop_pipe
+                (uc "Json")
+                (uc "Value")
               )
-              (args
-                (tuple_literal
-                  (lc "parserConfig")
-                  (lc "input")
+              (binop_pipe
+                (binop_pipe
+                  (uc "Json")
+                  (uc "Parser")
                 )
-              )
-            )
-          )
-          (binop_colon
-            (lc "combineResults")
-            (binop_thin_arrow
-              (apply_uc
-                (uc "Result")
-                (tuple_literal
-                  (lc "a")
-                  (lc "err")
-                )
-              )
-              (binop_thin_arrow
-                (apply_uc
-                  (uc "Result")
-                  (tuple_literal
-                    (lc "b")
-                    (lc "err")
-                  )
-                )
-                (apply_uc
-                  (uc "Result")
-                  (tuple_literal
-                    (tuple_literal
-                      (lc "a")
-                      (lc "b")
-                    )
-                    (lc "err")
-                  )
-                )
-              )
-            )
-          )
-          (binop_equals
-            (lc "combineResults")
-            (lambda
-              (body
-                (match <171 branches>)
-              )
-              (args
-                (tuple_literal
-                  (lc "result1")
-                  (lc "result2")
-                )
+                (uc "Error")
               )
             )
           )
@@ -279,53 +206,127 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
       )
     )
   )
+  (binop_equals
+    (lc "advancedParser")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (binop_pipe
+              (uc "Json")
+              (uc "Parser")
+            )
+            (dot_lc "parseWith")
+          )
+          (tuple_literal
+            (lc "parserConfig")
+            (lc "input")
+          )
+        )
+      )
+      (args
+        (tuple_literal
+          (lc "parserConfig")
+          (lc "input")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "combineResults")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (lc "a")
+          (lc "err")
+        )
+      )
+      (binop_thin_arrow
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (lc "b")
+            (lc "err")
+          )
+        )
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (tuple_literal
+              (lc "a")
+              (lc "b")
+            )
+            (lc "err")
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "combineResults")
+    (lambda
+      (body
+        (match <179 branches>)
+      )
+      (args
+        (tuple_literal
+          (lc "result1")
+          (lc "result2")
+        )
+      )
+    )
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
-
-import http exposing [Client, Http, Request, Response]
-import json exposing [Json]
-import utils exposing [Result, Result]
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
 processRequest: (Request -> Response)
-processRequest = \req -> Http | .defaultResponse
-
+processRequest = \req -> Http.defaultResponse
 parseJson: (Str -> Json.Value)
-parseJson = \input -> Json | .parse(input)
+parseJson = \input -> Json.parse(input)
+
 handleApi: (Http.Request -> Result((Http.Response, Json.Error)))
 handleApi = \request -> {
-	result = Json | .decode(request | .body)
+	result = Json.decode(request.body),
 	when result is {
 		Ok(data)
-		<malformed>
-		Ok(Http | .success(data))
+		=>
+		Ok(Http.success(data))
 		Err(err)
-		<malformed>
+		=>
 		Err(err)
-	} -> <malformed>
-	config: Json.Config
-	config = Json | .defaultConfig
-	
-
-# Test nested type qualification
-advancedParser: ((Json.Parser) | Config -> (Str -> Result((Json.Value, (Json.Parser) | Error))))
-	advancedParser = \(parserConfig, input) -> (Json.Parser) | .parseWith((parserConfig, input))
-	combineResults: (Result((a, err)) -> (Result((b, err)) -> Result(((a, b), err))))
-	combineResults = \(result1, result2) -> when result1 is {
-		Ok(value1)
-		<malformed>
-		when result2 is {
-			Ok(value2)
-			<malformed>
-			Ok((value1, value2))
-			Err(err)
-			<malformed>
-			Err(err)
-		} -> Err(err) => Err(err)
-	} -> <malformed>
-}
+	} -> },
+	config: Json.Config,
+	config = Json.defaultConfig,
+	advancedParser: Json.Parser | Config,
+	Str
+} -> Result((Json.Value, Json.Parser | Error))
+advancedParser = \(
+	parserConfig,
+	input
+) -> Json.Parser | .parseWith((parserConfig, input))
+combineResults: (Result((a, err)) -> (Result((b, err)) -> Result(((a, b), err))))
+combineResults = \(
+	result1,
+	result2
+) -> when result1 is {
+	Ok(value1)
+	=>
+	when result2 is {
+		Ok(value2)
+		=>
+		Ok((value1, value2))
+		Err(err)
+		=>
+		Err(err)
+	} -> Err(err) => Err(err)
+} -> 
 ~~~
 # EXPECTED
 NIL
@@ -344,6 +345,9 @@ at 16:5 to 20:1
 
 **Parse Error**
 at 20:1 to 20:1
+
+**Parse Error**
+at 14:23 to 26:42
 
 **Parse Error**
 at 32:5 to 32:19
@@ -368,9 +372,6 @@ at 32:5 to 39:6
 
 **Parse Error**
 at 39:6 to 39:6
-
-**Parse Error**
-at 14:23 to 39:6
 
 **Unsupported Node**
 at 3:1 to 3:55
@@ -399,6 +400,15 @@ at 13:13 to 13:62
 **Unsupported Node**
 at 14:13 to 14:23
 
+**Unsupported Node**
+at 27:18 to 27:40
+
+**Unsupported Node**
+at 30:18 to 31:1
+
+**Unsupported Node**
+at 31:18 to 32:5
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -417,6 +427,12 @@ at 14:13 to 14:23
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "handleApi")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "combineResults")
     (Expr.malformed)
   )
   (Expr.malformed)

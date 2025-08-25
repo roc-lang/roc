@@ -21,13 +21,11 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comm
     )
     (str_literal_small "")
     (binop_colon
-      (tuple_literal
-        (binop_colon
-          (lc "r")
-          (str_literal_small "")
-        )
-        (lc "o")
-      )
+      (lc "r")
+      (str_literal_small "")
+    )
+    (binop_colon
+      (lc "o")
       (str_literal_small "")
     )
   )
@@ -35,9 +33,13 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comm
 ~~~
 # FORMATTED
 ~~~roc
-app {  }
+app
+{
+	f,
+	platform,
+}
 
-[]{ f: <malformed>, "", (r: "", o): "" }
+[]{ f: platform, "", r: "", o: "" }
 ~~~
 # EXPECTED
 NIL
@@ -54,9 +56,6 @@ at 1:4 to 1:5
 **Unsupported Node**
 at 1:9 to 1:9
 
-**Unsupported Node**
-at 1:26 to 1:27
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -68,7 +67,11 @@ at 1:26 to 1:27
     )
     (Expr.str_literal_small)
     (Expr.binop_colon
-      (Expr.malformed)
+      (Expr.lookup "r")
+      (Expr.str_literal_small)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "o")
       (Expr.str_literal_small)
     )
   )

@@ -36,7 +36,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
 ~~~roc
 module []
 
-
 BadType := _
 
 foo: BadType

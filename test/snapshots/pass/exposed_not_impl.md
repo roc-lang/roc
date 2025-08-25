@@ -29,11 +29,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
   (binop_colon
     (uc "MyType")
     (list_literal
-      (tuple_literal
-        (uc "A")
-        (uc "B")
-        (uc "C")
-      )
+      (uc "A")
+      (uc "B")
+      (uc "C")
     )
   )
 )
@@ -41,17 +39,17 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 # FORMATTED
 ~~~roc
 module [
-	foo, bar, MyType, OtherType, foo, MyType
+	foo,
+	bar,
+	MyType,
+	OtherType,
+	foo,
+	MyType,
 ]
 
-
-# This module exposes foo, bar, MyType, and OtherType
-# but only implements foo and MyType
-# This should generate "exposed but not implemented" errors for bar and OtherType
-# Also tests redundant exposed entries for foo and MyType
 foo = 42
 
-MyType: [(A, B, C)]
+MyType: [A, B, C]
 ~~~
 # EXPECTED
 NIL

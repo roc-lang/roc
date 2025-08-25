@@ -23,18 +23,18 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~roc
 when result is {
 	Ok(value)
-	<malformed>
+	=>
 	value + 1
 	Err(value)
-	<malformed>
+	=>
 	value - 1
 	Ok(different)
-	<malformed>
+	=>
 	different * 2
 	Err(different)
-	<malformed>
+	=>
 	different / 2
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

@@ -64,16 +64,14 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
   )
   (binop_colon
     (uc "Person")
-    (block
+    (record_literal
       (binop_colon
         (lc "name")
-        (binop_colon
-          (tuple_literal
-            (uc "Str")
-            (lc "age")
-          )
-          (uc "U64")
-        )
+        (uc "Str")
+      )
+      (binop_colon
+        (lc "age")
+        (uc "U64")
       )
     )
   )
@@ -86,15 +84,13 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
       )
     )
     (list_literal
-      (tuple_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "ok")
-        )
-        (apply_uc
-          (uc "Err")
-          (lc "err")
-        )
+      (apply_uc
+        (uc "Ok")
+        (lc "ok")
+      )
+      (apply_uc
+        (uc "Err")
+        (lc "err")
       )
     )
   )
@@ -104,18 +100,16 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
       (lc "a")
     )
     (list_literal
-      (tuple_literal
+      (apply_uc
+        (uc "Branch")
         (apply_uc
-          (uc "Branch")
-          (apply_uc
-            (uc "Node")
-            (lc "a")
-          )
-        )
-        (apply_uc
-          (uc "Leaf")
+          (uc "Node")
           (lc "a")
         )
+      )
+      (apply_uc
+        (uc "Leaf")
+        (lc "a")
       )
     )
   )
@@ -124,20 +118,18 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
       (uc "Node")
       (lc "a")
     )
-    (block
+    (record_literal
       (binop_colon
         (lc "value")
-        (binop_colon
-          (tuple_literal
-            (lc "a")
-            (lc "children")
-          )
+        (lc "a")
+      )
+      (binop_colon
+        (lc "children")
+        (apply_uc
+          (uc "List")
           (apply_uc
-            (uc "List")
-            (apply_uc
-              (uc "Tree")
-              (lc "a")
-            )
+            (uc "Tree")
+            (lc "a")
           )
         )
       )
@@ -180,30 +172,26 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
   )
   (binop_colon
     (uc "Complex")
-    (block
+    (record_literal
       (binop_colon
         (lc "person")
-        (binop_colon
+        (uc "Person")
+      )
+      (binop_colon
+        (lc "result")
+        (apply_uc
+          (uc "Result")
           (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (uc "Person")
-                (lc "result")
-              )
-              (apply_uc
-                (uc "Result")
-                (tuple_literal
-                  (uc "Bool")
-                  (uc "Str")
-                )
-              )
-            )
-            (lc "tree")
+            (uc "Bool")
+            (uc "Str")
           )
-          (apply_uc
-            (uc "Tree")
-            (uc "U64")
-          )
+        )
+      )
+      (binop_colon
+        (lc "tree")
+        (apply_uc
+          (uc "Tree")
+          (uc "U64")
         )
       )
     )
@@ -213,50 +201,57 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 # FORMATTED
 ~~~roc
 module [
-	MyU64, Person, Result, Tree, Node
+	MyU64,
+	Person,
+	Result,
+	Tree,
+	Node,
 ]
 
-
-# Built-in types should work
 MyU64: U64
 MyString: Str
 MyBool: Bool
 
 # Simple user-defined type
-Person: {
-	name: ((Str, age): U64)
-}
-Result((ok, err)): [(Ok(ok), Err(err))]
-Tree(a): [(Branch(Node(a)), Leaf(a))]
-Node(a): {
-	value: ((a, children): List(Tree(a)))
-}
+Person: { name: Str, age: U64 }
+
+# Type with parameters
+Result((ok, err)): [Ok(ok), Err(err)]
+
+# Forward reference - Tree references Node before Node is defined
+Tree(a): [Branch(Node(a)), Leaf(a)]
+
+# Node definition comes after Tree
+Node(a): { value: a, children: List(Tree(a)) }
+
+# Using a previously defined type
 MyResult: Result((Str, U64))
+
+# Type redeclaration (should error)
 Person: U64
+
+# Using an undeclared type (should error)
 BadType: SomeUndeclaredType
+
+# Using built-in types with parameters
 MyList: List(Str)
 MyDict: Dict((Str, U64))
+
+# Complex nested type using multiple declared types
 Complex: {
-	person: (((Person, result): Result((Bool, Str)), tree): Tree(U64))
+	person: Person,
+	result: Result((Bool, Str)),
+	tree: Tree(U64)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 9:26 to 9:27
+at 12:19 to 12:37
 
 **Unsupported Node**
-at 12:19 to 13:1
-
-**Unsupported Node**
-at 15:11 to 16:1
-
-**Unsupported Node**
-at 18:31 to 18:32
-
-**Unsupported Node**
-at 37:9 to 37:10
+at 15:11 to 15:37
 
 # CANONICALIZE
 ~~~clojure
@@ -278,10 +273,11 @@ at 37:9 to 37:10
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "name")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.apply_tag)
       )
     )
   )
@@ -298,10 +294,11 @@ at 37:9 to 37:10
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "value")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.lookup "a")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "children")
+        (Expr.apply_tag)
       )
     )
   )
@@ -330,10 +327,15 @@ at 37:9 to 37:10
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "person")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "result")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "tree")
+        (Expr.apply_tag)
       )
     )
   )

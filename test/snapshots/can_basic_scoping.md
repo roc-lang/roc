@@ -78,8 +78,6 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Int LowerIdent OpAssign Int 
 ~~~roc
 module []
 
-
-# Top-level variables
 x = 5
 y = 10
 

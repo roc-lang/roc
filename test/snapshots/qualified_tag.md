@@ -20,10 +20,8 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpColonEqual OpenSquare Up
   (binop_colon_equals
     (uc "Color")
     (list_literal
-      (tuple_literal
-        (uc "Red")
-        (uc "Blue")
-      )
+      (uc "Red")
+      (uc "Blue")
     )
   )
   (binop_equals
@@ -41,14 +39,15 @@ module [
 	Color,
 ]
 
-Color := [(Red, Blue)]
+Color := [Red, Blue]
+
 test = Color.Red
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 3:1 to 4:1
+at 3:1 to 3:21
 
 **Unsupported Node**
 at 5:8 to 5:13

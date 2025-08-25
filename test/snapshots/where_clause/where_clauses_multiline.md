@@ -69,7 +69,10 @@ module [
 	process,
 ]
 
-process: (a -> (b -> (((c where a() | .convert: a) -> c, b() | .transform): b -> c)))
+process: (a -> (b -> ((
+	(c where module(a) | .convert: a) -> c,
+	module(b) | .transform
+): b -> c)))
 process = ...
 ~~~
 # EXPECTED

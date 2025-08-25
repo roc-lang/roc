@@ -20,7 +20,7 @@ OpenRound Int Comma String Comma UpperIdent CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(1, "hello", True)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

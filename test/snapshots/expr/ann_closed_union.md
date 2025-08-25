@@ -21,12 +21,10 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
   (binop_colon
     (lc "apple")
     (list_literal
-      (tuple_literal
-        (uc "Apple")
-        (apply_uc
-          (uc "IsFruit")
-          (uc "Bool")
-        )
+      (uc "Apple")
+      (apply_uc
+        (uc "IsFruit")
+        (uc "Bool")
       )
     )
   )
@@ -39,15 +37,16 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
 ~~~
 # FORMATTED
 ~~~roc
-apple: [(Apple, IsFruit(Bool))]
+apple: [Apple, IsFruit(Bool)]
 apple = Apple
+
 apple
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 2:10 to 3:1
+at 2:10 to 2:32
 
 # CANONICALIZE
 ~~~clojure

@@ -16,7 +16,7 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes
 ~~~
 # FORMATTED
 ~~~roc
-platform "" requires <malformed> exposes  []
+platform "" requires  exposes  []
 
 ~~~
 # EXPECTED

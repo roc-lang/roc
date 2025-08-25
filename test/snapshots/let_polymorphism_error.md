@@ -13,16 +13,14 @@ OpenSquare Int Comma Float Comma String CloseSquare ~~~
 # PARSE
 ~~~clojure
 (list_literal
-  (tuple_literal
-    (num_literal_i32 42)
-    (frac_literal_small 4.2)
-    (str_literal_big "hello")
-  )
+  (num_literal_i32 42)
+  (frac_literal_small 4.2)
+  (str_literal_big "hello")
 )
 ~~~
 # FORMATTED
 ~~~roc
-[(42, 4.2, "hello")]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

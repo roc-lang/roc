@@ -30,16 +30,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (lc "make_record")
     (binop_thin_arrow
       (lc "a")
-      (block
+      (record_literal
         (binop_colon
           (lc "value")
-          (binop_colon
-            (tuple_literal
-              (lc "a")
-              (lc "tag")
-            )
-            (uc "Str")
-          )
+          (lc "a")
+        )
+        (binop_colon
+          (lc "tag")
+          (uc "Str")
         )
       )
     )
@@ -48,16 +46,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (lc "make_record")
     (lambda
       (body
-        (block
+        (record_literal
           (binop_colon
             (lc "value")
-            (binop_colon
-              (tuple_literal
-                (lc "x")
-                (lc "tag")
-              )
-              (str_literal_small "data")
-            )
+            (lc "x")
+          )
+          (binop_colon
+            (lc "tag")
+            (str_literal_small "data")
           )
         )
       )
@@ -69,16 +65,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
   (binop_colon
     (lc "get_value")
     (binop_thin_arrow
-      (block
+      (record_literal
         (binop_colon
           (lc "value")
-          (binop_colon
-            (tuple_literal
-              (lc "a")
-              (lc "tag")
-            )
-            (uc "Str")
-          )
+          (lc "a")
+        )
+        (binop_colon
+          (lc "tag")
+          (uc "Str")
         )
       )
       (lc "a")
@@ -138,20 +132,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
-
-make_record: (a -> {
-	value: ((a, tag): Str)
-})
-make_record = \x -> {
-	value: ((x, tag): "data")
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
 }
-get_value: ({
-	value: ((a, tag): Str)
-} -> a)
-get_value = \r -> r | .value
+
+make_record: (a -> { value: a, tag: Str })
+make_record = \x -> { value: x, tag: "data" }
+
+get_value: ({ value: a, tag: Str } -> a)
+get_value = \r -> r.value
 composed: (List(a) -> Str)
 composed = \n -> get_value(make_record(n))
+
 answer = composed([42])
 ~~~
 # EXPECTED

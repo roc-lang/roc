@@ -22,9 +22,8 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
 (block
   (malformed malformed:expr_unexpected_token)
   (list_literal
-    (lc "main")
+    (not_lc "main")
   )
-  (unary_not <unary>)
   (malformed malformed:expr_unexpected_token)
   (binop_colon
     (uc "UserId")
@@ -50,18 +49,21 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
   )
   (str_literal_small "big")
   (malformed malformed:expr_unexpected_token)
-  (binop_minus
-    (str_literal_small "l")
-    (lc "ain")
-  )
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
+  (binop_equals
+    (binop_minus
+      (str_literal_small "l")
+      (not_lc "ain")
     )
-    (apply_lc
-      (lc "getUser")
-      (num_literal_i32 900)
+    (lambda
+      (body
+        (apply_lc
+          (lc "getUser")
+          (num_literal_i32 900)
+        )
+      )
+      (args
+        (underscore)
+      )
     )
   )
 )
@@ -70,17 +72,16 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
 ~~~roc
 app {  }
 
-<malformed>[main]<malformed>!
-<malformed>
+platform[main!]
+}
+
 UserId: U64
 
 ser: (UserId -> Str)
-getUser = \id -> if id > 1 <malformed>!
-"big"
-<malformed>
+getUser = \id -> if id > 1 !)"big"
+else
 
-"l" - ain
-(<malformed>! | _) | getUser(900)
+"l" - ain! = \_ -> getUser(900)
 ~~~
 # EXPECTED
 NIL
@@ -93,12 +94,6 @@ at 1:1 to 1:7
 
 **Parse Error**
 at 1:15 to 1:15
-
-**Parse Error**
-at 1:24 to 1:29
-
-**Parse Error**
-at 1:30 to 1:30
 
 **Parse Error**
 at 1:32 to 1:32
@@ -115,17 +110,11 @@ at 6:27 to 6:27
 **Parse Error**
 at 6:35 to 6:35
 
-**Parse Error**
-at 8:7 to 8:7
-
 **Unsupported Node**
 at 1:15 to 1:15
 
 **Unsupported Node**
-at 1:24 to 1:30
-
-**Unsupported Node**
-at 1:30 to 1:30
+at 1:24 to 1:31
 
 **Unsupported Node**
 at 1:32 to 1:32
@@ -139,15 +128,17 @@ at 6:11 to 6:16
 **Unsupported Node**
 at 6:35 to 6:35
 
+**Expression in Pattern Context**
+at 6:40 to 8:6
+
 **Unsupported Node**
-at 8:5 to 8:7
+at 8:9 to 8:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.unary_not)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -160,16 +151,12 @@ at 8:5 to 8:7
   (Expr.malformed)
   (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.binop_minus
-    (Expr.str_literal_small)
-    (Expr.lookup "ain")
-  )
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

@@ -21,7 +21,7 @@ OpStar KwImport UpperIdent KwAs ~~~
 ~~~
 # FORMATTED
 ~~~roc
-<malformed>import B
+importimport B
 ~~~
 # EXPECTED
 NIL

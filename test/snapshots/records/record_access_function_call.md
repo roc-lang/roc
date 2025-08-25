@@ -22,7 +22,7 @@ OpenRound LowerIdent Dot LowerIdent CloseRound OpenRound Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-person | .transform(42)
+person.transform(42)
 ~~~
 # EXPECTED
 NIL

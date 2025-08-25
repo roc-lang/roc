@@ -19,7 +19,9 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIden
 # FORMATTED
 ~~~roc
 package [
-	something, SomeType
+	# This comment is here
+	something,
+	SomeType,
 ] packages {somePkg, "../main.roc"}
 
 ~~~

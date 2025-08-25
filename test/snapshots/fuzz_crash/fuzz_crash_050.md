@@ -29,7 +29,7 @@ KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
 module []
 
 _0 = {
-	<malformed>
+	
 }
 ~~~
 # EXPECTED

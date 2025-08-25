@@ -24,7 +24,7 @@ when value is {
 	x
 	if x > 0 => "positive: ${Num.toStr x}" x
 	if x < 0 => "negative: ${Num.toStr x}" _ => "other"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

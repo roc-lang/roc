@@ -21,7 +21,7 @@ Int OpBar ~~~
 ~~~
 # FORMATTED
 ~~~roc
-0 | <malformed>
+0 | 
 ~~~
 # EXPECTED
 NIL

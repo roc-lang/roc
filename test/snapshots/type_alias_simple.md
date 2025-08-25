@@ -42,39 +42,43 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (apply_lc
-      (lc "getUser")
-      (num_literal_i32 100)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "getUser")
+          (num_literal_i32 100)
+        )
+      )
+      (args
+        (underscore)
+      )
     )
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 UserId: U64
 
 getUser: (UserId -> Str)
 getUser = \id -> if id > 10 "big" else "small"
 
-main
-(<malformed>! | _) | getUser(100)
+main! = \_ -> getUser(100)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
 at 6:16 to 6:29
-
-**Parse Error**
-at 8:7 to 8:7
 
 **Unsupported Node**
 at 5:11 to 5:24
@@ -83,7 +87,10 @@ at 5:11 to 5:24
 at 6:11 to 6:16
 
 **Unsupported Node**
-at 8:5 to 8:7
+at 8:1 to 8:6
+
+**Unsupported Node**
+at 8:9 to 8:13
 
 # CANONICALIZE
 ~~~clojure
@@ -97,13 +104,12 @@ at 8:5 to 8:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

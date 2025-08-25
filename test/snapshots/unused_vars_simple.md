@@ -80,50 +80,53 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "a")
-        (apply_lc
-          (lc "unused_regular")
-          (num_literal_i32 5)
-        )
-      )
-      (binop_equals
-        (lc "b")
-        (apply_lc
-          (lc "used_underscore")
-          (num_literal_i32 10)
-        )
-      )
-      (binop_equals
-        (lc "c")
-        (apply_lc
-          (lc "unused_underscore")
-          (num_literal_i32 15)
-        )
-      )
-      (binop_equals
-        (lc "d")
-        (apply_lc
-          (lc "used_regular")
-          (num_literal_i32 20)
-        )
-      )
-      (binop_plus
-        (binop_plus
-          (binop_plus
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
             (lc "a")
-            (lc "b")
+            (apply_lc
+              (lc "unused_regular")
+              (num_literal_i32 5)
+            )
           )
-          (lc "c")
+          (binop_equals
+            (lc "b")
+            (apply_lc
+              (lc "used_underscore")
+              (num_literal_i32 10)
+            )
+          )
+          (binop_equals
+            (lc "c")
+            (apply_lc
+              (lc "unused_underscore")
+              (num_literal_i32 15)
+            )
+          )
+          (binop_equals
+            (lc "d")
+            (apply_lc
+              (lc "used_regular")
+              (num_literal_i32 20)
+            )
+          )
+          (binop_plus
+            (binop_plus
+              (binop_plus
+                (lc "a")
+                (lc "b")
+              )
+              (lc "c")
+            )
+            (lc "d")
+          )
         )
-        (lc "d")
+      )
+      (args
+        (underscore)
       )
     )
   )
@@ -131,7 +134,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 unused_regular = \x -> 42
 
@@ -144,8 +152,7 @@ unused_underscore = \_ignored -> 100
 # Regular variable that is used - should be fine
 used_regular = \number -> number + 1
 
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	a = unused_regular(5)
 	b = used_underscore(10)
 	c = unused_underscore(15)
@@ -156,9 +163,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 15:7 to 15:7
-
 **Unsupported Node**
 at 4:18 to 4:22
 
@@ -172,7 +176,10 @@ at 10:21 to 10:32
 at 13:16 to 13:25
 
 **Unsupported Node**
-at 15:5 to 15:7
+at 15:1 to 15:6
+
+**Unsupported Node**
+at 15:9 to 15:13
 
 # CANONICALIZE
 ~~~clojure
@@ -181,13 +188,12 @@ at 15:5 to 15:7
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

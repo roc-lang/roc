@@ -17,7 +17,7 @@ MalformedString LowerIdent CloseRound CloseCurly LowerIdent LowerIdent LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-<malformed>
+
 ~~~
 # EXPECTED
 NIL

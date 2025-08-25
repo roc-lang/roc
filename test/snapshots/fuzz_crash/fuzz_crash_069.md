@@ -16,7 +16,9 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly Int Clos
 ~~~
 # FORMATTED
 ~~~roc
-package []
+package [] packages {d, {
+	0
+}}
 
 ~~~
 # EXPECTED

@@ -68,11 +68,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 # FORMATTED
 ~~~roc
 module [
-	string_function, wrong_type_function
+	string_function,
+	wrong_type_function,
 ]
 
-
-# Annotation says it takes and returns strings, but implementation uses number addition
 string_function: (Str -> Str)
 string_function = \x -> x + 42
 

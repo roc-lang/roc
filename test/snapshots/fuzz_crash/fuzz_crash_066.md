@@ -27,7 +27,6 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon OpenSquare Int CloseSquare ~~
 ~~~roc
 module []
 
-
 C: [0]
 ~~~
 # EXPECTED

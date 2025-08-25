@@ -23,15 +23,15 @@ KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~roc
 when coord is {
 	(Zero, Zero)
-	<malformed>
+	=>
 	"origin"((x, Zero))
-	<malformed>
+	=>
 	x((Zero, y))
-	<malformed>
+	=>
 	y((x, y))
-	<malformed>
+	=>
 	x
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

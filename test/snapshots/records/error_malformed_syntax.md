@@ -15,18 +15,16 @@ OpenCurly LowerIdent OpColon String Comma OpColon Int Comma Comma LowerIdent OpC
 (record_literal
   (binop_colon
     (lc "name")
-    (tuple_literal
-      (str_literal_big "Alice")
-      (malformed malformed:expr_unexpected_token)
-    )
+    (str_literal_big "Alice")
   )
-  (num_literal_i32 30)
   (malformed malformed:expr_unexpected_token)
 )
 ~~~
 # FORMATTED
 ~~~roc
-{ name: ("Alice", <malformed>), 30, <malformed> }
+{
+	name: "Alice"
+}
 ~~~
 # EXPECTED
 NIL
@@ -35,25 +33,18 @@ NIL
 at 1:18 to 1:18
 
 **Parse Error**
-at 1:24 to 1:24
-
-**Parse Error**
-at 1:1 to 1:26
+at 1:1 to 1:20
 
 **Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 1:24 to 1:24
+at 1:18 to 1:18
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
     (Expr.lookup "name")
-    (Expr.malformed)
+    (Expr.str_literal_big)
   )
-  (Expr.num_literal_i32 30)
   (Expr.malformed)
 )
 ~~~

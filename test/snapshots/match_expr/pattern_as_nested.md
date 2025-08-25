@@ -15,24 +15,19 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <24 branches>)
+(match <21 branches>)
 ~~~
 # FORMATTED
 ~~~roc
 when person is {
-	{ name, (address: {
+	{ name, address: {
 		city
-	}) as addr }
-	<malformed>
-	fullPerson
-	<malformed>((fullPerson, addr, city))
-	{
-		name
-	}
-	<malformed>
-	simplePerson
-	<malformed>((simplePerson, name, "unknown"))
-} -> <malformed>
+	} }
+	as
+	addr
+} as fullPerson => (fullPerson, addr, city) -> {
+	name
+} as simplePerson => (simplePerson, name, "unknown")
 ~~~
 # EXPECTED
 NIL
@@ -41,28 +36,19 @@ NIL
 at 1:1 to 1:14
 
 **Parse Error**
-at 2:41 to 2:41
+at 2:5 to 2:31
 
 **Parse Error**
-at 2:55 to 2:55
+at 2:31 to 2:31
 
 **Parse Error**
-at 3:14 to 3:14
-
-**Parse Error**
-at 3:30 to 3:30
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
+at 1:1 to 3:5
 
 **Unsupported Node**
-at 1:14 to 4:1
+at 1:14 to 2:82
 
 **Unsupported Node**
-at 4:2 to 4:2
+at 3:5 to 3:64
 
 # CANONICALIZE
 ~~~clojure

@@ -1552,7 +1552,7 @@ test "collections.NodeSlices with negative sentinel" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var node_slices = collections.NodeSlices(Node.Idx){ .entries = collections.SafeList(collections.NodeSlices(Node.Idx).Entry){} };
+    var node_slices = collections.NodeSlices(Node.Idx){ .entries = collections.SafeList(Node.Idx){} };
     defer node_slices.entries.items.deinit(allocator);
 
     // Test single node
@@ -1579,8 +1579,8 @@ test "collections.NodeSlices with negative sentinel" {
 
     // First verify entries are correct before iterating
     try testing.expectEqual(@as(usize, 3), entries.len);
-    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0].node_idx));
-    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1].node_idx));
+    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0]));
+    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1]));
 
     var iter2 = node_slices.nodes(&idx2);
     const first = iter2.next().?;
@@ -1603,9 +1603,9 @@ test "collections.NodeSlices with negative sentinel" {
 
     // Multiple nodes ARE stored in entries (last one with sign bit set)
     try testing.expectEqual(@as(usize, 3), entries.len);
-    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0].node_idx));
-    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1].node_idx));
-    const last_val = @intFromEnum(entries[2].node_idx);
+    try testing.expectEqual(@as(i32, 10), @intFromEnum(entries[0]));
+    try testing.expectEqual(@as(i32, 20), @intFromEnum(entries[1]));
+    const last_val = @intFromEnum(entries[2]);
     try testing.expect(last_val < 0); // Sign bit should be set
     try testing.expectEqual(@as(i32, 30), last_val & ~@as(i32, sign_bit)); // Original value should be 30
 }

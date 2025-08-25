@@ -21,57 +21,60 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "pf")
     (uc "Stdout")
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (binop_pipe
-      (uc "Stdout")
-      (dot_lc "line")
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "Stdout")
+            (not_lc "line")
+          )
+          (str_literal_big "Hello, world!")
+        )
+      )
+      (args
+        (underscore)
+      )
     )
   )
-  (unary_not <unary>)
 )
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout]
+import pf.Stdout
 
-main
-(<malformed>! | _) | (Stdout | .line)
-"Hello, world!"!
+main! = \_ -> Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:7 to 5:7
-
 **Unsupported Node**
 at 3:1 to 3:17
 
 **Unsupported Node**
-at 5:5 to 5:7
+at 5:1 to 5:6
 
 **Unsupported Node**
-at 5:13 to 5:19
+at 5:9 to 5:13
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
-  (Expr.unary_not)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[True, False]_others")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

@@ -19,7 +19,7 @@ Int OpPlus OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-1 + <malformed>
+1 + + 2
 ~~~
 # EXPECTED
 NIL

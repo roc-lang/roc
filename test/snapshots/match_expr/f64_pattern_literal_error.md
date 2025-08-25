@@ -23,16 +23,16 @@ KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent
 when x is {
 	3.14f64
 	f64
-	<malformed>
+	=>
 	"pi"
 	0.0f64
 	f64
-	<malformed>
+	=>
 	"zero"
 	value
-	<malformed>
+	=>
 	"other"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

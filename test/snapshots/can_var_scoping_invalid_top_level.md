@@ -26,8 +26,6 @@ KwModule OpenSquare CloseSquare KwVar LowerIdent OpAssign Int ~~~
 ~~~roc
 module []
 
-
-# This should cause an error - var not allowed at top level
 var topLevelVar_ = 0
 ~~~
 # EXPECTED

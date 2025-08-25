@@ -20,7 +20,7 @@ KwModule OpenSquare CloseSquare OpBang Int Dot LowerIdent ~~~
 ~~~roc
 module []
 
-0 | .t!
+!0 | .t
 ~~~
 # EXPECTED
 NIL

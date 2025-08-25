@@ -25,24 +25,26 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Op
 ~~~roc
 when items is {
 	[_]
-	<malformed>
+	=>
 	1 # pattern match on a list with a single (ignored) element
-	[<unary_double_dot>]
+	[..]
 	last
-	<malformed>
-	<malformed>
+	]
+	=>
 	last # pattern match on the last item in the list
-	[first => (<unary_double_dot> => first # pattern match on the first item in the list)]
-	[(_, _, third)]
-	<malformed>
-	third
-	[(x, _, _, y)]
-	<malformed>
-	x + y
+	[first, ..]]
+	=>
+	first # pattern match on the first item in the list
+	[_, _, third]
+	=>
+	third # pattern match on the third item in the list
+	[x, _, _, y]
+	=>
+	x + y # first + fourth item in the list
 	[]
-	<malformed>
-	0
-} -> <malformed>
+	=>
+	0 # match an empty list
+} -> 
 ~~~
 # EXPECTED
 NIL
@@ -69,7 +71,10 @@ at 3:16 to 3:16
 at 4:15 to 4:15
 
 **Parse Error**
-at 4:5 to 5:5
+at 4:5 to 4:17
+
+**Parse Error**
+at 4:17 to 4:17
 
 **Parse Error**
 at 5:19 to 5:19

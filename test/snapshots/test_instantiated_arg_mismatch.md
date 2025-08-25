@@ -17,77 +17,45 @@ type=expr
 OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpenRound Int Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "pair")
-    (binop_thin_arrow
+(binop_thin_arrow
+  (record_literal
+    (binop_colon
+      (lc "pair")
       (lc "a")
-      (binop_thin_arrow
-        (lc "a")
-        (tuple_literal
-          (lc "a")
-          (lc "a")
-        )
-      )
     )
+    (lc "a")
   )
-  (binop_equals
-    (lc "pair")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "x")
-          (lc "y")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "x")
-          (lc "y")
-        )
-      )
-    )
-  )
-  (apply_lc
-    (lc "pair")
-    (tuple_literal
-      (num_literal_i32 42)
-      (str_literal_big "hello")
-    )
+  (tuple_literal
+    (lc "a")
+    (lc "a")
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-pair: (a -> (a -> (a, a)))
-pair = \(x, y) -> (x, y)
-pair((42, "hello"))
+{
+	pair: a,
+	a
+} -> (a, a)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:12 to 2:26
+**Parse Error**
+at 1:1 to 2:17
 
 **Unsupported Node**
-at 3:12 to 3:19
+at 1:1 to 2:26
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "pair")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.apply_ident)
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-pair : Error
+# No expression found
 ~~~

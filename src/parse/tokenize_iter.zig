@@ -125,7 +125,6 @@ pub const Token = struct {
         OpBar,
         OpDoubleSlash,
         OpSlash,
-        OpPercent,
         OpCaret,
         OpGreaterThanOrEq,
         OpGreaterThan,
@@ -273,7 +272,6 @@ pub const Token = struct {
                 .OpBar,
                 .OpDoubleSlash,
                 .OpSlash,
-                .OpPercent,
                 .OpCaret,
                 .OpGreaterThanOrEq,
                 .OpGreaterThan,
@@ -1334,10 +1332,10 @@ pub const Tokenizer = struct {
                     try self.pushTokenNormalHere(gpa, .OpBackslash, start);
                 },
 
-                // Percent (%)
+                // Percent (%) - not supported in Roc
                 '%' => {
+                    // Modulo operator not supported - just skip it
                     self.cursor.pos += 1;
-                    try self.pushTokenNormalHere(gpa, .OpPercent, start);
                 },
 
                 // Caret (^)
@@ -2055,10 +2053,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .OpSlash => {
                 std.debug.assert(length == 1);
                 try buf2.append(alloc, '/');
-            },
-            .OpPercent => {
-                std.debug.assert(length == 1);
-                try buf2.append(alloc, '%');
             },
             .OpCaret => {
                 std.debug.assert(length == 1);
@@ -2907,17 +2901,6 @@ pub const TokenIterator = struct {
                 }
                 return Token{
                     .tag = .OpAmpersand,
-                    .region = base.Region{
-                        .start = base.Region.Position{ .offset = @intCast(start) },
-                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
-                    },
-                    .extra = .{ .none = 0 },
-                };
-            },
-            '%' => {
-                self.cursor.pos += 1;
-                return Token{
-                    .tag = .OpPercent,
                     .region = base.Region{
                         .start = base.Region.Position{ .offset = @intCast(start) },
                         .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },

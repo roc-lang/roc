@@ -16,7 +16,7 @@ Int LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-0xFF
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -250,54 +250,57 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "result1")
-        (apply_lc
-          (lc "identity")
-          (num_literal_i32 123)
-        )
-      )
-      (binop_equals
-        (lc "result2")
-        (apply_lc
-          (lc "anotherIdentity")
-          (str_literal_small "test")
-        )
-      )
-      (binop_equals
-        (lc "result3")
-        (apply_lc
-          (lc "combine")
-          (tuple_literal
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
             (lc "result1")
+            (apply_lc
+              (lc "identity")
+              (num_literal_i32 123)
+            )
+          )
+          (binop_equals
             (lc "result2")
+            (apply_lc
+              (lc "anotherIdentity")
+              (str_literal_small "test")
+            )
+          )
+          (binop_equals
+            (lc "result3")
+            (apply_lc
+              (lc "combine")
+              (tuple_literal
+                (lc "result1")
+                (lc "result2")
+              )
+            )
+          )
+          (binop_equals
+            (lc "result4")
+            (apply_lc
+              (lc "yetAnotherIdentity")
+              (uc "True")
+            )
+          )
+          (binop_equals
+            (lc "result5")
+            (apply_lc
+              (lc "finalIdentity")
+              (frac_literal_small 3.14)
+            )
+          )
+          (binop_plus
+            (lc "a")
+            (lc "f")
           )
         )
       )
-      (binop_equals
-        (lc "result4")
-        (apply_lc
-          (lc "yetAnotherIdentity")
-          (uc "True")
-        )
-      )
-      (binop_equals
-        (lc "result5")
-        (apply_lc
-          (lc "finalIdentity")
-          (frac_literal_small 3.14)
-        )
-      )
-      (binop_plus
-        (lc "a")
-        (lc "f")
+      (args
+        (underscore)
       )
     )
   )
@@ -305,7 +308,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/main.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/main.roc" platform [
+		main,
+	],
+}
 
 a = 42
 
@@ -323,7 +331,10 @@ anotherIdentity = \y -> y
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
-combine = \(first, second) -> (first, second)
+combine = \(
+	first,
+	second
+) -> (first, second)
 f = 1
 g = 2
 h = 3
@@ -349,8 +360,7 @@ yetAnotherIdentity = \arg -> arg
 aa = 100
 ab = 200
 finalIdentity = \param -> param
-main
-(<malformed>! | _) | {
+main! = \_ -> {
 	result1 = identity(123)
 	result2 = anotherIdentity("test")
 	result3 = combine((result1, result2))
@@ -362,9 +372,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 55:7 to 55:7
-
 **Unsupported Node**
 at 7:12 to 7:16
 
@@ -381,7 +388,10 @@ at 46:22 to 46:28
 at 53:17 to 53:25
 
 **Unsupported Node**
-at 55:5 to 55:7
+at 55:1 to 55:6
+
+**Unsupported Node**
+at 55:9 to 55:13
 
 # CANONICALIZE
 ~~~clojure
@@ -419,13 +429,12 @@ at 55:5 to 55:7
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg2, _arg3 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

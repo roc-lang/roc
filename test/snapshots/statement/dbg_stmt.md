@@ -16,7 +16,7 @@ KwDbg UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-<malformed>
+ Bool.True
 ~~~
 # EXPECTED
 NIL

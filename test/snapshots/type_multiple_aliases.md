@@ -43,22 +43,18 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   )
   (binop_colon
     (uc "User")
-    (block
+    (record_literal
       (binop_colon
         (lc "id")
-        (binop_colon
-          (tuple_literal
-            (binop_colon
-              (tuple_literal
-                (uc "UserId")
-                (lc "name")
-              )
-              (uc "UserName")
-            )
-            (lc "age")
-          )
-          (uc "UserAge")
-        )
+        (uc "UserId")
+      )
+      (binop_colon
+        (lc "name")
+        (uc "UserName")
+      )
+      (binop_colon
+        (lc "age")
+        (uc "UserAge")
       )
     )
   )
@@ -84,8 +80,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
             (lc "id")
             (lc "id")
           )
-          (tuple_literal
+          (binop_colon
             (lc "name")
+            (lc "name")
+          )
+          (binop_colon
+            (lc "age")
             (lc "age")
           )
         )
@@ -120,27 +120,30 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (lc "main")
-  (binop_pipe
-    (binop_pipe
-      (unary_not <unary>)
-      (underscore)
-    )
-    (block
-      (binop_equals
-        (lc "user")
-        (apply_lc
-          (lc "create_user")
-          (tuple_literal
-            (num_literal_i32 123)
-            (str_literal_big "Alice")
-            (num_literal_i32 25)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "user")
+            (apply_lc
+              (lc "create_user")
+              (tuple_literal
+                (num_literal_i32 123)
+                (str_literal_big "Alice")
+                (num_literal_i32 25)
+              )
+            )
+          )
+          (apply_lc
+            (lc "get_user_name")
+            (lc "user")
           )
         )
       )
-      (apply_lc
-        (lc "get_user_name")
-        (lc "user")
+      (args
+        (underscore)
       )
     )
   )
@@ -148,20 +151,27 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 UserId: U64
 UserName: Str
 UserAge: U8
-User: {
-	id: (((UserId, name): UserName, age): UserAge)
-}
+User: { id: UserId, name: UserName, age: UserAge }
+
 create_user: (UserId -> (UserName -> (UserAge -> User)))
-create_user = \(id, name, age) -> { id: id, (name, age) }
+create_user = \(
+	id,
+	name,
+	age
+) -> { id: id, name: name, age: age }
 get_user_name: (User -> UserName)
-get_user_name = \user -> user | .name
-main
-(<malformed>! | _) | {
+get_user_name = \user -> user.name
+main! = \_ -> {
 	user = create_user((123, "Alice", 25))
 	get_user_name(user)
 }
@@ -169,12 +179,6 @@ main
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 14:7 to 14:7
-
-**Unsupported Node**
-at 6:44 to 6:44
-
 **Unsupported Node**
 at 8:15 to 8:48
 
@@ -188,7 +192,10 @@ at 11:17 to 11:33
 at 12:17 to 12:24
 
 **Unsupported Node**
-at 14:5 to 14:7
+at 14:1 to 14:6
+
+**Unsupported Node**
+at 14:9 to 14:13
 
 # CANONICALIZE
 ~~~clojure
@@ -210,10 +217,15 @@ at 14:5 to 14:7
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "id")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.apply_tag)
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.apply_tag)
       )
     )
   )
@@ -227,13 +239,12 @@ at 14:5 to 14:7
     (Expr.malformed)
   )
   (Expr.malformed)
-  (Expr.lookup "main")
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "Error")
 ~~~
 # TYPES
 ~~~roc

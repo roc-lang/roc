@@ -43,7 +43,9 @@ module [
 	red,
 ]
 
-import design exposing [Styles, Color, Encoder]<malformed>CE<malformed>
+import design.Styles.Color exposing [Encoder]
+asCE]
+
 red: CE
 red = ...
 ~~~

@@ -99,11 +99,9 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
       )
       (str_literal_big "world")
       (list_literal
-        (tuple_literal
-          (num_literal_i32 1)
-          (num_literal_i32 2)
-          (num_literal_i32 3)
-        )
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+        (num_literal_i32 3)
       )
     )
   )
@@ -148,7 +146,7 @@ single = 42
 pair = (1, 2)
 triple = (1, "hello", True)
 nested = ((1, 2), (3, 4))
-mixed = (add_one(5), "world", [(1, 2, 3)])
+mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
 with_lambda = \n -> (n + 1, 42)
 
@@ -173,7 +171,7 @@ at 12:28 to 12:29
 at 13:26 to 13:27
 
 **Unsupported Node**
-at 14:41 to 15:1
+at 14:41 to 14:42
 
 **Unsupported Node**
 at 15:22 to 15:23

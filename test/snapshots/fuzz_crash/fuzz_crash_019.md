@@ -191,16 +191,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   )
   (binop_colon
     (uc "Som")
-    (block
+    (record_literal
       (binop_colon
         (lc "foo")
-        (binop_colon
-          (tuple_literal
-            (uc "O")
-            (lc "bar")
-          )
-          (lc "g")
-        )
+        (uc "O")
+      )
+      (binop_colon
+        (lc "bar")
+        (lc "g")
       )
     )
   )
@@ -329,11 +327,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
             (lc "n")
             (lc "list")
             (block
-              (binop_colon
-                (lc "line")
-                (lc "line")
+              (apply_anon
+                (not_lc "line")
+                (str_literal_big "Ag ${n} to ${er}")
               )
-              (unary_not <unary>)
               (binop_plus
                 (lc "ber")
                 (lc "n")
@@ -342,34 +339,29 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
           )
           (binop_equals
             (lc "rd")
-            (block
+            (record_literal
               (binop_colon
                 (lc "foo")
-                (tuple_literal
-                  (binop_colon
-                    (tuple_literal
-                      (binop_colon
-                        (tuple_literal
-                          (binop_colon
-                            (tuple_literal
-                              (num_literal_i32 123)
-                              (lc "bar")
-                            )
-                            (str_literal_small "H")
-                          )
-                          (lc "baz")
-                        )
-                        (lc "tag")
-                      )
-                      (lc "qux")
-                    )
-                    (apply_uc
-                      (uc "Ok")
-                      (lc "world")
-                    )
-                  )
-                  (lc "ned")
+                (num_literal_i32 123)
+              )
+              (binop_colon
+                (lc "bar")
+                (str_literal_small "H")
+              )
+              (binop_colon
+                (lc "baz")
+                (lc "tag")
+              )
+              (binop_colon
+                (lc "qux")
+                (apply_uc
+                  (uc "Ok")
+                  (lc "world")
                 )
+              )
+              (binop_colon
+                (lc "ned")
+                (lc "ned")
               )
             )
           )
@@ -385,11 +377,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
                 (lc "t")
               )
               (list_literal
-                (tuple_literal
-                  (num_literal_i32 1)
-                  (num_literal_i32 2)
-                  (num_literal_i32 3)
-                )
+                (num_literal_i32 1)
+                (num_literal_i32 2)
+                (num_literal_i32 3)
               )
             )
           )
@@ -405,11 +395,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
                 (lc "tuple")
               )
               (list_literal
-                (tuple_literal
-                  (num_literal_i32 1)
-                  (num_literal_i32 2)
-                  (num_literal_i32 3)
-                )
+                (num_literal_i32 1)
+                (num_literal_i32 2)
+                (num_literal_i32 3)
               )
               (malformed malformed:expr_unexpected_token)
             )
@@ -517,23 +505,33 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 # FORMATTED
 ~~~roc
 # Thnt!
-app { # Thnt!
-pf: ("c" platform [main]) }
+app
+{
+	# Thnt!
+	# Thnt!
+pf: "c" platform [
+		main,
+	],
+}
 
-import pf exposing [Stdout, line]
-import Stdot exposing [Cust]
-import Bae exposing [Gooe]
+import pf.Stdout exposing [line]
+import Stdot.Cust
+import Bae as Gooe
 import Ba
 Map((a, b)): (Lis -> (ab -> List(b)))
 MapML(): (List() -> (ab -> List(b)))
-line: () # Co
-Som: {
-	foo: ((O, bar): g)
+line: (
+) # Co
+Som: { foo: O, bar: g }
+Ml(a): {# ld
 }
-Ml(a): {  }
-Soine(a): {  }
+
+Soine(a): {#
+} #
 Maybe(a): [Somne]
-Mayine(a): []
+
+Mayine(a): [#
+] #)
 
 ane = \num -> if num 2 else 5
 
@@ -541,58 +539,79 @@ one: U6
 add = \num -> {
 	1
 	if num {
-		<malformed>
+		dbg # bug
 		s: s
 		exp0: exp0
 	} else {
-		<malformed>
+		dbg
 		123
 		r: r
 	}
 }
-me = <malformed>
-<malformed>!Listlt(({  }, _))
+
+me = main!:Listlt(({  }, _))
 ma = \_ -> {
 	e: e
 	w = "d"
 	var er = 123
 	expect blaue
-	<ret>
-	...
-	me((..., <malformed>))
+	return tag
+	
+
+#
+...
+	me((
+		...
+	))
 	crash ke
 	"Unr!"
 	i = "H, ${d}"
-	t = [one((er, <malformed>, 456, 9, <malformed>))]
-	for n in list {
-		{
-			line: line
-			"Ag ${n} to ${er}"!
-			ber + n
-		}
-	}
+	t = [
+		one((
+			er,
+			456,
+			9
+		))
+	]
+	for n in list { {
+		line!("Ag ${n} to ${er}")
+		ber + n
+	} }
 	rd = {
-		foo: ((((123, bar): "H", baz): tag, qux): Ok(world), ned)
+		foo: 123,
+		bar: "H",
+		baz: tag,
+		qux: Ok(world),
+		ned: ned
 	}
-	t = (123, "World", tag, O, (nd, t), [(1, 2, 3)])
-	m((123, "World", ag1, O, (ne, tuple), [(
-		1,
-		2,
-		3,
-	)], <malformed>))
+	t = (
+		123,
+		"World",
+		tag,
+		O,
+		(nd, t),
+		[1, 2, 3]
+	)
+	m((
+		123,
+		"World",
+		ag1,
+		O,
+		(ne, tuple),
+		[1, 2, 3]
+	))
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
-	<malformed> | .od()
-	<malformed> | .ned()
-	<malformed> | .recd
-	<malformed>
+	? | .od()
+	? | .ned()
+	? | .recd
+	?
 	Stdo
-	<malformed>!
+	!"Ho${ #
 	r(nu)
-}
-<malformed>
-<malformed>
-<malformed>
+}"
+)
+} # Cocl
 y: {  }
 e = {  }
 t: V((a, c))
@@ -624,12 +643,6 @@ at 55:7 to 55:7
 
 **Parse Error**
 at 58:12 to 58:12
-
-**Parse Error**
-at 58:21 to 58:21
-
-**Parse Error**
-at 58:17 to 59:3
 
 **Parse Error**
 at 65:7 to 65:7
@@ -734,9 +747,6 @@ at 17:3 to 20:14
 at 22:8 to 22:9
 
 **Unsupported Node**
-at 24:22 to 24:22
-
-**Unsupported Node**
 at 30:12 to 30:19
 
 **Unsupported Node**
@@ -796,10 +806,11 @@ at 118:1 to 121:1
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.lookup "foo")
-        (Expr.binop_colon
-          (Expr.malformed)
-          (Expr.lookup "g")
-        )
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.lookup "g")
       )
     )
   )

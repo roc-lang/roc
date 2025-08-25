@@ -67,26 +67,22 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
   (binop_equals
     (lc "my_nonempty_list")
     (list_literal
-      (tuple_literal
-        (lc "num")
-        (lc "frac")
-      )
+      (lc "num")
+      (lc "frac")
     )
   )
   (binop_equals
     (lc "make_container")
     (lambda
       (body
-        (block
+        (record_literal
           (binop_colon
             (lc "data")
-            (binop_colon
-              (tuple_literal
-                (lc "value")
-                (lc "count")
-              )
-              (num_literal_i32 1)
-            )
+            (lc "value")
+          )
+          (binop_colon
+            (lc "count")
+            (num_literal_i32 1)
           )
         )
       )
@@ -195,11 +191,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (apply_lc
       (lc "identity_record")
       (list_literal
-        (tuple_literal
-          (num_literal_i32 1)
-          (num_literal_i32 2)
-          (num_literal_i32 3)
-        )
+        (num_literal_i32 1)
+        (num_literal_i32 2)
+        (num_literal_i32 3)
       )
     )
   )
@@ -229,22 +223,34 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: ("../basic-cli/platform.roc" platform [main]) }
+app
+{
+	pf: "../basic-cli/platform.roc" platform [
+		main,
+	],
+}
 
 num = 42
 frac = 4.2
 str = "hello"
 my_empty_list = []
-my_nonempty_list = [(num, frac)]
-make_container = \value -> {
-	data: ((value, count): 1)
-}
+my_nonempty_list = [num, frac]
+
+# Record with polymorphic field
+make_container = \value -> { data: value, count: 1 }
+
+# Used with different types
 int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
-update_data = \(container, new_value) -> {
+
+# Polymorphic record update
+update_data = \(
+	container,
+	new_value
+) -> {
 	container: container
-	<malformed>
+	&
 	data: new_value
 }
 updated_int = update_data((int_container, 100))
@@ -254,9 +260,9 @@ identity_record = \x -> {
 }
 int_record = identity_record(42)
 str_record = identity_record("test")
-list_record = identity_record([(1, 2, 3)])
+list_record = identity_record([1, 2, 3])
 main = \_ -> {
-	(int_container | .count) + (str_container | .count)
+	int_container.count + str_container.count
 }
 ~~~
 # EXPECTED
@@ -269,7 +275,7 @@ at 19:50 to 19:50
 at 7:17 to 7:18
 
 **Unsupported Node**
-at 8:20 to 9:1
+at 8:20 to 8:31
 
 **Unsupported Node**
 at 11:18 to 11:26
@@ -281,7 +287,7 @@ at 19:15 to 19:38
 at 26:19 to 26:23
 
 **Unsupported Node**
-at 31:31 to 31:41
+at 31:31 to 31:40
 
 **Unsupported Node**
 at 33:8 to 33:12

@@ -24,14 +24,12 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColon OpenSquare UpperId
   (binop_colon
     (uc "Color")
     (list_literal
-      (tuple_literal
-        (uc "Red")
-        (uc "Green")
-        (uc "Blue")
-        (uc "Yellow")
-        (uc "Orange")
-        (uc "Purple")
-      )
+      (uc "Red")
+      (uc "Green")
+      (uc "Blue")
+      (uc "Yellow")
+      (uc "Orange")
+      (uc "Purple")
     )
   )
   (binop_colon
@@ -60,15 +58,23 @@ module [
 	kind,
 ]
 
-Color: [(Red, Green, Blue, Yellow, Orange, Purple)]
+Color: [
+	Red,
+	Green,
+	Blue,
+	Yellow,
+	Orange,
+	Purple
+]
+
 kind: (Color -> Str)
 kind = \color -> when color is {
 	Red
 	\Green -> Blue => "primary"
-	(Yellow.Orange) | Purple
-	<malformed>
+	Yellow.Orange | Purple
+	=>
 	"secondary"
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL
@@ -86,7 +92,7 @@ at 6:16 to 9:2
 at 9:2 to 9:2
 
 **Unsupported Node**
-at 3:9 to 4:1
+at 3:9 to 3:51
 
 **Unsupported Node**
 at 5:8 to 5:20

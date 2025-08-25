@@ -21,11 +21,11 @@ KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound Upp
 ~~~roc
 when (value, other) is {
 	(Some(x), y)
-	<malformed>
+	=>
 	x + y((None, x))
-	<malformed>
+	=>
 	x * 2
-} -> <malformed>
+} -> 
 ~~~
 # EXPECTED
 NIL

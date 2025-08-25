@@ -21,7 +21,7 @@ MalformedString LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRoun
 ~~~
 # FORMATTED
 ~~~roc
-<malformed>
+
 ~~~
 # EXPECTED
 NIL

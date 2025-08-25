@@ -21,29 +21,26 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
 (list_literal
-  (tuple_literal
-    (num_literal_i32 1)
-    (num_literal_i32 2)
-    (num_literal_i32 3)
-    (malformed malformed:expr_unexpected_token)
-  )
+  (num_literal_i32 1)
+  (num_literal_i32 2)
+  (num_literal_i32 3)
 )
 ~~~
 # FORMATTED
 ~~~roc
-[(1, 2, 3, <malformed>)]
+[	# Open
+	1,	# First
+	# A comment in the middle
+	2,	# Second
+	# This comment has no blanks around it
+	3# Third
+]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 9:1 to 9:1
-
-**Parse Error**
-at 1:1 to 9:2
-
 **Unsupported Node**
-at 1:1 to 9:1
+at 1:1 to 8:4
 
 # CANONICALIZE
 ~~~clojure

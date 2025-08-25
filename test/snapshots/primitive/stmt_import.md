@@ -20,10 +20,8 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent OpenSquare Lo
     (uc "Json")
   )
   (list_literal
-    (tuple_literal
-      (lc "foo")
-      (uc "BAR")
-    )
+    (lc "foo")
+    (uc "BAR")
   )
 )
 ~~~
@@ -31,8 +29,8 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent OpenSquare Lo
 ~~~roc
 module []
 
-
-import json exposing [Json][(foo, BAR)]
+import json.Json
+[foo, BAR]
 ~~~
 # EXPECTED
 NIL
