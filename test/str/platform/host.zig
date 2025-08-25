@@ -82,17 +82,23 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
-// Windows __main stub for MinGW-style initialization
+// OS-specific entry point handling
 comptime {
-    if (@import("builtin").os.tag == .windows) {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows) {
+        // Windows needs __main for MinGW-style initialization
         @export(__main, .{ .name = "__main" });
+    } else {
+        // On Unix-like systems, export main to be called by C runtime
+        @export(&main, .{ .name = "main" });
     }
 }
+
 fn __main() void {}
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-pub export fn roc_platform_host_main(argc: c_int, argv: [*][*:0]u8) c_int {
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
     _ = argc;
     _ = argv;
 

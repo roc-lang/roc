@@ -324,11 +324,6 @@ fn addMainExe(
         .linkage = .static,
     });
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Add C shim that provides main and calls roc_platform_host_main
-    test_platform_host_lib.addCSourceFile(.{
-        .file = b.path("test/str/platform/main_shim.c"),
-        .flags = &.{"-std=c99"},
-    });
 
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;

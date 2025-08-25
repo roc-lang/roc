@@ -114,9 +114,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            // try args.append("-w");
+            try args.append("-w");
             // Add verbose flags for debugging (uncomment if needed)
-            try args.append("--verbose");
+            // try args.append("--verbose");
             // try args.append("--print-map");
 
             // Specify the dynamic linker/interpreter

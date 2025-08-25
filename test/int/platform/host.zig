@@ -63,8 +63,19 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 extern fn roc__addInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
-// Windows __main stub for MinGW-style initialization
-pub export fn __main() void {}
+// OS-specific entry point handling
+comptime {
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .windows) {
+        // Windows needs __main for MinGW-style initialization
+        @export(__main, .{ .name = "__main" });
+    } else {
+        // On Unix-like systems, export main to be called by C runtime
+        @export(&main, .{ .name = "main" });
+    }
+}
+
+fn __main() void {}
 
 /// Arguments struct for passing two integers to Roc as a tuple
 const Args = struct {
@@ -74,7 +85,17 @@ const Args = struct {
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-pub fn main() !void {
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
+    _ = argc;
+    _ = argv;
+    roc_platform_host_main() catch |err| {
+        std.debug.print("Error in platform host main: {}\n", .{err});
+        return 1;
+    };
+    return 0;
+}
+
+fn roc_platform_host_main() !void {
     std.io.getStdErr().writer().print("DEBUG HOST: main() started\n", .{}) catch {};
     std.debug.print("DEBUG HOST: main() started\n", .{});
     var host_env = HostEnv{
