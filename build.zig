@@ -414,7 +414,6 @@ fn addMainExe(
 
     exe.linkLibrary(zstd.artifact("zstd"));
 
-
     return exe;
 }
 

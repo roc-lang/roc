@@ -139,6 +139,18 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("-o");
             try args.append(config.output_path);
 
+            // Prevent hidden linker behaviour -- only explicit platfor mdependencies
+            try args.append("-nostdlib");
+            // Remove unused sections to reduce binary size
+            try args.append("--gc-sections");
+            // TODO make the confirugable instead of using comments
+            // Suppress linker warnings
+            try args.append("-w");
+            // Verbose linker for debugging (uncomment as needed)
+            // try args.append("--verbose");
+            // try args.append("--print-map");
+            // try args.append("--error-limit=0");
+
             // Determine target ABI
             const target_abi = config.target_abi orelse if (builtin.target.abi == .musl) TargetAbi.musl else TargetAbi.gnu;
 
@@ -146,24 +158,11 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                 .musl => {
                     // Static musl linking
                     try args.append("-static");
-                    try args.append("-nostdlib");
-                    try args.append("--error-limit=0");
-                    try args.append("--entry");
-                    try args.append("_start");
-                    try args.append("--build-id=none");
-                    try args.append("--gc-sections");
-                    try args.append("--eh-frame-hdr");
-                    try args.append("-s"); // Strip symbols
-                    try args.append("-znow");
-                    try args.append("-m");
-                    try args.append("elf_x86_64");
                 },
                 .gnu => {
                     // Dynamic GNU linking
-                    try args.append("-w");
                     try args.append("-dynamic-linker");
                     try args.append("/lib64/ld-linux-x86-64.so.2");
-                    try args.append("-nostdlib");
                 },
             }
         },
