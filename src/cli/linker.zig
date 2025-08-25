@@ -71,7 +71,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         return LinkError.LLVMNotAvailable;
     }
 
-    var args = std.ArrayList([]const u8).init(allocator);
+    var args = std.array_list.Managed([]const u8).init(allocator);
     defer args.deinit();
 
     // Add platform-specific linker name and arguments

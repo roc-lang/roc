@@ -82,10 +82,7 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/snapshot_tool/main.zig"), .target = target, .optimize = optimize, .link_libc = true }),
     });
     roc_modules.addAll(snapshot_exe);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
@@ -93,12 +90,14 @@ pub fn build(b: *std.Build) void {
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
-        .root_source_file = b.path("src/playground_wasm/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = optimize,
         }),
-        .optimize = optimize,
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
@@ -121,9 +120,11 @@ pub fn build(b: *std.Build) void {
     const playground_test_install = blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
-            .root_source_file = b.path("test/playground-integration/main.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/playground-integration/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
         });
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
@@ -154,10 +155,12 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool test
     const snapshot_test = b.addTest(.{
         .name = "snapshot_tool_test",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/snapshot_tool/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
     roc_modules.addAll(snapshot_test);
     add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
@@ -168,10 +171,12 @@ pub fn build(b: *std.Build) void {
     // Add CLI test
     const cli_test = b.addTest(.{
         .name = "cli_test",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
     roc_modules.addAll(cli_test);
     cli_test.linkLibrary(zstd.artifact("zstd"));
@@ -279,10 +284,12 @@ fn add_fuzz_target(
     const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
-        .root_source_file = root_source_file,
-        .target = target,
-        // Work around instrumentation bugs on mac without giving up perf on linux.
-        .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        .root_module = b.createModule(.{
+            .root_source_file = root_source_file,
+            .target = target,
+            // Work around instrumentation bugs on mac without giving up perf on linux.
+            .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        }),
     });
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
@@ -292,10 +299,12 @@ fn add_fuzz_target(
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
@@ -327,21 +336,26 @@ fn addMainExe(
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .link_libc = true,
+        }),
     });
 
     // Create test platform host static library (str)
-    const test_platform_host_lib = b.addStaticLibrary(.{
+    const test_platform_host_lib = b.addLibrary(.{
         .name = "test_platform_str_host",
-        .root_source_file = b.path("test/str/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/str/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
     test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -355,13 +369,16 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
-    const test_platform_int_host_lib = b.addStaticLibrary(.{
+    const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
-        .root_source_file = b.path("test/int/platform/host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/int/platform/host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
     test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -373,13 +390,16 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_lib = b.addStaticLibrary(.{
+    const builtins_lib = b.addLibrary(.{
         .name = "roc_builtins",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
     // Add the builtins module so it can import "builtins"
     builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
@@ -387,13 +407,16 @@ fn addMainExe(
     builtins_lib.bundle_compiler_rt = true;
 
     // Create shim static library at build time
-    const shim_lib = b.addStaticLibrary(.{
+    const shim_lib = b.addLibrary(.{
         .name = "roc_shim",
-        .root_source_file = b.path("src/interpreter_shim/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
     shim_lib.linkLibC();
     // Add all modules from roc_modules that the shim needs

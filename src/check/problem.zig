@@ -195,7 +195,7 @@ pub const ReportBuilder = struct {
     const Self = @This();
 
     gpa: Allocator,
-    buf: std.ArrayList(u8),
+    buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -215,7 +215,7 @@ pub const ReportBuilder = struct {
     ) Self {
         return .{
             .gpa = gpa,
-            .buf = std.ArrayList(u8).init(gpa),
+            .buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -1655,7 +1655,7 @@ pub const ReportBuilder = struct {
 
     // Given a buffer and a number, write a the human-readably ordinal number
     // Note that the caller likely needs to clear the buffer before calling this function
-    fn appendOrdinal(buf: *std.ArrayList(u8), n: u32) !void {
+    fn appendOrdinal(buf: *std.array_list.Managed(u8), n: u32) !void {
         switch (n) {
             1 => try buf.appendSlice("first"),
             2 => try buf.appendSlice("second"),

@@ -188,7 +188,7 @@ pub const Store = struct {
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
-        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (field_layouts, field_names) |field_layout, field_name| {
@@ -517,7 +517,7 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
@@ -618,7 +618,7 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_tuple_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (updated_tuple.resolved_fields_start..resolved_fields_end) |i| {

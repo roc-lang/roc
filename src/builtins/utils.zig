@@ -85,11 +85,11 @@ pub const TestEnv = struct {
 
         // Allocate memory using the testing allocator with comptime alignment
         const ptr = switch (roc_alloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, 1, roc_alloc.length),
-            2 => self.allocator.alignedAlloc(u8, 2, roc_alloc.length),
-            4 => self.allocator.alignedAlloc(u8, 4, roc_alloc.length),
-            8 => self.allocator.alignedAlloc(u8, 8, roc_alloc.length),
-            16 => self.allocator.alignedAlloc(u8, 16, roc_alloc.length),
+            1 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"1", roc_alloc.length),
+            2 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"2", roc_alloc.length),
+            4 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"4", roc_alloc.length),
+            8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", roc_alloc.length),
+            16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", roc_alloc.length),
             else => @panic("Unsupported alignment in test allocator"),
         } catch {
             @panic("Test allocation failed");

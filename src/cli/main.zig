@@ -493,7 +493,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
-        var extra_args = std.ArrayList([]const u8).init(gpa);
+        var extra_args = std.array_list.Managed([]const u8).init(gpa);
         defer extra_args.deinit();
 
         // Add system libraries for macOS
@@ -1150,7 +1150,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).init(arena_allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(arena_allocator);
     defer file_paths.deinit();
 
     var uncompressed_size: u64 = 0;
@@ -1577,7 +1577,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Find all expect statements
     const statements = env.store.sliceStatements(env.all_statements);
-    var expects = std.ArrayList(ExpectTest).init(gpa);
+    var expects = std.array_list.Managed(ExpectTest).init(gpa);
     defer expects.deinit();
 
     for (statements) |stmt_idx| {
@@ -1626,7 +1626,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         error_msg: ?[]const u8 = null,
     };
 
-    var test_results = std.ArrayList(TestResult).init(gpa);
+    var test_results = std.array_list.Managed(TestResult).init(gpa);
     defer test_results.deinit();
 
     // Evaluate each expect statement
@@ -1730,7 +1730,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.ArrayList([]const u8).init(gpa);
+        var unformatted_files = std.array_list.Managed([]const u8).init(gpa);
         defer unformatted_files.deinit();
 
         for (args.paths) |path| {

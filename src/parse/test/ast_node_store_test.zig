@@ -54,7 +54,7 @@ test "NodeStore round trip - Headers" {
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
     defer store.deinit();
 
-    var headers = std.ArrayList(AST.Header).init(gpa);
+    var headers = std.array_list.Managed(AST.Header).init(gpa);
     defer headers.deinit();
 
     try headers.append(AST.Header{
@@ -126,7 +126,7 @@ test "NodeStore round trip - Statement" {
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
     defer store.deinit();
 
-    var statements = std.ArrayList(AST.Statement).init(gpa);
+    var statements = std.array_list.Managed(AST.Statement).init(gpa);
     defer statements.deinit();
 
     try statements.append(AST.Statement{
@@ -267,7 +267,7 @@ test "NodeStore round trip - Pattern" {
 
     var expected_test_count: usize = NodeStore.AST_PATTERN_NODE_COUNT;
 
-    var patterns = std.ArrayList(AST.Pattern).init(gpa);
+    var patterns = std.array_list.Managed(AST.Pattern).init(gpa);
     defer patterns.deinit();
 
     try patterns.append(AST.Pattern{
@@ -377,7 +377,7 @@ test "NodeStore round trip - TypeAnno" {
 
     var expected_test_count: usize = NodeStore.AST_TYPE_ANNO_NODE_COUNT;
 
-    var ty_annos = std.ArrayList(AST.TypeAnno).init(gpa);
+    var ty_annos = std.array_list.Managed(AST.TypeAnno).init(gpa);
     defer ty_annos.deinit();
 
     try ty_annos.append(AST.TypeAnno{
@@ -467,7 +467,7 @@ test "NodeStore round trip - Expr" {
 
     var expected_test_count: usize = NodeStore.AST_EXPR_NODE_COUNT;
 
-    var expressions = std.ArrayList(AST.Expr).init(gpa);
+    var expressions = std.array_list.Managed(AST.Expr).init(gpa);
     defer expressions.deinit();
 
     try expressions.append(AST.Expr{

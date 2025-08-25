@@ -516,7 +516,7 @@
 //         const mod_name = try std.fmt.allocPrint(gpa, "Mod{}", .{i});
 //         defer gpa.free(mod_name);
 
-//         var imports = std.ArrayList(u8).init(gpa);
+//         var imports = std.array_list.Managed(u8).init(gpa);
 //         defer imports.deinit();
 
 //         // Each module imports the next two modules (circular style)
