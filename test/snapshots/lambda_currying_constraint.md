@@ -24,22 +24,9 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_currying_constraint.md:5:21:5:22
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_currying_constraint.md:5:21:5:22:**
-```roc
-makeAdder = |x| |y| x + y
-```
-                    ^
-
-It has the type:
-    _a_
-
-But here it's being used as:
-    _Num(_size)_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),LowerIdent(1:20-1:30),Comma(1:30-1:31),LowerIdent(1:32-1:42),CloseSquare(1:42-1:43),
@@ -222,13 +209,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.10 (type "Error -> Error -> Error"))
-		(patt @9.1-9.11 (type "Error -> Error"))
+		(patt @5.1-5.10 (type "a -> a -> a"))
+		(patt @9.1-9.11 (type "I64 -> I64"))
 		(patt @13.1-13.11 (type "a -> a, a -> a"))
-		(patt @17.1-17.14 (type "Error -> Error")))
+		(patt @17.1-17.14 (type "I64 -> I64")))
 	(expressions
-		(expr @5.13-5.26 (type "Error -> Error -> Error"))
-		(expr @9.14-9.26 (type "Error -> Error"))
+		(expr @5.13-5.26 (type "a -> a -> a"))
+		(expr @9.14-9.26 (type "I64 -> I64"))
 		(expr @13.14-13.28 (type "a -> a, a -> a"))
-		(expr @17.17-17.45 (type "Error -> Error"))))
+		(expr @17.17-17.45 (type "I64 -> I64"))))
 ~~~

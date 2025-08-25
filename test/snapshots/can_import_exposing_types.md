@@ -795,8 +795,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @50.1-50.15 (ident "combineResults"))
 		(e-closure @50.18-54.6
 			(captures
-				(capture @53.13-53.18 (ident "error"))
-				(capture @52.12-52.17 (ident "value")))
+				(capture @52.12-52.17 (ident "value"))
+				(capture @53.13-53.18 (ident "error")))
 			(e-lambda @50.18-54.6
 				(args
 					(p-assign @50.19-50.29 (ident "jsonResult"))

@@ -13,9 +13,24 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:10
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first and second arguments to `pair` must have compatible types, but they are incompatible in this call:
+**test_instantiated_arg_mismatch.md:5:10:**
+```roc
+    pair(42, "hello")
+```
+         ^^  ^^^^^^^
+
+The first argument has the type:
+    _Num(_size)_
+
+But the second argument has the type:
+    _Str_
+
+`pair` needs these arguments to have compatible types.
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -90,5 +105,5 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "(Num(_size), Str)"))
+(expr @1.1-6.2 (type "_b"))
 ~~~
