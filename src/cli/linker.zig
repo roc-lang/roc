@@ -119,11 +119,16 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("--verbose");
             // try args.append("--print-map");
 
-            // Use static linking to avoid dynamic linker dependency issues
-            // try args.append("-static");
+            // Specify the dynamic linker/interpreter
+            try args.append("-dynamic-linker");
+            try args.append("/lib64/ld-linux-x86-64.so.2");
 
             // Don't let the linker do sneaky stuff, only explicit depdendencies permitted!
             try args.append("-nostdlib");
+
+            // Link libc for the interpreter shim's system calls
+            try args.append("-L/usr/lib/x86_64-linux-gnu");
+            try args.append("-lc");
         },
         .windows => {
             // Add linker name for Windows COFF

@@ -83,13 +83,20 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) no
 extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
 
 // Windows __main stub for MinGW-style initialization
-pub export fn __main() void {}
+comptime {
+    if (@import("builtin").os.tag == .windows) {
+        @export(__main, .{ .name = "__main" });
+    }
+}
+fn __main() void {}
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
 pub export fn roc_platform_host_main(argc: c_int, argv: [*][*:0]u8) c_int {
     _ = argc;
     _ = argv;
+
+    std.debug.print("DEBUG HOST: main() started\n", .{});
 
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
