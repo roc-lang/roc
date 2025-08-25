@@ -64,14 +64,11 @@ const ShimError = error{
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
-    var buf: [256]u8 = undefined;
-    const msg1 = std.fmt.bufPrint(&buf, "DEBUG: roc_entrypoint called with entry_idx={}\n", .{entry_idx}) catch "DEBUG: roc_entrypoint called\n";
-    ops.dbg(msg1);
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
+        var buf: [256]u8 = undefined;
         const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
         ops.crash(msg2);
     };
-    ops.dbg("roc_entrypoint completed");
 }
 
 /// Initialize shared memory and ModuleEnv once per process
