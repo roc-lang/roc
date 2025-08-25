@@ -40,17 +40,53 @@ value5 = {
 		"""multiline
 		,
 	],
+	d: (
+		0 - """
+		,
+	),
+	e: !"""
+	,
 }
 
 x = {
-	"""
-	"""
+	s = """
+		"""
+
+	s
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - multiline_string_complex.md:37:7:37:10
+TYPE MISMATCH - multiline_string_complex.md:40:5:40:9
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**multiline_string_complex.md:37:7:37:10:**
+```roc
+		0 - """
+```
+		    ^^^
+
+It has the type:
+    _Str_
+
+But here it's being used as:
+    _Num(_size)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**multiline_string_complex.md:40:5:40:9:**
+```roc
+	e: !"""
+```
+	   ^^^^
+
+It has the type:
+    _Bool_
+
+But here it's being used as:
+    _Str_
+
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),
@@ -82,15 +118,22 @@ LowerIdent(32:2-32:3),OpColon(32:3-32:4),OpenSquare(32:5-32:6),
 MultilineStringStart(33:3-33:6),StringPart(33:6-33:15),
 Comma(34:3-34:4),
 CloseSquare(35:2-35:3),Comma(35:3-35:4),
-CloseCurly(36:1-36:2),
-LowerIdent(38:1-38:2),OpAssign(38:3-38:4),OpenCurly(38:5-38:6),
-MultilineStringStart(39:2-39:5),StringPart(39:5-39:5),
-MultilineStringStart(40:2-40:5),StringPart(40:5-40:5),
-CloseCurly(41:1-41:2),EndOfFile(41:2-41:2),
+LowerIdent(36:2-36:3),OpColon(36:3-36:4),OpenRound(36:5-36:6),
+Int(37:3-37:4),OpBinaryMinus(37:5-37:6),MultilineStringStart(37:7-37:10),StringPart(37:10-37:10),
+Comma(38:3-38:4),
+CloseRound(39:2-39:3),Comma(39:3-39:4),
+LowerIdent(40:2-40:3),OpColon(40:3-40:4),OpBang(40:5-40:6),MultilineStringStart(40:6-40:9),StringPart(40:9-40:9),
+Comma(41:2-41:3),
+CloseCurly(42:1-42:2),
+LowerIdent(44:1-44:2),OpAssign(44:3-44:4),OpenCurly(44:5-44:6),
+LowerIdent(45:2-45:3),OpAssign(45:4-45:5),MultilineStringStart(45:6-45:9),StringPart(45:9-45:9),
+MultilineStringStart(46:3-46:6),StringPart(46:6-46:6),
+LowerIdent(48:2-48:3),
+CloseCurly(49:1-49:2),EndOfFile(49:2-49:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-41.2
+(file @1.1-49.2
 	(package @1.1-6.3
 		(exposes @2.2-2.4)
 		(packages @3.2-6.3
@@ -122,9 +165,9 @@ CloseCurly(41:1-41:2),EndOfFile(41:2-41:2),
 				(e-string-part @21.5-21.5 (raw ""))
 				(e-ident @21.7-21.13 (raw "value2"))
 				(e-string-part @21.14-21.14 (raw ""))))
-		(s-decl @23.1-36.2
+		(s-decl @23.1-42.2
 			(p-ident @23.1-23.7 (raw "value5"))
-			(e-record @23.10-36.2
+			(e-record @23.10-42.2
 				(field (field "a")
 					(e-multiline-string @24.5-24.17
 						(e-string-part @24.8-24.17 (raw "Multiline"))))
@@ -137,14 +180,27 @@ CloseCurly(41:1-41:2),EndOfFile(41:2-41:2),
 				(field (field "c")
 					(e-list @32.5-35.3
 						(e-multiline-string @33.3-33.15
-							(e-string-part @33.6-33.15 (raw "multiline")))))))
-		(s-decl @38.1-41.2
-			(p-ident @38.1-38.2 (raw "x"))
-			(e-block @38.5-41.2
+							(e-string-part @33.6-33.15 (raw "multiline")))))
+				(field (field "d")
+					(e-tuple @36.5-39.3
+						(e-binop @37.3-37.10 (op "-")
+							(e-int @37.3-37.4 (raw "0"))
+							(e-multiline-string @37.7-37.10
+								(e-string-part @37.10-37.10 (raw ""))))))
+				(field (field "e")
+					(unary "!"
+						(e-multiline-string @40.6-40.9
+							(e-string-part @40.9-40.9 (raw "")))))))
+		(s-decl @44.1-49.2
+			(p-ident @44.1-44.2 (raw "x"))
+			(e-block @44.5-49.2
 				(statements
-					(e-multiline-string @39.2-40.5
-						(e-string-part @39.5-39.5 (raw ""))
-						(e-string-part @40.5-40.5 (raw ""))))))))
+					(s-decl @45.2-46.6
+						(p-ident @45.2-45.3 (raw "s"))
+						(e-multiline-string @45.6-46.6
+							(e-string-part @45.9-45.9 (raw ""))
+							(e-string-part @46.6-46.6 (raw ""))))
+					(e-ident @48.2-48.3 (raw "s")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -181,7 +237,7 @@ NO CHANGE
 				(p-assign @10.1-10.7 (ident "value2")))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "value5"))
-		(e-record @23.10-36.2
+		(e-record @23.10-42.2
 			(fields
 				(field (name "a")
 					(e-string @24.5-24.17
@@ -197,12 +253,23 @@ NO CHANGE
 					(e-list @32.5-35.3
 						(elems
 							(e-string @33.3-33.15
-								(e-literal @33.6-33.15 (string "multiline")))))))))
+								(e-literal @33.6-33.15 (string "multiline"))))))
+				(field (name "d")
+					(e-binop @37.3-37.10 (op "sub")
+						(e-int @37.3-37.4 (value "0"))
+						(e-string @37.7-37.10)))
+				(field (name "e")
+					(e-unary-not @40.5-40.9
+						(e-string @40.6-40.9))))))
 	(d-let
-		(p-assign @38.1-38.2 (ident "x"))
-		(e-block @38.5-41.2
-			(e-string @39.2-40.5
-				(e-literal @40.2-40.5 (string "\n"))))))
+		(p-assign @44.1-44.2 (ident "x"))
+		(e-block @44.5-49.2
+			(s-let @45.2-46.6
+				(p-assign @45.2-45.3 (ident "s"))
+				(e-string @45.6-46.6
+					(e-literal @46.3-46.6 (string "\n"))))
+			(e-lookup-local @48.2-48.3
+				(p-assign @45.2-45.3 (ident "s"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -212,13 +279,13 @@ NO CHANGE
 		(patt @10.1-10.7 (type "Str"))
 		(patt @13.1-13.7 (type "Str"))
 		(patt @17.1-17.7 (type "Str"))
-		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
-		(patt @38.1-38.2 (type "Str")))
+		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Num(_size), e: Error }"))
+		(patt @44.1-44.2 (type "Str")))
 	(expressions
 		(expr @8.10-8.50 (type "Str"))
 		(expr @11.2-11.42 (type "Str"))
 		(expr @13.10-15.14 (type "Str"))
 		(expr @18.2-21.14 (type "Str"))
-		(expr @23.10-36.2 (type "{ a: Str, b: (Str, Str), c: List(Str) }"))
-		(expr @38.5-41.2 (type "Str"))))
+		(expr @23.10-42.2 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Num(_size), e: Error }"))
+		(expr @44.5-49.2 (type "Str"))))
 ~~~
