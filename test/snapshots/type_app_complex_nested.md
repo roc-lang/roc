@@ -33,7 +33,6 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-TYPE MISMATCH - type_app_complex_nested.md:12:55:12:56
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -101,20 +100,6 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_complex_nested.md:12:55:12:56:**
-```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
-```
-                                                      ^
-
-It has the type:
-    _a_
-
-But here it's being used as:
-    _{}_
 
 # TOKENS
 ~~~zig
@@ -308,8 +293,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(args
 				(p-underscore @13.15-13.16))
 			(e-block @13.18-15.2
-				(s-crash @14.2-14.25 (msg "not implemented"))
-				(e-empty_record @13.18-15.2)))
+				(e-crash @14.2-14.25 (msg "not implemented"))))
 		(annotation @13.1-13.11
 			(declared-type
 				(ty-fn @12.14-12.56 (effectful false)
@@ -360,7 +344,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (inferred-types
 	(defs
 		(patt @5.1-5.15 (type "Result(List(item), Dict) -> List(a)"))
-		(patt @13.1-13.11 (type "Error -> Error"))
+		(patt @13.1-13.11 (type "Error -> a"))
 		(patt @20.1-20.6 (type "_arg -> List(a)")))
 	(type_decls
 		(alias @18.1-18.64 (type "ComplexType(a, b)")
@@ -370,6 +354,6 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-var @18.16-18.17 (name "b"))))))
 	(expressions
 		(expr @5.18-9.6 (type "Result(List(item), Dict) -> List(a)"))
-		(expr @13.14-15.2 (type "Error -> Error"))
+		(expr @13.14-15.2 (type "Error -> a"))
 		(expr @20.9-20.49 (type "_arg -> List(a)"))))
 ~~~

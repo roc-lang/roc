@@ -69,7 +69,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "_a")))
+		(patt @3.1-3.5 (type "Num(_size)")))
 	(expressions
-		(expr @3.8-6.2 (type "_a"))))
+		(expr @3.8-6.2 (type "Num(_size)"))))
 ~~~

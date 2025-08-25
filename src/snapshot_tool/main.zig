@@ -1093,11 +1093,22 @@ fn processSnapshotContent(
             maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
         },
         .statement => {
-            // Manually track scratch statements because we aren't using the file entrypoint
-            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = try czer.canonicalizeStatement(stmt_idx);
-            can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+            const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+
+            var last_anno: ?Can.StmtTypeAnno = null;
+            const can_stmt_result = try czer.canonicalizeStatement(ast_stmt_idx, &last_anno);
+            switch (can_stmt_result) {
+                .import_stmt => {
+                    // After we process import statements, there's no
+                    // need to include then in the canonicalize IR
+                },
+                .stmt => |can_stmt| {
+                    // Manually track scratch statements because we aren't using the file entrypoint
+                    const scratch_statements_start = can_ir.store.scratch_statements.top();
+                    try can_ir.store.addScratchStatement(can_stmt.idx);
+                    can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+                },
+            }
         },
         .package => try czer.canonicalizeFile(),
         .platform => try czer.canonicalizeFile(),

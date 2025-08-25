@@ -258,9 +258,9 @@ main! = |_| {
 		(e-closure @19.9-25.2
 			(captures
 				(capture @5.1-5.4 (ident "add"))
-				(capture @17.1-17.7 (ident "double"))
 				(capture @13.1-13.8 (ident "process"))
-				(capture @9.1-9.9 (ident "multiply")))
+				(capture @9.1-9.9 (ident "multiply"))
+				(capture @17.1-17.7 (ident "double")))
 			(e-lambda @19.9-25.2
 				(args
 					(p-underscore @19.10-19.11))

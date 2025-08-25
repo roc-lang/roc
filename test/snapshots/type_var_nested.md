@@ -219,8 +219,8 @@ main = |_| "done"
 		(p-assign @5.1-5.11 (ident "map_result"))
 		(e-closure @5.14-10.2
 			(captures
-				(capture @7.12-7.17 (ident "value"))
-				(capture @8.13-8.18 (ident "error")))
+				(capture @8.13-8.18 (ident "error"))
+				(capture @7.12-7.17 (ident "value")))
 			(e-lambda @5.14-10.2
 				(args
 					(p-assign @5.15-5.21 (ident "result"))

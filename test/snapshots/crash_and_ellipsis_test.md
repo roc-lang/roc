@@ -34,7 +34,6 @@ main! = |_| {
 UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
-TYPE MISMATCH - crash_and_ellipsis_test.md:8:20:8:23
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
@@ -71,20 +70,6 @@ The unused variable is declared here:
 ```
     ^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:8:20:8:23:**
-```roc
-testCrash : U64 -> U64
-```
-                   ^^^
-
-It has the type:
-    _U64_
-
-But here it's being used as:
-    _{}_
 
 # TOKENS
 ~~~zig
@@ -230,8 +215,7 @@ main! = |_| {
 			(args
 				(p-underscore @9.14-9.15))
 			(e-block @9.17-11.2
-				(s-crash @10.2-10.33 (msg "This is a crash message"))
-				(e-empty_record @9.17-11.2)))
+				(e-crash @10.2-10.33 (msg "This is a crash message"))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
@@ -243,8 +227,7 @@ main! = |_| {
 			(args
 				(p-underscore @15.20-15.21))
 			(e-block @15.23-17.2
-				(s-crash @16.2-16.14 (msg "oops"))
-				(e-empty_record @15.23-17.2)))
+				(e-crash @16.2-16.14 (msg "oops"))))
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-fn @14.19-14.29 (effectful false)
@@ -285,13 +268,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "Error -> Error"))
-		(patt @9.1-9.10 (type "Error -> Error"))
-		(patt @15.1-15.16 (type "Error -> Error"))
+		(patt @5.1-5.13 (type "U64 -> U64"))
+		(patt @9.1-9.10 (type "U64 -> U64"))
+		(patt @15.1-15.16 (type "U64 -> U64"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
 	(expressions
-		(expr @5.16-5.23 (type "Error -> Error"))
-		(expr @9.13-11.2 (type "Error -> Error"))
-		(expr @15.19-17.2 (type "Error -> Error"))
+		(expr @5.16-5.23 (type "U64 -> U64"))
+		(expr @9.13-11.2 (type "U64 -> U64"))
+		(expr @15.19-17.2 (type "U64 -> U64"))
 		(expr @19.9-24.2 (type "_arg -> List(_elem)"))))
 ~~~

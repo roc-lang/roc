@@ -44,6 +44,7 @@ main = |_| {
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
+UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -56,6 +57,17 @@ update_data = |container, new_value| { container & data: new_value }
 ```
                                                  ^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**let_polymorphism_records.md:19:50:19:51:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                                 ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNUSED VARIABLE**
 Variable `new_value` is not used anywhere in your code.
@@ -326,6 +338,8 @@ main = |_| {
 				(s-expr @19.40-19.49
 					(e-lookup-local @19.40-19.49
 						(p-assign @19.16-19.25 (ident "container"))))
+				(s-expr @19.50-19.51
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-type-anno @19.52-19.67 (name "data")
 					(ty-var @19.58-19.67 (name "new_value")))
 				(e-empty_record @19.38-19.69))))

@@ -110,7 +110,7 @@ pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 13;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -187,10 +187,22 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .statement_decl => return CIR.Statement{ .s_decl = .{
-            .pattern = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_decl => {
+            return CIR.Statement{ .s_decl = .{
+                .pattern = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const has_anno = extra_data[0] != 0;
+                    if (has_anno) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_var => return CIR.Statement{ .s_var = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -278,6 +290,11 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                     .where = where_clause,
                 },
             };
+        },
+        .malformed => {
+            return CIR.Statement{ .s_runtime_error = .{
+                .diagnostic = @enumFromInt(node.data_1),
+            } };
         },
         else => {
             @panic("unreachable, node is not an expression tag");
@@ -1070,9 +1087,18 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 
     switch (statement) {
         .s_decl => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
             node.tag = .statement_decl;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
         },
         .s_var => |s| {
             node.tag = .statement_var;
@@ -1175,6 +1201,10 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 
             // Store the extra data start position in the node
             node.data_1 = @intCast(extra_start);
+        },
+        .s_runtime_error => |s| {
+            node.data_1 = @intFromEnum(s.diagnostic);
+            node.tag = .malformed;
         },
     }
 

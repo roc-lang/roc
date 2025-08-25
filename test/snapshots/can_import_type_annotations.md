@@ -457,8 +457,8 @@ combineResults = |result1, result2|
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @18.13-18.16 (ident "err"))
-				(capture @17.12-17.16 (ident "data")))
+				(capture @17.12-17.16 (ident "data"))
+				(capture @18.13-18.16 (ident "err")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -556,10 +556,10 @@ combineResults = |result1, result2|
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @36.21-36.24 (ident "err"))
-				(capture @35.20-35.26 (ident "value2"))
 				(capture @38.13-38.16 (ident "err"))
-				(capture @33.12-33.18 (ident "value1")))
+				(capture @36.21-36.24 (ident "err"))
+				(capture @33.12-33.18 (ident "value1"))
+				(capture @35.20-35.26 (ident "value2")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))

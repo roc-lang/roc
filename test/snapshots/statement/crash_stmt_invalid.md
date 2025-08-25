@@ -35,7 +35,8 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-runtime-error (tag "crash_expects_string")))
 ~~~
 # TYPES
 ~~~clojure

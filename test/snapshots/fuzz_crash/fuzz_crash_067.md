@@ -12,16 +12,17 @@ f = || {
 }
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - fuzz_crash_067.md:4:5:4:12
+CRASH EXPECTS STRING - fuzz_crash_067.md:3:8:5:2
 # PROBLEMS
 **CRASH EXPECTS STRING**
 The `crash` keyword expects a string literal as its argument.
 For example: `crash "Something went wrong"`
-**fuzz_crash_067.md:4:5:4:12:**
+**fuzz_crash_067.md:3:8:5:2:**
 ```roc
+f = || {
     crash 1
+}
 ```
-    ^^^^^^^
 
 
 # TOKENS
@@ -62,13 +63,13 @@ f = || {
 		(e-lambda @3.5-5.2
 			(args)
 			(e-block @3.8-5.2
-				(e-empty_record @3.8-5.2)))))
+				(e-runtime-error (tag "crash_expects_string"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "({}) -> {}")))
+		(patt @3.1-3.2 (type "({}) -> Error")))
 	(expressions
-		(expr @3.5-5.2 (type "({}) -> {}"))))
+		(expr @3.5-5.2 (type "({}) -> Error"))))
 ~~~

@@ -1882,8 +1882,8 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @94.5-94.6 (ident "x"))
 				(capture @86.4-86.5 (ident "x"))
+				(capture @94.5-94.6 (ident "x"))
 				(capture @136.11-136.15 (ident "dude")))
 			(e-lambda @80.14-138.3
 				(args
@@ -2098,9 +2098,8 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @80.1-80.11 (ident "match_time"))
 				(capture @68.1-68.8 (ident "add_one"))
-				(capture @179.2-179.7 (ident "tuple")))
+				(capture @80.1-80.11 (ident "match_time")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2161,6 +2160,7 @@ expect {
 											(p-assign @146.2-146.18 (ident "number")))))
 								(e-int @171.3-171.6 (value "456"))
 								(e-int @172.3-172.6 (value "789")))))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let @178.2-178.71
 						(p-assign @178.2-178.8 (ident "record"))
 						(e-record @178.11-178.71

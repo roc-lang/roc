@@ -256,6 +256,9 @@ UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
 NOT IMPLEMENTED - :0:0:0:0
+UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
+UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
+UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
 UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
@@ -691,6 +694,39 @@ Is there an `import` or `exposing` missing up-top?
 This feature is not yet implemented: statement type in block
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_023.md:178:38:178:40:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                    ^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_023.md:178:40:178:41:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                      ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_023.md:178:45:178:46:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                           ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
@@ -1936,8 +1972,8 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @94.5-94.6 (ident "x"))
 				(capture @86.4-86.5 (ident "x"))
+				(capture @94.5-94.6 (ident "x"))
 				(capture @136.11-136.15 (ident "dude")))
 			(e-lambda @80.14-138.3
 				(args
@@ -2152,9 +2188,8 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @80.1-80.11 (ident "match_time"))
 				(capture @68.1-68.8 (ident "add_one"))
-				(capture @179.2-179.7 (ident "tuple")))
+				(capture @80.1-80.11 (ident "match_time")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2215,9 +2250,17 @@ expect {
 											(p-assign @146.2-146.18 (ident "number")))))
 								(e-int @171.3-171.6 (value "456"))
 								(e-int @172.3-172.6 (value "789")))))
+					(s-runtime-error (tag "not_implemented"))
+					(s-let @178.2-178.40
+						(p-assign @178.2-178.8 (ident "record"))
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @178.40-178.41
+						(e-runtime-error (tag "expr_not_canonicalized")))
 					(s-expr @178.42-178.45
 						(e-lookup-local @178.42-178.45
 							(p-assign @148.2-148.5 (ident "tag"))))
+					(s-expr @178.45-178.46
+						(e-runtime-error (tag "expr_not_canonicalized")))
 					(s-type-anno @178.47-178.71 (name "qux")
 						(ty-malformed @178.52-178.71))
 					(s-let @179.2-179.68

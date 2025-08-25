@@ -174,6 +174,7 @@ processColor = |color| {
 			(args
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
+				(s-runtime-error (tag "not_implemented"))
 				(s-expr @9.12-9.21
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match @11.5-15.6
