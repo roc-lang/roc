@@ -13,6 +13,12 @@ const layout = @import("layout");
 const ipc = @import("ipc");
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
+
+// Global state for shared memory - initialized once per process
+var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var global_shm: ?SharedMemoryAllocator = null;
+var global_env_ptr: ?*ModuleEnv = null;
+var shm_mutex: std.Thread.Mutex = .{};
 const Stack = eval.Stack;
 const LayoutStore = layout.Store;
 const CIR = can.CIR;
@@ -68,15 +74,29 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
     ops.dbg("roc_entrypoint completed");
 }
 
-/// Cross-platform shared memory evaluation
-fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
-    roc_ops.dbg("evaluateFromSharedMemory started");
+/// Initialize shared memory and ModuleEnv once per process
+fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
+    // Fast path: if already initialized, return immediately
+    if (shared_memory_initialized.load(.acquire)) {
+        return;
+    }
+
+    // Slow path: acquire mutex and check again (double-checked locking)
+    shm_mutex.lock();
+    defer shm_mutex.unlock();
+    
+    // Check again in case another thread initialized while we were waiting
+    if (shared_memory_initialized.load(.acquire)) {
+        return;
+    }
+
+    roc_ops.dbg("initializing shared memory (once per process)");
     const allocator = std.heap.page_allocator;
+    var buf: [256]u8 = undefined;
 
     // Get page size
     roc_ops.dbg("getting page size");
     const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
-    var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "DEBUG: page_size = {}\n", .{page_size}) catch "DEBUG: page_size\n";
     roc_ops.dbg(msg);
 
@@ -87,7 +107,6 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
         roc_ops.crash(msg2);
         return error.SharedMemoryError;
     };
-    defer shm.deinit(allocator);
     roc_ops.dbg("shared memory allocator created");
 
     // Set up ModuleEnv from shared memory
@@ -95,7 +114,27 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const env_ptr = try setupModuleEnv(&shm, roc_ops);
     roc_ops.dbg("ModuleEnv setup complete");
 
-    // Set up interpreter infrastructure
+    // Store globals
+    global_shm = shm;
+    global_env_ptr = env_ptr;
+    
+    // Mark as initialized (release semantics ensure all writes above are visible)
+    shared_memory_initialized.store(true, .release);
+    roc_ops.dbg("shared memory initialization complete");
+}
+
+/// Cross-platform shared memory evaluation
+fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+    roc_ops.dbg("evaluateFromSharedMemory started");
+    
+    // Initialize shared memory once per process
+    try initializeSharedMemoryOnce(roc_ops);
+    
+    // Use the global shared memory and environment
+    const shm = global_shm.?;
+    const env_ptr = global_env_ptr.?;
+
+    // Set up interpreter infrastructure (per-call, as it's lightweight)
     roc_ops.dbg("creating interpreter");
     var interpreter = try createInterpreter(env_ptr, roc_ops);
     defer interpreter.deinit(roc_ops);
@@ -104,6 +143,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     // Get expression info from shared memory using entry_idx
     roc_ops.dbg("getting base pointer");
     const base_ptr = shm.getBasePtr();
+    var buf: [256]u8 = undefined;
     const ptr_msg = std.fmt.bufPrint(&buf, "DEBUG: base_ptr = {*}\n", .{base_ptr}) catch "DEBUG: base_ptr\n";
     roc_ops.dbg(ptr_msg);
 
