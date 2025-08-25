@@ -168,8 +168,16 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     const ident = self.currentIdent();
                     const pos = self.currentPosition();
                     self.advance();
+                    
+                    // Check for ! suffix for effectful functions/values
+                    const is_effectful = self.peek() == .OpBang;
+                    if (is_effectful) {
+                        self.advance(); // consume the !
+                    }
+                    
                     if (ident) |id| {
-                        break :blk try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
+                        const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
+                        break :blk try self.ast.appendNode(self.gpa, pos, node_tag, .{ .ident = id });
                     } else {
                         break :blk try self.pushMalformed(.expr_unexpected_token, pos);
                     }
@@ -390,9 +398,16 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     if (self.peek() == .LowerIdent) {
                         const ident = self.currentIdent();
                         self.advance();
+                        
+                        // Check for ! suffix for effectful functions/values
+                        const is_effectful = self.peek() == .OpBang;
+                        if (is_effectful) {
+                            self.advance(); // consume the !
+                        }
 
                         if (ident) |id| {
-                            const field = try self.ast.appendNode(self.gpa, dot_pos, .dot_lc, .{ .ident = id });
+                            const field_tag: Node.Tag = if (is_effectful) .not_lc else .dot_lc;
+                            const field = try self.ast.appendNode(self.gpa, dot_pos, field_tag, .{ .ident = id });
                             const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
                             left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
                         } else {

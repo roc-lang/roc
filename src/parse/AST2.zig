@@ -399,9 +399,14 @@ pub fn region(
         .uc, .lc, .lc_dot_ucs, .uc_dot_ucs => {
             return self.identRegion(idx, ident_store);
         },
-        .dot_lc, .not_lc, .neg_lc => {
+        .dot_lc, .neg_lc => {
             var ident_region = self.identRegion(idx, ident_store);
-            ident_region.start.offset -= 1; // Account for the dot/bang/minus
+            ident_region.start.offset -= 1; // Account for the dot/minus
+            return ident_region;
+        },
+        .not_lc => {
+            var ident_region = self.identRegion(idx, ident_store);
+            ident_region.end.offset += 1; // Account for the bang after the identifier
             return ident_region;
         },
         .double_dot_lc => {
