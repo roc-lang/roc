@@ -737,7 +737,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                     };
 
                     // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
-                    if (std.fs.cwd().access(scrt1_path, .{})) |_| {
+                    if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
+                        file.close();
                         platform_files_pre.append(scrt1_path) catch {
                             std.log.err("Failed to add system Scrt1.o", .{});
                             std.process.exit(1);
@@ -754,7 +755,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                         }
                     }
 
-                    if (std.fs.cwd().access(crti_path, .{})) |_| {
+                    if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
+                        file.close();
                         platform_files_pre.append(crti_path) catch {
                             std.log.err("Failed to add system crti.o", .{});
                             std.process.exit(1);
@@ -771,7 +773,8 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                         }
                     }
 
-                    if (std.fs.cwd().access(crtn_path, .{})) |_| {
+                    if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
+                        file.close();
                         platform_files_post.append(crtn_path) catch {
                             std.log.err("Failed to add system crtn.o", .{});
                             std.process.exit(1);
