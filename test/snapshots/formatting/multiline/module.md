@@ -24,7 +24,8 @@ LowerIdent(2:2-2:3),Comma(2:3-2:4),
 LowerIdent(3:2-3:3),Comma(3:3-3:4),
 CloseSquare(4:1-4:2),
 LowerIdent(6:1-6:2),OpAssign(6:3-6:4),SingleQuote(6:5-6:8),
-LowerIdent(7:1-7:2),OpAssign(7:3-7:4),SingleQuote(7:5-7:8),EndOfFile(7:8-7:8),
+LowerIdent(7:1-7:2),OpAssign(7:3-7:4),SingleQuote(7:5-7:8),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

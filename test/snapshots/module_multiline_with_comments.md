@@ -41,7 +41,8 @@ KwModule(1:1-1:7),
 OpenSquare(2:2-2:3),
 LowerIdent(3:3-3:12),Comma(3:12-3:13),
 UpperIdent(4:3-4:11),Comma(4:11-4:12),
-CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
+CloseSquare(5:2-5:3),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

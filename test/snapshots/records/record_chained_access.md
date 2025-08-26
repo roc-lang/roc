@@ -23,7 +23,8 @@ person.address.street
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:15),NoSpaceDotLowerIdent(1:15-1:22),EndOfFile(1:22-1:22),
+LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:15),NoSpaceDotLowerIdent(1:15-1:22),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

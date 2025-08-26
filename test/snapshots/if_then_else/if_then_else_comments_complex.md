@@ -39,7 +39,8 @@ CloseCurly(5:3-5:4),
 KwElse(6:4-6:8),
 OpenCurly(7:5-7:6),
 Int(8:6-8:7),
-CloseCurly(9:5-9:6),EndOfFile(9:6-9:6),
+CloseCurly(9:5-9:6),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

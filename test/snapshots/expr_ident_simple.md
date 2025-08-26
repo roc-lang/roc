@@ -23,7 +23,8 @@ foo
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
+LowerIdent(1:1-1:4),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -60,7 +60,8 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),StringStart(8:9-8:10),StringPart(8:10-8:14
 UpperIdent(10:1-10:9),OpColonEqual(10:10-10:12),UpperIdent(10:13-10:16),
 UpperIdent(12:1-12:12),OpColonEqual(12:13-12:15),UpperIdent(12:16-12:24),
 LowerIdent(14:1-14:10),OpColon(14:11-14:12),UpperIdent(14:13-14:24),
-LowerIdent(15:1-15:10),OpAssign(15:11-15:12),StringStart(15:13-15:14),StringPart(15:14-15:18),StringEnd(15:18-15:19),EndOfFile(15:19-15:19),
+LowerIdent(15:1-15:10),OpAssign(15:11-15:12),StringStart(15:13-15:14),StringPart(15:14-15:18),StringEnd(15:18-15:19),
+EndOfFile(16:1-16:1),
 ~~~
 # PARSE
 ~~~clojure

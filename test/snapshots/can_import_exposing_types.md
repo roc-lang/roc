@@ -378,7 +378,8 @@ LowerIdent(50:1-50:15),OpAssign(50:16-50:17),OpBar(50:18-50:19),LowerIdent(50:19
 KwMatch(51:5-51:10),LowerIdent(51:11-51:21),OpenCurly(51:22-51:23),
 UpperIdent(52:9-52:11),NoSpaceOpenRound(52:11-52:12),LowerIdent(52:12-52:17),CloseRound(52:17-52:18),OpFatArrow(52:19-52:21),UpperIdent(52:22-52:24),NoSpaceOpenRound(52:24-52:25),OpenCurly(52:25-52:26),LowerIdent(52:27-52:31),OpColon(52:31-52:32),UpperIdent(52:33-52:37),NoSpaceDotLowerIdent(52:37-52:44),NoSpaceOpenRound(52:44-52:45),LowerIdent(52:45-52:50),CloseRound(52:50-52:51),Comma(52:51-52:52),LowerIdent(52:53-52:59),OpColon(52:59-52:60),LowerIdent(52:61-52:71),CloseCurly(52:72-52:73),CloseRound(52:73-52:74),
 UpperIdent(53:9-53:12),NoSpaceOpenRound(53:12-53:13),LowerIdent(53:13-53:18),CloseRound(53:18-53:19),OpFatArrow(53:20-53:22),UpperIdent(53:23-53:26),NoSpaceOpenRound(53:26-53:27),LowerIdent(53:27-53:32),CloseRound(53:32-53:33),
-CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
+CloseCurly(54:5-54:6),
+EndOfFile(55:1-55:1),
 ~~~
 # PARSE
 ~~~clojure

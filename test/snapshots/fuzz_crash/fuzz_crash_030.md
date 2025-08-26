@@ -185,7 +185,8 @@ LowerIdent(12:1-12:4),OpColon(12:4-12:5),Int(12:6-12:8),StringStart(12:8-12:9),S
 KwProvides(13:2-13:10),
 OpenSquare(14:3-14:4),
 LowerIdent(15:1-15:3),Comma(15:3-15:4),
-CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
+CloseSquare(16:3-16:4),
+EndOfFile(17:1-17:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -208,7 +209,6 @@ CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
 #
 # Cd
 # pen
-
 
 ~~~
 # CANONICALIZE

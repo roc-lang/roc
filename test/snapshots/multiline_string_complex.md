@@ -126,7 +126,8 @@ CloseCurly(42:1-42:2),
 LowerIdent(44:1-44:2),OpAssign(44:3-44:4),OpenCurly(44:5-44:6),
 MultilineStringStart(45:2-45:5),StringPart(45:5-45:5),
 MultilineStringStart(46:2-46:5),StringPart(46:5-46:5),
-CloseCurly(47:1-47:2),EndOfFile(47:2-47:2),
+CloseCurly(47:1-47:2),
+EndOfFile(48:1-48:1),
 ~~~
 # PARSE
 ~~~clojure

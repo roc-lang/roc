@@ -35,7 +35,8 @@ Stdout.line???
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),EndOfFile(1:15-1:15),
+UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

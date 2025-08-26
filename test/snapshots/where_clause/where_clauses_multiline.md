@@ -24,7 +24,8 @@ LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Comma(3:12-3:13),Low
 KwWhere(4:2-4:7),
 KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),Comma(5:29-5:30),
 KwModule(6:3-6:9),NoSpaceOpenRound(6:9-6:10),LowerIdent(6:10-6:11),CloseRound(6:11-6:12),NoSpaceDotLowerIdent(6:12-6:22),OpColon(6:23-6:24),LowerIdent(6:25-6:26),OpArrow(6:27-6:29),LowerIdent(6:30-6:31),
-LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),EndOfFile(7:14-7:14),
+LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

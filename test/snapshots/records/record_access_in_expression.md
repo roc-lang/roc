@@ -23,7 +23,8 @@ person.age + 5
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:15),EndOfFile(1:15-1:15),
+LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:15),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

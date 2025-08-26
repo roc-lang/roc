@@ -57,7 +57,8 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
+OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -69,7 +70,6 @@ OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

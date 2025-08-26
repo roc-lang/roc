@@ -33,7 +33,8 @@ UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),OpenSquare(2:8-2:9),LowerIdent(2:9
 UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:10),CloseRound(3:10-3:11),OpFatArrow(3:12-3:14),LowerIdent(3:15-3:16),OpBinaryMinus(3:17-3:18),Int(3:19-3:20),
 UpperIdent(4:5-4:7),NoSpaceOpenRound(4:7-4:8),OpenSquare(4:8-4:9),LowerIdent(4:9-4:10),CloseSquare(4:10-4:11),CloseRound(4:11-4:12),OpFatArrow(4:13-4:15),LowerIdent(4:16-4:17),OpStar(4:18-4:19),Int(4:20-4:21),
 UpperIdent(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),OpFatArrow(5:12-5:14),LowerIdent(5:15-5:16),OpSlash(5:17-5:18),Int(5:19-5:20),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

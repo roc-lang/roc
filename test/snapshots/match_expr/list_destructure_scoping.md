@@ -29,7 +29,8 @@ match list {
 KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),
 OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),CloseSquare(2:11-2:12),OpFatArrow(2:13-2:15),LowerIdent(2:16-2:21),
 OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),LowerIdent(3:13-3:19),CloseSquare(3:19-3:20),OpFatArrow(3:21-3:23),LowerIdent(3:24-3:29),OpPlus(3:30-3:31),LowerIdent(3:32-3:38),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

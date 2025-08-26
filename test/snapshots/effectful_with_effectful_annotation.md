@@ -35,7 +35,8 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),
 LowerIdent(6:1-6:11),OpColon(6:12-6:13),UpperIdent(6:14-6:17),OpFatArrow(6:18-6:20),OpenCurly(6:21-6:22),CloseCurly(6:22-6:23),
 LowerIdent(7:1-7:11),OpAssign(7:12-7:13),OpBar(7:14-7:15),LowerIdent(7:15-7:18),OpBar(7:18-7:19),UpperIdent(7:20-7:26),NoSpaceDotLowerIdent(7:26-7:32),NoSpaceOpenRound(7:32-7:33),LowerIdent(7:33-7:36),CloseRound(7:36-7:37),
-LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19-9:20),StringStart(9:20-9:21),StringPart(9:21-9:34),StringEnd(9:34-9:35),CloseRound(9:35-9:36),EndOfFile(9:36-9:36),
+LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19-9:20),StringStart(9:20-9:21),StringPart(9:21-9:34),StringEnd(9:34-9:35),CloseRound(9:35-9:36),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

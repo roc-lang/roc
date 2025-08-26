@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1:6-1:7),LowerIdent(1:8-1:9),CloseCurly(1:10-1:11),OpBar(1:11-1:12),LowerIdent(1:13-1:14),OpStar(1:15-1:16),LowerIdent(1:17-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),OpenCurly(1:20-1:21),LowerIdent(1:22-1:23),OpColon(1:23-1:24),Int(1:25-1:27),Comma(1:27-1:28),LowerIdent(1:29-1:30),OpColon(1:30-1:31),Int(1:32-1:34),CloseCurly(1:35-1:36),CloseRound(1:36-1:37),EndOfFile(1:37-1:37),
+OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1:6-1:7),LowerIdent(1:8-1:9),CloseCurly(1:10-1:11),OpBar(1:11-1:12),LowerIdent(1:13-1:14),OpStar(1:15-1:16),LowerIdent(1:17-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),OpenCurly(1:20-1:21),LowerIdent(1:22-1:23),OpColon(1:23-1:24),Int(1:25-1:27),Comma(1:27-1:28),LowerIdent(1:29-1:30),OpColon(1:30-1:31),Int(1:32-1:34),CloseCurly(1:35-1:36),CloseRound(1:36-1:37),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

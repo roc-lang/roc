@@ -25,7 +25,8 @@ OpenSquare(1:1-1:2),
 Int(2:2-2:3),Comma(2:3-2:4),
 Int(6:2-6:3),Comma(6:3-6:4),
 Int(8:2-8:3),Comma(8:3-8:4),
-CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
+CloseSquare(9:1-9:2),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

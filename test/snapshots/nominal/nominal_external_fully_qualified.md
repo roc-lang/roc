@@ -54,7 +54,8 @@ KwMatch(7:5-7:10),LowerIdent(7:11-7:17),OpenCurly(7:18-7:19),
 UpperIdent(8:9-8:23),NoSpaceDotUpperIdent(8:23-8:36),NoSpaceDotUpperIdent(8:36-8:39),NoSpaceOpenRound(8:39-8:40),LowerIdent(8:40-8:45),CloseRound(8:45-8:46),OpFatArrow(8:47-8:49),LowerIdent(8:50-8:55),
 UpperIdent(9:9-9:23),NoSpaceDotUpperIdent(9:23-9:36),NoSpaceDotUpperIdent(9:36-9:40),NoSpaceOpenRound(9:40-9:41),LowerIdent(9:41-9:45),CloseRound(9:45-9:46),OpFatArrow(9:47-9:49),StringStart(9:50-9:51),StringPart(9:51-9:73),StringEnd(9:73-9:74),
 CloseCurly(10:5-10:6),
-CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
+CloseCurly(11:1-11:2),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure

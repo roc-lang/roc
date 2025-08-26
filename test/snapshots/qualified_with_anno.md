@@ -21,7 +21,8 @@ NIL
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:14),CloseSquare(1:14-1:15),
 UpperIdent(3:1-3:7),OpColonEqual(3:8-3:10),OpenSquare(3:11-3:12),UpperIdent(3:12-3:16),Comma(3:16-3:17),UpperIdent(3:18-3:22),CloseSquare(3:22-3:23),
 LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:15),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(6:15-6:20),EndOfFile(6:20-6:20),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(6:15-6:20),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

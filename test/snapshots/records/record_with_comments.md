@@ -57,7 +57,8 @@ LowerIdent(16:2-16:9),OpColon(16:9-16:10),OpenCurly(16:11-16:12),
 LowerIdent(19:3-19:8),OpColon(19:8-19:9),StringStart(19:10-19:11),StringPart(19:11-19:28),StringEnd(19:28-19:29),Comma(19:29-19:30),
 LowerIdent(20:3-20:8),OpColon(20:8-20:9),OpenCurly(20:10-20:11),LowerIdent(20:12-20:16),OpColon(20:16-20:17),StringStart(20:18-20:19),StringPart(20:19-20:27),StringEnd(20:27-20:28),Comma(20:28-20:29),LowerIdent(20:30-20:34),OpColon(20:34-20:35),StringStart(20:36-20:37),StringPart(20:37-20:45),StringEnd(20:45-20:46),CloseCurly(20:47-20:48),Comma(20:48-20:49),
 CloseCurly(21:2-21:3),Comma(21:3-21:4),
-CloseCurly(23:1-23:2),EndOfFile(23:2-23:2),
+CloseCurly(23:1-23:2),
+EndOfFile(24:1-24:1),
 ~~~
 # PARSE
 ~~~clojure

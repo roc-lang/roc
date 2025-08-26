@@ -135,7 +135,8 @@ LowerIdent(15:1-15:15),OpAssign(15:16-15:17),OpBar(15:18-15:19),LowerIdent(15:19
 LowerIdent(18:1-18:7),OpAssign(18:8-18:9),UpperIdent(18:10-18:14),NoSpaceDotLowerIdent(18:14-18:20),NoSpaceOpenRound(18:20-18:21),StringStart(18:21-18:22),StringPart(18:22-18:26),StringEnd(18:26-18:27),CloseRound(18:27-18:28),
 LowerIdent(21:1-21:7),OpAssign(21:8-21:9),UpperIdent(21:10-21:17),NoSpaceDotUpperIdent(21:17-21:24),NoSpaceDotLowerIdent(21:24-21:31),
 LowerIdent(24:1-24:7),OpAssign(24:8-24:9),UpperIdent(24:10-24:14),NoSpaceDotLowerIdent(24:14-24:28),
-LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUpperIdent(27:14-27:21),NoSpaceDotUpperIdent(27:21-27:30),NoSpaceDotUpperIdent(27:30-27:42),NoSpaceDotLowerIdent(27:42-27:49),EndOfFile(27:49-27:49),
+LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUpperIdent(27:14-27:21),NoSpaceDotUpperIdent(27:21-27:30),NoSpaceDotUpperIdent(27:30-27:42),NoSpaceDotLowerIdent(27:42-27:49),
+EndOfFile(28:1-28:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -67,7 +67,8 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~zig
 MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),
 MalformedNumberNoDigits(2:1-2:6),
-MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
+MalformedNumberBadSuffix(3:1-3:5),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -80,7 +81,6 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # FORMATTED
 ~~~roc
-
 
 
 ~~~

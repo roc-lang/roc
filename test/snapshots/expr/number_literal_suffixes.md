@@ -79,7 +79,8 @@ LowerIdent(30:3-30:9),OpColon(30:9-30:10),Int(30:12-30:20),Comma(30:20-30:21),
 LowerIdent(31:3-31:9),OpColon(31:9-31:10),Int(31:12-31:20),Comma(31:20-31:21),
 LowerIdent(32:3-32:9),OpColon(32:9-32:10),Int(32:12-32:20),Comma(32:20-32:21),
 LowerIdent(33:3-33:10),OpColon(33:10-33:11),Int(33:12-33:21),Comma(33:21-33:22),
-CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
+CloseCurly(34:1-34:2),
+EndOfFile(35:1-35:1),
 ~~~
 # PARSE
 ~~~clojure

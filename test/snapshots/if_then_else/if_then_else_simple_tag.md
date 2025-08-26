@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),UpperIdent(1:4-1:8),NoSpaceDotUpperIdent(1:8-1:13),UpperIdent(1:14-1:16),NoSpaceOpenRound(1:16-1:17),Int(1:17-1:18),CloseRound(1:18-1:19),KwElse(1:20-1:24),UpperIdent(1:25-1:28),NoSpaceOpenRound(1:28-1:29),Int(1:29-1:30),CloseRound(1:30-1:31),EndOfFile(1:31-1:31),
+KwIf(1:1-1:3),UpperIdent(1:4-1:8),NoSpaceDotUpperIdent(1:8-1:13),UpperIdent(1:14-1:16),NoSpaceOpenRound(1:16-1:17),Int(1:17-1:18),CloseRound(1:18-1:19),KwElse(1:20-1:24),UpperIdent(1:25-1:28),NoSpaceOpenRound(1:28-1:29),Int(1:29-1:30),CloseRound(1:30-1:31),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

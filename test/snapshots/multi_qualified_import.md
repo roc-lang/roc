@@ -292,7 +292,8 @@ LowerIdent(6:1-6:13),OpAssign(6:14-6:15),UpperIdent(6:16-6:20),NoSpaceDotUpperId
 LowerIdent(9:1-9:8),OpColon(9:9-9:10),LowerIdent(9:11-9:15),NoSpaceDotUpperIdent(9:15-9:20),NoSpaceDotUpperIdent(9:20-9:25),NoSpaceDotUpperIdent(9:25-9:33),OpArrow(9:34-9:36),UpperIdent(9:37-9:40),
 LowerIdent(10:1-10:8),OpAssign(10:9-10:10),OpBar(10:11-10:12),LowerIdent(10:12-10:19),OpBar(10:19-10:20),StringStart(10:21-10:22),StringPart(10:22-10:32),StringEnd(10:32-10:33),
 LowerIdent(13:1-13:5),OpColon(13:6-13:7),LowerIdent(13:8-13:12),NoSpaceDotUpperIdent(13:12-13:17),NoSpaceDotUpperIdent(13:17-13:22),NoSpaceDotUpperIdent(13:22-13:34),
-LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpperIdent(14:12-14:17),NoSpaceDotUpperIdent(14:17-14:22),NoSpaceDotLowerIdent(14:22-14:29),NoSpaceOpenRound(14:29-14:30),StringStart(14:30-14:31),StringPart(14:31-14:36),StringEnd(14:36-14:37),CloseRound(14:37-14:38),EndOfFile(14:38-14:38),
+LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpperIdent(14:12-14:17),NoSpaceDotUpperIdent(14:17-14:22),NoSpaceDotLowerIdent(14:22-14:29),NoSpaceOpenRound(14:29-14:30),StringStart(14:30-14:31),StringPart(14:31-14:36),StringEnd(14:36-14:37),CloseRound(14:37-14:38),
+EndOfFile(15:1-15:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -354,7 +355,6 @@ process = |encoder| "processing"
 # Test with multiple qualifiers
 data : json.Core.Utf8.EncodedData
 data = json
-
 ~~~
 # CANONICALIZE
 ~~~clojure

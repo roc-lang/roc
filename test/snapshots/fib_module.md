@@ -16,7 +16,8 @@ NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),OpBar(3:7-3:8),LowerIdent(3:8-3:9),OpBar(3:9-3:10),KwIf(3:11-3:13),LowerIdent(3:14-3:15),OpLessThanOrEq(3:16-3:18),Int(3:19-3:20),LowerIdent(3:21-3:22),KwElse(3:23-3:27),LowerIdent(3:28-3:31),NoSpaceOpenRound(3:31-3:32),LowerIdent(3:32-3:33),OpBinaryMinus(3:34-3:35),Int(3:36-3:37),CloseRound(3:37-3:38),OpPlus(3:39-3:40),LowerIdent(3:41-3:44),NoSpaceOpenRound(3:44-3:45),LowerIdent(3:45-3:46),OpBinaryMinus(3:47-3:48),Int(3:49-3:50),CloseRound(3:50-3:51),EndOfFile(3:51-3:51),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),OpBar(3:7-3:8),LowerIdent(3:8-3:9),OpBar(3:9-3:10),KwIf(3:11-3:13),LowerIdent(3:14-3:15),OpLessThanOrEq(3:16-3:18),Int(3:19-3:20),LowerIdent(3:21-3:22),KwElse(3:23-3:27),LowerIdent(3:28-3:31),NoSpaceOpenRound(3:31-3:32),LowerIdent(3:32-3:33),OpBinaryMinus(3:34-3:35),Int(3:36-3:37),CloseRound(3:37-3:38),OpPlus(3:39-3:40),LowerIdent(3:41-3:44),NoSpaceOpenRound(3:44-3:45),LowerIdent(3:45-3:46),OpBinaryMinus(3:47-3:48),Int(3:49-3:50),CloseRound(3:50-3:51),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

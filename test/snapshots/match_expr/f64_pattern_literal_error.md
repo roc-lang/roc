@@ -44,7 +44,8 @@ KwMatch(1:1-1:6),LowerIdent(1:7-1:8),OpenCurly(1:9-1:10),
 Float(2:5-2:12),OpFatArrow(2:13-2:15),StringStart(2:16-2:17),StringPart(2:17-2:19),StringEnd(2:19-2:20),
 Float(3:5-3:11),OpFatArrow(3:12-3:14),StringStart(3:15-3:16),StringPart(3:16-3:20),StringEnd(3:20-3:21),
 LowerIdent(4:5-4:10),OpFatArrow(4:11-4:13),StringStart(4:14-4:15),StringPart(4:15-4:20),StringEnd(4:20-4:21),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

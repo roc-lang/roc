@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Float(1:1-1:8),EndOfFile(1:8-1:8),
+Float(1:1-1:8),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

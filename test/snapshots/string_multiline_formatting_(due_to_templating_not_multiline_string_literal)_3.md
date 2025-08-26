@@ -57,7 +57,8 @@ LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),
 LowerIdent(3:3-3:4),Comma(3:4-3:5),
 LowerIdent(4:3-4:4),Comma(4:4-4:5),
 CloseRound(5:2-5:3),
-CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndOfFile(6:43-6:43),
+CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

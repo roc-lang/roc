@@ -101,7 +101,8 @@ Float(15:5-15:9),Comma(15:9-15:10),
 OpenSquare(16:5-16:6),Int(16:6-16:7),Comma(16:7-16:8),Int(16:9-16:10),CloseSquare(16:10-16:11),Comma(16:11-16:12),
 UpperIdent(17:5-17:9),Comma(17:9-17:10),
 StringStart(18:5-18:6),StringPart(18:6-18:10),StringEnd(18:10-18:11),Comma(18:11-18:12),
-CloseRound(19:1-19:2),EndOfFile(19:2-19:2),
+CloseRound(19:1-19:2),
+EndOfFile(20:1-20:1),
 ~~~
 # PARSE
 ~~~clojure

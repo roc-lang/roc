@@ -12,6 +12,7 @@ UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_003.md:1:1:1:2
 PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
+PARSE ERROR - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -59,9 +60,21 @@ This is an unexpected parsing error. Please check your syntax.
    ^^
 
 
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_003.md:1:6:1:6:**
+```roc
+= "te
+```
+     ^
+
+
 # TOKENS
 ~~~zig
-OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
+OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),StringEnd(1:6-1:6),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -69,11 +82,11 @@ OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
 	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements
 		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))))
+		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))
+		(s-malformed @1.6-1.6 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:2-1:5),OpColon(1:5-1:6),StringStart(1:7-1:8),StringPart(1:8-1:13),StringEnd(1:13-1:14),CloseCurly(1:14-1:15),NoSpaceDotLowerIdent(1:15-1:19),EndOfFile(1:19-1:19),
+OpenCurly(1:1-1:2),LowerIdent(1:2-1:5),OpColon(1:5-1:6),StringStart(1:7-1:8),StringPart(1:8-1:13),StringEnd(1:13-1:14),CloseCurly(1:14-1:15),NoSpaceDotLowerIdent(1:15-1:19),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

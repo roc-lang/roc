@@ -23,7 +23,8 @@ add(5, 3)
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),CloseRound(1:9-1:10),EndOfFile(1:10-1:10),
+LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),CloseRound(1:9-1:10),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

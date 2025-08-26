@@ -39,7 +39,8 @@ LowerIdent(6:2-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),LowerIdent(6:11-6:15),
 LowerIdent(7:2-7:9),OpAssign(7:10-7:11),LowerIdent(7:12-7:18),NoSpaceOpenRound(7:18-7:19),LowerIdent(7:19-7:23),CloseRound(7:23-7:24),
 LowerIdent(8:2-8:9),OpAssign(8:10-8:11),LowerIdent(8:12-8:20),NoSpaceOpenRound(8:20-8:21),LowerIdent(8:21-8:28),CloseRound(8:28-8:29),
 LowerIdent(9:2-9:9),
-CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
+CloseCurly(10:1-10:2),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure

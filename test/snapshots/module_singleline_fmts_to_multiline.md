@@ -33,7 +33,8 @@ You can fix this by either defining `SomeType` in this module, or by removing it
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:28),Comma(1:28-1:29),CloseSquare(1:29-1:30),EndOfFile(1:30-1:30),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:28),Comma(1:28-1:29),CloseSquare(1:29-1:30),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

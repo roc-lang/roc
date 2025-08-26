@@ -23,7 +23,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:14),CloseSquare(1:14-1:15
 LowerIdent(3:1-3:6),OpColon(3:7-3:8),UpperIdent(3:9-3:11),Comma(3:11-3:12),UpperIdent(3:13-3:15),OpArrow(3:16-3:18),UpperIdent(3:19-3:21),
 LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:14),OpBar(4:14-4:15),LowerIdent(4:16-4:17),OpPlus(4:18-4:19),LowerIdent(4:20-4:21),
 KwExpect(6:1-6:7),LowerIdent(6:8-6:13),NoSpaceOpenRound(6:13-6:14),Int(6:14-6:15),Comma(6:15-6:16),Int(6:17-6:18),CloseRound(6:18-6:19),OpEquals(6:20-6:22),Int(6:23-6:24),
-KwExpect(7:1-7:7),LowerIdent(7:8-7:13),NoSpaceOpenRound(7:13-7:14),Int(7:14-7:15),Comma(7:15-7:16),Int(7:17-7:19),CloseRound(7:19-7:20),OpEquals(7:21-7:23),Int(7:24-7:26),EndOfFile(7:26-7:26),
+KwExpect(7:1-7:7),LowerIdent(7:8-7:13),NoSpaceOpenRound(7:13-7:14),Int(7:14-7:15),Comma(7:15-7:16),Int(7:17-7:19),CloseRound(7:19-7:20),OpEquals(7:21-7:23),Int(7:24-7:26),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

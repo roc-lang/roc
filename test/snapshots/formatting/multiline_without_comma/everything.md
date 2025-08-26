@@ -406,7 +406,8 @@ LowerIdent(106:5-106:6),
 CloseSquare(107:4-107:5),
 CloseRound(108:3-108:4),OpFatArrow(108:5-108:7),LowerIdent(108:8-108:9),
 CloseCurly(109:2-109:3),
-CloseCurly(110:1-110:2),EndOfFile(110:2-110:2),
+CloseCurly(110:1-110:2),
+EndOfFile(111:1-111:1),
 ~~~
 # PARSE
 ~~~clojure

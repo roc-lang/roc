@@ -225,7 +225,8 @@ UpperIdent(35:17-35:19),NoSpaceOpenRound(35:19-35:20),LowerIdent(35:20-35:26),Cl
 UpperIdent(36:17-36:20),NoSpaceOpenRound(36:20-36:21),LowerIdent(36:21-36:24),CloseRound(36:24-36:25),OpFatArrow(36:26-36:28),UpperIdent(36:29-36:32),NoSpaceOpenRound(36:32-36:33),LowerIdent(36:33-36:36),CloseRound(36:36-36:37),
 CloseCurly(37:13-37:14),
 UpperIdent(38:9-38:12),NoSpaceOpenRound(38:12-38:13),LowerIdent(38:13-38:16),CloseRound(38:16-38:17),OpFatArrow(38:18-38:20),UpperIdent(38:21-38:24),NoSpaceOpenRound(38:24-38:25),LowerIdent(38:25-38:28),CloseRound(38:28-38:29),
-CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
+CloseCurly(39:5-39:6),
+EndOfFile(40:1-40:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -31,7 +31,8 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),Float(1:6-1:9),Comma(1:9-1:10),StringStart(1:11-1:12),StringPart(1:12-1:17),StringEnd(1:17-1:18),CloseSquare(1:18-1:19),EndOfFile(1:19-1:19),
+OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),Float(1:6-1:9),Comma(1:9-1:10),StringStart(1:11-1:12),StringPart(1:12-1:17),StringEnd(1:17-1:18),CloseSquare(1:18-1:19),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

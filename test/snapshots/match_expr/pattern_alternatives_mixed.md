@@ -51,7 +51,8 @@ UpperIdent(4:2-4:4),NoSpaceOpenRound(4:4-4:5),Underscore(4:5-4:6),CloseRound(4:6
 OpenSquare(5:2-5:3),CloseSquare(5:3-5:4),OpBar(5:5-5:6),OpenSquare(5:7-5:8),Underscore(5:8-5:9),CloseSquare(5:9-5:10),OpFatArrow(5:11-5:13),StringStart(5:14-5:15),StringPart(5:15-5:25),StringEnd(5:25-5:26),
 OpenRound(6:2-6:3),Int(6:3-6:4),Comma(6:4-6:5),Underscore(6:6-6:7),CloseRound(6:7-6:8),OpBar(6:9-6:10),OpenRound(6:11-6:12),Underscore(6:12-6:13),Comma(6:13-6:14),Int(6:15-6:16),CloseRound(6:16-6:17),OpFatArrow(6:18-6:20),StringStart(6:21-6:22),StringPart(6:22-6:30),StringEnd(6:30-6:31),
 Underscore(7:2-7:3),OpFatArrow(7:4-7:6),StringStart(7:7-7:8),StringPart(7:8-7:13),StringEnd(7:13-7:14),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

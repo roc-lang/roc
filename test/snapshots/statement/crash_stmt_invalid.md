@@ -22,7 +22,8 @@ crash 42
 
 # TOKENS
 ~~~zig
-KwCrash(1:1-1:6),Int(1:7-1:9),EndOfFile(1:9-1:9),
+KwCrash(1:1-1:6),Int(1:7-1:9),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -27,7 +27,8 @@ when x is
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),
 Int(2:2-2:3),OpArrow(2:4-2:6),Int(2:7-2:8),
-Int(3:2-3:3),OpArrow(3:4-3:6),Int(3:7-3:8),EndOfFile(3:8-3:8),
+Int(3:2-3:3),OpArrow(3:4-3:6),Int(3:7-3:8),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

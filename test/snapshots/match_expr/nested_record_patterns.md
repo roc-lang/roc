@@ -25,7 +25,8 @@ OpenCurly(3:5-3:6),LowerIdent(3:7-3:13),OpColon(3:13-3:14),OpenCurly(3:15-3:16),
 OpenCurly(4:5-4:6),LowerIdent(4:7-4:11),OpColon(4:11-4:12),OpenCurly(4:13-4:14),LowerIdent(4:15-4:19),OpColon(4:19-4:20),OpenCurly(4:21-4:22),LowerIdent(4:23-4:28),CloseCurly(4:29-4:30),CloseCurly(4:31-4:32),CloseCurly(4:33-4:34),OpFatArrow(4:35-4:37),StringStart(4:38-4:39),StringPart(4:39-4:52),OpenStringInterpolation(4:52-4:54),LowerIdent(4:54-4:59),CloseStringInterpolation(4:59-4:60),StringPart(4:60-4:60),StringEnd(4:60-4:61),
 OpenCurly(5:5-5:6),LowerIdent(5:7-5:13),CloseCurly(5:14-5:15),OpFatArrow(5:16-5:18),StringStart(5:19-5:20),StringPart(5:20-5:28),OpenStringInterpolation(5:28-5:30),LowerIdent(5:30-5:36),CloseStringInterpolation(5:36-5:37),StringPart(5:37-5:37),StringEnd(5:37-5:38),
 OpenCurly(6:5-6:6),CloseCurly(6:6-6:7),OpFatArrow(6:8-6:10),StringStart(6:11-6:12),StringPart(6:12-6:17),StringEnd(6:17-6:18),
-CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
+CloseCurly(7:1-7:2),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

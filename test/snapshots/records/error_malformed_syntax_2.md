@@ -71,7 +71,8 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:16),OpAssign(1:17-1:18),StringStart(1:19-1:20),StringPart(1:20-1:25),StringEnd(1:25-1:26),CloseCurly(1:27-1:28),EndOfFile(1:28-1:28),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:16),OpAssign(1:17-1:18),StringStart(1:19-1:20),StringPart(1:20-1:25),StringEnd(1:25-1:26),CloseCurly(1:27-1:28),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
