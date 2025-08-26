@@ -211,7 +211,7 @@ jobs:
     needs: [create-release-archive]
     strategy:
       matrix:
-        os: [ubuntu-22.04, macos-13, macos-14]
+        os: [ubuntu-20.04, ubuntu-22.04, ubuntu-24.04, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
