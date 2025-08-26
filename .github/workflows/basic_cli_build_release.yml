@@ -277,6 +277,7 @@ jobs:
           cd basic-cli
           git checkout ${{ env.RELEASE_TAG }}
           cp -r examples ../..
+          cp -r tests ../..
           cp -r ci ../..
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
