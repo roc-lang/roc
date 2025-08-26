@@ -411,30 +411,23 @@ fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaq
 
 /// Initialize the WASM module in START state
 export fn init() void {
-    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-    allocator = fba.allocator();
-
+    // Clean up any complex data structures first, before resetting allocator
     if (compiler_data) |*data| {
         data.deinit();
         compiler_data = null;
     }
 
-    // Clean up REPL state
+    // Clean up REPL state before resetting allocator
     cleanupReplState();
 
-    // Clean up any existing buffers
-    if (host_message_buffer) |buf| {
-        allocator.free(buf);
-        host_message_buffer = null;
-    }
-    if (host_response_buffer) |buf| {
-        allocator.free(buf);
-        host_response_buffer = null;
-    }
-    if (last_error) |err| {
-        allocator.free(err);
-        last_error = null;
-    }
+    // Reset allocator to clean slate - this invalidates all previous allocations
+    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
+    allocator = fba.allocator();
+
+    // Simply null out buffer pointers - they're invalid after allocator reset
+    host_message_buffer = null;
+    host_response_buffer = null;
+    last_error = null;
 }
 
 /// Allocate a buffer for incoming messages from the host.
@@ -603,32 +596,40 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeReplInitResponse(response_buffer);
         },
         .RESET => {
-            // A RESET message should clean up all compilation-related memory.
+            logDebug("RESET: Starting in READY state\n", .{});
+            
+            // First, clean up any complex data structures properly
             if (compiler_data) |*old_data| {
+                logDebug("RESET: Cleaning up compiler_data\n", .{});
                 old_data.deinit();
                 compiler_data = null;
+                logDebug("RESET: Compiler data cleaned up\n", .{});
             }
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
-
-            // Clean up REPL state
+            
+            // Clean up REPL state before resetting allocator
+            logDebug("RESET: Cleaning up REPL state\n", .{});
             cleanupReplState();
+            logDebug("RESET: REPL state cleaned up\n", .{});
 
-            // Now, fully reset the allocator to prevent fragmentation.
+            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
+            // Don't try to free individual buffers after resetting the allocator!
+            logDebug("RESET: Resetting allocator to clean slate\n", .{});
             fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
             allocator = fba.allocator();
+            
+            // Simply null out the buffer pointers - they're now invalid anyway
+            host_message_buffer = null;
+            host_response_buffer = null;
+            
+            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
 
             current_state = .READY;
+            logDebug("RESET: State set to READY\n", .{});
 
             const compiler_version = build_options.compiler_version;
+            logDebug("RESET: Writing success response\n", .{});
             try writeSuccessResponse(response_buffer, compiler_version, null);
+            logDebug("RESET: Success response written\n", .{});
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
@@ -663,29 +664,35 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             try writeHoverInfoResponse(response_buffer, data, message_json);
         },
         .RESET => {
-            // A RESET message should clean up all compilation-related memory.
+            logDebug("RESET: Starting in LOADED state\n", .{});
+            
+            // First, clean up any complex data structures properly
             if (compiler_data) |*old_data| {
+                logDebug("RESET: Cleaning up compiler_data\n", .{});
                 old_data.deinit();
                 compiler_data = null;
-            }
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
+                logDebug("RESET: Compiler data cleaned up\n", .{});
             }
 
-            // Now, fully reset the allocator to prevent fragmentation.
+            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
+            // Don't try to free individual buffers after resetting the allocator!
+            logDebug("RESET: Resetting allocator to clean slate\n", .{});
             fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
             allocator = fba.allocator();
+            
+            // Simply null out the buffer pointers - they're now invalid anyway
+            host_message_buffer = null;
+            host_response_buffer = null;
+            
+            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
 
             current_state = .READY;
+            logDebug("RESET: State set to READY\n", .{});
 
             const compiler_version = build_options.compiler_version;
+            logDebug("RESET: Writing success response\n", .{});
             try writeSuccessResponse(response_buffer, compiler_version, null);
+            logDebug("RESET: Success response written\n", .{});
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
@@ -743,27 +750,32 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
-            // Clean up REPL state
+            logDebug("RESET: Starting in REPL_ACTIVE state\n", .{});
+            
+            // Clean up REPL state before resetting allocator
+            logDebug("RESET: Cleaning up REPL state\n", .{});
             cleanupReplState();
+            logDebug("RESET: REPL state cleaned up\n", .{});
 
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
-
-            // Now, fully reset the allocator to prevent fragmentation.
+            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
+            // Don't try to free individual buffers after resetting the allocator!
+            logDebug("RESET: Resetting allocator to clean slate\n", .{});
             fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
             allocator = fba.allocator();
+            
+            // Simply null out the buffer pointers - they're now invalid anyway
+            host_message_buffer = null;
+            host_response_buffer = null;
+            
+            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
 
             current_state = .READY;
+            logDebug("RESET: State set to READY\n", .{});
 
             const compiler_version = build_options.compiler_version;
+            logDebug("RESET: Writing success response\n", .{});
             try writeSuccessResponse(response_buffer, compiler_version, null);
+            logDebug("RESET: Success response written\n", .{});
         },
         .QUERY_CIR => {
             // For REPL mode, we need to generate CIR from the REPL's last module env
