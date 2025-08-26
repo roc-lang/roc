@@ -227,7 +227,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:142:10:142:41
+TYPE MISMATCH - fuzz_crash_027.md:142:10:142:47
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -921,18 +921,18 @@ But here it's being used as:
     _[Red, Blue]_others, _arg2 -> Error_
 
 **TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**fuzz_crash_027.md:142:10:142:41:**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:142:10:142:47:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
-	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-This argument has the type:
-    _List(Error)_
+The type annotation says it should have the type:
+    _Result({  }, _d)_
 
-But the function needs the first argument to be:
-    _List(Error)_
+But here it's being used as:
+    _[Stdoline!(Str)]_others_
 
 # TOKENS
 ~~~zig
@@ -1659,8 +1659,8 @@ main! = |_| { # Yeah Ie
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
 	list = [
-		, # afarg
-		,
+				, # afarg
+				,
 		456, # ee
 	]
 	for n in list {
@@ -1907,8 +1907,7 @@ expect {
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-closure @100.9-148.2
 			(captures
-				(capture @60.1-60.11 (ident "match_time"))
-				(capture @132.2-132.7 (ident "tuple")))
+				(capture @60.1-60.11 (ident "match_time")))
 			(e-lambda @100.9-148.2
 				(args
 					(p-underscore @100.10-100.11))
@@ -1962,6 +1961,7 @@ expect {
 						(e-list @121.9-126.3
 							(elems
 								(e-int @125.6-125.9 (value "456")))))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let @131.2-131.71
 						(p-assign @131.2-131.8 (ident "record"))
 						(e-record @131.11-131.71
@@ -2196,7 +2196,7 @@ expect {
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
-		(patt @100.1-100.6 (type "Error"))
+		(patt @100.1-100.6 (type "List(Error) -> Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
 		(alias @15.1-15.41 (type "Map(a, b)")
@@ -2231,6 +2231,6 @@ expect {
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
-		(expr @100.9-148.2 (type "Error"))
+		(expr @100.9-148.2 (type "List(Error) -> Error"))
 		(expr @151.9-151.11 (type "{}"))))
 ~~~

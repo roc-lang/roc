@@ -64,6 +64,7 @@ test "NodeStore round trip - Statements" {
         .s_decl = .{
             .pattern = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
         },
     });
 
@@ -146,6 +147,10 @@ test "NodeStore round trip - Statements" {
         .name = rand_ident_idx(),
         .anno = rand_idx(CIR.TypeAnno.Idx),
         .where = null,
+    } });
+
+    try statements.append(CIR.Statement{ .s_runtime_error = .{
+        .diagnostic = rand_idx(CIR.Diagnostic.Idx),
     } });
 
     for (statements.items, 0..) |stmt, i| {

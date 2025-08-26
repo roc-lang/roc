@@ -305,7 +305,6 @@ module [tus, r]
 
 LocalStatus : lue => Loc
 
-
 olor : _ -> tus
 olor = |color| {
 		Color.RGB
@@ -313,7 +312,7 @@ olor = |color| {
 	match color {
 		RGB => LocalStatus.Pending
 		Green => LocalStatus
-		 => Complete
+					=> Complete
 		B.Blue => LocalStatus.Pending
 	}
 }
@@ -327,6 +326,7 @@ olor = |color| {
 			(args
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-block @6.16-12.2
+				(s-runtime-error (tag "not_implemented"))
 				(s-expr @6.25-6.34
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match @8.5-11.6

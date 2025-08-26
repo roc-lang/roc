@@ -719,16 +719,7 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
-                // special case for multiline_strings
-                var node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(item_idx)));
-                if (node.tag == .record_field) {
-                    const field = fmt.ast.store.getRecordField(@enumFromInt(@intFromEnum(item_idx)));
-                    if (field.value) |v| {
-                        node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
-                    }
-                }
-                if (node.tag == .multiline_string) {
-                    try fmt.ensureNewline();
+                if (fmt.has_newline) {
                     try fmt.pushIndent();
                 }
                 try fmt.push(',');
@@ -853,6 +844,7 @@ const Formatter = struct {
                         },
                     }
                 }
+                try fmt.ensureNewline();
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
@@ -946,14 +938,8 @@ const Formatter = struct {
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
                     if (multiline) {
-                        const field = fmt.ast.store.getRecordField(field_idx);
-                        if (field.value) |v| {
-                            const node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(v)));
-                            // special case for multiline_strings
-                            if (node.tag == .multiline_string) {
-                                try fmt.ensureNewline();
-                                try fmt.pushIndent();
-                            }
+                        if (fmt.has_newline) {
+                            try fmt.pushIndent();
                         }
                         try fmt.push(',');
                         _ = try fmt.flushCommentsAfter(field_region.end);
@@ -1931,7 +1917,7 @@ const Formatter = struct {
 
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
         var found_comment = false;
-        var newline_count: usize = 0;
+        var newline_count: usize = if (fmt.has_newline) 1 else 0;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {

@@ -17,8 +17,11 @@ UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
 UNDEFINED VARIABLE - record_builder.md:1:3:1:14
+UNRECOGNIZED SYNTAX - record_builder.md:1:15:1:17
 MALFORMED TYPE - record_builder.md:2:8:2:9
+UNRECOGNIZED SYNTAX - record_builder.md:2:9:2:10
 MALFORMED TYPE - record_builder.md:3:8:3:9
+UNRECOGNIZED SYNTAX - record_builder.md:3:9:3:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.
@@ -86,6 +89,17 @@ Is there an `import` or `exposing` missing up-top?
   ^^^^^^^^^^^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_builder.md:1:15:1:17:**
+```roc
+{ Foo.Bar.baz <-
+```
+              ^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -96,6 +110,17 @@ This type annotation is malformed or contains invalid syntax.
        ^
 
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_builder.md:2:9:2:10:**
+```roc
+    x: 5,
+```
+        ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -105,6 +130,17 @@ This type annotation is malformed or contains invalid syntax.
 ```
        ^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_builder.md:3:9:3:10:**
+```roc
+    y: 0,
+```
+        ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -142,13 +178,17 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 (e-block @1.1-4.2
 	(s-expr @1.3-1.14
 		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expr @1.15-1.17
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-type-anno @2.5-2.9 (name "x")
 		(ty-malformed @2.8-2.9))
+	(s-expr @2.9-2.10
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-type-anno @3.5-3.9 (name "y")
 		(ty-malformed @3.8-3.9))
-	(e-empty_record @1.1-4.2))
+	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{}"))
+(expr @1.1-4.2 (type "Error"))
 ~~~

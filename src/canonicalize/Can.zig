@@ -736,9 +736,7 @@ pub fn canonicalizeFile(
                             if (anno_info.name.idx == decl_ident.idx) {
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
-                                const type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, pattern_region, TypeVar);
-                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region);
-
+                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, pattern_region);
                                 // Clear the annotation since we've used it
                                 last_type_anno = null;
                             }
@@ -3033,6 +3031,8 @@ pub fn canonicalizeExpr(
         .block => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            var last_type_anno: ?StmtTypeAnno = null;
+
             // Blocks don't introduce function boundaries, but may contain var statements
             try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
             defer self.scopeExit(self.env.gpa) catch {};
@@ -3059,48 +3059,89 @@ pub fn canonicalizeExpr(
                 const is_last = (i == statements.len - 1);
                 const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
-                if (is_last and (stmt == .expr or stmt == .dbg)) {
+                if (is_last and (stmt == .expr or stmt == .dbg or stmt == .@"return" or stmt == .crash)) {
                     // For the last expression or debug statement, canonicalize it directly as the final expression
                     // without adding it as a statement
                     switch (stmt) {
-                        .expr => |expr_stmt| last_expr = try self.canonicalizeExpr(expr_stmt.expr),
-                        .dbg => |d| {
+                        .expr => |expr_stmt| last_expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr),
+                        .dbg => |dbg_stmt| {
                             // For final debug statements, canonicalize as debug expression
-                            const debug_region = self.parse_ir.tokenizedRegionToRegion(d.region);
-                            const can_inner = try self.canonicalizeExpr(d.expr) orelse return null;
+                            const debug_region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
+                            const inner_expr = try self.canonicalizeExprOrMalformed(dbg_stmt.expr);
 
                             // Create debug expression
-                            const dbg_expr = try self.env.addExprAndTypeVar(Expr{ .e_dbg = .{
-                                .expr = can_inner.idx,
-                            } }, Content{ .flex_var = null }, debug_region);
-                            last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
+                            const dbg_expr = try self.env.addExprAndTypeVarRedirect(Expr{ .e_dbg = .{
+                                .expr = inner_expr.idx,
+                            } }, ModuleEnv.varFrom(inner_expr.idx), debug_region);
+                            last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
+                        },
+                        .@"return" => |return_stmt| last_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr),
+                        .crash => |crash_stmt| {
+                            // For final debug statements, canonicalize as debug expression
+                            const crash_region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
+
+                            // Create crash expression
+                            // Extract string content from the crash expression or create malformed if not string
+                            const crash_expr = blk: {
+                                const msg_expr = self.parse_ir.store.getExpr(crash_stmt.expr);
+                                switch (msg_expr) {
+                                    .string => |s| {
+                                        // For string literals, we need to extract the actual string parts
+                                        const parts = self.parse_ir.store.exprSlice(s.parts);
+                                        if (parts.len > 0) {
+                                            const first_part = self.parse_ir.store.getExpr(parts[0]);
+                                            if (first_part == .string_part) {
+                                                const part_text = self.parse_ir.resolve(first_part.string_part.token);
+                                                break :blk try self.env.addExprAndTypeVar(Expr{ .e_crash = .{
+                                                    .msg = try self.env.insertString(part_text),
+                                                } }, .{ .flex_var = null }, crash_region);
+                                            }
+                                        }
+                                        // Fall back to default if we can't extract
+                                        break :blk try self.env.addExprAndTypeVar(Expr{ .e_crash = .{
+                                            .msg = try self.env.insertString("crash"),
+                                        } }, .{ .flex_var = null }, crash_region);
+                                    },
+                                    else => {
+                                        // For non-string expressions, create a malformed expression
+                                        break :blk try self.env.pushMalformed(Expr.Idx, Diagnostic{ .crash_expects_string = .{
+                                            .region = region,
+                                        } });
+                                    },
+                                }
+                            };
+
+                            last_expr = CanonicalizedExpr{ .idx = crash_expr, .free_vars = null };
                         },
                         else => unreachable,
                     }
                 } else {
                     // This is a regular statement within the block
-                    if (try self.canonicalizeStatement(stmt_idx)) |can_stmt| {
-                        // Collect free vars from the statement into the block's scratch space
-                        if (can_stmt.free_vars) |fvs| {
-                            for (fvs) |fv| {
-                                if (!bound_vars.contains(fv)) {
-                                    try captures.put(self.env.gpa, fv, {});
-                                }
-                            }
-                        }
+                    const can_stmt_result = try self.canonicalizeStatement(stmt_idx, &last_type_anno);
+                    switch (can_stmt_result) {
+                        .import_stmt => {
+                            // After we process import statements, there's no
+                            // need to include then in the canonicalize IR
+                        },
+                        .stmt => |can_stmt| {
+                            try self.env.store.addScratchStatement(can_stmt.idx);
 
-                        if (self.env.store.scratch_statements.top() > 0) {
-                            // Collect bound vars from the statement
-                            // We need to look at the statement that was just added to the scratch buffer
-                            const last_added_stmt_idx = self.env.store.scratch_statements.items.items[self.env.store.scratch_statements.top() - 1];
-                            const cir_stmt = self.env.store.getStatement(last_added_stmt_idx);
-
+                            const cir_stmt = self.env.store.getStatement(can_stmt.idx);
                             switch (cir_stmt) {
                                 .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
                                 .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
                                 else => {},
                             }
-                        }
+
+                            // Collect free vars from the statement into the block's scratch space
+                            if (can_stmt.free_vars) |fvs| {
+                                for (fvs) |fv| {
+                                    if (!bound_vars.contains(fv)) {
+                                        try captures.put(self.env.gpa, fv, {});
+                                    }
+                                }
+                            }
+                        },
                     }
                 }
             }
@@ -3156,6 +3197,22 @@ pub fn canonicalizeExpr(
             return null;
         },
     }
+}
+
+/// Canonicalize an expr. If it fails, convert it to a malormed expr node
+fn canonicalizeExprOrMalformed(
+    self: *Self,
+    ast_expr_idx: AST.Expr.Idx,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    return try self.canonicalizeExpr(ast_expr_idx) orelse blk: {
+        const ast_expr = self.parse_ir.store.getExpr(ast_expr_idx);
+        break :blk CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = self.parse_ir.tokenizedRegionToRegion(ast_expr.to_tokenized_region()),
+            } }),
+            .free_vars = null,
+        };
+    };
 }
 
 // Canonicalize a tag expr
@@ -5698,121 +5755,202 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     }, Content{ .flex_var = null }, region);
 }
 
+// expr statements //
+
+// A canonicalized statement
+const CanonicalizedStatement = struct {
+    idx: Statement.Idx,
+    free_vars: ?[]Pattern.Idx,
+};
+
+/// A statement type annotation
+pub const StmtTypeAnno = struct {
+    anno_idx: Statement.Idx,
+    anno: std.meta.FieldType(Statement, .s_type_anno),
+};
+
+// The result of canonicalizing a statement
+const CanonicalizedStatementResult = union(enum) {
+    import_stmt,
+    stmt: CanonicalizedStatement,
+};
+
 /// Canonicalize a statement in the canonical IR.
-pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!?CanonicalizedExpr {
+///
+/// This always succeed, but the Statement.Idx returned may be null only if the
+/// statement was an imported.
+pub fn canonicalizeStatement(
+    self: *Self,
+    ast_stmt_idx: AST.Statement.Idx,
+    last_type_anno: *?StmtTypeAnno,
+) std.mem.Allocator.Error!CanonicalizedStatementResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stmt = self.parse_ir.store.getStatement(stmt_idx);
+    // In many of these branches, we defer setting `last_anno_type` to ensure
+    // that in the case of early returns, the value is reset properly.
+    //
+    // We can't have the `defer` outide the switch branches because not all
+    // branches should reset `last_type_anno`
 
-    switch (stmt) {
+    const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+    switch (ast_stmt) {
         .decl => |d| {
+            defer last_type_anno.* = null; // See above comment for why this is necessary
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+
             // Check if this is a var reassignment
-            const pattern = self.parse_ir.store.getPattern(d.pattern);
-            if (pattern == .ident) {
-                const ident_tok = pattern.ident.ident_tok;
-                if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
-                    const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
+            const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
+            switch (ast_pattern) {
+                .ident => |pattern_ident| {
+                    const ident_region = self.parse_ir.tokenizedRegionToRegion(pattern_ident.region);
+                    const ident_tok = pattern_ident.ident_tok;
 
-                    // Check if this identifier exists and is a var
-                    switch (self.scopeLookup(.ident, ident_idx)) {
-                        .found => |existing_pattern_idx| {
-                            // Check if this is a var reassignment across function boundaries
-                            if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
-                                // Generate error for var reassignment across function boundary
-                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .var_across_function_boundary = .{
-                                    .region = region,
-                                } });
+                    if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
+                        // Check if this identifier exists and is a var
+                        switch (self.scopeLookup(.ident, ident_idx)) {
+                            .found => |existing_pattern_idx| {
+                                // Check if this is a var reassignment across function boundaries
+                                if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+                                    // Generate error for var reassignment across function boundary
+                                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .var_across_function_boundary = .{
+                                        .region = ident_region,
+                                    } });
 
-                                // Create a reassign statement with the error expression
-                                const reassign_stmt = Statement{ .s_reassign = .{
-                                    .pattern_idx = existing_pattern_idx,
-                                    .expr = malformed_idx,
-                                } };
-                                const reassign_idx = try self.env.addStatementAndTypeVar(reassign_stmt, Content{ .flex_var = null }, region);
-                                try self.env.store.addScratchStatement(reassign_idx);
+                                    // Create a reassign statement with the error expression
+                                    const reassign_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_reassign = .{
+                                        .pattern_idx = existing_pattern_idx,
+                                        .expr = malformed_idx,
+                                    } }, ModuleEnv.varFrom(malformed_idx), ident_region);
 
-                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
-                            }
+                                    return .{
+                                        .stmt = CanonicalizedStatement{ .idx = reassign_idx, .free_vars = null },
+                                    };
+                                }
 
-                            // Check if this was declared as a var
-                            if (self.isVarPattern(existing_pattern_idx)) {
-                                // This is a var reassignment - canonicalize the expression and create reassign statement
-                                const can_expr = try self.canonicalizeExpr(d.body) orelse return null;
+                                // Check if this was declared as a var
+                                if (self.isVarPattern(existing_pattern_idx)) {
+                                    // This is a var reassignment - canonicalize the expression and create reassign statement
+                                    const expr = try self.canonicalizeExprOrMalformed(d.body);
 
-                                // Create reassign statement
-                                const reassign_stmt = Statement{ .s_reassign = .{
-                                    .pattern_idx = existing_pattern_idx,
-                                    .expr = can_expr.idx,
-                                } };
-                                const reassign_idx = try self.env.addStatementAndTypeVar(reassign_stmt, Content{ .flex_var = null }, region);
-                                try self.env.store.addScratchStatement(reassign_idx);
+                                    // Create reassign statement
+                                    const reassign_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_reassign = .{
+                                        .pattern_idx = existing_pattern_idx,
+                                        .expr = expr.idx,
+                                    } }, ModuleEnv.varFrom(expr.idx), ident_region);
 
-                                return can_expr;
-                            }
-                        },
-                        .not_found => {
-                            // Not found in scope, fall through to regular declaration
-                        },
+                                    return .{
+                                        .stmt = CanonicalizedStatement{ .idx = reassign_idx, .free_vars = expr.free_vars },
+                                    };
+                                }
+                            },
+                            .not_found => {
+                                // Not found in scope, fall through to regular declaration
+                            },
+                        }
+                    }
+                },
+                else => {},
+            }
+
+            // check against last anno
+
+            // Regular declaration - canonicalize as usual
+            const pattern_idx = try self.canonicalizePattern(d.pattern) orelse blk: {
+                const pattern = self.parse_ir.store.getPattern(d.pattern);
+                break :blk try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region()),
+                } });
+            };
+
+            const expr = try self.canonicalizeExprOrMalformed(d.body);
+
+            // Check if this declaration matches the last type annotation
+            var annotation_idx: ?Annotation.Idx = null;
+            if (last_type_anno.*) |anno_info| {
+                if (ast_pattern == .ident) {
+                    const pattern_ident = ast_pattern.ident;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+                        if (anno_info.anno.name.idx == decl_ident.idx) {
+                            // This declaration matches the type annotation
+                            const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
+                            annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno.anno, pattern_region);
+
+                            // Clear the annotation since we've used it
+                            last_type_anno.* = null;
+                        }
                     }
                 }
             }
 
-            // Regular declaration - canonicalize as usual
-            const pattern_idx = try self.canonicalizePattern(d.pattern) orelse return null;
-            const can_expr = try self.canonicalizeExpr(d.body) orelse return null;
-
             // Create a declaration statement
-            const var_stmt = Statement{ .s_decl = .{
+            const stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_decl = .{
                 .pattern = pattern_idx,
-                .expr = can_expr.idx,
-            } };
-            const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getStatement(stmt_idx).decl.region);
-            const var_stmt_idx = try self.env.addStatementAndTypeVar(var_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(var_stmt_idx);
+                .expr = expr.idx,
+                .anno = annotation_idx,
+            } }, ModuleEnv.varFrom(expr.idx), region);
 
-            return can_expr;
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
         .@"var" => |v| {
-            // Var declaration - handle specially with function boundary tracking
-            const var_name = self.parse_ir.tokens.resolveIdentifier(v.name) orelse return null;
+            defer last_type_anno.* = null; // See above comment for why this is necessary
             const region = self.parse_ir.tokenizedRegionToRegion(v.region);
 
+            // Var declaration - handle specially with function boundary tracking
+            const var_name = self.parse_ir.tokens.resolveIdentifier(v.name) orelse {
+                const feature = try self.env.insertString("resolve var name");
+                return .{ .stmt = CanonicalizedStatement{
+                    .idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } }),
+                    .free_vars = null,
+                } };
+            };
+
             // Canonicalize the initial value
-            const can_init_expr = try self.canonicalizeExpr(v.body) orelse return null;
+            const expr = try self.canonicalizeExprOrMalformed(v.body);
 
             // Create pattern for the var
-            const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{ .assign = .{ .ident = var_name } }, Content{ .flex_var = null }, region);
+            const pattern_idx = try self.env.addPatternAndTypeVarRedirect(
+                Pattern{ .assign = .{ .ident = var_name } },
+                ModuleEnv.varFrom(expr.idx),
+                region,
+            );
 
             // Introduce the var with function boundary tracking
             _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
 
             // Create var statement
-            const var_stmt = Statement{ .s_var = .{
+            const stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_var = .{
                 .pattern_idx = pattern_idx,
-                .expr = can_init_expr.idx,
-            } };
-            const var_idx = try self.env.addStatementAndTypeVar(var_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(var_idx);
+                .expr = expr.idx,
+            } }, ModuleEnv.varFrom(expr.idx), region);
 
-            return can_init_expr;
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
         .expr => |e| {
+            defer last_type_anno.* = null; // See above comment for why this is necessary
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
             // Expression statement
-            const can_expr = try self.canonicalizeExpr(e.expr) orelse return null;
+            const expr = try self.canonicalizeExprOrMalformed(e.expr);
 
             // Create expression statement
-            const expr_stmt = Statement{ .s_expr = .{
-                .expr = can_expr.idx,
-            } };
-            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const expr_stmt_idx = try self.env.addStatementAndTypeVar(expr_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(expr_stmt_idx);
+            const stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_expr = .{
+                .expr = expr.idx,
+            } }, ModuleEnv.varFrom(expr.idx), region);
 
-            return can_expr;
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
         .crash => |c| {
-            // Crash statement
+            defer last_type_anno.* = null; // See above comment for why this is necessary
             const region = self.parse_ir.tokenizedRegionToRegion(c.region);
 
             // Extract string content from the crash expression or create malformed if not string
@@ -5834,114 +5972,111 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     },
                     else => {
                         // For non-string expressions, create a malformed expression
-                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .crash_expects_string = .{
+                        const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .crash_expects_string = .{
                             .region = region,
                         } });
-                        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+                        return .{
+                            .stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = null },
+                        };
                     },
                 }
             };
 
             // Create crash statement
-            const crash_stmt = Statement{ .s_crash = .{
+            const stmt_idx = try self.env.addStatementAndTypeVar(Statement{ .s_crash = .{
                 .msg = msg_literal,
-            } };
-            const crash_stmt_idx = try self.env.addStatementAndTypeVar(crash_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(crash_stmt_idx);
+            } }, .err, region);
 
-            // Create a crash expression that represents the runtime behavior
-            const crash_expr_idx = try self.env.addExprAndTypeVar(Expr{ .e_crash = .{
-                .msg = msg_literal,
-            } }, Content{ .flex_var = null }, region);
-
-            return CanonicalizedExpr{ .idx = crash_expr_idx, .free_vars = null };
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null },
+            };
         },
         .dbg => |d| {
-            // Debug statement
+            defer last_type_anno.* = null; // See above comment for why this is necessary
             const region = self.parse_ir.tokenizedRegionToRegion(d.region);
 
             // Canonicalize the debug expression
-            const can_dbg_expr = try self.canonicalizeExpr(d.expr) orelse return null;
+            const expr = try self.canonicalizeExprOrMalformed(d.expr);
 
             // Create dbg statement
-            const dbg_stmt = Statement{ .s_dbg = .{
-                .expr = can_dbg_expr.idx,
-            } };
-            const dbg_stmt_idx = try self.env.addStatementAndTypeVar(dbg_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(dbg_stmt_idx);
 
-            // Return the debug expression value (dbg returns the value of its expression)
-            return can_dbg_expr;
+            const stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_dbg = .{
+                .expr = expr.idx,
+            } }, ModuleEnv.varFrom(expr.idx), region);
+
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
-
         .expect => |e| {
-            // Expect statement
+            defer last_type_anno.* = null; // See above comment for why this is necessary
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Canonicalize the expect expression
-            const can_expect = try self.canonicalizeExpr(e.body) orelse return null;
+            const expr = try self.canonicalizeExprOrMalformed(e.body);
 
             // Create expect statement
-            const expect_stmt = Statement{ .s_expect = .{
-                .body = can_expect.idx,
-            } };
-            const expect_stmt_idx = try self.env.addStatementAndTypeVar(expect_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(expect_stmt_idx);
+            const stmt_idx = try self.env.addStatementAndTypeVar(Statement{ .s_expect = .{
+                .body = expr.idx,
+            } }, Content{ .structure = .empty_record }, region);
 
-            const expect_expr_node = try self.env.addExprAndTypeVar(Expr{ .e_expect = .{
-                .body = can_expect.idx,
-            } }, Content{ .flex_var = null }, region);
-            return CanonicalizedExpr{ .idx = expect_expr_node, .free_vars = can_expect.free_vars };
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
         .@"return" => |r| {
-            // Return statement
+            defer last_type_anno.* = null; // See above comment for why this is necessary
             const region = self.parse_ir.tokenizedRegionToRegion(r.region);
 
             // Canonicalize the return expression
-            const can_return_expr = try self.canonicalizeExpr(r.expr) orelse return null;
+            const expr = try self.canonicalizeExprOrMalformed(r.expr);
 
             // Create return statement
-            const return_stmt = Statement{ .s_return = .{
-                .expr = can_return_expr.idx,
-            } };
-            const return_stmt_idx = try self.env.addStatementAndTypeVar(return_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(return_stmt_idx);
+            const stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{ .s_return = .{
+                .expr = expr.idx,
+            } }, ModuleEnv.varFrom(expr.idx), region);
 
-            // Return the return expression value
-            return can_return_expr;
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars },
+            };
         },
         .type_decl => |s| {
+            defer last_type_anno.* = null; // See above comment for why this is necessary
+
             // TODO type declarations in statement context
             const feature = try self.env.insertString("type_decl in statement context");
-            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = self.parse_ir.tokenizedRegionToRegion(s.region),
             } });
-            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = null },
+            };
         },
         .type_anno => |ta| {
+            // Note that we do _not_ defer resetting last_type_anno in this branch
+
             // Type annotation statement
             const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
             // Resolve the identifier name
             const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                 const feature = try self.env.insertString("type annotation identifier resolution");
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = region,
                 } });
-                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+                return .{
+                    .stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = null },
+                };
             };
 
             // Introduce type variables into scope
             const type_vars_top: u32 = @intCast(self.scratch_idents.top());
-
             // Extract type variables from the AST annotation
             try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
-
             // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
-
             // Canonicalize where clauses if present
             const where_clauses = if (ta.where) |where_coll| blk: {
                 const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
@@ -5949,57 +6084,59 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
 
                 // Enter a new scope for where clause
                 try self.scopeEnter(self.env.gpa, false);
-                defer self.scopeExit(self.env.gpa) catch {};
+                defer self.scopeExit(self.env.gpa) catch {}; // See above comment for why this is necessary
 
                 for (where_slice) |where_idx| {
                     const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
                     try self.env.store.addScratchWhereClause(canonicalized_where);
                 }
-
                 break :blk try self.env.store.whereClauseSpanFrom(where_start);
             } else null;
 
             // Create a type annotation statement
-            const type_anno_stmt = Statement{
-                .s_type_anno = .{
-                    .name = name_ident,
-                    .anno = type_anno_idx,
-                    .where = where_clauses,
-                },
+            const type_anno_stmt: std.meta.FieldType(Statement, .s_type_anno) = .{
+                .name = name_ident,
+                .anno = type_anno_idx,
+                .where = where_clauses,
             };
-            const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
-            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+            const type_anno_stmt_idx = try self.env.addStatementAndTypeVarRedirect(Statement{
+                .s_type_anno = type_anno_stmt,
+            }, ModuleEnv.varFrom(type_anno_idx), region);
 
-            // Type annotations don't produce runtime values, so return a unit expression
-            // Create an empty tuple as a unit value
-            const empty_span = Expr.Span{ .span = DataSpan{ .start = 0, .len = 0 } };
-            const unit_expr = try self.env.addExprAndTypeVar(Expr{ .e_tuple = .{
-                .elems = empty_span,
-            } }, Content{ .flex_var = null }, region);
-            return CanonicalizedExpr{ .idx = unit_expr, .free_vars = null };
+            last_type_anno.* = StmtTypeAnno{
+                .anno_idx = type_anno_stmt_idx,
+                .anno = type_anno_stmt,
+            };
+
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = type_anno_stmt_idx, .free_vars = null },
+            };
         },
         .import => |import_stmt| {
-            _ = try self.canonicalizeImportStatement(import_stmt);
+            defer last_type_anno.* = null; // See above comment for why this is necessary
 
-            // Import statements don't produce runtime values, so return a unit expression
-            const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-            const empty_span = Expr.Span{ .span = DataSpan{ .start = 0, .len = 0 } };
-            const unit_expr = try self.env.addExprAndTypeVar(Expr{ .e_tuple = .{
-                .elems = empty_span,
-            } }, Content{ .flex_var = null }, region);
-            return CanonicalizedExpr{ .idx = unit_expr, .free_vars = null };
+            // After we process import statements, there's no need to include
+            // then in the canonicalize IR
+            _ = try self.canonicalizeImportStatement(import_stmt);
+            return .import_stmt;
         },
         else => {
+            defer last_type_anno.* = null; // See above comment for why this is necessary
+
             // Other statement types not yet implemented
             const feature = try self.env.insertString("statement type in block");
-            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
-            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+            return .{
+                .stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = null },
+            };
         },
     }
 }
+
+// scope //
 
 /// Enter a new scope level
 pub fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: bool) std.mem.Allocator.Error!void {
@@ -6886,7 +7023,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
 
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, _: TypeVar, region: Region) std.mem.Allocator.Error!?Annotation.Idx {
+fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, region: Region) std.mem.Allocator.Error!?Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6898,7 +7035,7 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, _: Typ
     };
 
     // Add to NodeStore and return the index
-    const annotation_idx = try self.env.addAnnotationAndTypeVar(annotation, .err, region);
+    const annotation_idx = try self.env.addAnnotationAndTypeVarRedirect(annotation, ModuleEnv.varFrom(type_anno_idx), region);
 
     return annotation_idx;
 }

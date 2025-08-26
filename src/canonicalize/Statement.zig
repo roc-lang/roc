@@ -26,6 +26,7 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;
+const Annotation = CIR.Annotation;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -37,6 +38,7 @@ pub const Statement = union(enum) {
     s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
+        anno: ?Annotation.Idx,
     },
     /// A rebindable declaration using the "var" keyword.
     ///
@@ -151,6 +153,10 @@ pub const Statement = union(enum) {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?CIR.WhereClause.Span,
+    },
+
+    s_runtime_error: struct {
+        diagnostic: CIR.Diagnostic.Idx,
     },
 
     pub const Idx = enum(u32) { _ };
@@ -334,6 +340,19 @@ pub const Statement = union(enum) {
                     try tree.endNode(where_begin, where_attrs);
                 }
 
+                try tree.endNode(begin, attrs);
+            },
+            .s_runtime_error => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-runtime-error");
+
+                const diagnostic = env.store.getDiagnostic(s.diagnostic);
+                const msg = try std.fmt.allocPrint(env.gpa, "{s}", .{@tagName(diagnostic)});
+                defer env.gpa.free(msg);
+
+                try tree.pushStringPair("tag", msg);
+
+                const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
         }
