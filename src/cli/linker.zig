@@ -163,15 +163,15 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                 .gnu => {
                     // Dynamic GNU linking - find the dynamic linker
                     if (libc_finder.findLibc(allocator)) |libc_info| {
-                        // Copy the dynamic linker path before deinit
-                        const dynamic_linker_copy = try allocator.dupe(u8, libc_info.dynamic_linker);
-                        
-                        // Clean up libc_info
+                        // We need to copy the path since args holds references
+                        const dynamic_linker = try allocator.dupe(u8, libc_info.dynamic_linker);
+
+                        // Clean up libc_info after copying what we need
                         var info = libc_info;
                         info.deinit();
-                        
+
                         try args.append("-dynamic-linker");
-                        try args.append(dynamic_linker_copy);
+                        try args.append(dynamic_linker);
                     } else |err| {
                         // Fallback to hardcoded path based on architecture
                         std.log.warn("Failed to detect libc: {}, using fallback", .{err});

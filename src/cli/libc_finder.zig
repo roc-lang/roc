@@ -31,6 +31,28 @@ pub const LibcInfo = struct {
     }
 };
 
+/// Validate that a path is safe (absolute and no traversal)
+fn validatePath(path: []const u8) bool {
+    if (!fs.path.isAbsolute(path)) return false;
+    if (std.mem.indexOf(u8, path, "../") != null) return false;
+    return true;
+}
+
+/// Get the dynamic linker name for the given architecture
+fn getDynamicLinkerName(arch: []const u8) []const u8 {
+    if (std.mem.eql(u8, arch, "x86_64")) {
+        return "ld-linux-x86-64.so.2";
+    } else if (std.mem.eql(u8, arch, "aarch64")) {
+        return "ld-linux-aarch64.so.1";
+    } else if (std.mem.startsWith(u8, arch, "arm")) {
+        return "ld-linux-armhf.so.3";
+    } else if (std.mem.eql(u8, arch, "i686") or std.mem.eql(u8, arch, "i386")) {
+        return "ld-linux.so.2";
+    } else {
+        return "ld-linux.so.2";
+    }
+}
+
 /// Main entry point - finds libc and dynamic linker
 pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
     // Try compiler-based detection first (most reliable)
@@ -46,11 +68,21 @@ pub fn findLibc(allocator: std.mem.Allocator) !LibcInfo {
 fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
+    // Get architecture first
+    const arch = try getArchitecture(allocator);
+    defer allocator.free(arch);
+
+    // Get the expected dynamic linker name for this architecture
+    const ld_name = getDynamicLinkerName(arch);
+
     for (compilers) |compiler| {
         // Try to get dynamic linker path from compiler
+        const ld_cmd = try std.fmt.allocPrint(allocator, "-print-file-name={s}", .{ld_name});
+        defer allocator.free(ld_cmd);
+
         const ld_result = process.Child.run(.{
             .allocator = allocator,
-            .argv = &[_][]const u8{ compiler, "-print-file-name=ld-linux-x86-64.so.2" },
+            .argv = &[_][]const u8{ compiler, ld_cmd },
         }) catch continue;
         defer allocator.free(ld_result.stdout);
         defer allocator.free(ld_result.stderr);
@@ -66,22 +98,27 @@ fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
         const libc_path = std.mem.trimRight(u8, libc_result.stdout, "\n\r \t");
         if (libc_path.len == 0 or std.mem.eql(u8, libc_path, "libc.so")) continue;
 
-        // Verify the file exists
-        _ = fs.openFileAbsolute(libc_path, .{}) catch continue;
+        // Validate path for security
+        if (!validatePath(libc_path)) continue;
+
+        // Verify the file exists and close it properly
+        const libc_file = fs.openFileAbsolute(libc_path, .{}) catch continue;
+        libc_file.close();
 
         const lib_dir = fs.path.dirname(libc_path) orelse continue;
 
-        // Get architecture
-        const arch = try getArchitecture(allocator);
-
         // Find dynamic linker
         const dynamic_linker = try findDynamicLinker(allocator, arch, lib_dir) orelse continue;
+        defer allocator.free(dynamic_linker);
+
+        // Validate dynamic linker path
+        if (!validatePath(dynamic_linker)) continue;
 
         return LibcInfo{
-            .dynamic_linker = dynamic_linker,
+            .dynamic_linker = try allocator.dupe(u8, dynamic_linker),
             .libc_path = try allocator.dupe(u8, libc_path),
             .lib_dir = try allocator.dupe(u8, lib_dir),
-            .arch = arch,
+            .arch = try allocator.dupe(u8, arch),
             .allocator = allocator,
         };
     }
@@ -91,8 +128,11 @@ fn findViaCompiler(allocator: std.mem.Allocator) !?LibcInfo {
 
 /// Find libc by searching the filesystem
 fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
-    const arch = try getArchitecture(allocator);
-    defer allocator.free(arch);
+    // Get architecture and duplicate it for later use
+    const arch_temp = try getArchitecture(allocator);
+    defer allocator.free(arch_temp);
+    const arch = try allocator.dupe(u8, arch_temp);
+    errdefer allocator.free(arch);
 
     const search_paths = try getSearchPaths(allocator, arch);
     defer {
@@ -107,42 +147,59 @@ fn findViaFilesystem(allocator: std.mem.Allocator) !LibcInfo {
         var dir = fs.openDirAbsolute(lib_dir, .{}) catch continue;
         defer dir.close();
 
-        const libc_names = [_][]const u8{ "libc.so.6", "libc.so", "libc.a" };
+        // Support both glibc and musl
+        const libc_names = [_][]const u8{
+            "libc.so.6", // glibc
+            "libc.musl-x86_64.so.1", // musl x86_64
+            "libc.musl-aarch64.so.1", // musl aarch64
+            "libc.musl-arm.so.1", // musl arm
+            "libc.so",
+            "libc.a",
+        };
 
         for (libc_names) |libc_name| {
             const libc_path = try fs.path.join(allocator, &[_][]const u8{ lib_dir, libc_name });
             defer allocator.free(libc_path);
 
-            // Check if file exists
-            _ = fs.openFileAbsolute(libc_path, .{}) catch continue;
+            // Check if file exists and close it properly
+            const libc_file = fs.openFileAbsolute(libc_path, .{}) catch continue;
+            libc_file.close();
 
             // Try to find dynamic linker
             const dynamic_linker = try findDynamicLinker(allocator, arch, lib_dir) orelse continue;
+            errdefer allocator.free(dynamic_linker);
+
+            // Validate paths for security
+            if (!validatePath(libc_path) or !validatePath(dynamic_linker)) {
+                allocator.free(dynamic_linker);
+                continue;
+            }
 
             return LibcInfo{
                 .dynamic_linker = dynamic_linker,
                 .libc_path = try allocator.dupe(u8, libc_path),
                 .lib_dir = try allocator.dupe(u8, lib_dir),
-                .arch = try allocator.dupe(u8, arch),
+                .arch = arch, // Transfer ownership
                 .allocator = allocator,
             };
         }
     }
 
+    allocator.free(arch);
     return error.LibcNotFound;
 }
 
 /// Find the dynamic linker for the given architecture
 fn findDynamicLinker(allocator: std.mem.Allocator, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
-    // Map architecture to dynamic linker name
+    // Map architecture to dynamic linker names (including musl)
     const ld_names = if (std.mem.eql(u8, arch, "x86_64"))
-        &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-linux.so.2" }
+        &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2" }
     else if (std.mem.eql(u8, arch, "aarch64"))
-        &[_][]const u8{ "ld-linux-aarch64.so.1", "ld-linux.so.1" }
+        &[_][]const u8{ "ld-linux-aarch64.so.1", "ld-musl-aarch64.so.1", "ld-linux.so.1" }
     else if (std.mem.startsWith(u8, arch, "arm"))
-        &[_][]const u8{ "ld-linux-armhf.so.3", "ld-linux.so.3" }
+        &[_][]const u8{ "ld-linux-armhf.so.3", "ld-musl-arm.so.1", "ld-linux.so.3" }
     else if (std.mem.eql(u8, arch, "i686") or std.mem.eql(u8, arch, "i386"))
-        &[_][]const u8{"ld-linux.so.2"}
+        &[_][]const u8{ "ld-linux.so.2", "ld-musl-i386.so.1" }
     else
         &[_][]const u8{ "ld-linux.so.2", "ld.so.1" };
 
@@ -236,6 +293,10 @@ fn getSearchPaths(allocator: std.mem.Allocator, arch: []const u8) !std.ArrayList
     try paths.append(try allocator.dupe(u8, "/usr/lib"));
     try paths.append(try allocator.dupe(u8, "/usr/local/lib"));
 
+    // Add musl-specific paths
+    try paths.append(try allocator.dupe(u8, "/lib/musl"));
+    try paths.append(try allocator.dupe(u8, "/usr/lib/musl"));
+
     return paths;
 }
 
@@ -302,6 +363,10 @@ test "libc detection integration test" {
     try std.testing.expect(libc_info.dynamic_linker.len > 0);
     try std.testing.expect(libc_info.libc_path.len > 0);
     try std.testing.expect(libc_info.lib_dir.len > 0);
+
+    // Verify paths are valid
+    try std.testing.expect(validatePath(libc_info.dynamic_linker));
+    try std.testing.expect(validatePath(libc_info.libc_path));
 
     // Verify the dynamic linker file exists and is accessible
     const ld_file = fs.openFileAbsolute(libc_info.dynamic_linker, .{}) catch |err| {
