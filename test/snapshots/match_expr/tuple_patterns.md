@@ -21,17 +21,7 @@ KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-when coord is {
-	(Zero, Zero)
-	=>
-	"origin"((x, Zero))
-	=>
-	x((Zero, y))
-	=>
-	y((x, y))
-	=>
-	x
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

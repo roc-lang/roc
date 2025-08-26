@@ -18,11 +18,7 @@ KwMatch LowerIdent OpenCurly LowerIdent OpFatArrow LowerIdent OpPlus Int CloseCu
 ~~~
 # FORMATTED
 ~~~roc
-when value is {
-	x
-	=>
-	x + 1
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

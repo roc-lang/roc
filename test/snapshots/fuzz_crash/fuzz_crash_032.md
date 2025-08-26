@@ -77,17 +77,10 @@ olor = \color -> {
 	import Color.RGB
 	
 
-when color is {
-		RGB
-		=>
-		LocalStatus.Pending
-		Green
-		=>
-		LocalStatus - Complete
-		B.Blue
-		=>
-		LocalStatus.Pending
-	}
+match color { RGB => LocalStatus.Pending
+Green => LocalStatus-Complete
+  B.Blue => LocalStatus.Pending
+    }
 }
 ~~~
 # EXPECTED

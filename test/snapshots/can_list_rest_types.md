@@ -19,16 +19,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-when numbers is {
-	[first, ..as]
-	restNums
-	]
-	=>
-	restNums
-	[]
-	=>
-	[]
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

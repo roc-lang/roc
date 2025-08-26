@@ -19,16 +19,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow UpperIdent OpenRo
 ~~~
 # FORMATTED
 ~~~roc
-when l is {
-	[]
-	=>
-	Err(EmptyList)
-	[..]
-	e
-	]
-	=>
-	Ok(e)
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -19,14 +19,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
 ~~~
 # FORMATTED
 ~~~roc
-when numbers is {
-	[]
-	=>
-	acc
-	[first, ..rest]
-	=>
-	0 # invalid rest pattern should error
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

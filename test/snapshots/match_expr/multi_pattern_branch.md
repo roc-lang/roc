@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatA
 ~~~
 # FORMATTED
 ~~~roc
-when color is {
-	Blue.Green | Red
-	=>
-	1
-	Black
-	=>
-	2
-	White
-	=>
-	3
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

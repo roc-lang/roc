@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-when items is {
-	[first, ..rest]
-	=>
-	first + 1
-	[..rest, last]
-	=>
-	last + 2
-	[x, ..rest, y]
-	=>
-	x + y
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -23,28 +23,7 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Op
 ~~~
 # FORMATTED
 ~~~roc
-when items is {
-	[_]
-	=>
-	1 # pattern match on a list with a single (ignored) element
-	[..]
-	last
-	]
-	=>
-	last # pattern match on the last item in the list
-	[first, ..]]
-	=>
-	first # pattern match on the first item in the list
-	[_, _, third]
-	=>
-	third # pattern match on the third item in the list
-	[x, _, _, y]
-	=>
-	x + y # first + fourth item in the list
-	[]
-	=>
-	0 # match an empty list
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

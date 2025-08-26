@@ -21,20 +21,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
 ~~~
 # FORMATTED
 ~~~roc
-when data is {
-	[..items]
-	=>
-	1
-	[first, ..items]
-	=>
-	first
-	[..items, last]
-	=>
-	last
-	[first, ..items, last]
-	=>
-	first + last
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

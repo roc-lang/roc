@@ -212,13 +212,13 @@ process = \list -> "processed"
 get_data : {field : _, other : U32} -> U32
 get_data = \record -> record.other
 handle_result : Result (_, Str) -> Str
-handle_result = \result -> when result is ({
+handle_result = \result -> match result { ({
 	Ok(_),
 	"success",
 	Err(msg),
 } => msg, }
 
-# Underscore in function arguments) => map : a -> b -> (List(a) -> List(b))map = \(_, _) -> []
+# Underscore in function arguments) => map : a -> b -> (List(a) -> List(b)) }map = \(_, _) -> []
 transform :
 	(_a -> _b) -> _b
 transform = \(_, b) -> b

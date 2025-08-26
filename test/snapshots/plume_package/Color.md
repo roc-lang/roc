@@ -526,8 +526,8 @@ hex = \str -> {
                 and f.is_char_in_hex_range()
 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("
-	when bytes is {
-		['#', a, b, c, d, e, f] => {
+	match bytes {
+        ['#', a, b, c, d, e, f] => {
             is_valid =
                 a.is_char_in_hex_range()
                 and b.is_char_in_hex_range()
@@ -536,33 +536,21 @@ hex = \str -> {
                 and e.is_char_in_hex_range()
                 and f.is_char_in_hex_range()
 
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex(", a, b, c, d, e, f]
-		=>
-		{
-			is_valid = ((((a.is_char_in_hex_range() && b.is_char_in_hex_range()) && c.is_char_in_hex_range()) && d.is_char_in_hex_range()) && e.is_char_in_hex_range()) && f.is_char_in_hex_range()
-			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-		}
-		_
-		=>
-		Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-	}
-	to_str : Color
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+        }
+        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
+    }
+	
+
+to_str : Color
 	->
 	Str
-	to_str = \color -> when color is {
-		Color.RGB((r, g, b))
-		=>
-		"rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-		Color.RGBA((r, g, b, a))
-		=>
-		"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-		Color.Named(inner)
-		=>
-		inner : inner
-		Color.Hex(inner)
-		=>
-		inner : inner
-	}
+	to_str = \color -> match color {
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+    Color.Named(inner) => inner
+    Color.Hex(inner) => inner
+}
 	rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 	expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 	expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")

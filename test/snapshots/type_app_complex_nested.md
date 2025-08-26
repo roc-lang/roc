@@ -153,14 +153,10 @@ app
 }
 
 processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
-processComplex = \result -> when result is {
-	Ok(maybeList)
-	=>
-	[]
-	Err(_)
-	=>
-	[]
-}deepNested = \_ -> {
+processComplex = \result -> match result {
+        Ok(maybeList) => []
+        Err(_) => []
+    }deepNested = \_ -> {
 	crash "not implemented"
 }
 ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))

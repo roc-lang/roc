@@ -23,25 +23,7 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
 ~~~
 # FORMATTED
 ~~~roc
-when ... is {
-	(1 | 2) | 3
-	=>
-	"small numbers"
-	"hello" | "world"
-	=>
-	"greetings"
-	Ok(_) | Some(_)
-	=>
-	"success value"
-	[] | [_]
-	=>
-	"short list"((0, _)) | (_, 0)
-	=>
-	"has zero"
-	_
-	=>
-	"other"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -23,32 +23,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare Lo
 ~~~
 # FORMATTED
 ~~~roc
-when list is {
-	[]
-	=>
-	0
-	[x]
-	=>
-	x
-	[first, second]
-	=>
-	first + second
-	[head, ..as]
-	tail
-	]
-	=>
-	head
-	[One, Two, ..as]
-	rest
-	]
-	=>
-	3
-	[x, y, z, ..as]
-	more
-	]
-	=>
-	(x + y) + z
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

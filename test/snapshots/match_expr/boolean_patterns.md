@@ -19,14 +19,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~
 # FORMATTED
 ~~~roc
-when isReady is {
-	True
-	=>
-	"ready to go!"
-	False
-	=>
-	"not ready yet"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

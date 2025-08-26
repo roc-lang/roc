@@ -19,18 +19,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-when person is {
-	{
-		name
-	}
-	=>
-	name
-	{
-		age
-	}
-	=>
-	age
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

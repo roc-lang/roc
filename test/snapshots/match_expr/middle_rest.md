@@ -21,7 +21,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
 ~~~
 # FORMATTED
 ~~~roc
-when items is {[first, ..], last, ], =>, first + last, [a, b, ..as], middle, x, y} => ] => ((a + b) + x) + y
+match items { {[first, ..], last, ], =>, first + last, [a, b, ..as], middle, x, y} => ] => ((a + b) + x) + y }
 ~~~
 # EXPECTED
 NIL

@@ -394,19 +394,29 @@ g : (e -> e where module(e) | A, module(e) | B)h = \(x, y) -> {
 	h3 = A((x, y))
 	h4 = [x, y]
 	h5 = (x, y)
-	when x is {
-		Z1((a, b))
-		=>
-		a : a
-		Z2((a, b))
-		=>
-		a : a
-		Z3({ a : a, b : b })
-		=>
-		a : a
-		Z4([a, b])
-		=>
-		a : a
+	match x {
+		Z1(
+			(
+				a,
+				b
+			)
+		) => a
+		Z2(
+			a,
+			b
+		) => a
+		Z3(
+			{
+				a,
+				b
+			}
+		) => a
+		Z4(
+			[
+				a,
+				b
+			]
+		) => a
 	}
 }
 ~~~

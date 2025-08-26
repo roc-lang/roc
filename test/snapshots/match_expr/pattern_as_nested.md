@@ -19,7 +19,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 ~~~
 # FORMATTED
 ~~~roc
-when person is {
+match person { {
 	{ name, address : {
 		city
 	} }
@@ -27,7 +27,7 @@ when person is {
 	addr
 } as fullPerson => (fullPerson, addr, city) => {
 	name
-} as simplePerson => (simplePerson, name, "unknown")
+} as simplePerson => (simplePerson, name, "unknown") }
 ~~~
 # EXPECTED
 NIL

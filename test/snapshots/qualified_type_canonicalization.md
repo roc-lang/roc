@@ -311,14 +311,10 @@ processColor = \color -> "Color processed"
 
 # Multiple qualified types in a function signature
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
-transform = \result -> when result is {
-	Result.Ok(rgb)
-	=>
-	TypeC.fromColor(rgb)
-	Result.Err(err)
-	=>
-	TypeC.default
-}
+transform = \result -> match result {
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+        Result.Err(err) => TypeC.default
+    }
 ~~~
 # EXPECTED
 NIL

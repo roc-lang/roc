@@ -24,45 +24,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-when ... is {
-	{
-		a : {
-			b : {
-				c
-			}
-		}
-	}
-	=>
-	"deeply nested: ${c}"
-	{ x, y : {} }
-	=>
-	"mixed with empty: ${x}"
-	{ outer : {
-		inner
-	}, simple }
-	=>
-	"mixed: ${inner} and ${simple}"
-	{ a : {
-		b
-	}, c : {
-		d
-	} }
-	=>
-	"multiple nested: ${b}, ${d}"
-	{
-		name : x
-	}
-	=>
-	"renamed: ${x}"
-	{
-		person : {name : firstName, age : userAge}
-	}
-	=>
-	"renamed nested: ${firstName} (${userAge.to_str()})"
-	{  }
-	=>
-	"empty record"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

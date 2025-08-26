@@ -21,20 +21,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~
 # FORMATTED
 ~~~roc
-when result is {
-	Ok(value)
-	=>
-	value + 1
-	Err(value)
-	=>
-	value - 1
-	Ok(different)
-	=>
-	different * 2
-	Err(different)
-	=>
-	different / 2
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

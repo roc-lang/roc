@@ -28,10 +28,8 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 ~~~roc
 module []
 
-C : k || when 0 is {
-	0 | 0
-	"
-}
+C : k || match 0 {0|#
+0"
 }
 ~~~
 # EXPECTED

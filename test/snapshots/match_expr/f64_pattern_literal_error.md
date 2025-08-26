@@ -20,19 +20,7 @@ KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-when x is {
-	3.14f64
-	f64
-	=>
-	"pi"
-	0.0f64
-	f64
-	=>
-	"zero"
-	value
-	=>
-	"other"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

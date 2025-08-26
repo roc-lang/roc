@@ -19,13 +19,7 @@ KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound Upp
 ~~~
 # FORMATTED
 ~~~roc
-when (value, other) is {
-	(Some(x), y)
-	=>
-	x + y((None, x))
-	=>
-	x * 2
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

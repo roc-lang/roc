@@ -1708,7 +1708,7 @@ const Formatter = struct {
     fn formatMatch(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        try self.pushAll("when ");
+        try self.pushAll("match ");
 
         // Match nodes use match_branches to count branches
         const branch_count = node.payload.match_branches;
@@ -1725,17 +1725,22 @@ const Formatter = struct {
         if (peek_it.next()) |next_idx| {
             const next_node = self.getNode(next_idx);
             if (next_node.tag == .block) {
-                // Malformed match - has block instead of proper branches
-                // Just format it as best we can
-                try self.pushAll(" is ");
-                try self.formatNode(next_idx);
+                // This is the correct match syntax: match expr { branches }
+                // For now, just preserve the source formatting exactly
+                try self.pushAll(" ");
+                const start = next_node.start.offset;
+                const end = self.findNodeEnd(next_idx);
+                if (end > start and end <= self.source.len) {
+                    const block_source = self.source[start..end];
+                    try self.output.appendSlice(block_source);
+                    self.last_formatted_pos = end;
+                }
                 return;
             }
         }
 
-        try self.pushAll(" is");
-
-        // Check if multiline
+        // This path is for when branches are stored directly (shouldn't happen with correct syntax)
+        try self.pushAll(" {");
         const multiline = self.nodeWillBeMultiline(node_idx);
         if (multiline) {
             try self.ensureNewline();
@@ -1803,6 +1808,11 @@ const Formatter = struct {
 
         if (multiline) {
             self.curr_indent -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+            try self.pushAll("}");
+        } else {
+            try self.pushAll(" }");
         }
     }
 

@@ -18,13 +18,7 @@ KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma 
 ~~~
 # FORMATTED
 ~~~roc
-when (1, 2) is {
-	(x, y)
-	as
-	point
-	=>
-	point
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

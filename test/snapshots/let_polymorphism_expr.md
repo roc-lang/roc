@@ -18,11 +18,7 @@ KwMatch OpenSquare CloseSquare OpenCurly LowerIdent OpFatArrow OpenCurly LowerId
 ~~~
 # FORMATTED
 ~~~roc
-when [] is {
-	empty
-	=>
-	{ ints : [1, 2, 3], strs : ["a", "b", "c"], empty : empty }
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

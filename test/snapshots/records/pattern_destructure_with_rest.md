@@ -18,11 +18,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma DoubleDot LowerIdent Clo
 ~~~
 # FORMATTED
 ~~~roc
-when person is {
-	{ first_name, ..others }
-	=>
-	Str.len(first_name) > Str.len(others.last_name)
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

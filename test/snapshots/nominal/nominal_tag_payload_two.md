@@ -113,13 +113,9 @@ ok : ok -> MyResult (ok, _)
 ok = \a -> MyResult.Ok(a)
 
 is_ok : MyResult (_ok, _err) -> Bool
-is_ok = \result -> when result is {
-	MyResult.Ok(_)
-	=>
-	Bool.True
-	MyResult.Err(_)
-	=>
-	Bool.False
+is_ok = \result -> match result {
+    MyResult.Ok(_) => Bool.True
+    MyResult.Err(_) => Bool.False
 }
 ~~~
 # EXPECTED

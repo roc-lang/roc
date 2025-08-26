@@ -19,14 +19,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
 ~~~
 # FORMATTED
 ~~~roc
-when list is {
-	[first]
-	=>
-	first
-	[first, second]
-	=>
-	first + second
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

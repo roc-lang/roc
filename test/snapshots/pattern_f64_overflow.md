@@ -22,23 +22,7 @@ KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Flo
 ~~~
 # FORMATTED
 ~~~roc
-when x is {
-	1e100
-	=>
-	"very large number"
-	1e-40
-	=>
-	"very small number"
-	1.7976931348623157e308
-	=>
-	"near f64 max"
-	0.0
-	=>
-	"zero"
-	value
-	=>
-	"other"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

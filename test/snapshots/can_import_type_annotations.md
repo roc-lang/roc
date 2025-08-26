@@ -292,28 +292,22 @@ parseJson : Str -> Json.Value
 parseJson = \input -> Json.parse(input)
 
 handleApi : Http.Request -> Result (Http.Response, Json.Error)
-handleApi = \request -> { result = Json.decode(request.body), when result is {
-	Ok(data)
-	=>
-	Ok(Http.success(data))
-	Err(err)
-	=>
-	Err(err)
-}, config : Json.Config, config = Json.defaultConfig, advancedParser : Json.Parser | Config, Str } -> Result((Json.Value, Json.Parser | Error))
+handleApi = \request -> { result = Json.decode(request.body), match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }, 
+
+config : Json.Config, config = Json.defaultConfig, advancedParser : Json.Parser | Config, Str } -> Result((Json.Value, Json.Parser | Error))
 advancedParser = \(parserConfig, input) -> Json.Parser | .parseWith((parserConfig, input))
 combineResults : Result (a, err) -> Result (b, err) -> Result ((a, b), err)
-combineResults = \(result1, result2) -> when result1 is {
-	Ok(value1)
-	=>
-	when result2 is {
-		Ok(value2)
-		=>
-		Ok((value1, value2))
-		Err(err)
-		=>
-		Err(err)
-	}
-}
+combineResults = \(result1, result2) -> match result1 {
+        Ok(value1) =>
+            match(result2) {
+                Ok(value2) => Ok((value1, value2))
+                Err(err) => Err(err)
+            }
+        Err(err) => Err(err)
+    }
 ~~~
 # EXPECTED
 NIL

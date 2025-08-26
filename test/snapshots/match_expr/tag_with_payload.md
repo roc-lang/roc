@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
 ~~~
 # FORMATTED
 ~~~roc
-when shape is {
-	Circle(radius)
-	=>
-	(3.14 * radius) * radius
-	Rectangle((width, height))
-	=>
-	width * height
-	Triangle((base, height))
-	=>
-	(0.5 * base) * height
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

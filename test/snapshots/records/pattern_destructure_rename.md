@@ -18,11 +18,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent OpColon LowerIdent Comma Lower
 ~~~
 # FORMATTED
 ~~~roc
-when person is {
-	{ name : userName, age : userAge }
-	=>
-	"User ${userName} is ${userAge.to_str()} years old"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

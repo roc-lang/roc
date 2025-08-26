@@ -61,12 +61,9 @@ module [
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 
 kind : Color -> Str
-kind = \color -> when color is {
-	Red
-	\Green -> Blue => "primary"
-	Yellow.Orange | Purple
-	=>
-	"secondary"
+kind = \color -> match color {
+    Red | Green | Blue => "primary"
+    Yellow | Orange | Purple => "secondary"
 }
 ~~~
 # EXPECTED

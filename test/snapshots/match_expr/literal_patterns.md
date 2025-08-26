@@ -21,20 +21,7 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 ~~~
 # FORMATTED
 ~~~roc
-when Answer is {
-	Answer
-	=>
-	1
-	Zero
-	=>
-	"hello"
-	Greeting
-	=>
-	3
-	10
-	=>
-	4
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

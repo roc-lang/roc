@@ -67,14 +67,10 @@ import MyResultModule
 
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = \result -> {
-	when result is {
-		MyResultModule.MyResultType | Ok(value)
-		=>
-		value : value
-		MyResultModule.MyResultType | Err(code)
-		=>
-		"Error: $(code.toStr())"
-	}
+	match result {
+        MyResultModule.MyResultType.Ok(value) => value
+        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+    }
 }
 ~~~
 # EXPECTED

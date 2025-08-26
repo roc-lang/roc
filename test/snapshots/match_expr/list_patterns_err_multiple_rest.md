@@ -18,7 +18,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 ~~~
 # FORMATTED
 ~~~roc
-when numbers is {[..], middle, _} => ] => ...
+match numbers { {[..], middle, _} => ] => ... }
 ~~~
 # EXPECTED
 NIL

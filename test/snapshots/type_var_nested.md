@@ -221,14 +221,16 @@ app
 }
 
 map_result : Result (a, e) -> (a -> b) -> Result (b, e)
-map_result = \(result, transform) -> { when result is {
-	Ok(value)
-	=>
-	Ok(transform(value))
-	Err(error)
-	=>
-	Err(error)
-}, identity : a, a : a, identity = \x -> x, make_pair : a, b } -> { first : a, second : b }
+map_result = \(result, transform) -> { match result {
+        Ok(value) => Ok(transform(value))
+        Err(error) => Err(error)
+    }, 
+
+# Simple identity function with type variable
+identity : a, a : a, identity = \x -> x, 
+
+# Nested type variables in records
+make_pair : a, b } -> { first : a, second : b }
 make_pair = \(x, y) -> { first : x, second : y }
 list_length : List _a -> U64
 list_length = \_lst -> 42

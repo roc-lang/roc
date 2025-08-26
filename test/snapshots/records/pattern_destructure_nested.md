@@ -18,11 +18,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 ~~~
 # FORMATTED
 ~~~roc
-when person is {
-	{ name, address : {street, city, zipCode} }
-	=>
-	"${name} lives on ${street} in ${city}"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

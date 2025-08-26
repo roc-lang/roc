@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~
 # FORMATTED
 ~~~roc
-when value is {
-	Answer
-	=>
-	"the answer"
-	Zero
-	=>
-	"zero"
-	other
-	=>
-	"something else"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

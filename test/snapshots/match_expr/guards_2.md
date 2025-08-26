@@ -20,13 +20,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-when value is {
-	[first, ..as]
-	rest
-	]
-	if List.len(rest) > 5 => "long list starting with ${Num.toStr first}" [x, y]
-	if x == y => "pair of equal values: ${Num.toStr x}" _ => "other"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

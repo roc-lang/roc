@@ -75,17 +75,11 @@ processColor = \color -> {
 	import Color.RGB
 	
 
-when color is {
-		RGB.Red
-		=>
-		LocalStatus.Pending
-		RGB.Green
-		=>
-		LocalStatus.Complete
-		RGB.Blue
-		=>
-		LocalStatus.Pending
-	}
+match color {
+        RGB.Red => LocalStatus.Pending
+        RGB.Green => LocalStatus.Complete
+        RGB.Blue => LocalStatus.Pending
+    }
 }
 ~~~
 # EXPECTED

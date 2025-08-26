@@ -301,14 +301,13 @@ parseJson = \input -> Json.parse(input)
 
 # Test mixing exposed types with qualified access
 handleRequest : Request -> Response
-handleRequest = \req -> { result = Json.decode(req.body), when result is {
-	Ok(value)
-	=>
-	Http.ok(value)
-	Err(error)
-	=>
-	Http.badRequest(error)
-}, processData : Config, List(Value) } -> Result((List(Value), Error))
+handleRequest = \req -> { result = Json.decode(req.body), match result {
+        Ok(value) => Http.ok(value)
+        Err(error) => Http.badRequest(error)
+    }, 
+
+# Test using exposed types in complex signatures
+processData : Config, List(Value) } -> Result((List(Value), Error))
 processData = \(config, values) -> List.mapTry((values, \v -> (Json.validateWith((config, v)))))ServerConfig :
 	{
 		jsonConfig : Config,
@@ -318,21 +317,13 @@ processData = \(config, values) -> List.mapTry((values, \v -> (Json.validateWith
 createClient : Config -> Http.Client
 createClient = \config -> Http.clientWith(config)
 handleResponse : Response -> Str
-handleResponse = \response -> when response.status is {
-	Ok(status)
-	=>
-	Http.statusToString(status)
-	Err(error)
-	=>
-	Error.toString(error)
-}combineResults = \(jsonResult, httpStatus) -> when jsonResult is {
-	Ok(value)
-	=>
-	Ok({ body : Json.encode(value), status : httpStatus })
-	Err(error)
-	=>
-	Err(error)
-}
+handleResponse = \response -> match response.status {
+        Ok(status) => Http.statusToString(status)
+        Err(error) => Error.toString(error)
+    }combineResults = \(jsonResult, httpStatus) -> match jsonResult {
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+        Err(error) => Err(error)
+    }
 ~~~
 # EXPECTED
 NIL

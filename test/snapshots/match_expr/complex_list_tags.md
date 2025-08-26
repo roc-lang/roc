@@ -23,32 +23,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
 ~~~
 # FORMATTED
 ~~~roc
-when events is {
-	[]
-	=>
-	"no events"
-	[Click((x, y))]
-	=>
-	"single click at (${Num.toStr(x)}, ${Num.toStr(y)})"
-	[KeyPress(key), ..as]
-	rest
-	]
-	=>
-	"key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
-	[Move((dx, dy)), Move((dx2, dy2)), ..as]
-	others
-	]
-	=>
-	"moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
-	[Scroll(amount), Click((x, y)), ..as]
-	remaining
-	]
-	=>
-	"scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
-	_
-	=>
-	"other event pattern"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

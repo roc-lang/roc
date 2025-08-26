@@ -22,33 +22,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 ~~~
 # FORMATTED
 ~~~roc
-when ... is {
-	{ name, address : {city, country} }
-	=>
-	"${name} lives in ${city}, ${country}"
-	{ person : {name, age}, location : {
-		city
-	} }
-	=>
-	"${name} (${age.to_str()}) from ${city}"
-	{
-		data : {
-			info : {
-				value
-			}
-		}
-	}
-	=>
-	"Deep nested: ${value}"
-	{
-		simple
-	}
-	=>
-	"Simple: ${simple}"
-	{  }
-	=>
-	"empty"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

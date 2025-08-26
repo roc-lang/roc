@@ -107,20 +107,12 @@ process : [Some(Str), None] -> Str
 process = \maybe -> "result"
 
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
-is_ok_ret_unqualified_bool = \result -> when result is {
-	Ok(_)
-	=>
-	True
-	Err(_)
-	=>
-	False
-}is_ok_ret_bool = \result -> when result is {
-	Ok(_)
-	=>
-	Bool.True
-	Err(_)
-	=>
-	Bool.False
+is_ok_ret_unqualified_bool = \result -> match result {
+    Ok(_) => True
+    Err(_) => False
+}is_ok_ret_bool = \result -> match result {
+    Ok(_) => Bool.True
+    Err(_) => Bool.False
 }
 ~~~
 # EXPECTED

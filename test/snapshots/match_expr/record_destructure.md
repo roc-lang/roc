@@ -20,19 +20,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpF
 ~~~
 # FORMATTED
 ~~~roc
-when ... is {
-	{ name, age }
-	=>
-	"${name} is ${age.to_str()} years old"
-	{ name, address : {
-		city
-	} }
-	=>
-	"${city} is the city of ${name}"
-	{  }
-	=>
-	"empty"
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

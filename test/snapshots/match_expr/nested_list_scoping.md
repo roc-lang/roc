@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
 ~~~
 # FORMATTED
 ~~~roc
-when nestedList is {
-	[[x], [y]]
-	=>
-	x + y
-	[[x, y]]
-	=>
-	x - y
-	[x, [y]]
-	=>
-	x * y
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

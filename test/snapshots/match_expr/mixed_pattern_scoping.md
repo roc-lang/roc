@@ -21,20 +21,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenSquare LowerIdent Comma Lo
 ~~~
 # FORMATTED
 ~~~roc
-when data is {
-	Ok([x, y])
-	=>
-	x + y
-	Err(x)
-	=>
-	x - 1
-	Ok([x])
-	=>
-	x * 2
-	Err(y)
-	=>
-	y / 2
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -21,26 +21,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenCurly LowerIdent OpColon O
 ~~~
 # FORMATTED
 ~~~roc
-when data is {
-	Container({
-		items : [First(x), ..as]
-		rest
-		] })
-	})
-	=>
-	x + List.len(rest)
-	Container({
-		items : []
-	})
-	=>
-	0
-	Wrapper([Tag(value), Other(y)])
-	=>
-	value + y
-	Simple(x)
-	=>
-	x
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

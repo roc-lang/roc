@@ -20,17 +20,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-when items is {
-	[first, ..rest]
-	=>
-	0 # invalid rest pattern should error
-	[..rest, last]
-	=>
-	1 # invalid rest pattern should error
-	[x, ..rest, y]
-	=>
-	2 # invalid rest pattern should error
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
