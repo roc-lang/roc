@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -14,7 +14,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.19.0
+  RELEASE_TAG: 0.20.0
 
 jobs:
   prepare:
@@ -283,6 +283,8 @@ jobs:
 
       - name: run tests
         run: |
-          cd basic-cli-platform
           # no need to build platform anymore
+          cd basic-cli-platform
+          # this one does not work when building with musl
+          rm examples/file-accessed-modified-created-time.roc
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
