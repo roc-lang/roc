@@ -2,131 +2,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const target = @import("target.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Roc's simplified targets
-pub const RocTarget = enum {
-    // x64 (x86_64) targets
-    x64mac,
-    x64win,
-    x64freebsd,
-    x64openbsd,
-    x64netbsd,
-    x64musl,
-    x64glibc,
-    x64linux,
-    x64elf,
-
-    // arm64 (aarch64) targets
-    arm64mac,
-    arm64win,
-    arm64linux,
-    arm64musl,
-    arm64glibc,
-
-    // arm32 targets
-    arm32linux,
-    arm32musl,
-
-    // WebAssembly
-    wasm32,
-
-    /// Convert Roc target to LLVM target triple
-    pub fn toTriple(self: RocTarget) []const u8 {
-        return switch (self) {
-            // x64 targets
-            .x64mac => "x86_64-apple-darwin",
-            .x64win => "x86_64-pc-windows-msvc",
-            .x64freebsd => "x86_64-unknown-freebsd",
-            .x64openbsd => "x86_64-unknown-openbsd",
-            .x64netbsd => "x86_64-unknown-netbsd",
-            .x64musl => "x86_64-unknown-linux-musl",
-            .x64glibc => "x86_64-unknown-linux-gnu",
-            .x64linux => "x86_64-unknown-linux-gnu",
-            .x64elf => "x86_64-unknown-none-elf",
-
-            // arm64 targets
-            .arm64mac => "aarch64-apple-darwin",
-            .arm64win => "aarch64-pc-windows-msvc",
-            .arm64linux => "aarch64-unknown-linux-gnu",
-            .arm64musl => "aarch64-unknown-linux-musl",
-            .arm64glibc => "aarch64-unknown-linux-gnu",
-
-            // arm32 targets
-            .arm32linux => "arm-unknown-linux-gnueabihf",
-            .arm32musl => "arm-unknown-linux-musleabihf",
-
-            // WebAssembly
-            .wasm32 => "wasm32-unknown-unknown",
-        };
-    }
-
-    /// Detect the current system's Roc target
-    pub fn detectNative() RocTarget {
-        const os = builtin.target.os.tag;
-        const arch = builtin.target.cpu.arch;
-
-        // Handle architecture first
-        switch (arch) {
-            .x86_64 => {
-                switch (os) {
-                    .macos => return .x64mac,
-                    .windows => return .x64win,
-                    .freebsd => return .x64freebsd,
-                    .openbsd => return .x64openbsd,
-                    .netbsd => return .x64netbsd,
-                    .linux => {
-                        // Default to glibc on Linux
-                        // Could check builtin.target.abi for musl
-                        if (builtin.target.abi == .musl) {
-                            return .x64musl;
-                        } else {
-                            return .x64glibc;
-                        }
-                    },
-                    else => return .x64elf, // Generic fallback
-                }
-            },
-            .aarch64, .aarch64_be => {
-                switch (os) {
-                    .macos => return .arm64mac,
-                    .windows => return .arm64win,
-                    .linux => {
-                        if (builtin.target.abi == .musl) {
-                            return .arm64musl;
-                        } else {
-                            return .arm64glibc;
-                        }
-                    },
-                    else => return .arm64linux, // Generic ARM64 Linux
-                }
-            },
-            .arm => {
-                switch (os) {
-                    .linux => {
-                        if (builtin.target.abi == .musl or builtin.target.abi == .musleabi or builtin.target.abi == .musleabihf) {
-                            return .arm32musl;
-                        } else {
-                            return .arm32linux;
-                        }
-                    },
-                    else => return .arm32linux, // Generic ARM32 Linux
-                }
-            },
-            .wasm32 => return .wasm32,
-            else => {
-                // Default fallback based on OS
-                switch (os) {
-                    .macos => return .x64mac,
-                    .windows => return .x64win,
-                    .linux => return .x64glibc,
-                    else => return .x64elf,
-                }
-            },
-        }
-    }
-};
+// Re-export RocTarget from target.zig for backward compatibility
+pub const RocTarget = target.RocTarget;
 
 /// Optimization levels for compilation
 pub const OptimizationLevel = enum {
@@ -295,8 +176,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     externs.LLVMSetTarget(module, target_triple_z.ptr);
 
     // 5. Create target
-    var target: ?*anyopaque = null;
-    if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &target, &error_message) != 0) {
+    var llvm_target: ?*anyopaque = null;
+    if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
         std.log.err("Failed to get target from triple: {s}", .{error_message});
         externs.LLVMDisposeMessage(error_message);
         return false;
@@ -309,7 +190,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     defer gpa.free(features_z);
 
     const target_machine = externs.ZigLLVMCreateTargetMachine(
-        target,
+        llvm_target,
         target_triple_z.ptr,
         cpu_z.ptr,
         features_z.ptr,

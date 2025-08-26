@@ -1960,7 +1960,125 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    fatal("build not implemented", .{});
+    // Import needed modules
+    const target_mod = @import("target.zig");
+    const app_stub = @import("app_stub.zig");
+
+    std.log.info("Building {s} for cross-compilation", .{args.path});
+
+    // Parse target if provided, otherwise use native with musl preference
+    const target = if (args.target) |target_str| blk: {
+        break :blk target_mod.RocTarget.fromString(target_str) orelse {
+            std.log.err("Invalid target: {s}", .{target_str});
+            std.log.err("Valid targets: x64musl, x64glibc, arm64musl, arm64glibc, etc.", .{});
+            std.process.exit(1);
+        };
+    } else target_mod.RocTarget.detectNative();
+
+    std.log.info("Target: {} ({s})", .{ target, target.toTriple() });
+
+    // Only support test platforms for now (int and str)
+    const platform_type = if (std.mem.indexOf(u8, args.path, "/int/") != null) 
+        "int" 
+    else if (std.mem.indexOf(u8, args.path, "/str/") != null) 
+        "str" 
+    else {
+        std.log.err("roc build currently only supports test platforms (int and str)", .{});
+        std.log.err("Your app path: {s}", .{args.path});
+        std.process.exit(1);
+    };
+
+    std.log.info("Detected platform type: {s}", .{platform_type});
+
+    // Get platform directory path
+    const platform_dir = if (std.mem.eql(u8, platform_type, "int"))
+        try std.fs.path.join(gpa, &.{ "test", "int", "platform" })
+    else
+        try std.fs.path.join(gpa, &.{ "test", "str", "platform" });
+    defer gpa.free(platform_dir);
+
+    // Check that platform exists
+    std.fs.cwd().access(platform_dir, .{}) catch |err| {
+        std.log.err("Platform directory not found: {s} ({})", .{ platform_dir, err });
+        std.process.exit(1);
+    };
+
+    // Get host library path
+    const host_lib_filename = if (builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+    const host_lib_path = try std.fs.path.join(gpa, &.{ platform_dir, host_lib_filename });
+    defer gpa.free(host_lib_path);
+
+    std.fs.cwd().access(host_lib_path, .{}) catch |err| {
+        std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
+        std.process.exit(1);
+    };
+
+    // Get expected entrypoints for this platform
+    const entrypoints = try app_stub.getTestPlatformEntrypoints(gpa, platform_type);
+    defer gpa.free(entrypoints);
+
+    std.log.info("Expected entrypoints: {}", .{entrypoints.len});
+    for (entrypoints, 0..) |ep, i| {
+        std.log.info("  {}: roc__{s}", .{ i, ep.name });
+    }
+
+    // Create temp directory for build artifacts
+    const temp_dir = try std.fs.path.join(gpa, &.{ "zig-cache", "roc_build" });
+    defer gpa.free(temp_dir);
+    
+    std.fs.cwd().makePath(temp_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Generate app stub object file
+    const app_stub_obj = try app_stub.generateAppStubObject(gpa, temp_dir, entrypoints, target);
+    defer gpa.free(app_stub_obj);
+
+    // Get CRT files for the target
+    const crt_files = try target_mod.getVendoredCRTFiles(gpa, target, platform_dir);
+
+    // Create object files list for linking
+    var object_files = std.ArrayList([]const u8).init(gpa);
+    defer object_files.deinit();
+
+    // Add CRT files in correct order
+    if (crt_files.crt1_o) |crt1| try object_files.append(crt1);
+    if (crt_files.crti_o) |crti| try object_files.append(crti);
+    
+    // Add our app stub and host library
+    try object_files.append(app_stub_obj);
+    try object_files.append(host_lib_path);
+    
+    // Add libc.a for static linking
+    if (crt_files.libc_a) |libc| try object_files.append(libc);
+    if (crt_files.crtn_o) |crtn| try object_files.append(crtn);
+
+    // Determine output path
+    const output_path = if (args.output) |output| 
+        try gpa.dupe(u8, output)
+    else blk: {
+        const basename = std.fs.path.basename(args.path);
+        const name_without_ext = if (std.mem.endsWith(u8, basename, ".roc"))
+            basename[0..basename.len - 4]
+        else
+            basename;
+        break :blk try gpa.dupe(u8, name_without_ext);
+    };
+    defer gpa.free(output_path);
+
+    // Use LLD for linking
+    const linker_mod = @import("linker.zig");
+    const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+    const link_config = linker_mod.LinkConfig{
+        .object_files = object_files.items,
+        .output_path = output_path,
+        .target_abi = target_abi,
+    };
+
+    try linker_mod.link(gpa, link_config);
+
+    std.log.info("Successfully built executable: {s}", .{output_path});
 }
 
 /// Information about a test (expect statement) to be evaluated
