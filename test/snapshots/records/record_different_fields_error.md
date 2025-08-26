@@ -550,7 +550,8 @@ UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4
 LowerIdent(5:5-5:10),OpUnaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
 LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),
 LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

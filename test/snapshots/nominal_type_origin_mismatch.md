@@ -62,7 +62,8 @@ KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:2
 LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),
 LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBar(6:17-6:18),LowerIdent(6:18-6:19),OpBar(6:19-6:20),StringStart(6:21-6:22),StringPart(6:22-6:34),StringEnd(6:34-6:35),
 LowerIdent(8:1-8:5),OpAssign(8:6-8:7),
-LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),StringPart(10:20-10:32),StringEnd(10:32-10:33),CloseRound(10:33-10:34),EndOfFile(10:34-10:34),
+LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),StringPart(10:20-10:32),StringEnd(10:32-10:33),CloseRound(10:33-10:34),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure

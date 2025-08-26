@@ -407,7 +407,8 @@ LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBar(40:13-40:14),LowerIdent(40:14
 KwMatch(41:5-41:10),LowerIdent(41:11-41:17),OpenCurly(41:18-41:19),
 UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),NoSpaceOpenRound(42:18-42:19),LowerIdent(42:19-42:22),CloseRound(42:22-42:23),OpFatArrow(42:24-42:26),UpperIdent(42:27-42:32),NoSpaceDotLowerIdent(42:32-42:42),NoSpaceOpenRound(42:42-42:43),LowerIdent(42:43-42:46),CloseRound(42:46-42:47),
 UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),NoSpaceOpenRound(43:19-43:20),LowerIdent(43:20-43:23),CloseRound(43:23-43:24),OpFatArrow(43:25-43:27),UpperIdent(43:28-43:33),NoSpaceDotLowerIdent(43:33-43:41),
-CloseCurly(44:5-44:6),EndOfFile(44:6-44:6),
+CloseCurly(44:5-44:6),
+EndOfFile(45:1-45:1),
 ~~~
 # PARSE
 ~~~clojure

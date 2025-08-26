@@ -119,7 +119,8 @@ app[]{f:platform""}|(0,)|||0
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpBar(1:20-1:21),NoSpaceOpenRound(1:21-1:22),Int(1:22-1:23),Comma(1:23-1:24),CloseRound(1:24-1:25),OpBar(1:25-1:26),OpBar(1:26-1:27),OpBar(1:27-1:28),Int(1:28-1:29),EndOfFile(1:29-1:29),
+KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpBar(1:20-1:21),NoSpaceOpenRound(1:21-1:22),Int(1:22-1:23),Comma(1:23-1:24),CloseRound(1:24-1:25),OpBar(1:25-1:26),OpBar(1:26-1:27),OpBar(1:27-1:28),Int(1:28-1:29),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -147,7 +148,6 @@ KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),Lower
 # FORMATTED
 ~~~roc
 app [] { f: platform "" }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

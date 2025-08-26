@@ -54,7 +54,8 @@ LowerIdent(7:3-7:4),OpColon(7:4-7:5),StringStart(7:6-7:7),StringPart(7:7-7:8),St
 LowerIdent(8:3-8:4),OpColon(8:4-8:5),StringStart(8:6-8:7),StringPart(8:7-8:8),StringEnd(8:8-8:9),
 CloseCurly(9:2-9:3),
 LowerIdent(11:1-11:3),OpColon(11:4-11:5),UpperIdent(11:6-11:9),OpFatArrow(11:10-11:12),UpperIdent(11:13-11:16),
-LowerIdent(12:1-12:3),OpColon(12:4-12:5),UpperIdent(12:6-12:9),OpFatArrow(12:10-12:12),UpperIdent(12:13-12:16),EndOfFile(12:16-12:16),
+LowerIdent(12:1-12:3),OpColon(12:4-12:5),UpperIdent(12:6-12:9),OpFatArrow(12:10-12:12),UpperIdent(12:13-12:16),
+EndOfFile(13:1-13:1),
 ~~~
 # PARSE
 ~~~clojure

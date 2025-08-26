@@ -53,7 +53,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:24),Comma(1:24-1:25),Lowe
 LowerIdent(4:1-4:16),OpColon(4:17-4:18),UpperIdent(4:19-4:22),OpArrow(4:23-4:25),UpperIdent(4:26-4:29),
 LowerIdent(5:1-5:16),OpAssign(5:17-5:18),OpBar(5:19-5:20),LowerIdent(5:20-5:21),OpBar(5:21-5:22),LowerIdent(5:23-5:24),OpPlus(5:25-5:26),Int(5:27-5:29),
 LowerIdent(8:1-8:20),OpColon(8:21-8:22),UpperIdent(8:23-8:26),OpArrow(8:27-8:29),UpperIdent(8:30-8:33),
-LowerIdent(9:1-9:20),OpAssign(9:21-9:22),OpBar(9:23-9:24),LowerIdent(9:24-9:25),OpBar(9:25-9:26),LowerIdent(9:27-9:28),OpStar(9:29-9:30),Float(9:31-9:35),EndOfFile(9:35-9:35),
+LowerIdent(9:1-9:20),OpAssign(9:21-9:22),OpBar(9:23-9:24),LowerIdent(9:24-9:25),OpBar(9:25-9:26),LowerIdent(9:27-9:28),OpStar(9:29-9:30),Float(9:31-9:35),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

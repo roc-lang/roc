@@ -18,7 +18,8 @@ NIL
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:13),CloseSquare(1:13-1:14),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),SingleQuote(3:5-3:8),
-LowerIdent(4:1-4:2),OpAssign(4:3-4:4),SingleQuote(4:5-4:8),EndOfFile(4:8-4:8),
+LowerIdent(4:1-4:2),OpAssign(4:3-4:4),SingleQuote(4:5-4:8),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

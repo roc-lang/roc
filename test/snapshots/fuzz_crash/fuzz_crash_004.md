@@ -27,7 +27,8 @@ F
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
+UpperIdent(1:1-1:2),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -37,7 +38,6 @@ UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

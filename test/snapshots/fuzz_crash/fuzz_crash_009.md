@@ -19,7 +19,6 @@ PARSE ERROR - fuzz_crash_009.md:1:3:1:4
 PARSE ERROR - fuzz_crash_009.md:1:4:1:5
 PARSE ERROR - fuzz_crash_009.md:1:5:1:6
 PARSE ERROR - fuzz_crash_009.md:2:6:2:7
-PARSE ERROR - fuzz_crash_009.md:6:12:6:12
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -89,23 +88,13 @@ This is an unexpected parsing error. Please check your syntax.
      ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `string_unclosed`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:6:12:6:12:**
-```roc
-    "onmo %
-```
-           ^
-
-
 # TOKENS
 ~~~zig
 LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),
 CloseSquare(2:6-2:7),
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),
-StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
+StringStart(6:5-6:6),StringPart(6:6-6:12),StringEnd(6:12-6:12),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

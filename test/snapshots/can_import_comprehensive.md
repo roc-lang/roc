@@ -104,7 +104,8 @@ LowerIdent(31:9-31:16),Comma(31:16-31:17),
 LowerIdent(32:9-32:16),Comma(32:16-32:17),
 LowerIdent(33:9-33:17),Comma(33:17-33:18),
 CloseRound(34:5-34:6),
-CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
+CloseCurly(35:1-35:2),
+EndOfFile(36:1-36:1),
 ~~~
 # PARSE
 ~~~clojure

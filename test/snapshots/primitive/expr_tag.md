@@ -15,7 +15,8 @@ NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),EndOfFile(2:15-2:15),
+LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure

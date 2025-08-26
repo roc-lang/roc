@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),Underscore(1:2-1:3),Comma(1:3-1:4),Underscore(1:5-1:6),OpBar(1:6-1:7),Int(1:8-1:10),EndOfFile(1:10-1:10),
+OpBar(1:1-1:2),Underscore(1:2-1:3),Comma(1:3-1:4),Underscore(1:5-1:6),OpBar(1:6-1:7),Int(1:8-1:10),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

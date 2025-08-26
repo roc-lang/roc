@@ -439,7 +439,8 @@ KwExpect(4:5-4:11),OpColon(4:11-4:12),StringStart(4:13-4:14),StringPart(4:14-4:2
 KwImport(5:5-5:11),OpColon(5:11-5:12),StringStart(5:13-5:14),StringPart(5:14-5:25),StringEnd(5:25-5:26),Comma(5:26-5:27),
 OpAnd(6:5-6:8),OpColon(6:8-6:9),UpperIdent(6:10-6:14),NoSpaceDotLowerIdent(6:14-6:19),Comma(6:19-6:20),
 OpOr(7:5-7:7),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceDotLowerIdent(7:13-7:19),Comma(7:19-7:20),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

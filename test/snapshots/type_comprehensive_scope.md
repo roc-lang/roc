@@ -127,7 +127,8 @@ UpperIdent(34:1-34:8),OpColon(34:9-34:10),OpenCurly(34:11-34:12),
 LowerIdent(35:5-35:11),OpColon(35:11-35:12),UpperIdent(35:13-35:19),Comma(35:19-35:20),
 LowerIdent(36:5-36:11),OpColon(36:11-36:12),UpperIdent(36:13-36:19),NoSpaceOpenRound(36:19-36:20),UpperIdent(36:20-36:24),Comma(36:24-36:25),UpperIdent(36:26-36:29),CloseRound(36:29-36:30),Comma(36:30-36:31),
 LowerIdent(37:5-37:9),OpColon(37:9-37:10),UpperIdent(37:11-37:15),NoSpaceOpenRound(37:15-37:16),UpperIdent(37:16-37:19),CloseRound(37:19-37:20),
-CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
+CloseCurly(38:1-38:2),
+EndOfFile(39:1-39:1),
 ~~~
 # PARSE
 ~~~clojure

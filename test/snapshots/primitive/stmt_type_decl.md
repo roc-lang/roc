@@ -16,7 +16,8 @@ NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),
-UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColon(3:10-3:11),OpenRound(3:12-3:13),LowerIdent(3:13-3:14),Comma(3:14-3:15),LowerIdent(3:15-3:16),Comma(3:16-3:17),UpperIdent(3:17-3:20),Comma(3:20-3:21),UpperIdent(3:21-3:24),CloseRound(3:24-3:25),EndOfFile(3:25-3:25),
+UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColon(3:10-3:11),OpenRound(3:12-3:13),LowerIdent(3:13-3:14),Comma(3:14-3:15),LowerIdent(3:15-3:16),Comma(3:16-3:17),UpperIdent(3:17-3:20),Comma(3:20-3:21),UpperIdent(3:21-3:24),CloseRound(3:24-3:25),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

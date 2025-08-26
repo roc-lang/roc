@@ -127,7 +127,8 @@ red : CE
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
 KwImport(3:1-3:7),LowerIdent(3:8-3:14),NoSpaceDotUpperIdent(3:14-3:21),NoSpaceDotUpperIdent(3:21-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:45),KwAs(3:46-3:48),UpperIdent(3:49-3:51),CloseSquare(3:51-3:52),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:9),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:28-6:28),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -158,7 +159,6 @@ import design.Styles
 
 red : CE
 red = ... # not implemented
-
 ~~~
 # CANONICALIZE
 ~~~clojure

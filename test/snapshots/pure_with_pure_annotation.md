@@ -28,7 +28,8 @@ LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),Comma(4:10-4:11),Upper
 LowerIdent(5:1-5:4),OpAssign(5:5-5:6),OpBar(5:7-5:8),LowerIdent(5:8-5:9),Comma(5:9-5:10),LowerIdent(5:11-5:12),OpBar(5:12-5:13),OpenCurly(5:14-5:15),LowerIdent(5:16-5:17),OpColon(5:17-5:18),LowerIdent(5:19-5:20),Comma(5:20-5:21),LowerIdent(5:22-5:23),OpColon(5:23-5:24),LowerIdent(5:25-5:26),CloseCurly(5:27-5:28),NoSpaceDotLowerIdent(5:28-5:30),
 LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:13),OpArrow(8:14-8:16),UpperIdent(8:17-8:20),
 LowerIdent(9:1-9:7),OpAssign(9:8-9:9),OpBar(9:10-9:11),LowerIdent(9:11-9:12),OpBar(9:12-9:13),LowerIdent(9:14-9:17),NoSpaceOpenRound(9:17-9:18),LowerIdent(9:18-9:19),Comma(9:19-9:20),LowerIdent(9:21-9:22),CloseRound(9:22-9:23),
-LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRound(11:12-11:13),Int(11:13-11:14),Comma(11:14-11:15),Int(11:16-11:17),CloseRound(11:17-11:18),EndOfFile(11:18-11:18),
+LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRound(11:12-11:13),Int(11:13-11:14),Comma(11:14-11:15),Int(11:16-11:17),CloseRound(11:17-11:18),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure

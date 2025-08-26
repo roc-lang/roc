@@ -19,7 +19,8 @@ NIL
 OpenCurly(1:1-1:2),
 KwCrash(2:5-2:10),StringStart(2:11-2:12),StringPart(2:12-2:37),StringEnd(2:37-2:38),
 OpenCurly(3:5-3:6),CloseCurly(3:6-3:7),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -39,7 +39,8 @@ UpperIdent(3:1-3:6),OpColonEqual(3:7-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-
 LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:13),NoSpaceDotUpperIdent(6:13-6:18),
 LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:15),
-LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent(9:15-9:22),EndOfFile(9:22-9:22),
+LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent(9:15-9:22),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

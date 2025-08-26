@@ -314,17 +314,13 @@ const Formatter = struct {
         _ = try fmt.flushCommentsBefore(header_region.start);
         _ = try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
-        for (statement_slice, 0..) |s, i| {
+        for (statement_slice) |s| {
             const region = fmt.nodeRegion(@intFromEnum(s));
             _ = try fmt.flushCommentsBefore(region.start);
             try fmt.ensureNewline();
             try fmt.formatStatement(s);
-
-            if (i == statement_slice.len - 1) {
-                // Flush comments before EOF
-                _ = try fmt.flushCommentsBefore(region.end);
-            }
         }
+        try fmt.flushCommentsEOF();
     }
 
     fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) !void {
@@ -1918,8 +1914,50 @@ const Formatter = struct {
         return fmt.flushComments(fmt.ast.env.source[start..end]);
     }
 
+    fn flushCommentsEOF(fmt: *Formatter) !void {
+        const last_token_idx = if (fmt.ast.tokens.tokens.len >= 2) fmt.ast.tokens.tokens.len - 2 else 0;
+        const start = fmt.ast.tokens.resolve(last_token_idx).end.offset;
+        const end = fmt.ast.env.source.len;
+        const between_text = fmt.ast.env.source[start..end];
+
+        var newline_count_to_apply: usize = 0;
+        var i: usize = 0;
+        while (i < between_text.len) {
+            if (between_text[i] == '#') {
+                // Found a comment, extract it
+                const comment_start = i + 1; // Skip the #
+                var comment_end = comment_start;
+                while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
+                    comment_end += 1;
+                }
+
+                if (newline_count_to_apply > 0) {
+                    for (0..@min(2, newline_count_to_apply)) |_| {
+                        try fmt.newline();
+                    }
+                } else if (!fmt.has_newline) {
+                    try fmt.push(' ');
+                }
+                try fmt.push('#');
+                const comment_text = between_text[comment_start..comment_end];
+                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                    try fmt.push(' ');
+                }
+                try fmt.pushAll(comment_text);
+                newline_count_to_apply = 1; // reset count to allow an additional newline after a comment
+                i = comment_end + 1;
+            } else if (between_text[i] == '\n') {
+                newline_count_to_apply += 1;
+                i += 1;
+            } else {
+                i += 1;
+            }
+        }
+
+        try fmt.ensureNewline();
+    }
+
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
-        var found_comment = false;
         var newline_count: usize = 0;
         var i: usize = 0;
         while (i < between_text.len) {
@@ -1931,9 +1969,9 @@ const Formatter = struct {
                     comment_end += 1;
                 }
 
-                if (found_comment or newline_count > 0) {
+                if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
-                } else if (!fmt.has_newline) {
+                } else {
                     try fmt.push(' ');
                 }
                 try fmt.push('#');
@@ -1942,13 +1980,9 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
-                found_comment = true;
                 try fmt.newline();
                 newline_count = 1; // reset count to allow an additional newline after a comment
-                i = comment_end;
-                if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
-                    i += 1; // Skip any additional newlines
-                }
+                i = comment_end + 1;
             } else if (between_text[i] == '\n') {
                 if (newline_count < 2) {
                     try fmt.newline();

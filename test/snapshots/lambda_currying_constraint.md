@@ -37,7 +37,8 @@ LowerIdent(9:1-9:11),OpAssign(9:12-9:13),LowerIdent(9:14-9:23),NoSpaceOpenRound(
 LowerIdent(12:1-12:11),OpColon(12:12-12:13),OpenRound(12:14-12:15),LowerIdent(12:15-12:16),OpArrow(12:17-12:19),LowerIdent(12:20-12:21),CloseRound(12:21-12:22),Comma(12:22-12:23),LowerIdent(12:24-12:25),OpArrow(12:26-12:28),LowerIdent(12:29-12:30),
 LowerIdent(13:1-13:11),OpAssign(13:12-13:13),OpBar(13:14-13:15),LowerIdent(13:15-13:16),Comma(13:16-13:17),LowerIdent(13:18-13:19),OpBar(13:19-13:20),LowerIdent(13:21-13:22),NoSpaceOpenRound(13:22-13:23),LowerIdent(13:23-13:24),NoSpaceOpenRound(13:24-13:25),LowerIdent(13:25-13:26),CloseRound(13:26-13:27),CloseRound(13:27-13:28),
 LowerIdent(16:1-16:14),OpColon(16:15-16:16),UpperIdent(16:17-16:20),OpArrow(16:21-16:23),UpperIdent(16:24-16:27),
-LowerIdent(17:1-17:14),OpAssign(17:15-17:16),OpBar(17:17-17:18),LowerIdent(17:18-17:19),OpBar(17:19-17:20),LowerIdent(17:21-17:31),NoSpaceOpenRound(17:31-17:32),OpBar(17:32-17:33),LowerIdent(17:33-17:34),OpBar(17:34-17:35),LowerIdent(17:36-17:37),OpPlus(17:38-17:39),Int(17:40-17:41),Comma(17:41-17:42),LowerIdent(17:43-17:44),CloseRound(17:44-17:45),EndOfFile(17:45-17:45),
+LowerIdent(17:1-17:14),OpAssign(17:15-17:16),OpBar(17:17-17:18),LowerIdent(17:18-17:19),OpBar(17:19-17:20),LowerIdent(17:21-17:31),NoSpaceOpenRound(17:31-17:32),OpBar(17:32-17:33),LowerIdent(17:33-17:34),OpBar(17:34-17:35),LowerIdent(17:36-17:37),OpPlus(17:38-17:39),Int(17:40-17:41),Comma(17:41-17:42),LowerIdent(17:43-17:44),CloseRound(17:44-17:45),
+EndOfFile(18:1-18:1),
 ~~~
 # PARSE
 ~~~clojure

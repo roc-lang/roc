@@ -23,7 +23,8 @@ app[]{f:platform"",r:"
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),Comma(1:19-1:20),LowerIdent(1:20-1:21),OpColon(1:21-1:22),StringStart(1:22-1:23),StringPart(1:23-1:23),StringEnd(1:23-1:23),
-CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
+CloseCurly(2:1-2:2),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure

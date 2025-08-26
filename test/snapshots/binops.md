@@ -45,7 +45,8 @@ Int(13:5-13:6),OpDoubleSlash(13:7-13:9),Int(13:10-13:11),Comma(13:11-13:12),
 UpperIdent(14:5-14:9),NoSpaceDotUpperIdent(14:9-14:14),OpAnd(14:15-14:18),UpperIdent(14:19-14:23),NoSpaceDotUpperIdent(14:23-14:29),Comma(14:29-14:30),
 UpperIdent(15:5-15:9),NoSpaceDotUpperIdent(15:9-15:15),OpOr(15:16-15:18),UpperIdent(15:19-15:23),NoSpaceDotUpperIdent(15:23-15:28),Comma(15:28-15:29),
 UpperIdent(16:5-16:9),OpDoubleQuestion(16:10-16:12),Int(16:13-16:14),Comma(16:14-16:15),
-CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
+CloseRound(17:1-17:2),
+EndOfFile(18:1-18:1),
 ~~~
 # PARSE
 ~~~clojure

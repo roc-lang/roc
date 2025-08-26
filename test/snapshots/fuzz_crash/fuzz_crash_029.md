@@ -402,7 +402,8 @@ LowerIdent(13:1-13:4),OpColon(13:4-13:5),StringStart(13:6-13:7),StringPart(13:7-
 KwProvides(14:2-14:10),
 OpenSquare(15:3-15:4),UpperIdent(15:5-15:7),NoSpaceOpenRound(15:7-15:8),LowerIdent(15:8-15:13),CloseRound(15:13-15:14),Comma(15:14-15:15),OpenRound(15:16-15:17),LowerIdent(15:17-15:18),
 LowerIdent(16:1-16:3),Comma(16:3-16:4),
-CloseSquare(17:3-17:4),EndOfFile(17:4-17:4),
+CloseSquare(17:3-17:4),
+EndOfFile(18:1-18:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -451,7 +452,6 @@ pkg :
 # Cose
 # Cd
 # pen
-
 
 ~~~
 # CANONICALIZE

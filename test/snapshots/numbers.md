@@ -53,7 +53,8 @@ Float(9:5-9:11),Comma(9:11-9:12),
 Int(10:5-10:15),Comma(10:15-10:16),
 Int(11:5-11:15),Comma(11:15-11:16),
 Int(12:5-12:15),Comma(12:15-12:16),
-CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
+CloseRound(13:1-13:2),
+EndOfFile(14:1-14:1),
 ~~~
 # PARSE
 ~~~clojure

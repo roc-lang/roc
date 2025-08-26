@@ -183,7 +183,8 @@ module[]C:k||match 0{0|#
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),UpperIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),OpBar(1:12-1:13),OpBar(1:13-1:14),KwMatch(1:14-1:19),Int(1:20-1:21),OpenCurly(1:21-1:22),Int(1:22-1:23),OpBar(1:23-1:24),
 Int(2:1-2:2),StringStart(2:2-2:3),StringPart(2:3-2:3),StringEnd(2:3-2:3),
-CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
+CloseCurly(3:1-3:2),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -213,7 +214,6 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 module []
 C : k
 #
-
 
 ~~~
 # CANONICALIZE

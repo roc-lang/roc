@@ -113,7 +113,8 @@ LowerIdent(33:5-33:11),OpAssign(33:12-33:13),OpenCurly(33:14-33:15),LowerIdent(3
 LowerIdent(35:5-35:10),OpColon(35:11-35:12),UpperIdent(35:13-35:18),
 LowerIdent(36:5-36:10),OpAssign(36:11-36:12),UpperIdent(36:13-36:16),
 LowerIdent(38:5-38:11),
-CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
+CloseCurly(39:1-39:2),
+EndOfFile(40:1-40:1),
 ~~~
 # PARSE
 ~~~clojure

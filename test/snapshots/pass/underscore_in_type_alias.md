@@ -140,7 +140,8 @@ UpperIdent(7:1-7:12),OpColonEqual(7:13-7:15),UpperIdent(7:16-7:20),NoSpaceOpenRo
 UpperIdent(9:1-9:11),OpColonEqual(9:12-9:14),OpenCurly(9:15-9:16),LowerIdent(9:17-9:22),OpColon(9:22-9:23),Underscore(9:24-9:25),Comma(9:25-9:26),LowerIdent(9:27-9:32),OpColon(9:32-9:33),UpperIdent(9:34-9:37),CloseCurly(9:38-9:39),
 UpperIdent(11:1-11:13),OpColonEqual(11:14-11:16),Underscore(11:17-11:18),OpArrow(11:19-11:21),Underscore(11:22-11:23),
 UpperIdent(13:1-13:10),OpColonEqual(13:11-13:13),OpenRound(13:14-13:15),Underscore(13:15-13:16),Comma(13:16-13:17),UpperIdent(13:18-13:21),Comma(13:21-13:22),Underscore(13:23-13:24),CloseRound(13:24-13:25),
-UpperIdent(15:1-15:8),OpColonEqual(15:9-15:11),OpenSquare(15:12-15:13),UpperIdent(15:13-15:17),NoSpaceOpenRound(15:17-15:18),Underscore(15:18-15:19),CloseRound(15:19-15:20),Comma(15:20-15:21),UpperIdent(15:22-15:26),CloseSquare(15:26-15:27),EndOfFile(15:27-15:27),
+UpperIdent(15:1-15:8),OpColonEqual(15:9-15:11),OpenSquare(15:12-15:13),UpperIdent(15:13-15:17),NoSpaceOpenRound(15:17-15:18),Underscore(15:18-15:19),CloseRound(15:19-15:20),Comma(15:20-15:21),UpperIdent(15:22-15:26),CloseSquare(15:26-15:27),
+EndOfFile(16:1-16:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -21,7 +21,8 @@ OpenCurly(1:1-1:2),
 LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:11),
 LowerIdent(3:5-3:6),OpAssign(3:7-3:8),LowerIdent(3:9-3:10),OpPlus(3:11-3:12),Int(3:13-3:14),
 LowerIdent(4:5-4:6),OpStar(4:7-4:8),Int(4:9-4:10),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

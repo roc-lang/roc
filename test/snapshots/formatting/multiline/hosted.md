@@ -44,7 +44,8 @@ LowerIdent(2:2-2:4),Comma(2:4-2:5),
 LowerIdent(3:2-3:4),Comma(3:4-3:5),
 CloseSquare(4:1-4:2),
 LowerIdent(6:1-6:3),OpColon(6:4-6:5),UpperIdent(6:6-6:9),OpFatArrow(6:10-6:12),UpperIdent(6:13-6:16),
-LowerIdent(7:1-7:3),OpColon(7:4-7:5),UpperIdent(7:6-7:9),OpFatArrow(7:10-7:12),UpperIdent(7:13-7:16),EndOfFile(7:16-7:16),
+LowerIdent(7:1-7:3),OpColon(7:4-7:5),UpperIdent(7:6-7:9),OpFatArrow(7:10-7:12),UpperIdent(7:13-7:16),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

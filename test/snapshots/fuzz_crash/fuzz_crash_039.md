@@ -10,7 +10,7 @@ module[}('
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_039.md:1:8:1:9
-PARSE ERROR - fuzz_crash_039.md:2:2:2:2
+PARSE ERROR - fuzz_crash_039.md:3:1:3:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -27,22 +27,23 @@ module[}('
 A parsing error occurred: `header_expected_close_square`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_039.md:2:2:2:2:**
+**fuzz_crash_039.md:3:1:3:1:**
 ```roc
-)
+
 ```
- ^
+^
 
 
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseCurly(1:8-1:9),NoSpaceOpenRound(1:9-1:10),MalformedSingleQuoteUnclosed(1:10-1:11),
-CloseRound(2:1-2:2),EndOfFile(2:2-2:2),
+CloseRound(2:1-2:2),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-2.2
-	(malformed-header @2.2-2.2 (tag "header_expected_close_square"))
+	(malformed-header @1.1-1.1 (tag "header_expected_close_square"))
 	(statements))
 ~~~
 # FORMATTED

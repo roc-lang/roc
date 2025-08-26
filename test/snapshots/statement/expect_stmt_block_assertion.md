@@ -24,7 +24,8 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:11),OpArrow(3:12-3:14),Upp
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),OpBar(4:7-4:8),LowerIdent(4:8-4:9),OpBar(4:9-4:10),OpenCurly(4:11-4:12),
 KwExpect(5:5-5:11),LowerIdent(5:12-5:13),OpEquals(5:14-5:16),UpperIdent(5:17-5:21),NoSpaceDotUpperIdent(5:21-5:26),
 LowerIdent(6:5-6:6),
-CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
+CloseCurly(7:1-7:2),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -29,7 +29,8 @@ import json.Json
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:12),NoSpaceDotLowerIdent(5:12-5:17),EndOfFile(5:17-5:17),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:12),NoSpaceDotLowerIdent(5:12-5:17),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

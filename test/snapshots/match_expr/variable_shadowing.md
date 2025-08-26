@@ -41,7 +41,8 @@ match (value, other) {
 KwMatch(1:1-1:6),OpenRound(1:7-1:8),LowerIdent(1:8-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:20),CloseRound(1:20-1:21),OpenCurly(1:22-1:23),
 OpenRound(2:5-2:6),UpperIdent(2:6-2:10),NoSpaceOpenRound(2:10-2:11),LowerIdent(2:11-2:12),CloseRound(2:12-2:13),Comma(2:13-2:14),LowerIdent(2:15-2:16),CloseRound(2:16-2:17),OpFatArrow(2:18-2:20),LowerIdent(2:21-2:22),OpPlus(2:23-2:24),LowerIdent(2:25-2:26),
 OpenRound(3:5-3:6),UpperIdent(3:6-3:10),Comma(3:10-3:11),LowerIdent(3:12-3:13),CloseRound(3:13-3:14),OpFatArrow(3:15-3:17),LowerIdent(3:18-3:19),OpStar(3:20-3:21),Int(3:22-3:23),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

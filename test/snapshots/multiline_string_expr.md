@@ -15,7 +15,8 @@ NIL
 # TOKENS
 ~~~zig
 MultilineStringStart(1:1-1:4),StringPart(1:4-1:20),
-MultilineStringStart(2:1-2:4),StringPart(2:4-2:23),EndOfFile(2:23-2:23),
+MultilineStringStart(2:1-2:4),StringPart(2:4-2:23),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -38,7 +38,8 @@ This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),LowerIdent(3:7-3:10),NoSpaceDotInt(3:10-3:12),EndOfFile(3:12-3:12),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),LowerIdent(3:7-3:10),NoSpaceDotInt(3:10-3:12),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

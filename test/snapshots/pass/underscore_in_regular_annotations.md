@@ -99,7 +99,8 @@ CloseCurly(23:5-23:6),
 LowerIdent(26:1-26:4),OpColon(26:5-26:6),OpenRound(26:7-26:8),LowerIdent(26:8-26:9),OpArrow(26:10-26:12),LowerIdent(26:13-26:14),CloseRound(26:14-26:15),Comma(26:15-26:16),UpperIdent(26:17-26:21),NoSpaceOpenRound(26:21-26:22),LowerIdent(26:22-26:23),CloseRound(26:23-26:24),OpArrow(26:25-26:27),UpperIdent(26:28-26:32),NoSpaceOpenRound(26:32-26:33),LowerIdent(26:33-26:34),CloseRound(26:34-26:35),
 LowerIdent(27:1-27:4),OpAssign(27:5-27:6),OpBar(27:7-27:8),Underscore(27:8-27:9),Comma(27:9-27:10),Underscore(27:11-27:12),OpBar(27:12-27:13),OpenSquare(27:14-27:15),CloseSquare(27:15-27:16),
 LowerIdent(30:1-30:10),OpColon(30:11-30:12),NamedUnderscore(30:13-30:15),OpArrow(30:16-30:18),NamedUnderscore(30:19-30:21),OpArrow(30:22-30:24),NamedUnderscore(30:25-30:27),
-LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14-31:15),Comma(31:15-31:16),LowerIdent(31:17-31:18),OpBar(31:18-31:19),LowerIdent(31:20-31:21),EndOfFile(31:21-31:21),
+LowerIdent(31:1-31:10),OpAssign(31:11-31:12),OpBar(31:13-31:14),Underscore(31:14-31:15),Comma(31:15-31:16),LowerIdent(31:17-31:18),OpBar(31:18-31:19),LowerIdent(31:20-31:21),
+EndOfFile(32:1-32:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -28,7 +28,8 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpBar(5:8-5:9),LowerIdent(5:9-5:13),OpBar(
 OpenRound(6:5-6:6),LowerIdent(6:6-6:11),Comma(6:11-6:12),LowerIdent(6:13-6:19),CloseRound(6:19-6:20),OpAssign(6:21-6:22),LowerIdent(6:23-6:27),
 OpenRound(7:5-7:6),LowerIdent(7:6-7:12),Comma(7:12-7:13),LowerIdent(7:14-7:19),CloseRound(7:19-7:20),
 CloseCurly(8:1-8:2),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),EndOfFile(10:15-10:15),
+LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure

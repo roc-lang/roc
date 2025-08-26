@@ -36,7 +36,8 @@ KwExposes(3:2-3:9),OpenSquare(3:10-3:11),CloseSquare(3:11-3:12),
 KwPackages(4:2-4:10),OpenCurly(4:11-4:12),CloseCurly(4:12-4:13),
 KwProvides(5:2-5:10),OpenSquare(5:11-5:12),LowerIdent(5:12-5:22),CloseSquare(5:22-5:23),
 LowerIdent(7:1-7:11),OpColon(7:12-7:13),UpperIdent(7:14-7:17),OpArrow(7:18-7:20),UpperIdent(7:21-7:24),
-LowerIdent(8:1-8:11),OpAssign(8:12-8:13),LowerIdent(8:14-8:18),EndOfFile(8:18-8:18),
+LowerIdent(8:1-8:11),OpAssign(8:12-8:13),LowerIdent(8:14-8:18),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -26,7 +26,8 @@ add2 = x +      2
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(3:17-3:18),EndOfFile(3:18-3:18),
+LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(3:17-3:18),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

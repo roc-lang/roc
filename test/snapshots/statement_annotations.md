@@ -52,7 +52,8 @@ LowerIdent(11:1-11:5),OpAssign(11:6-11:7),OpBar(11:8-11:9),LowerIdent(11:9-11:10
 LowerIdent(12:3-12:4),OpColon(12:5-12:6),LowerIdent(12:7-12:10),
 LowerIdent(13:3-13:4),OpAssign(13:5-13:6),LowerIdent(13:7-13:8),
 LowerIdent(15:3-15:4),
-CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
+CloseCurly(16:1-16:2),
+EndOfFile(17:1-17:1),
 ~~~
 # PARSE
 ~~~clojure

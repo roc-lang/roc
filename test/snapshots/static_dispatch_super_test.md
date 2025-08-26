@@ -17,7 +17,8 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),NoSpaceDotLowerIdent(1:15-1:38),NoSpaceOpenRound(1:38-1:39),CloseRound(1:39-1:40),NoSpaceOpQuestion(1:40-1:41),NoSpaceDotLowerIdent(1:41-1:69),NoSpaceOpenRound(1:69-1:70),CloseRound(1:70-1:71),NoSpaceOpQuestion(1:71-1:72),NoSpaceDotLowerIdent(1:72-1:85),NoSpaceOpQuestion(1:85-1:86),EndOfFile(1:86-1:86),
+LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),NoSpaceDotLowerIdent(1:15-1:38),NoSpaceOpenRound(1:38-1:39),CloseRound(1:39-1:40),NoSpaceOpQuestion(1:40-1:41),NoSpaceDotLowerIdent(1:41-1:69),NoSpaceOpenRound(1:69-1:70),CloseRound(1:70-1:71),NoSpaceOpQuestion(1:71-1:72),NoSpaceDotLowerIdent(1:72-1:85),NoSpaceOpQuestion(1:85-1:86),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

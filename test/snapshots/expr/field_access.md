@@ -23,7 +23,8 @@ person.name
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),
+LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

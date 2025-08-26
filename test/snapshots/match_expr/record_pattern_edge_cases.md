@@ -29,7 +29,8 @@ OpenCurly(5:5-5:6),LowerIdent(5:7-5:8),OpColon(5:8-5:9),OpenCurly(5:10-5:11),Low
 OpenCurly(6:5-6:6),LowerIdent(6:7-6:11),OpColon(6:11-6:12),LowerIdent(6:13-6:14),CloseCurly(6:15-6:16),OpFatArrow(6:17-6:19),StringStart(6:20-6:21),StringPart(6:21-6:30),OpenStringInterpolation(6:30-6:32),LowerIdent(6:32-6:33),CloseStringInterpolation(6:33-6:34),StringPart(6:34-6:34),StringEnd(6:34-6:35),
 OpenCurly(7:5-7:6),LowerIdent(7:7-7:13),OpColon(7:13-7:14),OpenCurly(7:15-7:16),LowerIdent(7:17-7:21),OpColon(7:21-7:22),LowerIdent(7:23-7:32),Comma(7:32-7:33),LowerIdent(7:34-7:37),OpColon(7:37-7:38),LowerIdent(7:39-7:46),CloseCurly(7:47-7:48),CloseCurly(7:49-7:50),OpFatArrow(7:51-7:53),StringStart(7:54-7:55),StringPart(7:55-7:71),OpenStringInterpolation(7:71-7:73),LowerIdent(7:73-7:82),CloseStringInterpolation(7:82-7:83),StringPart(7:83-7:85),OpenStringInterpolation(7:85-7:87),LowerIdent(7:87-7:94),NoSpaceDotLowerIdent(7:94-7:101),NoSpaceOpenRound(7:101-7:102),CloseRound(7:102-7:103),CloseStringInterpolation(7:103-7:104),StringPart(7:104-7:105),StringEnd(7:105-7:106),
 OpenCurly(8:5-8:6),CloseCurly(8:6-8:7),OpFatArrow(8:8-8:10),StringStart(8:11-8:12),StringPart(8:12-8:24),StringEnd(8:24-8:25),
-CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
+CloseCurly(9:1-9:2),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

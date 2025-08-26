@@ -23,7 +23,8 @@ I.5
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),NoSpaceDotInt(1:2-1:4),EndOfFile(1:4-1:4),
+UpperIdent(1:1-1:2),NoSpaceDotInt(1:2-1:4),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

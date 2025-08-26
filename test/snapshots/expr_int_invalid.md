@@ -23,7 +23,8 @@ Check that the number is correctly formatted. Valid examples include: `42`, `3.1
 
 # TOKENS
 ~~~zig
-Int(1:1-1:42),EndOfFile(1:42-1:42),
+Int(1:1-1:42),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

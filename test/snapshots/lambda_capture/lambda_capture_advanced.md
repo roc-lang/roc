@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:6-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:10),OpBar(1:10-1:11),OpBar(1:12-1:13),LowerIdent(1:13-1:14),OpBar(1:14-1:15),LowerIdent(1:16-1:17),OpPlus(1:18-1:19),LowerIdent(1:20-1:21),OpPlus(1:22-1:23),LowerIdent(1:24-1:25),OpPlus(1:26-1:27),LowerIdent(1:28-1:29),CloseRound(1:29-1:30),NoSpaceOpenRound(1:30-1:31),Int(1:31-1:33),Comma(1:33-1:34),Int(1:35-1:37),Comma(1:37-1:38),Int(1:39-1:40),CloseRound(1:40-1:41),NoSpaceOpenRound(1:41-1:42),Int(1:42-1:43),CloseRound(1:43-1:44),EndOfFile(1:44-1:44),
+OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:6-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:10),OpBar(1:10-1:11),OpBar(1:12-1:13),LowerIdent(1:13-1:14),OpBar(1:14-1:15),LowerIdent(1:16-1:17),OpPlus(1:18-1:19),LowerIdent(1:20-1:21),OpPlus(1:22-1:23),LowerIdent(1:24-1:25),OpPlus(1:26-1:27),LowerIdent(1:28-1:29),CloseRound(1:29-1:30),NoSpaceOpenRound(1:30-1:31),Int(1:31-1:33),Comma(1:33-1:34),Int(1:35-1:37),Comma(1:37-1:38),Int(1:39-1:40),CloseRound(1:40-1:41),NoSpaceOpenRound(1:41-1:42),Int(1:42-1:43),CloseRound(1:43-1:44),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -632,7 +632,6 @@ is_named_color = |str| {
 
 	colors.contains(str)
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -39,7 +39,8 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
+Int(1:1-1:2),OpenRound(1:3-1:4),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -50,7 +51,6 @@ Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

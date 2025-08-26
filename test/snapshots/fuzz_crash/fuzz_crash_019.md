@@ -979,7 +979,8 @@ LowerIdent(116:1-116:2),OpColon(116:3-116:4),UpperIdent(116:5-116:6),NoSpaceOpen
 KwExpect(118:1-118:7),OpenCurly(118:8-118:9),
 LowerIdent(119:2-119:5),OpEquals(119:6-119:8),Int(119:9-119:10),
 LowerIdent(120:1-120:2),OpEquals(120:3-120:5),LowerIdent(120:6-120:9),
-CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
+CloseCurly(121:1-121:2),
+EndOfFile(122:1-122:1),
 ~~~
 # PARSE
 ~~~clojure

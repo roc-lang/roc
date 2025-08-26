@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),CloseCurly(1:13-1:14),EndOfFile(1:14-1:14),
+KwPackage(1:1-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),CloseCurly(1:13-1:14),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

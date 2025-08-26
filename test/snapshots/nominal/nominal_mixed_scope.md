@@ -102,7 +102,8 @@ UpperIdent(12:9-12:12),NoSpaceDotUpperIdent(12:12-12:16),OpFatArrow(12:17-12:19)
 UpperIdent(13:9-13:12),NoSpaceDotUpperIdent(13:12-13:18),OpFatArrow(13:19-13:21),UpperIdent(13:22-13:33),NoSpaceDotUpperIdent(13:33-13:42),
 UpperIdent(14:9-14:12),NoSpaceDotUpperIdent(14:12-14:17),OpFatArrow(14:18-14:20),UpperIdent(14:21-14:32),NoSpaceDotUpperIdent(14:32-14:40),
 CloseCurly(15:5-15:6),
-CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
+CloseCurly(16:1-16:2),
+EndOfFile(17:1-17:1),
 ~~~
 # PARSE
 ~~~clojure

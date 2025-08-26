@@ -63,7 +63,8 @@ LowerIdent(25:1-25:2),OpAssign(25:3-25:4),Int(25:5-25:16),
 LowerIdent(27:1-27:2),OpColon(27:3-27:4),UpperIdent(27:5-27:8),
 LowerIdent(28:1-28:2),OpAssign(28:3-28:4),Int(28:5-28:25),
 LowerIdent(30:1-30:2),OpColon(30:3-30:4),UpperIdent(30:5-30:9),
-LowerIdent(31:1-31:2),OpAssign(31:3-31:4),Int(31:5-31:45),EndOfFile(31:45-31:45),
+LowerIdent(31:1-31:2),OpAssign(31:3-31:4),Int(31:5-31:45),
+EndOfFile(32:1-32:1),
 ~~~
 # PARSE
 ~~~clojure

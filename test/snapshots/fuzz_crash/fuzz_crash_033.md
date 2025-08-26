@@ -35,7 +35,8 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),CloseSquare(1:14-1:15),EndOfFile(1:15-1:15),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),CloseSquare(1:14-1:15),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

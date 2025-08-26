@@ -27,7 +27,8 @@ LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),OpArrow(5:14-5:16),Upp
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),OpBar(6:8-6:9),LowerIdent(6:9-6:14),OpBar(6:14-6:15),KwMatch(6:16-6:21),LowerIdent(6:22-6:27),OpenCurly(6:28-6:29),
 UpperIdent(7:5-7:8),OpBar(7:9-7:10),UpperIdent(7:11-7:16),OpBar(7:17-7:18),UpperIdent(7:19-7:23),OpFatArrow(7:24-7:26),StringStart(7:27-7:28),StringPart(7:28-7:35),StringEnd(7:35-7:36),
 UpperIdent(8:5-8:11),OpBar(8:12-8:13),UpperIdent(8:14-8:20),OpBar(8:21-8:22),UpperIdent(8:23-8:29),OpFatArrow(8:30-8:32),StringStart(8:33-8:34),StringPart(8:34-8:43),StringEnd(8:43-8:44),
-CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
+CloseCurly(9:1-9:2),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

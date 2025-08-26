@@ -17,7 +17,8 @@ ASCII control characters are not allowed in Roc source code.
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),KwImport(1:20-1:26),LowerIdent(1:27-1:28),UpperIdent(1:29-1:30),EndOfFile(1:30-1:30),
+KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),KwImport(1:20-1:26),LowerIdent(1:27-1:28),UpperIdent(1:29-1:30),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

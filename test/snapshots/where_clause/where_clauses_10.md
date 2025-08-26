@@ -48,7 +48,8 @@ LowerIdent(5:1-5:13),
 OpColon(6:2-6:3),
 UpperIdent(7:3-7:7),NoSpaceOpenRound(7:7-7:8),UpperIdent(7:8-7:12),NoSpaceOpenRound(7:12-7:13),UpperIdent(7:13-7:15),CloseRound(7:15-7:16),CloseRound(7:16-7:17),OpArrow(7:18-7:20),UpperIdent(7:21-7:25),NoSpaceOpenRound(7:25-7:26),LowerIdent(7:26-7:27),CloseRound(7:27-7:28),
 KwWhere(8:4-8:9),
-KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(9:13-9:14),NoSpaceDotUpperIdent(9:14-9:21),EndOfFile(9:21-9:21),
+KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(9:13-9:14),NoSpaceDotUpperIdent(9:14-9:21),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

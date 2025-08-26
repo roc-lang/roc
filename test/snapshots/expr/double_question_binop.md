@@ -23,7 +23,8 @@ get_name!({}) ?? "Bob"
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:10),NoSpaceOpenRound(1:10-1:11),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),CloseRound(1:13-1:14),OpDoubleQuestion(1:15-1:17),StringStart(1:18-1:19),StringPart(1:19-1:22),StringEnd(1:22-1:23),EndOfFile(1:23-1:23),
+LowerIdent(1:1-1:10),NoSpaceOpenRound(1:10-1:11),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),CloseRound(1:13-1:14),OpDoubleQuestion(1:15-1:17),StringStart(1:18-1:19),StringPart(1:19-1:22),StringEnd(1:22-1:23),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

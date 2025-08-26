@@ -21,7 +21,8 @@ This escape sequence is not recognized.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),MalformedStringPart(1:2-1:10),StringEnd(1:10-1:11),EndOfFile(1:11-1:11),
+StringStart(1:1-1:2),MalformedStringPart(1:2-1:10),StringEnd(1:10-1:11),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -49,7 +49,8 @@ The unused variable is declared here:
 OpenCurly(1:1-1:2),
 LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:10),
 OpenRound(3:5-3:6),OpBar(3:6-3:7),LowerIdent(3:7-3:8),OpBar(3:8-3:9),LowerIdent(3:10-3:11),CloseRound(3:11-3:12),NoSpaceOpenRound(3:12-3:13),Int(3:13-3:15),CloseRound(3:15-3:16),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

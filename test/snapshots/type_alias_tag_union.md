@@ -41,7 +41,8 @@ LowerIdent(14:1-14:10),OpColon(14:11-14:12),UpperIdent(14:13-14:19),NoSpaceOpenR
 LowerIdent(15:1-15:10),OpAssign(15:11-15:12),OpBar(15:13-15:14),NamedUnderscore(15:14-15:18),OpBar(15:18-15:19),StringStart(15:20-15:21),StringPart(15:21-15:28),StringEnd(15:28-15:29),
 LowerIdent(17:1-17:10),OpColon(17:11-17:12),UpperIdent(17:13-17:19),NoSpaceOpenRound(17:19-17:20),UpperIdent(17:20-17:23),CloseRound(17:23-17:24),OpArrow(17:25-17:27),UpperIdent(17:28-17:31),
 LowerIdent(18:1-18:10),OpAssign(18:11-18:12),OpBar(18:13-18:14),NamedUnderscore(18:14-18:18),OpBar(18:18-18:19),Int(18:20-18:21),
-LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),OpenCurly(20:13-20:14),CloseCurly(20:14-20:15),EndOfFile(20:15-20:15),
+LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),OpenCurly(20:13-20:14),CloseCurly(20:14-20:15),
+EndOfFile(21:1-21:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -404,7 +404,8 @@ UpperIdent(18:5-18:11),NoSpaceDotUpperIdent(18:11-18:18),NoSpaceDotUpperIdent(18
 LowerIdent(21:1-21:13),OpColon(21:14-21:15),UpperIdent(21:16-21:19),OpArrow(21:20-21:22),UpperIdent(21:23-21:26),
 LowerIdent(22:1-22:13),OpAssign(22:14-22:15),OpBar(22:16-22:17),LowerIdent(22:17-22:21),OpBar(22:21-22:22),LowerIdent(22:23-22:30),NoSpaceOpenRound(22:30-22:31),LowerIdent(22:31-22:35),Comma(22:35-22:36),UpperIdent(22:37-22:43),NoSpaceDotLowerIdent(22:43-22:58),CloseRound(22:58-22:59),
 LowerIdent(25:1-25:13),OpColon(25:14-25:15),UpperIdent(25:16-25:24),NoSpaceDotUpperIdent(25:24-25:36),OpArrow(25:37-25:39),UpperIdent(25:40-25:46),NoSpaceOpenRound(25:46-25:47),UpperIdent(25:47-25:55),NoSpaceDotUpperIdent(25:55-25:61),Comma(25:61-25:62),UpperIdent(25:63-25:71),NoSpaceDotUpperIdent(25:71-25:77),CloseRound(25:77-25:78),
-LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),EndOfFile(26:48-26:48),
+LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),
+EndOfFile(27:1-27:1),
 ~~~
 # PARSE
 ~~~clojure
