@@ -403,13 +403,13 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~roc
 match value {
 	[first, .. as rest] => 
-			=> 
-			=> 
-			=> 
+	 => 
+	 => 
+	 => 
 	[x, y] => 
-			=> 
-			=> 
-			=> 
+	 => 
+	 => 
+	 => 
 	_ => "other"
 }
 ~~~

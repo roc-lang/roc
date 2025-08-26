@@ -290,6 +290,7 @@ const Formatter = struct {
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
     has_newline: bool = true,
+    has_multiline_string: bool = false,
 
     /// Creates a new Formatter for the given parse IR.
     fn init(ast: AST, writer: std.io.AnyWriter) Formatter {
@@ -719,7 +720,8 @@ const Formatter = struct {
             }
             _ = try formatter(fmt, item_idx);
             if (multiline) {
-                if (fmt.has_newline) {
+                if (fmt.has_multiline_string) {
+                    try fmt.ensureNewline();
                     try fmt.pushIndent();
                 }
                 try fmt.push(',');
@@ -844,7 +846,7 @@ const Formatter = struct {
                         },
                     }
                 }
-                try fmt.ensureNewline();
+                fmt.has_multiline_string = true;
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
@@ -938,7 +940,8 @@ const Formatter = struct {
                     }
                     const field_region = try fmt.formatRecordField(field_idx);
                     if (multiline) {
-                        if (fmt.has_newline) {
+                        if (fmt.has_multiline_string) {
+                            try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.push(',');
@@ -1917,7 +1920,7 @@ const Formatter = struct {
 
     fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
         var found_comment = false;
-        var newline_count: usize = if (fmt.has_newline) 1 else 0;
+        var newline_count: usize = 0;
         var i: usize = 0;
         while (i < between_text.len) {
             if (between_text[i] == '#') {
@@ -1965,6 +1968,7 @@ const Formatter = struct {
         if (c != '\t') {
             fmt.has_newline = c == '\n';
         }
+        fmt.has_multiline_string = false;
         try fmt.buffer.writer().writeByte(c);
     }
 
@@ -1978,6 +1982,7 @@ const Formatter = struct {
         if (!all_tabs) {
             fmt.has_newline = str[str.len - 1] == '\n';
         }
+        fmt.has_multiline_string = false;
         try fmt.buffer.writer().writeAll(str);
     }
 
