@@ -1625,7 +1625,7 @@ pub const Content = struct {
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
-            // trainling newlines are part of the source
+            // trailing newlines are part of the source
             source = content[value.start..value.end];
         } else {
             return Error.MissingSnapshotSource;
