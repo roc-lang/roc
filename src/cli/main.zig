@@ -691,26 +691,103 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             // Str platform: use gnu dynamic linking
             target_abi = .gnu;
             if (builtin.target.os.tag == .linux) {
-                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
-                    std.log.err("Failed to add gnu Scrt1.o", .{});
-                    std.process.exit(1);
-                };
-                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
-                    std.log.err("Failed to add gnu crti.o", .{});
-                    std.process.exit(1);
-                };
-                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
-                    std.log.err("Failed to add gnu crtn.o", .{});
-                    std.process.exit(1);
-                };
-                // Add dynamic library dependencies
-                // Try to detect the correct library path
+                // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths
+                //
+                // According to the platform design (see Platform modules and linking design.md),
+                // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
+                // crtn.o) in their platform's targets/ directory. For example:
+                //   targets/x64glibc/crti.o
+                //   targets/x64glibc/crtn.o
+                //   targets/x64musl/crti.o
+                //   targets/x64musl/crtn.o
+                //
+                // The platform module header would then specify these in the targets section:
+                //   shared_lib: {
+                //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
+                //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
+                //   }
+                //
+                // Current implementation: We auto-detect system libc and use system CRT files as a
+                // convenience during platform development. This allows platform authors to develop
+                // and test without immediately vendoring architecture-specific CRT files.
+                //
+                // This auto-detection will be removed once platforms properly vendor their CRT files
+                // as specified in the design document.
+
                 const libc_finder = @import("libc_finder.zig");
                 if (libc_finder.findLibc(gpa)) |libc_info| {
                     defer {
                         var info = libc_info;
                         info.deinit();
                     }
+
+                    // Use system CRT files from the detected lib directory
+                    // TODO: Remove this once platforms provide their own CRT files
+                    const scrt1_path = std.fmt.allocPrint(gpa, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch {
+                        std.log.err("Failed to allocate Scrt1.o path", .{});
+                        std.process.exit(1);
+                    };
+                    const crti_path = std.fmt.allocPrint(gpa, "{s}/crti.o", .{libc_info.lib_dir}) catch {
+                        std.log.err("Failed to allocate crti.o path", .{});
+                        std.process.exit(1);
+                    };
+                    const crtn_path = std.fmt.allocPrint(gpa, "{s}/crtn.o", .{libc_info.lib_dir}) catch {
+                        std.log.err("Failed to allocate crtn.o path", .{});
+                        std.process.exit(1);
+                    };
+
+                    // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
+                    if (std.fs.cwd().access(scrt1_path, .{})) |_| {
+                        platform_files_pre.append(scrt1_path) catch {
+                            std.log.err("Failed to add system Scrt1.o", .{});
+                            std.process.exit(1);
+                        };
+                    } else |_| {
+                        if (builtin.target.cpu.arch == .x86_64) {
+                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                                std.log.err("Failed to add vendored Scrt1.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else {
+                            std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
+                            std.process.exit(1);
+                        }
+                    }
+
+                    if (std.fs.cwd().access(crti_path, .{})) |_| {
+                        platform_files_pre.append(crti_path) catch {
+                            std.log.err("Failed to add system crti.o", .{});
+                            std.process.exit(1);
+                        };
+                    } else |_| {
+                        if (builtin.target.cpu.arch == .x86_64) {
+                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                                std.log.err("Failed to add vendored crti.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else {
+                            std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
+                            std.process.exit(1);
+                        }
+                    }
+
+                    if (std.fs.cwd().access(crtn_path, .{})) |_| {
+                        platform_files_post.append(crtn_path) catch {
+                            std.log.err("Failed to add system crtn.o", .{});
+                            std.process.exit(1);
+                        };
+                    } else |_| {
+                        if (builtin.target.cpu.arch == .x86_64) {
+                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                                std.log.err("Failed to add vendored crtn.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else {
+                            std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
+                            std.process.exit(1);
+                        }
+                    }
+
                     const lib_path = std.fmt.allocPrint(gpa, "-L{s}", .{libc_info.lib_dir}) catch {
                         std.log.err("Failed to allocate library path", .{});
                         std.process.exit(1);
@@ -720,17 +797,28 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                         std.process.exit(1);
                     };
                 } else |_| {
-                    // Fallback to architecture-based default
-                    const default_lib_path = switch (builtin.target.cpu.arch) {
-                        .x86_64 => "-L/usr/lib/x86_64-linux-gnu",
-                        .aarch64 => "-L/usr/lib/aarch64-linux-gnu",
-                        .x86 => "-L/usr/lib/i386-linux-gnu",
-                        else => "-L/usr/lib",
-                    };
-                    extra_args.append(default_lib_path) catch {
-                        std.log.err("Failed to add library path", .{});
+                    // Fallback to vendored files for x86_64 or error for other architectures
+                    if (builtin.target.cpu.arch == .x86_64) {
+                        platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                            std.log.err("Failed to add gnu Scrt1.o", .{});
+                            std.process.exit(1);
+                        };
+                        platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                            std.log.err("Failed to add gnu crti.o", .{});
+                            std.process.exit(1);
+                        };
+                        platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                            std.log.err("Failed to add gnu crtn.o", .{});
+                            std.process.exit(1);
+                        };
+                        extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
+                            std.log.err("Failed to add library path", .{});
+                            std.process.exit(1);
+                        };
+                    } else {
+                        std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
                         std.process.exit(1);
-                    };
+                    }
                 }
                 extra_args.append("-lc") catch {
                     std.log.err("Failed to add libc", .{});
