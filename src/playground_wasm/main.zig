@@ -26,6 +26,7 @@ const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
+const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
 const Can = can.Can;
@@ -58,6 +59,7 @@ const MessageType = enum {
     QUERY_AST,
     QUERY_CIR,
     QUERY_TYPES,
+    QUERY_FORMATTED,
     GET_HOVER_INFO,
     RESET,
     INIT_REPL,
@@ -71,6 +73,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_AST")) return .QUERY_AST;
         if (std.mem.eql(u8, str, "QUERY_CIR")) return .QUERY_CIR;
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
+        if (std.mem.eql(u8, str, "QUERY_FORMATTED")) return .QUERY_FORMATTED;
         if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         if (std.mem.eql(u8, str, "INIT_REPL")) return .INIT_REPL;
@@ -653,6 +656,9 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         .QUERY_TYPES => {
             try writeTypesResponse(response_buffer, data);
         },
+        .QUERY_FORMATTED => {
+            try writeFormattedResponse(response_buffer, data);
+        },
         .GET_HOVER_INFO => {
             try writeHoverInfoResponse(response_buffer, data, message_json);
         },
@@ -769,9 +775,9 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             // Write CIR response directly using the REPL's module env
             try writeReplCanCirResponse(response_buffer, module_env);
         },
-        .QUERY_TYPES, .GET_HOVER_INFO => {
-            // These queries need type information which isn't readily available in REPL mode
-            try writeErrorResponse(response_buffer, .ERROR, "Type queries not available in REPL mode");
+        .QUERY_TYPES, .QUERY_FORMATTED, .GET_HOVER_INFO => {
+            // These queries need parse/type information which isn't readily available in REPL mode
+            try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
@@ -1259,6 +1265,41 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
         try writeJsonString(w, html);
     } else {
         try writeJsonString(w, "Parse AST not available");
+    }
+
+    try w.writeAll("\"}");
+    try resp_writer.finalize();
+}
+
+/// Write formatted response with formatted Roc code
+fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+
+    if (data.parse_ast) |*parse_ast| {
+        // Create a local arena for formatting
+        var local_arena = std.heap.ArenaAllocator.init(allocator);
+        defer local_arena.deinit();
+        const temp_alloc = local_arena.allocator();
+
+        var formatted = std.ArrayList(u8).init(temp_alloc);
+        defer formatted.deinit();
+
+        // Format the AST - in the playground we only deal with file-level parsing
+        fmt.formatAst(parse_ast.*, formatted.writer().any()) catch {
+            try writeJsonString(w, "Formatting failed");
+            try w.writeAll("\"}");
+            try resp_writer.finalize();
+            return;
+        };
+
+        // Return the formatted code
+        try writeJsonString(w, formatted.items);
+    } else {
+        try writeJsonString(w, "Parse AST not available for formatting");
     }
 
     try w.writeAll("\"}");

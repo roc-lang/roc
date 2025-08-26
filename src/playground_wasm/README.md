@@ -185,7 +185,24 @@ All communication uses JSON messages. Each message must have a `type` field.
 }
 ```
 
-#### 7. GET_HOVER_INFO
+#### 7. QUERY_FORMATTED
+**State**: LOADED
+**Purpose**: Get formatted Roc code
+
+**Request**:
+```json
+{"type": "QUERY_FORMATTED"}
+```
+
+**Response**:
+```json
+{
+  "status": "SUCCESS",
+  "data": "module [foo]\n\nfoo = 42\n\nbar = \"baz\"\n"
+}
+```
+
+#### 8. GET_HOVER_INFO
 **State**: LOADED or REPL_ACTIVE
 **Purpose**: Get hover information for an identifier at a specific source position
 
@@ -219,7 +236,7 @@ All communication uses JSON messages. Each message must have a `type` field.
 
 **Note**: In REPL_ACTIVE state, this works with the last REPL evaluation's ModuleEnv.
 
-#### 8. INIT_REPL
+#### 9. INIT_REPL
 **State**: READY → REPL_ACTIVE
 **Purpose**: Initialize a REPL session for interactive evaluation
 
@@ -240,7 +257,7 @@ All communication uses JSON messages. Each message must have a `type` field.
 }
 ```
 
-#### 9. REPL_STEP
+#### 10. REPL_STEP
 **State**: REPL_ACTIVE
 **Purpose**: Submit a line of input to the REPL for evaluation
 
@@ -308,10 +325,10 @@ All communication uses JSON messages. Each message must have a `type` field.
 - `error_details`: Additional error details, typically the specific error name or message
 
 **Compiler Availability**:
-- `compiler_available: true`: Compiler queries (QUERY_CIR, QUERY_TYPES, GET_HOVER_INFO) are available
+- `compiler_available: true`: Compiler queries (QUERY_CIR, QUERY_TYPES, QUERY_FORMATTED, GET_HOVER_INFO) are available
 - `compiler_available: false`: Compiler queries are not available (usually due to errors)
 
-#### 10. CLEAR_REPL
+#### 11. CLEAR_REPL
 **State**: REPL_ACTIVE
 **Purpose**: Clear all REPL definitions while keeping the REPL session active
 
@@ -332,7 +349,7 @@ All communication uses JSON messages. Each message must have a `type` field.
 }
 ```
 
-#### 11. RESET
+#### 12. RESET
 **State**: LOADED or REPL_ACTIVE → READY
 **Purpose**: Clean up compilation state and return to READY
 
@@ -403,10 +420,10 @@ The playground now supports interactive REPL (Read-Eval-Print Loop) sessions tha
 When in `REPL_ACTIVE` state, the following compiler query messages work with the last REPL evaluation:
 
 - `QUERY_CIR`: Returns CIR for the last REPL evaluation
-- `QUERY_TYPES`: Returns types for the last REPL evaluation  
+- `QUERY_TYPES`: Returns types for the last REPL evaluation
 - `GET_HOVER_INFO`: Returns hover info for the last REPL evaluation
 
-These queries are only available when `compiler_available: true` in the REPL response.
+- These queries are only available when `compiler_available: true` in the REPL response.
 
 ## Integration Notes
 
