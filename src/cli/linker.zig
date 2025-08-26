@@ -5,6 +5,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const libc_finder = @import("libc_finder.zig");
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -160,9 +161,29 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                     try args.append("-static");
                 },
                 .gnu => {
-                    // Dynamic GNU linking
-                    try args.append("-dynamic-linker");
-                    try args.append("/lib64/ld-linux-x86-64.so.2");
+                    // Dynamic GNU linking - find the dynamic linker
+                    if (libc_finder.findLibc(allocator)) |libc_info| {
+                        // Copy the dynamic linker path before deinit
+                        const dynamic_linker_copy = try allocator.dupe(u8, libc_info.dynamic_linker);
+                        
+                        // Clean up libc_info
+                        var info = libc_info;
+                        info.deinit();
+                        
+                        try args.append("-dynamic-linker");
+                        try args.append(dynamic_linker_copy);
+                    } else |err| {
+                        // Fallback to hardcoded path based on architecture
+                        std.log.warn("Failed to detect libc: {}, using fallback", .{err});
+                        try args.append("-dynamic-linker");
+                        const fallback_ld = switch (builtin.target.cpu.arch) {
+                            .x86_64 => "/lib64/ld-linux-x86-64.so.2",
+                            .aarch64 => "/lib/ld-linux-aarch64.so.1",
+                            .x86 => "/lib/ld-linux.so.2",
+                            else => "/lib/ld-linux.so.2",
+                        };
+                        try args.append(fallback_ld);
+                    }
                 },
             }
         },

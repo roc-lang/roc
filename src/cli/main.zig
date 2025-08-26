@@ -53,8 +53,10 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 
 const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
-test {
+test "main cli tests" {
     _ = @import("test_bundle_logic.zig");
+    _ = @import("libc_finder.zig");
+    _ = @import("test_shared_memory_system.zig");
 }
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -2524,9 +2526,4 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
         tracy.waitForShutdown() catch unreachable;
     }
     std.process.exit(1);
-}
-
-// Include tests from other files
-test {
-    _ = @import("test_shared_memory_system.zig");
 }
