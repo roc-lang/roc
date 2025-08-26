@@ -411,20 +411,19 @@ fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaq
 
 /// Initialize the WASM module in START state
 export fn init() void {
-    // Clean up any complex data structures first, before resetting allocator
+    // For the very first initialization, we can reset the allocator
+    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
+    allocator = fba.allocator();
+
     if (compiler_data) |*data| {
         data.deinit();
         compiler_data = null;
     }
 
-    // Clean up REPL state before resetting allocator
+    // Clean up REPL state
     cleanupReplState();
 
-    // Reset allocator to clean slate - this invalidates all previous allocations
-    fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-    allocator = fba.allocator();
-
-    // Simply null out buffer pointers - they're invalid after allocator reset
+    // Initialize buffer pointers to null
     host_message_buffer = null;
     host_response_buffer = null;
     last_error = null;
@@ -486,28 +485,38 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
     const message_slice = message_ptr[0..message_len];
     const response_slice = response_ptr[0..response_len];
 
+    logDebug("processMessage: Starting, state={}, message_len={}\n", .{ @intFromEnum(current_state), message_len });
+
     // Check if buffer is large enough for the length prefix (u32)
     if (response_slice.len < @sizeOf(u32)) {
+        logDebug("processMessage: Response buffer too small for length prefix\n", .{});
         return @intFromEnum(WasmError.response_buffer_too_small);
     }
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, message_slice, .{}) catch {
+    logDebug("processMessage: Parsing JSON message\n", .{});
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, message_slice, .{}) catch |err| {
+        logDebug("processMessage: JSON parse failed: {}\n", .{err});
         // Write error response. This will also write the length prefix.
         writeErrorResponse(response_slice, ResponseStatus.ERROR, "Invalid JSON message") catch return @intFromEnum(WasmError.response_buffer_too_small);
         return @intFromEnum(WasmError.success);
     };
     defer parsed.deinit();
+    logDebug("processMessage: JSON parsed successfully\n", .{});
 
     const root = parsed.value;
     const message_type_str = root.object.get("type") orelse {
+        logDebug("processMessage: Missing message type\n", .{});
         writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Missing message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
         return @intFromEnum(WasmError.success);
     };
 
     const message_type = MessageType.fromString(message_type_str.string) orelse {
+        logDebug("processMessage: Unknown message type: {s}\n", .{message_type_str.string});
         writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Unknown message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
         return @intFromEnum(WasmError.success);
     };
+
+    logDebug("processMessage: Handling {s} in state {}\n", .{ message_type_str.string, @intFromEnum(current_state) });
 
     // Handle message based on current state
     const result = switch (current_state) {
@@ -516,6 +525,8 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
         .LOADED => handleLoadedState(message_type, root, response_slice),
         .REPL_ACTIVE => handleReplState(message_type, root, response_slice),
     };
+
+    logDebug("processMessage: Message handling complete, returning result\n", .{});
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
@@ -540,31 +551,41 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
 fn handleReadyState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
     switch (message_type) {
         .LOAD_SOURCE => {
+            logDebug("LOAD_SOURCE: Starting in READY state\n", .{});
             const source_value = root.object.get("source") orelse {
+                logDebug("LOAD_SOURCE: Missing source in message\n", .{});
                 try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing source");
                 return;
             };
 
             const source = source_value.string;
+            logDebug("LOAD_SOURCE: Got source, length={}\n", .{source.len});
 
             // Clean up previous compilation if any
             if (compiler_data) |*data| {
+                logDebug("LOAD_SOURCE: Cleaning up previous compiler data\n", .{});
                 data.deinit();
                 compiler_data = null;
+                logDebug("LOAD_SOURCE: Previous compiler data cleaned up\n", .{});
             }
 
             // Compile the source through all stages
             // Compile and return result
+            logDebug("LOAD_SOURCE: Starting compilation\n", .{});
             const result = compileSource(source) catch |err| {
+                logDebug("LOAD_SOURCE: Compilation failed: {}\n", .{err});
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
+            logDebug("LOAD_SOURCE: Compilation completed successfully\n", .{});
 
             compiler_data = result;
             current_state = .LOADED;
 
             // Return success with diagnostics
+            logDebug("LOAD_SOURCE: Writing loaded response\n", .{});
             try writeLoadedResponse(response_buffer, result);
+            logDebug("LOAD_SOURCE: Loaded response written\n", .{});
         },
         .INIT_REPL => {
             // Clean up any existing REPL state
@@ -597,7 +618,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
         },
         .RESET => {
             logDebug("RESET: Starting in READY state\n", .{});
-            
+
             // First, clean up any complex data structures properly
             if (compiler_data) |*old_data| {
                 logDebug("RESET: Cleaning up compiler_data\n", .{});
@@ -605,23 +626,23 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
                 compiler_data = null;
                 logDebug("RESET: Compiler data cleaned up\n", .{});
             }
-            
-            // Clean up REPL state before resetting allocator
+
+            // Clean up REPL state
             logDebug("RESET: Cleaning up REPL state\n", .{});
             cleanupReplState();
             logDebug("RESET: REPL state cleaned up\n", .{});
 
-            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
-            // Don't try to free individual buffers after resetting the allocator!
-            logDebug("RESET: Resetting allocator to clean slate\n", .{});
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
-            
-            // Simply null out the buffer pointers - they're now invalid anyway
-            host_message_buffer = null;
-            host_response_buffer = null;
-            
-            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
+            // Clean up host-managed buffers normally
+            if (host_message_buffer) |buf| {
+                logDebug("RESET: Freeing host_message_buffer\n", .{});
+                allocator.free(buf);
+                host_message_buffer = null;
+            }
+            if (host_response_buffer) |buf| {
+                logDebug("RESET: Freeing host_response_buffer\n", .{});
+                allocator.free(buf);
+                host_response_buffer = null;
+            }
 
             current_state = .READY;
             logDebug("RESET: State set to READY\n", .{});
@@ -665,7 +686,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         },
         .RESET => {
             logDebug("RESET: Starting in LOADED state\n", .{});
-            
+
             // First, clean up any complex data structures properly
             if (compiler_data) |*old_data| {
                 logDebug("RESET: Cleaning up compiler_data\n", .{});
@@ -674,17 +695,17 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
                 logDebug("RESET: Compiler data cleaned up\n", .{});
             }
 
-            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
-            // Don't try to free individual buffers after resetting the allocator!
-            logDebug("RESET: Resetting allocator to clean slate\n", .{});
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
-            
-            // Simply null out the buffer pointers - they're now invalid anyway
-            host_message_buffer = null;
-            host_response_buffer = null;
-            
-            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
+            // Clean up host-managed buffers normally
+            if (host_message_buffer) |buf| {
+                logDebug("RESET: Freeing host_message_buffer\n", .{});
+                allocator.free(buf);
+                host_message_buffer = null;
+            }
+            if (host_response_buffer) |buf| {
+                logDebug("RESET: Freeing host_response_buffer\n", .{});
+                allocator.free(buf);
+                host_response_buffer = null;
+            }
 
             current_state = .READY;
             logDebug("RESET: State set to READY\n", .{});
@@ -751,23 +772,23 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
         },
         .RESET => {
             logDebug("RESET: Starting in REPL_ACTIVE state\n", .{});
-            
-            // Clean up REPL state before resetting allocator
+
+            // Clean up REPL state
             logDebug("RESET: Cleaning up REPL state\n", .{});
             cleanupReplState();
             logDebug("RESET: REPL state cleaned up\n", .{});
 
-            // CRITICAL FIX: Reset the allocator FIRST, then just null out buffer pointers
-            // Don't try to free individual buffers after resetting the allocator!
-            logDebug("RESET: Resetting allocator to clean slate\n", .{});
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
-            
-            // Simply null out the buffer pointers - they're now invalid anyway
-            host_message_buffer = null;
-            host_response_buffer = null;
-            
-            logDebug("RESET: Allocator reset complete, buffers nullified\n", .{});
+            // Clean up host-managed buffers normally
+            if (host_message_buffer) |buf| {
+                logDebug("RESET: Freeing host_message_buffer\n", .{});
+                allocator.free(buf);
+                host_message_buffer = null;
+            }
+            if (host_response_buffer) |buf| {
+                logDebug("RESET: Freeing host_response_buffer\n", .{});
+                allocator.free(buf);
+                host_response_buffer = null;
+            }
 
             current_state = .READY;
             logDebug("RESET: State set to READY\n", .{});
@@ -799,8 +820,11 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 
 /// Compile source through all compiler stages.
 fn compileSource(source: []const u8) !CompilerStageData {
+    logDebug("compileSource: Starting, source.len={}\n", .{source.len});
+
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
+        logDebug("compileSource: Empty source, creating empty CompilerStageData\n", .{});
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(allocator, source);
@@ -810,6 +834,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     const trimmed_source = std.mem.trim(u8, source, " \t\n\r");
     if (trimmed_source.len == 0) {
+        logDebug("compileSource: Whitespace-only source, creating empty CompilerStageData\n", .{});
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(allocator, source);
@@ -817,13 +842,20 @@ fn compileSource(source: []const u8) !CompilerStageData {
         return CompilerStageData.init(allocator, module_env);
     }
 
+    logDebug("compileSource: Setting up WASM filesystem\n", .{});
     // Set up the source in WASM filesystem
     WasmFilesystem.setSource(allocator, source);
 
+    logDebug("compileSource: Creating ModuleEnv\n", .{});
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
+    logDebug("compileSource: ModuleEnv allocated\n", .{});
+
     module_env.* = try ModuleEnv.init(allocator, source);
+    logDebug("compileSource: ModuleEnv initialized\n", .{});
+
     try module_env.common.calcLineStarts(module_env.gpa);
+    logDebug("compileSource: Line starts calculated\n", .{});
 
     var result = CompilerStageData.init(allocator, module_env);
 
