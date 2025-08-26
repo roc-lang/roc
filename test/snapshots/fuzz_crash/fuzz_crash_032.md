@@ -305,6 +305,7 @@ module [tus, r]
 
 LocalStatus : lue => Loc
 
+
 olor : _ -> tus
 olor = |color| {
 		Color.RGB
@@ -312,7 +313,7 @@ olor = |color| {
 	match color {
 		RGB => LocalStatus.Pending
 		Green => LocalStatus
-					=> Complete
+		 => Complete
 		B.Blue => LocalStatus.Pending
 	}
 }
