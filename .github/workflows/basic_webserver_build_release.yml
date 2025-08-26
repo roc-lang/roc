@@ -13,7 +13,7 @@ permissions: {}
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  RELEASE_TAG: 0.12.0
+  RELEASE_TAG: 0.13.0
 
 jobs:
   fetch-releases:
@@ -185,3 +185,87 @@ jobs:
           name: release-assets-docs
           path: |
             docs.tar.gz
+
+  test-release:
+    needs: [create-release-archive]
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v4
+
+      - name: Set OS-specific variables
+        id: vars
+        run: |
+          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+            echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-13" ]; then
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+          else
+            echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
+          fi
+
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "${{ steps.vars.outputs.os_pattern }}") ./roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzvf roc_nightly.tar.gz
+
+      - name: delete tar
+        run: rm roc_nightly.tar.gz
+
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
+
+      - if: contains(env.ARCHIVE_FORMAT, 'gz')
+        run: |
+          cd basic-webserver-platform && ls | grep "tar" | xargs tar -xzf
+
+      - if: contains(env.ARCHIVE_FORMAT, 'br')
+        run: |
+          cd basic-webserver-platform && ls | grep "tar" | xargs brotli -d
+          ls | grep "tar$" | xargs tar -xf
+
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          brew install expect
+          brew install nmap  # includes ncat
+          brew install ripgrep
+
+      - name: prepare testing
+        run: |
+          mv roc_nightly basic-webserver-platform/.
+          cd basic-webserver-platform
+          mkdir platform
+          # move all files to platform dir
+          find . -maxdepth 1 -type f -exec mv {} platform/ \;
+          # move all dirs (except roc_nightly) to platform dir
+          find . -maxdepth 1 -type d ! -name 'platform' ! -name 'roc_nightly' -exec mv {} platform/ \;
+
+          mkdir temp-basic-webserver
+          cd temp-basic-webserver
+          git clone https://github.com/roc-lang/basic-webserver.git
+          cd basic-webserver
+          git checkout ${{ env.RELEASE_TAG }}
+          cp -r examples ../..
+          cp -r tests ../..
+          cp -r ci ../..
+          # LICENSE is necessary for command test
+          cp -r LICENSE ../..
+
+      - name: run tests
+        run: |
+          # no need to build platform anymore
+          cd basic-webserver-platform
+          # this one does not work when building with musl
+          rm examples/file-accessed-modified-created-time.roc
+          NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
