@@ -704,10 +704,34 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                     std.process.exit(1);
                 };
                 // Add dynamic library dependencies
-                extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
-                    std.log.err("Failed to add library path", .{});
-                    std.process.exit(1);
-                };
+                // Try to detect the correct library path
+                const libc_finder = @import("libc_finder.zig");
+                if (libc_finder.findLibc(gpa)) |libc_info| {
+                    defer {
+                        var info = libc_info;
+                        info.deinit();
+                    }
+                    const lib_path = std.fmt.allocPrint(gpa, "-L{s}", .{libc_info.lib_dir}) catch {
+                        std.log.err("Failed to allocate library path", .{});
+                        std.process.exit(1);
+                    };
+                    extra_args.append(lib_path) catch {
+                        std.log.err("Failed to add library path", .{});
+                        std.process.exit(1);
+                    };
+                } else |_| {
+                    // Fallback to architecture-based default
+                    const default_lib_path = switch (builtin.target.cpu.arch) {
+                        .x86_64 => "-L/usr/lib/x86_64-linux-gnu",
+                        .aarch64 => "-L/usr/lib/aarch64-linux-gnu",
+                        .x86 => "-L/usr/lib/i386-linux-gnu",
+                        else => "-L/usr/lib",
+                    };
+                    extra_args.append(default_lib_path) catch {
+                        std.log.err("Failed to add library path", .{});
+                        std.process.exit(1);
+                    };
+                }
                 extra_args.append("-lc") catch {
                     std.log.err("Failed to add libc", .{});
                     std.process.exit(1);
