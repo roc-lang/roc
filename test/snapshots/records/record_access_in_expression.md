@@ -30,16 +30,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.lambda)
-  (Expr.num_literal_i32 5)
-)
+(Expr.binop_plus)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_plus :type "_arg -> _ret")
+(expr :tag binop_plus :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc
-_arg -> _ret
+Num(_size)
 ~~~

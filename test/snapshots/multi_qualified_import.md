@@ -114,72 +114,34 @@ module [
 ]
 
 import json.Core.Utf8 exposing [Encoder]
-json_encoder: Encoder
+json_encoder : Encoder
 json_encoder = (Json.Core | Utf8) | .defaultEncoder
-process: ((json.Core | Utf8) | Encoder -> Str)
+process : (json.Core | Utf8) | Encoder -> Str
 process = \encoder -> "processing"
 
 # Test with multiple qualifiers
-data: (json.Core | Utf8) | EncodedData
+data : (json.Core | Utf8) | EncodedData
 data = (json.Core | Utf8) | .encode("hello")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:40
-
-**Unsupported Node**
-at 6:16 to 6:20
-
-**Unsupported Node**
-at 6:20 to 6:24
-
-**Unsupported Node**
-at 6:25 to 6:29
-
-**Unsupported Node**
-at 9:11 to 9:40
-
-**Unsupported Node**
-at 10:11 to 10:21
-
-**Unsupported Node**
-at 13:12 to 13:16
-
-**Unsupported Node**
-at 13:17 to 13:21
-
-**Unsupported Node**
-at 14:12 to 14:16
-
-**Unsupported Node**
-at 14:17 to 14:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "json_encoder")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "data")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

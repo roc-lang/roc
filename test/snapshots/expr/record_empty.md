@@ -24,14 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

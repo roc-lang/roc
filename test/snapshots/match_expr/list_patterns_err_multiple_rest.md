@@ -18,11 +18,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 ~~~
 # FORMATTED
 ~~~roc
-when numbers is {
-	[..],
-	middle,
-	_# error, multiple rest patterns not allowed
-} -> ] => ...
+when numbers is {[..], middle, _} => ] => ...
 ~~~
 # EXPECTED
 NIL
@@ -45,21 +41,15 @@ at 1:1 to 2:20
 **Parse Error**
 at 2:20 to 2:20
 
-**Unsupported Node**
-at 1:15 to 2:20
-
-**Unsupported Node**
-at 2:20 to 2:28
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

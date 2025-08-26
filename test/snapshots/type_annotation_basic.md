@@ -166,76 +166,41 @@ app
 	],
 }
 
-identity: (a -> a)
+identity : a -> a
 identity = \x -> x
 
 # Test function with multiple type parameters
-combine: (a -> (b -> (a, b)))
-combine = \(
-	first,
-	second
-) -> (first, second)
-addOne: (U64 -> U64)
+combine : a -> b -> (a, b)
+combine = \(first, second) -> (first, second)
+addOne : U64 -> U64
 addOne = \n -> n + 1
 main! = \_ -> {
 	num = identity(42)
 	text = identity("hello")
 	pair = combine((num, text))
 	result = addOne(5)
-	result: result
+	result : result
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:12 to 4:18
-
-**Unsupported Node**
-at 5:12 to 5:16
-
-**Unsupported Node**
-at 8:11 to 8:25
-
-**Unsupported Node**
-at 9:11 to 9:27
-
-**Unsupported Node**
-at 12:10 to 12:20
-
-**Unsupported Node**
-at 13:10 to 13:14
-
-**Unsupported Node**
-at 15:1 to 15:6
-
-**Unsupported Node**
-at 15:9 to 15:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "combine")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "addOne")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

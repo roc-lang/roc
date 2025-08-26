@@ -59,34 +59,26 @@ module [
 	foo,
 ]
 
-foo: (Bool -> Bool)
+foo : Bool -> Bool
 foo = \a -> {
 	expect a == Bool.True
-	a: a
+	a : a
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:7 to 3:19
-
-**Unsupported Node**
-at 4:7 to 4:11
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

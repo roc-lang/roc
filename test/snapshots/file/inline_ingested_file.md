@@ -45,7 +45,7 @@ module [
 	foo,
 ]
 
-"users.json"asdata: Str
+"users.json"asdata : Str
 import Json
 
 foo = Json.parse(data)
@@ -56,31 +56,19 @@ NIL
 **Parse Error**
 at 3:21 to 3:21
 
-**Unsupported Node**
-at 3:21 to 3:21
-
-**Unsupported Node**
-at 4:1 to 4:12
-
-**Unsupported Node**
-at 6:7 to 6:11
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.str_literal_big)
+  (Expr.binop_lte)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "data")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
+  (Expr.binop_plus)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

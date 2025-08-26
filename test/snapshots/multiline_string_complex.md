@@ -150,66 +150,54 @@ at 10:5 to 10:5
 **Parse Error**
 at 16:5 to 16:5
 
-**Unsupported Node**
-at 3:32 to 3:32
-
-**Unsupported Node**
-at 6:24 to 6:24
-
-**Unsupported Node**
-at 10:5 to 10:5
-
-**Unsupported Node**
-at 16:5 to 16:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "is")
-  (Expr.lookup "a")
+  (Expr.str_literal_small)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
+  (Expr.malformed)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
   (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "just")
-  (Expr.lookup "one")
-  (Expr.lookup "line")
+  (Expr.str_literal_small)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "is")
-  (Expr.lookup "a")
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
   (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "just")
-  (Expr.lookup "one")
-  (Expr.lookup "line")
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "is")
-  (Expr.lookup "a")
-  (Expr.lookup "string")
+  (Expr.str_literal_small)
   (Expr.str_literal_big)
-  (Expr.apply_tag)
-  (Expr.lookup "multiple")
-  (Expr.lookup "lines")
   (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
+  (Expr.str_literal_small)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
   (Expr.malformed)
   (Expr.block
-    (Expr.lookup "value1")
+    (Expr.str_literal_big)
   )
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.lookup "is")
-  (Expr.lookup "a")
-  (Expr.lookup "string")
+  (Expr.str_literal_small)
   (Expr.str_literal_big)
-  (Expr.apply_tag)
-  (Expr.lookup "multiple")
-  (Expr.lookup "lines")
   (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
+  (Expr.str_literal_small)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.binop_lte)
   (Expr.malformed)
   (Expr.block
-    (Expr.lookup "value2")
+    (Expr.str_literal_big)
   )
 )
 ~~~

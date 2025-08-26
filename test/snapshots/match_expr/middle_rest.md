@@ -21,15 +21,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
 ~~~
 # FORMATTED
 ~~~roc
-when items is {
-	[first, ..],
-	last,
-	first + last,
-	[a, b, ..as],
-	middle,
-	x,
-	y
-} -> ] => ((a + b) + x) + y
+when items is {[first, ..], last, ], =>, first + last, [a, b, ..as], middle, x, y} => ] => ((a + b) + x) + y
 ~~~
 # EXPECTED
 NIL
@@ -64,21 +56,15 @@ at 1:1 to 3:30
 **Parse Error**
 at 3:30 to 3:30
 
-**Unsupported Node**
-at 1:13 to 3:31
-
-**Unsupported Node**
-at 3:30 to 3:48
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_c")
 ~~~
 # TYPES
 ~~~roc
-Error
+_c
 ~~~

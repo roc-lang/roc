@@ -204,19 +204,15 @@ app
 	],
 }
 
-Pair((a, b)): (a, b)
+Pair((a, b)) : (a, b)
 
 # Function that uses the alias and will need instantiation
-swap_pair: (Pair((a, b)) -> Pair((b, a)))
+swap_pair : Pair (a, b) -> Pair (b, a)
 swap_pair = \(x, y) -> (y, x)
 
 # Another polymorphic function to create more complex instantiation
-map_pair: (Pair((a, b)) -> ((a -> c) -> ((b -> d) -> Pair((c, d)))))
-map_pair = \(
-	(x, y),
-	f,
-	g
-) -> (f(x), g(y))
+map_pair : Pair (a, b) -> (a -> c) -> (b -> d) -> Pair (c, d)
+map_pair = \((x, y), f, g) -> (f(x), g(y))
 main = {
 	p1 = swap_pair((1, 2))
 	p2 = map_pair((3, 4, \x -> x + 1, \y -> y * 2))
@@ -226,50 +222,21 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:19 to 4:20
-
-**Unsupported Node**
-at 7:13 to 8:1
-
-**Unsupported Node**
-at 8:13 to 8:22
-
-**Unsupported Node**
-at 11:12 to 12:1
-
-**Unsupported Node**
-at 12:12 to 12:27
-
-**Unsupported Node**
-at 23:26 to 23:30
-
-**Unsupported Node**
-at 23:39 to 23:43
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "swap_pair")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "map_pair")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_e")
 ~~~
 # TYPES
 ~~~roc

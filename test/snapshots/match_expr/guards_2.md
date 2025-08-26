@@ -26,7 +26,7 @@ when value is {
 	]
 	if List.len(rest) > 5 => "long list starting with ${Num.toStr first}" [x, y]
 	if x == y => "pair of equal values: ${Num.toStr x}" _ => "other"
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -55,21 +55,15 @@ at 1:1 to 5:2
 **Parse Error**
 at 5:2 to 5:2
 
-**Unsupported Node**
-at 1:13 to 5:1
-
-**Unsupported Node**
-at 5:2 to 5:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

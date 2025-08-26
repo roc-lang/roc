@@ -155,25 +155,26 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 # FORMATTED
 ~~~roc
 {
-	name: "Alice",
-	scores: [95, 87, 92, 78],
-	status: Active({
-		since: "2023-01-15"
-	}),
-	preferences: { theme: Dark, notifications: Email("alice@example.com") },
-	metadata: Ok({
-		tags: ["developer", "senior", "fullstack"],
-		permissions: [Read, Write, Admin],
-	}),
-	callback: \
+	name : "Alice",
+	scores : [95, 87, 92, 78],
+	status : Active {
+		since : "2023-01-15"
+	},
+	preferences : {theme : Dark, notifications : Email "alice@example.com"},
+	metadata : Ok {
+		tags : ["developer", "senior", "fullstack"],
+		permissions : [Read, Write, Admin],
+	},
+	callback : \
 		x,
 	 -> ((
 		x + 1,
 		nested,
-	): {
-		items: [Some("first"), None, Some("third")],
-		result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-	}),
+	) :
+		{
+			items : [Some("first"), None, Some("third")],
+			result : Success {data : [1, 2, 3], timestamp : "2024-01-01"},
+		}),
 }
 ~~~
 # EXPECTED
@@ -185,61 +186,15 @@ at 15:1 to 15:1
 **Parse Error**
 at 1:1 to 15:2
 
-**Unsupported Node**
-at 3:13 to 3:29
-
-**Unsupported Node**
-at 7:15 to 7:51
-
-**Unsupported Node**
-at 8:22 to 8:42
-
-**Unsupported Node**
-at 10:15 to 10:19
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "scores")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "status")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "preferences")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "theme")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "notifications")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "metadata")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "callback")
-    (Expr.malformed)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

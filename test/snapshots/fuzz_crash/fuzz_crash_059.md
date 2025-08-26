@@ -39,7 +39,7 @@ app
 }
 
 []{
-	f: platform
+	f : platform
 	""
 }import B.G
 if 0 {  } else ||0
@@ -59,37 +59,22 @@ at 2:3 to 2:7
 **Parse Error**
 at 2:13 to 2:13
 
-**Unsupported Node**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:9 to 1:9
-
-**Unsupported Node**
-at 1:20 to 2:2
-
-**Unsupported Node**
-at 2:13 to 2:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_or)
   (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "f")
-      (Expr.malformed)
-    )
-    (Expr.str_literal_small)
+    (Expr.malformed)
+    (Expr.binop_not_equals)
   )
-  (Expr.malformed)
-  (Expr.if_else)
-  (Expr.num_literal_i32 0)
+  (Expr.binop_plus)
+  (Expr.match)
+  (Expr.binop_star)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Num(_size)")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

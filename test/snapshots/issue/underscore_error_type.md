@@ -147,94 +147,56 @@ module []
 
 BadType := _
 
-foo: BadType
+foo : BadType
 foo = 42
 
-BadList := List(_)
+BadList := List _
 
-bar: BadList
+bar : BadList
 bar = [1, 2, 3]
 
-BadRecord := { field: _, other: U32 }
+BadRecord := {field : _, other : U32}
 
-baz: BadRecord
-baz = { field: "hi", other: 5 }
+baz : BadRecord
+baz = { field : "hi", other : 5 }
 
 BadFunction := _ -> _
 
-qux: BadFunction
+qux : BadFunction
 qux = \x -> x
 
 BadTuple := (_, U32)
 
-quux: BadTuple
+quux : BadTuple
 quux = ("hello", 42)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:13
-
-**Unsupported Node**
-at 8:1 to 8:19
-
-**Unsupported Node**
-at 11:7 to 11:16
-
-**Unsupported Node**
-at 13:1 to 13:37
-
-**Unsupported Node**
-at 18:1 to 18:22
-
-**Unsupported Node**
-at 21:7 to 21:11
-
-**Unsupported Node**
-at 23:1 to 23:21
-
-**Unsupported Node**
-at 26:20 to 26:20
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "bar")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "baz")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "qux")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "quux")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

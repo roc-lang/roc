@@ -102,18 +102,13 @@ _ignored # Comment 1 =  # Comment 2
 
 # Use only the used_var
 result = used_var + 10
-	result: result
+	result : result
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:6
-
-**Unsupported Node**
-at 3:9 to 3:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -122,7 +117,7 @@ at 3:9 to 3:13
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

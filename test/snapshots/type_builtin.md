@@ -33,8 +33,8 @@ module [
 	MyString,
 ]
 
-MyNumber: U64
-MyString: Str
+MyNumber : U64
+MyString : Str
 ~~~
 # EXPECTED
 NIL
@@ -43,19 +43,13 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

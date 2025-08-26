@@ -54,7 +54,7 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-f: (Str, Str)
+f : (Str, Str)
 -> (((Str, Str))
 f = \x -> x
 
@@ -66,25 +66,13 @@ NIL
 **Parse Error**
 at 2:20 to 2:20
 
-**Unsupported Node**
-at 2:18 to 2:19
-
-**Unsupported Node**
-at 2:20 to 2:20
-
-**Unsupported Node**
-at 3:9 to 3:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "f")
-    (Expr.malformed)
-  )
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -93,5 +81,4 @@ at 3:9 to 3:13
 ~~~
 # TYPES
 ~~~roc
-f : Error
 ~~~

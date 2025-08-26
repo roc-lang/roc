@@ -139,12 +139,12 @@ app
 	],
 }
 
-make_record: (a -> { value: a, tag: Str })
-make_record = \x -> { value: x, tag: "data" }
+make_record : a -> {value : a, tag : Str}
+make_record = \x -> { value : x, tag : "data" }
 
-get_value: ({ value: a, tag: Str } -> a)
+get_value : {value : a, tag : Str} -> a
 get_value = \r -> r.value
-composed: (List(a) -> Str)
+composed : List a -> Str
 composed = \n -> get_value(make_record(n))
 
 answer = composed([42])
@@ -152,51 +152,22 @@ answer = composed([42])
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:15 to 5:41
-
-**Unsupported Node**
-at 6:15 to 6:19
-
-**Unsupported Node**
-at 8:13 to 8:40
-
-**Unsupported Node**
-at 9:13 to 9:17
-
-**Unsupported Node**
-at 11:12 to 11:26
-
-**Unsupported Node**
-at 12:12 to 12:16
-
-**Unsupported Node**
-at 14:19 to 14:23
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "make_record")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "get_value")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "composed")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

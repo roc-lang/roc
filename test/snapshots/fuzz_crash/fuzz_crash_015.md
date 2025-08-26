@@ -45,29 +45,24 @@ u8 | 0
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 2:2 to 2:3
-
-**Pattern in Expression Context**
-at 4:2 to 4:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
+  (Expr.binop_star)
   (Expr.lambda)
-  (Expr.num_literal_i32 0)
-  (Expr.malformed)
-  (Expr.num_literal_i32 0)
-  (Expr.num_literal_i32 0)
+  (Expr.binop_star)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
+  (Expr.binop_star)
   (Expr.lambda)
-  (Expr.num_literal_i32 0)
-  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

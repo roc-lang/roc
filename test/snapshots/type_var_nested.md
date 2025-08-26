@@ -220,34 +220,19 @@ app
 	],
 }
 
-map_result: (Result((a, e)) -> ((a -> b) -> Result((b, e))))
-map_result = \(
-	result,
-	transform
-) -> {
-	when result is {
-		Ok(value)
-		=>
-		Ok(transform(value))
-		Err(error)
-		=>
-		Err(error)
-	} -> }
-
-# Simple identity function with type variable,
-	identity: a,
-	a: a,
-	identity = \x -> x,
-	make_pair: a,
-	b
-} -> { first: a, second: b }
-make_pair = \(
-	x,
-	y
-) -> { first: x, second: y }
-list_length: (List(_a) -> U64)
+map_result : Result (a, e) -> (a -> b) -> Result (b, e)
+map_result = \(result, transform) -> { when result is {
+	Ok(value)
+	=>
+	Ok(transform(value))
+	Err(error)
+	=>
+	Err(error)
+}, identity : a, a : a, identity = \x -> x, make_pair : a, b } -> { first : a, second : b }
+make_pair = \(x, y) -> { first : x, second : y }
+list_length : List _a -> U64
 list_length = \_lst -> 42
-wrap_in_result: (a -> Result((Result((a, Str)), Str)))
+wrap_in_result : a -> Result (Result((a, Str)), Str)
 wrap_in_result = \value -> Ok(Ok(value))
 main = \_ -> "done"
 ~~~
@@ -275,55 +260,22 @@ at 13:14 to 13:14
 **Parse Error**
 at 5:34 to 17:18
 
-**Unsupported Node**
-at 4:14 to 5:1
-
-**Unsupported Node**
-at 5:14 to 5:34
-
-**Unsupported Node**
-at 18:13 to 18:20
-
-**Unsupported Node**
-at 21:15 to 21:30
-
-**Unsupported Node**
-at 22:15 to 22:22
-
-**Unsupported Node**
-at 25:18 to 26:1
-
-**Unsupported Node**
-at 26:18 to 26:26
-
-**Unsupported Node**
-at 28:8 to 28:12
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "map_result")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "list_length")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "wrap_in_result")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

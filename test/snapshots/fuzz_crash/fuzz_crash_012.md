@@ -45,16 +45,10 @@ at 1:17 to 1:17
 **Parse Error**
 at 1:3 to 1:17
 
-**Unsupported Node**
-at 1:3 to 1:3
-
-**Unsupported Node**
-at 1:4 to 1:17
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_ident)
+  (Expr.binop_colon)
 )
 ~~~
 # SOLVED

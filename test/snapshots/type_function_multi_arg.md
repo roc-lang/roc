@@ -90,7 +90,8 @@ app
 	],
 }
 
-curry: ((_a -> (_b -> _c)) -> ((_a -> _b) -> _c))
+curry :
+	(_a -> _b -> _c) -> (_a -> _b) -> _c
 curry = \fn -> \x -> \y -> fn((x, y))
 
 main! = \_ -> {  }
@@ -98,32 +99,18 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:10 to 3:42
-
-**Unsupported Node**
-at 4:9 to 4:14
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "curry")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

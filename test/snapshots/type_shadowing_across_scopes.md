@@ -82,57 +82,32 @@ module [
 	processData,
 ]
 
-Result((a, b)): [Ok(a), Err(b)]
+Result((a, b)) : [Ok(a), Err(b)]
 
-processData: (Str -> Str)
+processData : Str -> Str
 processData = \data -> "processed"
 
 # In a nested module scope, redeclare Result
-InnerModule: {
-	Result: [Success, Failure]
+InnerModule : {
+	Result : [Success, Failure]
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:16 to 3:31
-
-**Unsupported Node**
-at 5:15 to 5:25
-
-**Unsupported Node**
-at 6:15 to 7:5
-
-**Unsupported Node**
-at 11:14 to 11:32
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processData")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.apply_tag)
-        (Expr.malformed)
-      )
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

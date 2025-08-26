@@ -29,22 +29,16 @@ NIL
 **Parse Error**
 at 1:1 to 1:1
 
-**Unsupported Node**
-at 1:2 to 1:2
-
-**Unsupported Node**
-at 1:2 to 1:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_plus)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

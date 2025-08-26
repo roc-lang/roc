@@ -90,11 +90,11 @@ app
 	],
 }
 
-outer: (a -> a)
+outer : a -> a
 outer = \x -> {
-	inner: a
+	inner : a
 	->
-	a: a
+	a : a
 	inner = \y -> y
 	
 
@@ -109,32 +109,17 @@ NIL
 **Parse Error**
 at 7:15 to 7:15
 
-**Unsupported Node**
-at 4:9 to 4:15
-
-**Unsupported Node**
-at 5:9 to 5:13
-
-**Unsupported Node**
-at 13:1 to 13:6
-
-**Unsupported Node**
-at 13:9 to 13:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "outer")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

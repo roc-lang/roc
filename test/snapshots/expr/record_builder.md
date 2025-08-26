@@ -38,8 +38,8 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
 ~~~roc
 {
 	Foo.Bar | .baz,
-	x: 5,
-	y: 0,
+	x : 5,
+	y : 0,
 }
 ~~~
 # EXPECTED
@@ -48,35 +48,15 @@ NIL
 **Parse Error**
 at 1:15 to 1:15
 
-**Unsupported Node**
-at 1:3 to 1:6
-
-**Unsupported Node**
-at 1:6 to 1:9
-
-**Unsupported Node**
-at 1:15 to 1:15
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.lambda)
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 0)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

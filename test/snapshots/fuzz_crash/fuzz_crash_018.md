@@ -27,22 +27,17 @@ Int LowerIdent OpColon UpperIdent Dot UpperIdent ~~~
 # FORMATTED
 ~~~roc
 0
-b: S.R
+b : S.R
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:5 to 1:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.binop_colon
-    (Expr.lookup "b")
-    (Expr.lambda)
-  )
+  (Expr.binop_star)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

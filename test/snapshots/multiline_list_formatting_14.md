@@ -28,29 +28,21 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-[	# Open
-	1,	# First
-	# A comment in the middle
-	2,	# Second
-	# This comment has no blanks around it
-	3# Third
-]
+[1, 2, 3]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 8:4
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_or)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_or :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-Error
+[True, False]_others
 ~~~

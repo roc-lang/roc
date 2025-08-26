@@ -113,22 +113,22 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 # FORMATTED
 ~~~roc
 {
-	someTag: Some(42),
-	noneTag: None,
-	okTag: Ok("hello"),
-	errTag: Err("oops"),
-	addOne: \
+	someTag : Some 42,
+	noneTag : None,
+	okTag : Ok "hello",
+	errTag : Err "oops",
+	addOne : \
 		x,
 	 -> ((
 		(
 			(
 				x + 1,
 				result,
-			): addOne(5),
+			) : addOne(5),
 			nested,
-		): Some(Ok(Just(42))),
+		) : Some Ok Just 42,
 		tagList,
-	): [Some(1), Some(2), None, Some(3)]),
+	) : [Some(1), Some(2), None, Some(3)]),
 }
 ~~~
 # EXPECTED
@@ -140,39 +140,15 @@ at 10:1 to 10:1
 **Parse Error**
 at 1:1 to 10:2
 
-**Unsupported Node**
-at 6:13 to 6:17
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "someTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "noneTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "okTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "errTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "addOne")
-    (Expr.malformed)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

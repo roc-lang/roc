@@ -49,29 +49,18 @@ at 1:13 to 1:13
 **Parse Error**
 at 1:14 to 1:14
 
-**Pattern in Expression Context**
-at 1:10 to 1:11
-
-**Unsupported Node**
-at 1:13 to 1:13
-
-**Unsupported Node**
-at 1:14 to 1:14
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.record_literal
-    (Expr.malformed)
-  )
-  (Expr.num_literal_i32 0)
+  (Expr.binop_double_slash)
+  (Expr.binop_star)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

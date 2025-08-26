@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_big)
+(Expr.binop_gt)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag num_literal_big :type "Num(_a)")
+(expr :tag binop_gt :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-Num(_a)
+[True, False]_others
 ~~~

@@ -28,7 +28,7 @@ module [
 	nums,
 ]
 
-nums: List
+nums : List
 U8
 ~~~
 # EXPECTED
@@ -38,16 +38,13 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "nums")
-    (Expr.apply_tag)
-  )
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.str_literal_small)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

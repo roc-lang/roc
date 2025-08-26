@@ -61,31 +61,23 @@ module [
 	stringify,
 ]
 
-stringify: ((a -> Str where module(a) | .to_str: a) -> Str)
+stringify : a -> Str where module(a) | .to_str : a -> Str
 stringify = \value -> value.to_str()
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:13 to 3:55
-
-**Unsupported Node**
-at 4:13 to 4:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "stringify")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

@@ -46,32 +46,24 @@ module [
 
 MyType := [TagA, TagB]
 
-value: MyType
+value : MyType
 value = MyType.TagA
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:23
-
-**Unsupported Node**
-at 6:9 to 6:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "value")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

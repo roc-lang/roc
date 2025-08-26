@@ -51,8 +51,8 @@ hosted [
 	b!,
 ]
 
-a!: (Str => Str)
-b!: (Str => Str)
+a! : Str => Str
+b! : Str => Str
 ~~~
 # EXPECTED
 NIL
@@ -60,27 +60,12 @@ NIL
 **Expected Exposes**
 at 1:1 to 1:8
 
-**Unsupported Node**
-at 1:8 to 4:1
-
-**Unsupported Node**
-at 6:6 to 6:16
-
-**Unsupported Node**
-at 7:6 to 7:16
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_or)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

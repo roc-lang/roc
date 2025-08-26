@@ -44,18 +44,15 @@ at 1:47 to 1:47
 **Parse Error**
 at 1:52 to 1:52
 
-**Unsupported Node**
-at 1:2 to 1:10
-
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

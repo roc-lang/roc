@@ -25,7 +25,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ name : "Alice", age : 30 }
 ~~~
 # EXPECTED
 NIL
@@ -33,22 +33,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 30)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

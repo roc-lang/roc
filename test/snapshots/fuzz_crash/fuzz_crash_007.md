@@ -33,12 +33,12 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.frac_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg, _arg2 -> _ret")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

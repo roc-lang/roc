@@ -41,14 +41,12 @@ LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpCo
 ~~~
 # FORMATTED
 ~~~roc
-process_things: ({ name: Str, age: U32, thing: a } -> ((a -> Str) -> Str))
+process_things : {name : Str, age : U32, thing : a} -> (a -> Str) -> Str
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:72
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

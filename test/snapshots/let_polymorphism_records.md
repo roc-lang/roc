@@ -237,7 +237,7 @@ my_empty_list = []
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
-make_container = \value -> { data: value, count: 1 }
+make_container = \value -> { data : value, count : 1 }
 
 # Used with different types
 int_container = make_container(num)
@@ -245,18 +245,15 @@ str_container = make_container(str)
 list_container = make_container(my_empty_list)
 
 # Polymorphic record update
-update_data = \(
-	container,
-	new_value
-) -> {
-	container: container
+update_data = \(container, new_value) -> {
+	container : container
 	&
-	data: new_value
+	data : new_value
 }
 updated_int = update_data((int_container, 100))
 updated_str = update_data((str_container, "world"))
 identity_record = \x -> {
-	value: x
+	value : x
 }
 int_record = identity_record(42)
 str_record = identity_record("test")
@@ -270,27 +267,6 @@ NIL
 # PROBLEMS
 **Parse Error**
 at 19:50 to 19:50
-
-**Unsupported Node**
-at 7:17 to 7:18
-
-**Unsupported Node**
-at 8:20 to 8:31
-
-**Unsupported Node**
-at 11:18 to 11:26
-
-**Unsupported Node**
-at 19:15 to 19:38
-
-**Unsupported Node**
-at 26:19 to 26:23
-
-**Unsupported Node**
-at 31:31 to 31:40
-
-**Unsupported Node**
-at 33:8 to 33:12
 
 # CANONICALIZE
 ~~~clojure
@@ -316,7 +292,7 @@ at 33:8 to 33:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

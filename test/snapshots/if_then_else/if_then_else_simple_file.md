@@ -31,7 +31,9 @@ module [
 	foo,
 ]
 
-foo = if 1 A else 
+foo = if 1
+	A
+else 
 
 {
 	"hello"
@@ -51,7 +53,7 @@ at 3:7 to 3:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

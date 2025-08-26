@@ -42,14 +42,12 @@ LowerIdent OpBang OpColon UpperIdent Comma UpperIdent OpFatArrow OpenCurly Lower
 ~~~
 # FORMATTED
 ~~~roc
-create_user!: (Str => (U32 => { name: Str, age: U32, id: U64, active: Bool }))
+create_user! : Str => (U32 => { name : Str, age : U32, id : U64, active : Bool })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:77
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

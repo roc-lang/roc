@@ -38,7 +38,7 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang Op
 # FORMATTED
 ~~~roc
 platform "foo" # Ce requires (
-	n!: List(Str) => {  },
+	n! : List Str => {  },
 ) exposes  [
 	.
 		] # Cse
@@ -85,26 +85,17 @@ at 12:17 to 12:17
 **Parse Error**
 at 13:2 to 13:2
 
-**Unsupported Node**
-at 12:17 to 12:17
-
-**Unsupported Node**
-at 13:2 to 13:2
-
-**Unsupported Node**
-at 14:3 to 16:3
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_or)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

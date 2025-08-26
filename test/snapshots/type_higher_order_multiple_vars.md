@@ -86,42 +86,26 @@ app
 	],
 }
 
-compose: (((_b -> _c) -> (_a -> _b)) -> (_a -> _c))
-compose = \(
-	f,
-	g
-) -> \x -> f(g(x))
+compose :
+	((_b -> _c) -> _a -> _b) -> _a -> _c
+compose = \(f, g) -> \x -> f(g(x))
 main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:12 to 3:48
-
-**Unsupported Node**
-at 4:11 to 4:18
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "compose")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -70,42 +70,26 @@ app
 	],
 }
 
-apply: (((_a -> _b) -> _a) -> _b)
-apply = \(
-	fn,
-	x
-) -> fn(x)
+apply :
+	((_a -> _b) -> _a) -> _b
+apply = \(fn, x) -> fn(x)
 main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:10 to 3:31
-
-**Unsupported Node**
-at 4:9 to 4:17
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "apply")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

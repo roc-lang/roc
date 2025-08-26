@@ -39,12 +39,12 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.lambda)
-  (Expr.num_literal_i32 0)
-  (Expr.lookup "bu22")
-  (Expr.num_literal_i32 0)
-  (Expr.lookup "u22")
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
+  (Expr.binop_star)
+  (Expr.str_literal_big)
+  (Expr.binop_star)
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED

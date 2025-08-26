@@ -40,24 +40,18 @@ NIL
 **Parse Error**
 at 4:10 to 4:10
 
-**Unsupported Node**
-at 1:6 to 1:7
-
-**Unsupported Node**
-at 4:10 to 4:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "mule")
-  (Expr.malformed)
-  (Expr.lookup "vavar")
+  (Expr.str_literal_big)
+  (Expr.binop_or)
+  (Expr.str_literal_big)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

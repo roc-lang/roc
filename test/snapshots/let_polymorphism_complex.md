@@ -651,69 +651,58 @@ nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
 
 # Polymorphic record with empty list
-poly_record = { items: empty_list, count: 0 }
-use_poly_record1 = { items: [1, 2, 3], count: 0 }
-use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+poly_record = { items : empty_list, count : 0 }
+use_poly_record1 = { items : [1, 2, 3], count : 0 }
+use_poly_record2 = { items : ["x", "y", "z"], count : 0 }
 
 # Complex nested structure with multiple polymorphic uses
 base_config = {
-	data: empty_list,
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str,
-	},
+	data : empty_list,
+	metadata :
+		{
+			version : num,
+			ratio : frac,
+			description : str,
+		},
 }
 
 # Different instantiations of base_config
 config1 = {
-	data: [
-		1,
-		2,
-		3,
-		4,
-		5
-	],
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str,
-	},
-	name: "integers",
+	data : [1, 2, 3, 4, 5],
+	metadata :
+		{
+			version : num,
+			ratio : frac,
+			description : str,
+		},
+	name : "integers",
 }
 
-config2 = {	# Test comment 1
-	data: ["apple", "banana", "cherry"],	# Test comment 2
-	metadata: {		# Test comment 3
-		version: num,		# Test comment 4
-		ratio: frac,		# Test comment 5
-		description: str	# Test comment 6
-	},	# Test comment 7
-	name: "fruits"# Test comment 8
-} # Test comment 9
+config2 = { data : ["apple", "banana", "cherry"], metadata : {version : num, ratio : frac, description : str}, name : "fruits" } # Test comment 9
 
 # Polymorphic function-like structures
-make_container = \val -> { value: val, wrapper: [val] }
+make_container = \val -> { value : val, wrapper : [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
 
 # Deeply nested polymorphism
 deep = {
-	level1: {
-		level2: {
-			level3: {
-				data: empty_list,
-				value: num,
+	level1 :
+		{
+			level2 : {
+				level3 : {
+					data : empty_list,
+					value : num,
+				},
+				items : [num, num * 2, num * 3],
 			},
-			items: [num, num * 2, num * 3],
+			collection : empty_list,
 		},
-		collection: empty_list,
-	},
-	results: [
-		{ data: [1], tag: "single" },
-		{ data: [1, 2], tag: "ints" },
-		{ data: [1, 2, 3], tag: "more" },
+	results : [
+		{ data : [1], tag : "single" },
+		{ data : [1, 2], tag : "ints" },
+		{ data : [1, 2, 3], tag : "more" },
 	],
 }
 
@@ -721,24 +710,26 @@ deep = {
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
-compute4 = { base: num, derived: [num, num + 1, num + 2] }
+compute4 = { base : num, derived : [num, num + 1, num + 2] }
 
 # Mixed polymorphic structures
 mixed = {
-	numbers: { value: num, list: [num, num], float: frac },
-	strings: { value: str, list: [str, str] },
-	empty_lists: {
-		raw: empty_list,
-		in_list: [empty_list],
-		in_record: {
-			data: empty_list
+	numbers : {value : num, list : [num, num], float : frac},
+	strings : {value : str, list : [str, str]},
+	empty_lists :
+		{
+			raw : empty_list,
+			in_list : [empty_list],
+			in_record : {
+				data : empty_list
+			},
 		},
-	},
-	computations: {
-		from_num: num * 100,
-		from_frac: frac * 10.0,
-		list_from_num: [num, num, num],
-	},
+	computations :
+		{
+			from_num : num * 100,
+			from_frac : frac * 10.0,
+			list_from_num : [num, num, num],
+		},
 }
 
 main = \_ -> {
@@ -748,66 +739,7 @@ main = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 10:14 to 10:15
-
-**Unsupported Node**
-at 14:12 to 14:21
-
-**Unsupported Node**
-at 15:12 to 15:27
-
-**Unsupported Node**
-at 16:13 to 16:26
-
-**Unsupported Node**
-at 19:16 to 19:52
-
-**Unsupported Node**
-at 20:16 to 20:56
-
-**Unsupported Node**
-at 24:29 to 24:38
-
-**Unsupported Node**
-at 25:29 to 25:44
-
-**Unsupported Node**
-at 39:11 to 39:26
-
-**Unsupported Node**
-at 49:11 to 49:40
-
-**Unsupported Node**
-at 59:18 to 59:24
-
-**Unsupported Node**
-at 72:20 to 72:43
-
-**Unsupported Node**
-at 76:14 to 79:41
-
-**Unsupported Node**
-at 86:12 to 86:22
-
-**Unsupported Node**
-at 87:34 to 87:57
-
-**Unsupported Node**
-at 91:34 to 91:44
-
-**Unsupported Node**
-at 92:34 to 92:44
-
-**Unsupported Node**
-at 95:18 to 95:30
-
-**Unsupported Node**
-at 101:24 to 101:39
-
-**Unsupported Node**
-at 105:8 to 105:12
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -843,7 +775,7 @@ at 105:8 to 105:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

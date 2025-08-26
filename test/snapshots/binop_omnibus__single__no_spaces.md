@@ -60,51 +60,16 @@ UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan In
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_or
-  (Expr.binop_or
-    (Expr.binop_gt
-      (Expr.malformed)
-      (Expr.binop_star
-        (Expr.num_literal_i32 5)
-        (Expr.num_literal_i32 5)
-      )
-    )
-    (Expr.binop_and
-      (Expr.binop_lt
-        (Expr.binop_plus
-          (Expr.num_literal_i32 13)
-          (Expr.num_literal_i32 2)
-        )
-        (Expr.num_literal_i32 5)
-      )
-      (Expr.binop_gte
-        (Expr.binop_minus
-          (Expr.num_literal_i32 10)
-          (Expr.num_literal_i32 1)
-        )
-        (Expr.num_literal_i32 16)
-      )
-    )
-  )
-  (Expr.binop_lte
-    (Expr.num_literal_i32 12)
-    (Expr.binop_slash
-      (Expr.num_literal_i32 3)
-      (Expr.num_literal_i32 5)
-    )
-  )
-)
+(Expr.int_literal_i32)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_or :type "[True, False]_others")
+(expr :tag int_literal_i32 :type "I32")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+I32
 ~~~

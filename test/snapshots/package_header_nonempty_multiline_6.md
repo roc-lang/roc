@@ -30,10 +30,7 @@ package [
 	something,
 	# Comment after exposed item
 	SomeType,
-] packages {somePkg, ((
-	"../main.roc",
-	other
-): "../../other/main.roc")}
+] packages {somePkg, (("../main.roc", other) : "../../other/main.roc")}
 
 ~~~
 # EXPECTED

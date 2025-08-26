@@ -53,7 +53,7 @@ NIL
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "result")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED
@@ -62,7 +62,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-str : Str
-result : _a
 ~~~

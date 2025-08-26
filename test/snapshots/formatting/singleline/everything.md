@@ -302,26 +302,14 @@ I22
 asIas2]
 
 # Where constraint
-A(a): ((
-	(a where module(a) | .a1: (a, a)) -> Str,
-	module(a) | .a2
-): (a, a) -> Str)
-B(b): ((
-	(b where module(b) | .b1: (b, b)) -> Str,
-	module(b) | .b2
-): (b, b) -> Str)
-C((a, b)): (a, b)
-D((a, b)): C((a, b))
-E: { a: Str, b: Str }
-F: [A, B]
-g: (
-	e -> e where module(e) | A,
-	module(e) | B
-)h = \(
-	x,
-	y
-) -> {
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
+A(a) : ((a where module(a) | .a1 : (a, a)) -> Str, module(a) | .a2) : (a, a) -> Str
+B(b) : ((b where module(b) | .b1 : (b, b)) -> Str, module(b) | .b2) : (b, b) -> Str
+C((a, b)) : (a, b)
+D((a, b)) : C (a, b)
+E : {a : Str, b : Str}
+F : [A, B]
+g : (e -> e where module(e) | A, module(e) | B)h = \(x, y) -> {
+	h1 = { h11 : x, h12 : x, h13 : {h131 : x, h132 : y} }
 	h2 = h((x, y))
 	h3 = A((x, y))
 	h4 = [x, y]
@@ -329,17 +317,17 @@ g: (
 	when x is {
 		Z1((a, b))
 		=>
-		a: a
+		a : a
 		Z2((a, b))
 		=>
-		a: a
-		Z3({ a: a, b: b })
+		a : a
+		Z3({ a : a, b : b })
 		=>
-		a: a
+		a : a
 		Z4([a, b])
 		=>
-		a: a
-	} -> 
+		a : a
+	}
 }
 ~~~
 # EXPECTED
@@ -381,97 +369,31 @@ at 31:1 to 31:1
 **Parse Error**
 at 18:12 to 31:2
 
-**Unsupported Node**
-at 4:1 to 4:29
-
-**Unsupported Node**
-at 5:1 to 5:24
-
-**Unsupported Node**
-at 5:25 to 5:25
-
-**Unsupported Node**
-at 5:32 to 5:32
-
-**Unsupported Node**
-at 5:38 to 5:38
-
-**Unsupported Node**
-at 5:45 to 5:45
-
-**Unsupported Node**
-at 8:59 to 8:74
-
-**Unsupported Node**
-at 9:59 to 9:74
-
-**Unsupported Node**
-at 11:16 to 11:17
-
-**Unsupported Node**
-at 14:5 to 14:11
-
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 18:5 to 18:12
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "b")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

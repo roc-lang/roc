@@ -151,74 +151,40 @@ module [
 	applyTwice,
 ]
 
-makeAdder: (a -> (a -> a))
+makeAdder : a -> a -> a
 makeAdder = \x -> \y -> x + y
 
 # Should constrain the literal 5 to I64
-curriedAdd: (I64 -> I64)
+curriedAdd : I64 -> I64
 curriedAdd = makeAdder(5)
 
 # Higher-order function that applies a function twice
-applyTwice: ((a -> a) -> (a -> a))
-applyTwice = \(
-	f,
-	x
-) -> f(f(x))
-addThreeTwice: (I64 -> I64)
+applyTwice :
+	(a -> a) -> a -> a
+applyTwice = \(f, x) -> f(f(x))
+addThreeTwice : I64 -> I64
 addThreeTwice = \n -> applyTwice(\x -> (x + 3, n))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:13 to 4:25
-
-**Unsupported Node**
-at 5:13 to 5:17
-
-**Unsupported Node**
-at 8:14 to 8:24
-
-**Unsupported Node**
-at 12:15 to 12:30
-
-**Unsupported Node**
-at 13:14 to 13:21
-
-**Unsupported Node**
-at 16:17 to 16:27
-
-**Unsupported Node**
-at 17:17 to 17:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "makeAdder")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "curriedAdd")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "applyTwice")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "addThreeTwice")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

@@ -65,13 +65,13 @@ module [
 import Color
 *
 
-red: Color
+red : Color
 red = Red
 
-blue: Color
+blue : Color
 blue = Blue
 
-green: Color
+green : Color
 green = Green
 ~~~
 # EXPECTED
@@ -80,37 +80,22 @@ NIL
 **Parse Error**
 at 3:14 to 3:14
 
-**Unsupported Node**
-at 3:1 to 3:13
-
-**Unsupported Node**
-at 3:14 to 3:14
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "red")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "blue")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "green")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

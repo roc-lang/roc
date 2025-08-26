@@ -47,26 +47,17 @@ at 1:3 to 4:1
 **Parse Error**
 at 6:5 to 6:5
 
-**Unsupported Node**
-at 2:6 to 2:6
-
-**Unsupported Node**
-at 6:5 to 6:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "f")
-  (Expr.record_literal
-    (Expr.lookup "o")
-    (Expr.malformed)
-  )
+  (Expr.str_literal_big)
+  (Expr.binop_double_slash)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -458,8 +458,8 @@ const Formatter = struct {
             .binop_equals => try self.formatBinOp(node_idx, " = "),
             .binop_double_equals => try self.formatBinOp(node_idx, " == "),
             .binop_not_equals => try self.formatBinOp(node_idx, " != "),
-            .binop_colon => try self.formatBinOp(node_idx, ": "),
-            .binop_colon_equals => try self.formatBinOp(node_idx, " := "),
+            .binop_colon => try self.formatTypeAnnotation(node_idx),
+            .binop_colon_equals => try self.formatNominalTypeDefinition(node_idx),
             .binop_dot => try self.formatBinOp(node_idx, "."),
             .binop_plus => try self.formatBinOp(node_idx, " + "),
             .binop_minus => try self.formatBinOp(node_idx, " - "),
@@ -476,7 +476,7 @@ const Formatter = struct {
             .binop_and => try self.formatBinOp(node_idx, " && "),
             .binop_or => try self.formatBinOp(node_idx, " || "),
             .binop_as => try self.formatBinOp(node_idx, " as "),
-            .binop_where => try self.formatBinOp(node_idx, " where "),
+            .binop_where => try self.formatWhereClause(node_idx),
             .binop_platform => try self.formatBinOp(node_idx, " platform "),
             .binop_pipe => try self.formatBinOp(node_idx, " | "),
 
@@ -892,6 +892,247 @@ const Formatter = struct {
         }
     }
 
+    fn formatTypeAnnotation(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the left side (identifier or pattern)
+        try self.formatNode(lhs);
+
+        // Check if this is a complex type that should be multiline
+        const rhs_node = self.getNode(rhs);
+        const is_complex_type = switch (rhs_node.tag) {
+            // Function types with multiple arrows
+            .binop_thin_arrow => blk: {
+                const arrow_binop = self.ast.node_slices.binOp(rhs_node.payload.binop);
+                const arrow_lhs_node = self.getNode(arrow_binop.lhs);
+                // Check if the function has multiple parameters (tuple) or nested arrows
+                break :blk arrow_lhs_node.tag == .tuple_literal or arrow_lhs_node.tag == .binop_thin_arrow;
+            },
+            // Record types with many fields
+            .record_literal => self.collectionIsMultiline(rhs),
+            // Type applications with multiple parameters
+            .apply_uc => blk: {
+                var count: usize = 0;
+                var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
+                while (it.next()) |_| count += 1;
+                break :blk count > 2;
+            },
+            else => false,
+        };
+
+        if (is_complex_type) {
+            try self.pushAll(" :");
+            try self.ensureNewline();
+            self.curr_indent += 1;
+            try self.pushIndent();
+            try self.formatTypeExpression(rhs);
+            self.curr_indent -= 1;
+        } else {
+            try self.pushAll(" : ");
+            try self.formatTypeExpression(rhs);
+        }
+    }
+
+    fn formatNominalTypeDefinition(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the left side (type name with parameters)
+        try self.formatNode(lhs);
+
+        try self.pushAll(" := ");
+
+        // Format the implementation type
+        try self.formatTypeExpression(rhs);
+    }
+
+    fn formatTypeExpression(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            .binop_thin_arrow => {
+                // Function type: format with proper precedence and spacing
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+                // Check if LHS needs parentheses (another function type)
+                const lhs_node = self.getNode(binop.lhs);
+                const needs_parens = lhs_node.tag == .binop_thin_arrow;
+
+                if (needs_parens) try self.push('(');
+                try self.formatTypeExpression(binop.lhs);
+                if (needs_parens) try self.push(')');
+
+                try self.pushAll(" -> ");
+                try self.formatTypeExpression(binop.rhs);
+            },
+            .record_literal => {
+                // Record type: { field1 : Type1, field2 : Type2 }
+                try self.formatRecordType(node_idx);
+            },
+            .apply_uc => {
+                // Type application: List a, Dict k v
+                try self.formatTypeApplication(node_idx);
+            },
+            else => {
+                // Default: format as normal node
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
+    fn formatRecordType(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.push('{');
+
+        if (multiline) {
+            self.curr_indent += 1;
+        }
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first_field = true;
+
+        while (it.next()) |field| {
+            if (multiline) {
+                if (!first_field) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_field) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_field = false;
+
+            // Fields are binop_colon nodes
+            const field_node = self.getNode(field);
+            if (field_node.tag == .binop_colon) {
+                const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(field_binop.lhs);
+                try self.pushAll(" : ");
+                try self.formatTypeExpression(field_binop.rhs);
+            } else {
+                try self.formatNode(field);
+            }
+        }
+
+        if (multiline) {
+            // Check for trailing comma
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+            }
+            self.curr_indent -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.push('}');
+    }
+
+    fn formatTypeApplication(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Type applications store the constructor and arguments
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+
+        while (it.next()) |elem| {
+            if (!first) {
+                try self.push(' ');
+            }
+            first = false;
+
+            // Check if argument needs parentheses (e.g., function types as arguments)
+            const elem_node = self.getNode(elem);
+            const needs_parens = elem_node.tag == .binop_thin_arrow;
+
+            if (needs_parens) try self.push('(');
+            try self.formatTypeExpression(elem);
+            if (needs_parens) try self.push(')');
+        }
+    }
+
+    fn formatWhereClause(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the main type expression
+        try self.formatTypeExpression(lhs);
+
+        // Check if constraints should be multiline
+        const rhs_node = self.getNode(rhs);
+        const multiline = switch (rhs_node.tag) {
+            // Multiple constraints (comma-separated)
+            .record_literal, .block => self.collectionIsMultiline(rhs),
+            // Chained where clauses
+            .binop_where => true,
+            else => false,
+        };
+
+        if (multiline) {
+            try self.pushAll(" where");
+            try self.ensureNewline();
+            self.curr_indent += 1;
+            try self.pushIndent();
+            try self.formatWhereConstraints(rhs);
+            self.curr_indent -= 1;
+        } else {
+            try self.pushAll(" where ");
+            try self.formatWhereConstraints(rhs);
+        }
+    }
+
+    fn formatWhereConstraints(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            .record_literal, .block => {
+                // Multiple constraints
+                var it = self.ast.node_slices.nodes(&node.payload.nodes);
+                var first = true;
+
+                while (it.next()) |constraint| {
+                    if (!first) {
+                        try self.push(',');
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    }
+                    first = false;
+                    try self.formatNode(constraint);
+                }
+            },
+            .binop_where => {
+                // Nested where clause - format recursively
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                try self.formatWhereConstraints(binop.lhs);
+                try self.push(',');
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.formatWhereConstraints(binop.rhs);
+            },
+            else => {
+                // Single constraint
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
     fn formatQualifiedIdent(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
@@ -1157,8 +1398,21 @@ const Formatter = struct {
     fn formatRecord(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
+        // Special case: single-field record with just identifier and comma e.g. { foo, }
+        var field_count: usize = 0;
+        var is_single_ident_with_comma = false;
+        var temp_it = self.ast.node_slices.nodes(&node.payload.nodes);
+        while (temp_it.next()) |field| {
+            field_count += 1;
+            if (field_count == 1) {
+                const field_node = self.getNode(field);
+                // Check if it's just an identifier (not field:value)
+                is_single_ident_with_comma = (field_node.tag == .lc or field_node.tag == .var_lc) and self.hasTrailingComma(node_idx);
+            }
+        }
+
         // Check if this record should be multiline
-        const multiline = self.collectionIsMultiline(node_idx);
+        const multiline = if (is_single_ident_with_comma and field_count == 1) false else self.collectionIsMultiline(node_idx);
 
         if (multiline) {
             try self.push('{');
@@ -1392,8 +1646,18 @@ const Formatter = struct {
 
         if (condition == null or then_branch == null) return; // Malformed
 
-        // Check if multiline formatting is needed
-        const multiline = self.shouldIfElseBeMultiline(node_idx, condition.?, then_branch.?, else_branch);
+        // Check if any part is a block (blocks force multiline)
+        var has_block = false;
+        if (then_branch) |tb| {
+            const tb_node = self.getNode(tb);
+            if (tb_node.tag == .block) has_block = true;
+        }
+        if (else_branch) |eb| {
+            const eb_node = self.getNode(eb);
+            if (eb_node.tag == .block) has_block = true;
+        }
+
+        const multiline = has_block;
 
         try self.pushAll("if ");
         try self.formatNode(condition.?);
@@ -1409,19 +1673,22 @@ const Formatter = struct {
             if (else_branch) |eb| {
                 try self.ensureNewline();
                 try self.pushIndent();
+                try self.pushAll("else");
 
                 // Check for else-if chain
                 const eb_node = self.getNode(eb);
                 if (eb_node.tag == .if_else) {
-                    try self.pushAll("else ");
+                    try self.pushAll(" ");
+                    // Format the if-else directly inline (it will handle its own formatting)
                     try self.formatIfElse(eb);
-                } else {
-                    try self.pushAll("else");
-                    try self.ensureNewline();
-                    self.curr_indent += 1;
-                    try self.pushIndent();
+                } else if (eb_node.tag == .block) {
+                    // Blocks handle their own formatting
+                    try self.pushAll(" ");
                     try self.formatNode(eb);
-                    self.curr_indent -= 1;
+                } else {
+                    // Non-block else branch stays on same line as "else"
+                    try self.pushAll(" ");
+                    try self.formatNode(eb);
                 }
             }
         } else {
@@ -1436,41 +1703,7 @@ const Formatter = struct {
         }
     }
 
-    fn shouldIfElseBeMultiline(self: *Formatter, _: Node.Idx, condition: Node.Idx, then_branch: Node.Idx, else_branch: ?Node.Idx) bool {
-        // Check if condition is complex
-        if (self.nodeWillBeMultiline(condition)) return true;
-
-        // Check if then branch is complex
-        if (self.nodeWillBeMultiline(then_branch)) return true;
-
-        // Check if else branch exists and is complex
-        if (else_branch) |eb| {
-            if (self.nodeWillBeMultiline(eb)) return true;
-        }
-
-        // Check for comments between parts
-        const cond_end = self.findNodeEnd(condition);
-        const then_node = self.getNode(then_branch);
-        const then_start = then_node.start.offset;
-        if (cond_end < then_start) {
-            const between = self.source[cond_end..then_start];
-            for (between) |c| {
-                if (c == '\n' or c == '#') return true;
-            }
-        }
-
-        // Check estimated total length
-        const cond_node = self.getNode(condition);
-        const estimated_len = 20 + (cond_end - cond_node.start.offset) +
-            (self.findNodeEnd(then_branch) - then_start);
-        if (else_branch) |eb| {
-            const eb_node = self.getNode(eb);
-            const estimated_else = 6 + (self.findNodeEnd(eb) - eb_node.start.offset);
-            if (estimated_len + estimated_else > 80) return true;
-        }
-
-        return estimated_len > 80;
-    }
+    // Removed shouldIfElseBeMultiline - if-else is always multiline now
 
     fn formatMatch(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
@@ -1485,6 +1718,19 @@ const Formatter = struct {
         // First node is the scrutinee
         if (it.next()) |scrutinee| {
             try self.formatNode(scrutinee);
+        }
+
+        // Check if the next node is a block (malformed match syntax)
+        var peek_it = it;
+        if (peek_it.next()) |next_idx| {
+            const next_node = self.getNode(next_idx);
+            if (next_node.tag == .block) {
+                // Malformed match - has block instead of proper branches
+                // Just format it as best we can
+                try self.pushAll(" is ");
+                try self.formatNode(next_idx);
+                return;
+            }
         }
 
         try self.pushAll(" is");
@@ -1523,10 +1769,10 @@ const Formatter = struct {
                 // This is a pattern alternative like Ok(x) | Err(x)
                 try self.formatPatternWithAlternatives(pattern_idx);
             } else {
-                try self.formatNode(pattern_idx);
+                try self.formatPattern(pattern_idx);
             }
 
-            try self.pushAll(" -> ");
+            try self.pushAll(" => ");
 
             // Format body
             if (it.next()) |body_idx| {
@@ -1565,8 +1811,8 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         if (node.tag != .binop_pipe) {
-            // Not a pattern alternative, format normally
-            try self.formatNode(node_idx);
+            // Not a pattern alternative, format as pattern
+            try self.formatPattern(node_idx);
             return;
         }
 
@@ -1578,11 +1824,219 @@ const Formatter = struct {
         if (lhs_node.tag == .binop_pipe) {
             try self.formatPatternWithAlternatives(binop.lhs);
         } else {
-            try self.formatNode(binop.lhs);
+            try self.formatPattern(binop.lhs);
         }
 
         try self.pushAll(" | ");
-        try self.formatNode(binop.rhs);
+        try self.formatPattern(binop.rhs);
+    }
+
+    fn formatPattern(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            // Literal patterns
+            .num_literal_i32, .num_literal_big, .int_literal_i32, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big => {
+                try self.formatNode(node_idx);
+            },
+
+            // Identifier patterns
+            .lc => {
+                try self.formatIdent(node_idx);
+            },
+            .underscore => {
+                try self.pushAll("_");
+            },
+
+            // Constructor patterns
+            .apply_uc => {
+                try self.formatConstructorPattern(node_idx);
+            },
+            .uc => {
+                // Bare constructor
+                try self.formatIdent(node_idx);
+            },
+
+            // Collection patterns
+            .list_literal => {
+                try self.formatListPattern(node_idx);
+            },
+            .record_literal => {
+                try self.formatRecordPattern(node_idx);
+            },
+            .tuple_literal => {
+                try self.formatTuplePattern(node_idx);
+            },
+
+            // As-patterns (e.g., pattern as name)
+            .binop_as => {
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                try self.formatPattern(binop.lhs);
+                try self.pushAll(" as ");
+                try self.formatIdent(binop.rhs);
+            },
+
+            // Guard patterns (pattern if condition)
+            .if_without_else => {
+                const nodes_idx = node.payload.nodes;
+                var it = self.ast.node_slices.nodes(&nodes_idx);
+
+                // First node is the pattern
+                if (it.next()) |pattern| {
+                    try self.formatPattern(pattern);
+                }
+
+                try self.pushAll(" if ");
+
+                // Second node is the guard condition
+                if (it.next()) |guard| {
+                    try self.formatNode(guard);
+                }
+            },
+
+            else => {
+                // Default: format as normal node
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
+    fn formatConstructorPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        // First node is the constructor
+        if (it.next()) |constructor| {
+            try self.formatNode(constructor);
+        }
+
+        // Check if there are arguments
+        var has_args = false;
+
+        // Collect arguments
+        var first_arg = true;
+        while (it.next()) |arg| {
+            if (first_arg) {
+                try self.push('(');
+                has_args = true;
+            } else {
+                try self.pushAll(", ");
+            }
+            first_arg = false;
+            try self.formatPattern(arg);
+        }
+
+        if (has_args) {
+            try self.push(')');
+        }
+    }
+
+    fn formatListPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.push('[');
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+        var has_rest = false;
+
+        while (it.next()) |elem| {
+            if (!first) {
+                try self.pushAll(", ");
+            }
+            first = false;
+
+            const elem_node = self.getNode(elem);
+            if (elem_node.tag == .double_dot_lc or elem_node.tag == .unary_double_dot) {
+                // Rest pattern: ..rest or ..
+                has_rest = true;
+                if (elem_node.tag == .double_dot_lc) {
+                    try self.pushAll("..");
+                    try self.formatIdent(elem);
+                } else {
+                    try self.pushAll("..");
+                }
+            } else {
+                try self.formatPattern(elem);
+            }
+        }
+
+        try self.push(']');
+    }
+
+    fn formatRecordPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.push('{');
+
+        if (multiline) {
+            self.curr_indent += 1;
+        }
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+
+        while (it.next()) |field| {
+            if (multiline) {
+                if (!first) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first) {
+                    try self.pushAll(", ");
+                }
+            }
+            first = false;
+
+            const field_node = self.getNode(field);
+            if (field_node.tag == .binop_colon) {
+                // Field with explicit pattern: field: pattern
+                const binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(binop.lhs);
+                try self.pushAll(": ");
+                try self.formatPattern(binop.rhs);
+            } else if (field_node.tag == .double_dot_lc) {
+                // Rest fields: ..rest
+                try self.pushAll("..");
+                try self.formatIdent(field);
+            } else {
+                // Punned field: just the field name
+                try self.formatNode(field);
+            }
+        }
+
+        if (multiline) {
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+            }
+            self.curr_indent -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.push('}');
+    }
+
+    fn formatTuplePattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.push('(');
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+
+        while (it.next()) |elem| {
+            if (!first) {
+                try self.pushAll(", ");
+            }
+            first = false;
+            try self.formatPattern(elem);
+        }
+
+        try self.push(')');
     }
 
     fn formatLambdaNoArgs(self: *Formatter, node_idx: Node.Idx) !void {
@@ -2199,105 +2653,20 @@ const Formatter = struct {
     fn nodeWillBeMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
         const node = self.getNode(node_idx);
 
-        // Only dot-access with whitespace before the dot should be multiline
-        if (node.tag == .binop_dot) {
-            const binop = self.ast.node_slices.binOp(node.payload.binop);
-            const lhs_end = self.findNodeEnd(binop.lhs);
-            const rhs_node = self.getNode(binop.rhs);
-            const rhs_start = rhs_node.start.offset;
-
-            // Check if there's whitespace before the dot
-            if (lhs_end < rhs_start and rhs_start < self.source.len) {
-                const between = self.source[lhs_end..rhs_start];
-                for (between) |c| {
-                    if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
-                        return true; // Found whitespace before dot
-                    } else if (c == '.') {
-                        break; // Reached the dot without whitespace
-                    }
-                }
-            }
-        }
-
-        // All other operators are single-line
-        return false;
+        return switch (node.tag) {
+            // Block expressions are always multiline
+            .block => true,
+            // Collections use the collectionIsMultiline check (trailing comma or too long)
+            .list_literal, .record_literal, .tuple_literal => self.collectionIsMultiline(node_idx),
+            // Everything else is single-line
+            else => false,
+        };
     }
 
     fn collectionIsMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
-        // Collections are multiline if they:
-        // 1. Have a trailing comma
-        // 2. Contain comments
-        // 3. Have newlines between elements
-        // 4. Are too long to fit on one line (>80 chars)
-        // 5. Contain malformed nodes
-
-        // Check for trailing comma first (cheapest check)
-        if (self.hasTrailingComma(node_idx)) {
-            return true;
-        }
-
-        const node = self.getNode(node_idx);
-
-        // Check if any child is malformed - those should be multiline to be clearer
-        var iter = self.ast.node_slices.nodes(&node.payload.nodes);
-        var element_count: usize = 0;
-        while (iter.next()) |child_idx| {
-            element_count += 1;
-            const child = self.getNode(child_idx);
-            if (child.tag == .malformed) {
-                // Skip malformed nodes in formatting
-                continue;
-            }
-        }
-
-        // If we have many elements, format as multiline
-        if (element_count > 4) {
-            return true;
-        }
-
-        // Check for comments or newlines in the collection
-        const start = node.start.offset;
-        const end = self.findNodeEnd(node_idx);
-
-        if (start >= end or end > self.source.len) {
-            return false;
-        }
-
-        // Estimate the line length if formatted on one line
-        const estimated_length = end - start;
-        if (estimated_length > 60) { // Conservative estimate for line length
-            return true;
-        }
-
-        // Scan the source for comments or newlines
-        var i = start;
-        while (i < end) {
-            const c = self.source[i];
-            if (c == '#') {
-                // Found a comment - definitely multiline
-                return true;
-            }
-            if (c == '\n') {
-                // Found a newline - check if it's between elements (not just after opening bracket)
-                // Look back to see if we've seen any content
-                var j = i;
-                while (j > start) {
-                    j -= 1;
-                    const prev = self.source[j];
-                    if (prev != ' ' and prev != '\t' and prev != '\n' and prev != '[' and prev != '{' and prev != '(') {
-                        // Found content before the newline - this is multiline
-                        return true;
-                    }
-                    if (prev == '[' or prev == '{' or prev == '(') {
-                        // Newline right after opening - not necessarily multiline
-                        break;
-                    }
-                }
-            }
-            i += 1;
-        }
-
-        return false;
+        // Collections are multiline ONLY if they have a trailing comma
+        // We DO NOT enforce line lengths in this formatter by design
+        return self.hasTrailingComma(node_idx);
     }
 
     fn hasTrailingComma(self: *const Formatter, node_idx: Node.Idx) bool {

@@ -30,10 +30,9 @@ else if 10
 	{
 		A
 	}
-else
-	{
-		3
-	}
+else {
+	3
+}
 ~~~
 # EXPECTED
 NIL
@@ -46,13 +45,13 @@ at 3:8 to 3:14
 
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag if_else :type "Num(_size)")
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+_a
 ~~~

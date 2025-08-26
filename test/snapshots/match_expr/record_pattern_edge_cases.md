@@ -26,43 +26,43 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
 ~~~roc
 when ... is {
 	{
-		a: {
-			b: {
+		a : {
+			b : {
 				c
 			}
 		}
 	}
 	=>
 	"deeply nested: ${c}"
-	{ x, y: {  } }
+	{ x, y : {} }
 	=>
 	"mixed with empty: ${x}"
-	{ outer: {
+	{ outer : {
 		inner
 	}, simple }
 	=>
 	"mixed: ${inner} and ${simple}"
-	{ a: {
+	{ a : {
 		b
-	}, c: {
+	}, c : {
 		d
 	} }
 	=>
 	"multiple nested: ${b}, ${d}"
 	{
-		name: x
+		name : x
 	}
 	=>
 	"renamed: ${x}"
 	{
-		person: { name: firstName, age: userAge }
+		person : {name : firstName, age : userAge}
 	}
 	=>
 	"renamed nested: ${firstName} (${userAge.to_str()})"
 	{  }
 	=>
 	"empty record"
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -97,24 +97,15 @@ at 1:1 to 9:2
 **Parse Error**
 at 9:2 to 9:2
 
-**Unsupported Node**
-at 1:7 to 1:10
-
-**Unsupported Node**
-at 1:11 to 9:1
-
-**Unsupported Node**
-at 9:2 to 9:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_e")
 ~~~
 # TYPES
 ~~~roc
-Error
+_e
 ~~~

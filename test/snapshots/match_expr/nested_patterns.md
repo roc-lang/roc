@@ -23,14 +23,14 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenCurly LowerIdent OpColon O
 ~~~roc
 when data is {
 	Container({
-		items: [First(x), ..as]
+		items : [First(x), ..as]
 		rest
 		] })
 	})
 	=>
 	x + List.len(rest)
 	Container({
-		items: []
+		items : []
 	})
 	=>
 	0
@@ -40,7 +40,7 @@ when data is {
 	Simple(x)
 	=>
 	x
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -75,21 +75,15 @@ at 1:1 to 6:2
 **Parse Error**
 at 6:2 to 6:2
 
-**Unsupported Node**
-at 1:12 to 6:1
-
-**Unsupported Node**
-at 6:2 to 6:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

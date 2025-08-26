@@ -169,12 +169,7 @@ main = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 20:10 to 20:14
-
-**Unsupported Node**
-at 26:8 to 26:12
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -194,7 +189,7 @@ at 26:8 to 26:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

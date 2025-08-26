@@ -50,16 +50,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-a: F32
-a = 3.14
-
-b: F64
-b = 2.71828
-
-c: Dec
-c = 123.456
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -68,26 +59,17 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "a")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "b")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "c")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

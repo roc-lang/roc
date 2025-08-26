@@ -27,7 +27,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "x")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED

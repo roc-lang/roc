@@ -46,7 +46,7 @@ module [
 import design.Styles.Color exposing [Encoder]
 asCE]
 
-red: CE
+red : CE
 red = ...
 ~~~
 # EXPECTED
@@ -58,35 +58,20 @@ at 3:46 to 3:46
 **Parse Error**
 at 3:51 to 3:51
 
-**Unsupported Node**
-at 3:1 to 3:45
-
-**Unsupported Node**
-at 3:46 to 3:46
-
-**Unsupported Node**
-at 3:51 to 3:51
-
-**Unsupported Node**
-at 6:7 to 6:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "red")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

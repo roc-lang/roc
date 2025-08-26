@@ -28,11 +28,11 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 ~~~roc
 module []
 
-C: k || when 0 is {
+C : k || when 0 is {
 	0 | 0
 	"
 }
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -49,29 +49,16 @@ at 1:14 to 3:2
 **Parse Error**
 at 3:2 to 3:2
 
-**Unsupported Node**
-at 1:21 to 3:1
-
-**Unsupported Node**
-at 3:2 to 3:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_or
-      (Expr.lookup "k")
-      (Expr.match)
-    )
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -49,10 +49,7 @@ NIL
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_star
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 2)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -61,6 +58,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-y : _a
 ~~~

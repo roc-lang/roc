@@ -63,59 +63,28 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-BadBase := _
-
-BadDerived := BadBase
-
-value: BadDerived
-value = "test"
-
-GoodBase := Str
-
-GoodDerived := GoodBase
-
-goodValue: GoodDerived
-goodValue = "test"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:13
-
-**Unsupported Node**
-at 5:1 to 5:22
-
-**Unsupported Node**
-at 10:1 to 10:16
-
-**Unsupported Node**
-at 12:1 to 12:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "value")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "goodValue")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -39,8 +39,8 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 # FORMATTED
 ~~~roc
 {
-	answer: 42,
-	launchTheNukes!: \
+	answer : 42,
+	launchTheNukes! : \
 		{  },
 	 -> (...),
 }
@@ -54,27 +54,15 @@ at 4:1 to 4:1
 **Parse Error**
 at 1:1 to 4:2
 
-**Unsupported Node**
-at 3:22 to 3:25
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "answer")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

@@ -109,10 +109,10 @@ module [
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
 
-ok: (ok -> MyResult((ok, _)))
+ok : ok -> MyResult (ok, _)
 ok = \a -> MyResult.Ok(a)
 
-is_ok: (MyResult((_ok, _err)) -> Bool)
+is_ok : MyResult (_ok, _err) -> Bool
 is_ok = \result -> when result is {
 	MyResult.Ok(_)
 	=>
@@ -120,7 +120,7 @@ is_ok = \result -> when result is {
 	MyResult.Err(_)
 	=>
 	Bool.False
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -140,40 +140,19 @@ at 9:18 to 12:2
 **Parse Error**
 at 12:2 to 12:2
 
-**Unsupported Node**
-at 3:1 to 3:40
-
-**Unsupported Node**
-at 5:6 to 6:1
-
-**Unsupported Node**
-at 6:6 to 6:10
-
-**Unsupported Node**
-at 8:9 to 8:36
-
-**Unsupported Node**
-at 9:9 to 9:18
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "ok")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "is_ok")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

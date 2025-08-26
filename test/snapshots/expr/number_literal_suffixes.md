@@ -60,9 +60,9 @@ OpenCurly LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerId
 # FORMATTED
 ~~~roc
 {
-	u8: 123,
+	u8 : 123,
 	u8,
-	u16: 123,
+	u16 : 123,
 }
 ~~~
 # EXPECTED
@@ -73,23 +73,13 @@ at 1:1 to 3:12
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "u8")
-    (Expr.num_literal_i32 123)
-  )
-  (Expr.lookup "u8")
-  (Expr.binop_colon
-    (Expr.lookup "u16")
-    (Expr.num_literal_i32 123)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

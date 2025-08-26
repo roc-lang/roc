@@ -16,7 +16,9 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwIf Int Int KwEls
 ~~~
 # FORMATTED
 ~~~roc
-package [] packages {d, if 0 0 else {
+package [] packages {d, if 0
+	0
+else {
 	{  }
 }}
 

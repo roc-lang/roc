@@ -31,19 +31,17 @@ import S
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:9 to 2:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.num_literal_i32 0)
+  (Expr.binop_plus)
+  (Expr.binop_star)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Num(_size)")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

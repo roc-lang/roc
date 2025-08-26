@@ -50,15 +50,13 @@ f(10)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:9 to 3:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -67,6 +65,4 @@ at 3:9 to 3:13
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-f : Error
 ~~~

@@ -155,30 +155,7 @@ empty
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 3:19
-
-**Unsupported Node**
-at 9:10 to 9:11
-
-**Unsupported Node**
-at 11:14 to 11:15
-
-**Unsupported Node**
-at 12:28 to 12:29
-
-**Unsupported Node**
-at 13:26 to 13:27
-
-**Unsupported Node**
-at 14:41 to 14:42
-
-**Unsupported Node**
-at 15:22 to 15:23
-
-**Unsupported Node**
-at 16:17 to 16:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -194,7 +171,7 @@ at 16:17 to 16:21
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "empty")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED
@@ -203,16 +180,4 @@ at 16:17 to 16:21
 ~~~
 # TYPES
 ~~~roc
-add_one : Error
-x : Num(_size)
-y : Num(_size)
-z : Num(_size)
-empty : Error
-single : Num(_size)
-pair : Error
-triple : Error
-nested : Error
-mixed : Error
-with_vars : Error
-with_lambda : Error
 ~~~

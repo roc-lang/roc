@@ -45,5 +45,5 @@ at 1:1 to 2:66
 ~~~
 # TYPES
 ~~~roc
-main : _a
+main : Str
 ~~~

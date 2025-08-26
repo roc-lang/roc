@@ -36,7 +36,7 @@ app
 }
 
 []{
-	f: platform
+	f : platform
 	""
 }import f
 S
@@ -50,33 +50,21 @@ at 1:1 to 1:4
 **Parse Error**
 at 1:9 to 1:9
 
-**Unsupported Node**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:9 to 1:9
-
-**Unsupported Node**
-at 1:20 to 1:28
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_or)
   (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "f")
-      (Expr.malformed)
-    )
-    (Expr.str_literal_small)
+    (Expr.malformed)
+    (Expr.binop_not_equals)
   )
-  (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.binop_plus)
+  (Expr.str_literal_small)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

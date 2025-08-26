@@ -101,22 +101,7 @@ OpenRound Int OpPlus Int Comma Int OpBinaryMinus Int Comma Int OpStar Int Comma 
 ~~~
 # FORMATTED
 ~~~roc
-(
-	4 + 2,
-	4 - 2,
-	4 * 2,
-	4 / 2,
-	4 < 2,
-	4 > 2,
-	4 <= 2,
-	4 >= 2,
-	4 == 2,
-	4 != 2,
-	4 // 2,
-	Bool.True && Bool.False,
-	Bool.False || Bool.True,
-	None ?? 0
-)
+(4 + 2, 4 - 2, 4 * 2, 4 / 2, 4 < 2, 4 > 2, 4 <= 2, 4 >= 2, 4 == 2, 4 != 2, 4 // 2, Bool.True && Bool.False, Bool.False || Bool.True, None ?? 0)
 ~~~
 # EXPECTED
 NIL
@@ -127,18 +112,15 @@ at 16:1 to 16:1
 **Parse Error**
 at 16:2 to 16:2
 
-**Unsupported Node**
-at 1:1 to 1:1
-
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_double_question)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_double_question :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

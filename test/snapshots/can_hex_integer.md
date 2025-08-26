@@ -36,7 +36,7 @@ NIL
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.lookup "xFF")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED

@@ -49,9 +49,9 @@ app
 	a2!,
 ]
 {
-	pf: platform,
+	pf : platform,
 	"../basic-cli/main.roc",
-	a: "a",
+	a : "a",
 }
 ~~~
 # EXPECTED
@@ -63,32 +63,16 @@ at 1:1 to 1:5
 **Parse Error**
 at 5:6 to 5:6
 
-**Unsupported Node**
-at 1:5 to 4:1
-
-**Unsupported Node**
-at 5:6 to 5:6
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "pf")
-      (Expr.malformed)
-    )
-    (Expr.str_literal_big)
-    (Expr.binop_colon
-      (Expr.lookup "a")
-      (Expr.str_literal_small)
-    )
-  )
+  (Expr.binop_or)
+  (Expr.binop_double_slash)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "{}")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

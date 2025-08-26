@@ -21,7 +21,7 @@ OpenCurly LowerIdent OpColon Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-x: 1
+x : 1
 ~~~
 # EXPECTED
 NIL
@@ -29,18 +29,14 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 1)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
 ~~~

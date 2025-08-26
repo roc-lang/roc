@@ -20,7 +20,13 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool
+	{
+		1
+	}
+else {
+	2
+}
 ~~~
 # EXPECTED
 NIL
@@ -30,13 +36,13 @@ at 1:1 to 1:9
 
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag if_else :type "Num(_size)")
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+_a
 ~~~

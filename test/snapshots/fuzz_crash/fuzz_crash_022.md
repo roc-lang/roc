@@ -75,9 +75,9 @@ app {  }
 platform[main!]
 }
 
-UserId: U64
+UserId : U64
 
-ser: (UserId -> Str)
+ser : UserId -> Str
 getUser = \id -> if id > 1 !)"big"
 else
 
@@ -110,53 +110,23 @@ at 6:27 to 6:27
 **Parse Error**
 at 6:35 to 6:35
 
-**Unsupported Node**
-at 1:15 to 1:15
-
-**Unsupported Node**
-at 1:24 to 1:31
-
-**Unsupported Node**
-at 1:32 to 1:32
-
-**Unsupported Node**
-at 5:7 to 5:20
-
-**Unsupported Node**
-at 6:11 to 6:16
-
-**Unsupported Node**
-at 6:35 to 6:35
-
-**Expression in Pattern Context**
-at 6:40 to 8:6
-
-**Unsupported Node**
-at 8:9 to 8:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
+  (Expr.binop_or)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "ser")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.binop_not_equals)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

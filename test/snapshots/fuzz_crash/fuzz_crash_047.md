@@ -50,10 +50,8 @@ module [
 	updated,
 ]
 
-person = { name: "Alice", age: 30 }
-updated = {
-	..person
-}age: 31
+person = { name : "Alice", age : 30 }
+updated = { ..person }age : 31
 ~~~
 # EXPECTED
 NIL
@@ -64,27 +62,18 @@ at 4:11 to 5:2
 **Parse Error**
 at 5:10 to 5:10
 
-**Unsupported Node**
-at 4:11 to 4:19
-
-**Unsupported Node**
-at 5:10 to 5:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -83,8 +83,10 @@ pub const ExprTag = enum(u8) {
     frac_literal_big,
     str_literal_small,
     str_literal_big,
+    str_interpolation, // String interpolation
     list_literal,
     empty_list,
+    tuple_literal,
     record_literal,
     empty_record,
     apply_ident,
@@ -103,6 +105,10 @@ pub const ExprTag = enum(u8) {
     binop_lte,
     binop_and,
     binop_or,
+    binop_double_question, // Null coalescing operator ??
+    binop_double_slash, // Double slash division //
+    binop_thick_arrow, // Thick arrow =>
+    binop_thin_arrow, // Thin arrow ->
     binop_colon, // For record fields
     binop_equals, // For assignments in expression context
     block, // Block expression
@@ -112,6 +118,7 @@ pub const ExprTag = enum(u8) {
     match, // Match/when expression
     unary_neg, // Unary negation (e.g., -expr)
     unary_not, // Unary not (e.g., !expr)
+    unary_double_dot, // Unary double dot (e.g., ..(expr))
     malformed,
 };
 
@@ -438,17 +445,14 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
     // Read the tag as a u8 and interpret it directly as an ExprTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
 
-    // In debug builds, check if this is a valid expression tag
-    if (std.debug.runtime_safety) {
-        if (tag_value < EXPR_TAG_START) {
-            // This node hasn't been canonicalized as an expression yet
-            // Return a malformed expression view
-            return .{
-                .tag = .malformed,
-                .start = node.start,
-                .payload = node.payload,
-            };
-        }
+    // Check if this is a valid expression tag
+    if (tag_value < EXPR_TAG_START or tag_value >= PATT_TAG_START) {
+        // This node is not an expression - return a malformed expression view
+        return .{
+            .tag = .malformed,
+            .start = node.start,
+            .payload = node.payload,
+        };
     }
 
     const expr_tag = @as(ExprTag, @enumFromInt(tag_value));
@@ -466,8 +470,10 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .frac_literal_big => .frac_literal_big,
         .str_literal_small => .str_literal_small,
         .str_literal_big => .str_literal_big,
+        .str_interpolation => .str_interpolation,
         .list_literal => .list_literal,
         .empty_list => .empty_list,
+        .tuple_literal => .tuple_literal,
         .record_literal => .record_literal,
         .empty_record => .empty_record,
         .apply_ident => .apply_ident,
@@ -486,6 +492,10 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .binop_lte => .binop_lte,
         .binop_and => .binop_and,
         .binop_or => .binop_or,
+        .binop_double_question => .binop_double_question,
+        .binop_double_slash => .binop_double_slash,
+        .binop_thick_arrow => .binop_thick_arrow,
+        .binop_thin_arrow => .binop_thin_arrow,
         .binop_colon => .binop_colon,
         .binop_equals => .binop_equals,
         .block => .block,
@@ -495,6 +505,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .match => .match,
         .unary_neg => .unary_neg,
         .unary_not => .unary_not,
+        .unary_double_dot => .unary_double_dot,
         .malformed => .malformed,
     };
 
@@ -983,7 +994,15 @@ fn canonicalizeLambdaParams(self: *CIR, allocator: Allocator, node_idx: AST2.Nod
 
 pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Expr.Idx {
     const node = self.getNode(node_idx);
-    // Calculate the proper region for this node
+
+    // Check if this node has already been canonicalized (mutated)
+    const tag_value = @as(u8, @intFromEnum(node.tag));
+    if (tag_value >= EXPR_TAG_START and tag_value < PATT_TAG_START) {
+        // This node has already been canonicalized as an expression
+        return asExprIdx(node_idx);
+    }
+
+    // Calculate the proper region for this node BEFORE any mutations
     const node_region = self.ast.region(node_idx, raw_src, idents);
 
     switch (node.tag) {
@@ -1176,9 +1195,15 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             while (iter.next()) |n| {
                 const n_node = self.getNode(n);
                 // Check if this is a statement or expression
-                if (n_node.tag == .binop_equals or n_node.tag == .import) {
-                    // This is a statement in a block
-                    _ = try self.canonicalizeStmt(allocator, n, raw_src, idents);
+                if (n_node.tag == .binop_equals) {
+                    // Assignment in a block - convert to expression
+                    _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+                } else if (n_node.tag == .import) {
+                    // Import statement in a block - not allowed, convert to malformed
+                    const n_region = self.ast.region(n, raw_src, idents);
+                    try self.pushDiagnostic(allocator, .unsupported_node, n_region);
+                    self.mutateToExpr(n, .malformed);
+                    try self.ensureTypeVarExists(n);
                 } else {
                     // This is an expression
                     _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
@@ -1199,6 +1224,40 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             }
 
             self.mutateToExpr(node_idx, .record_literal);
+            return asExprIdx(node_idx);
+        },
+
+        // Tuple literal
+        .tuple_literal => {
+            // Canonicalize all elements
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |n| {
+                _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+            }
+            self.mutateToExpr(node_idx, .tuple_literal);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // List literal
+        .list_literal => {
+            // Canonicalize all elements
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |n| {
+                _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+            }
+            self.mutateToExpr(node_idx, .list_literal);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Malformed nodes
+        .malformed => {
+            // Already malformed - just keep it that way
+            self.mutateToExpr(node_idx, .malformed);
+            try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
 
@@ -1432,6 +1491,17 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
+        // Null coalescing operator
+        .binop_double_question => {
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_double_question);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
         // Match expressions
         .match => {
             // Match expressions have a scrutinee followed by pattern-body pairs
@@ -1460,23 +1530,63 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
-        // Lambda expressions (binop_pipe represents the | in lambda syntax like |x, y|)
-        .binop_pipe => {
-            // binop_pipe is used for lambda syntax: |params| body
-            // The left side is the parameters, the right side is the body
-            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+        // Lambda expressions
+        .lambda => {
+            // Lambda expression with parameters and body
+            const nodes_idx = node.payload.body_then_args;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
-            // Canonicalize the parameters (left side)
-            // Parameters might be underscore, identifiers, or nested binop_pipe for multiple params
-            _ = try self.canonicalizeLambdaParams(allocator, ast_binop.lhs, raw_src, idents);
+                // First is body
+                if (iter.next()) |body_node| {
+                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                }
 
-            // Canonicalize the body (right side)
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+                // Rest are parameters
+                while (iter.next()) |param_node| {
+                    _ = try self.canonicalizeLambdaParams(allocator, param_node, raw_src, idents);
+                }
+            }
 
-            // Mutate to lambda expression
             self.mutateToExpr(node_idx, .lambda);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
+        },
+
+        // Lambda expressions OR module access (binop_pipe is overloaded)
+        .binop_pipe => {
+            // binop_pipe can be:
+            // 1. Lambda syntax: |params| body
+            // 2. Module access: Module.Field
+
+            // First check what kind of payload we have
+            // binop_pipe should always have binop payload
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+
+            // Check if this is module access by looking at the left side
+            const lhs_tag = self.ast.*.tag(ast_binop.lhs);
+            const rhs_tag = self.ast.*.tag(ast_binop.rhs);
+
+            if (lhs_tag == .uc and rhs_tag == .uc) {
+                // This is module access like Bool.True
+                // Treat it as a lookup for now
+                self.mutateToExpr(node_idx, .lookup);
+                try self.ensureTypeVarExists(node_idx);
+                return asExprIdx(node_idx);
+            } else {
+                // This is lambda syntax: |params| body
+                // Canonicalize the parameters (left side)
+                // Parameters might be underscore, identifiers, or nested binop_pipe for multiple params
+                _ = try self.canonicalizeLambdaParams(allocator, ast_binop.lhs, raw_src, idents);
+
+                // Canonicalize the body (right side)
+                _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                // Mutate to lambda expression
+                self.mutateToExpr(node_idx, .lambda);
+                try self.ensureTypeVarExists(node_idx);
+                return asExprIdx(node_idx);
+            }
         },
 
         // Statement nodes - error in expression context
@@ -1485,9 +1595,260 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
+        .expect => {
+            // Expect statement - canonicalize the expression being tested
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |expr_node| {
+                    _ = try self.canonicalizeExpr(allocator, expr_node, raw_src, idents);
+                }
+            }
+            self.mutateToExpr(node_idx, .malformed); // Expect is a statement, not an expression
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Record spread operator (e.g., ..person in { ..person, age: 31 })
+        .double_dot_lc => {
+            // This represents a record being spread - treat as a special lookup for now
+            self.mutateToExpr(node_idx, .lookup);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Module/package qualified identifiers (e.g., Module.Type, pkg.Module.Type)
+        .uc_dot_ucs => {
+            // Module-qualified type or tag (e.g., Module.Type or Module.Tag)
+            self.mutateToExpr(node_idx, .lookup);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .lc_dot_ucs => {
+            // Package-qualified module access (e.g., pkg.Module.Type)
+            self.mutateToExpr(node_idx, .lookup);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Special lambda without args (e.g., || expr)
+        .lambda_no_args => {
+            // Lambda with no arguments, just has body stored in nodes field
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |body_node| {
+                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                }
+            }
+
+            self.mutateToExpr(node_idx, .lambda);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Loop constructs
+        .for_loop => {
+            // For loop: for pattern in iterable { body... }
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the pattern
+                if (iter.next()) |pattern_node| {
+                    _ = try self.canonicalizePatt(allocator, pattern_node, raw_src, idents);
+                }
+
+                // Second node is the iterable
+                if (iter.next()) |iterable_node| {
+                    _ = try self.canonicalizeExpr(allocator, iterable_node, raw_src, idents);
+                }
+
+                // Remaining nodes are the body
+                while (iter.next()) |body_node| {
+                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                }
+            }
+
+            self.mutateToExpr(node_idx, .block); // For loops are blocks for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .while_loop => {
+            // While loop: while condition { body... }
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the condition
+                if (iter.next()) |cond_node| {
+                    _ = try self.canonicalizeExpr(allocator, cond_node, raw_src, idents);
+                }
+
+                // Remaining nodes are the body
+                while (iter.next()) |body_node| {
+                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                }
+            }
+
+            self.mutateToExpr(node_idx, .block); // While loops are blocks for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // If without else (e.g., if cond do_something!())
+        .if_without_else => {
+            // if_without_else has if_branches field, not nodes
+            // The payload stores exactly 2 nodes: condition and body
+            const if_branches_u32 = node.payload.if_branches;
+            const nodes_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(if_branches_u32));
+
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node is the condition
+                if (iter.next()) |cond_node| {
+                    _ = try self.canonicalizeExpr(allocator, cond_node, raw_src, idents);
+                }
+
+                // Second node is the body
+                if (iter.next()) |body_node| {
+                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                }
+            }
+
+            self.mutateToExpr(node_idx, .if_else); // If without else is still an if
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Apply to module (used in where clauses)
+        .apply_module => {
+            // Module application in where clause (e.g., module(a))
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |arg_node| {
+                    _ = try self.canonicalizeExpr(allocator, arg_node, raw_src, idents);
+                }
+            }
+
+            self.mutateToExpr(node_idx, .apply_ident); // Module application is function application
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Type-level binops that might appear in expression context
+        .binop_dot => {
+            // Field access (e.g., foo.bar)
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .record_accessor); // Field access like foo.bar
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_colon_equals => {
+            // Assignment operator :=
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_colon); // Assignment is just colon for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_as => {
+            // Type ascription (e.g., expr as Type)
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            // The right side is a type, but we'll process it as an expression for now
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_colon); // Type ascription uses colon for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_thick_arrow => {
+            // Pattern match arrow =>
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_thick_arrow);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_thin_arrow => {
+            // Function type arrow ->
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_thin_arrow);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_where => {
+            // Where clause (type constraints)
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_colon); // Where clause uses colon for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+        .binop_platform => {
+            // Platform specification in app header
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_colon); // Platform spec uses colon for now
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Placeholder for unimplemented features
+        .ellipsis => {
+            // Triple dot ... placeholder
+            self.mutateToExpr(node_idx, .malformed); // Ellipsis is malformed
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // String interpolation
+        .str_interpolation => {
+            // String interpolation: "text ${expr} more text"
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |n| {
+                _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+            }
+            self.mutateToExpr(node_idx, .str_interpolation);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Unary double dot
+        .unary_double_dot => {
+            // Unary double dot: ..(expr)
+            if (!node.payload.nodes.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |operand| {
+                    _ = try self.canonicalizeExpr(allocator, operand, raw_src, idents);
+                }
+            }
+            self.mutateToExpr(node_idx, .unary_double_dot);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
 
         else => {
-            // Unsupported node type - mark as malformed
+            // This should never happen if we've handled all cases
+            std.log.err("Unhandled AST node tag in canonicalizeExpr: {}", .{node.tag});
             try self.pushDiagnostic(allocator, .unsupported_node, node_region);
             self.mutateToExpr(node_idx, .malformed);
             try self.ensureTypeVarExists(node_idx);
@@ -1654,6 +2015,15 @@ test "CIR2 canonicalize simple number literal" {
 /// Reports errors if the node is not valid in statement context
 pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Stmt.Idx {
     const node = self.getNode(node_idx);
+
+    // Check if this node has already been canonicalized (mutated)
+    const tag_value = @as(u8, @intFromEnum(node.tag));
+    if (tag_value < EXPR_TAG_START) {
+        // This node has already been canonicalized as a statement
+        return asStmtIdx(node_idx);
+    }
+
+    // Calculate the proper region for this node BEFORE any mutations
     const node_region = self.ast.region(node_idx, raw_src, idents);
 
     switch (node.tag) {
@@ -1671,12 +2041,16 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     // Canonicalize the pattern (lhs) as mutable
                     const patt_idx = try self.canonicalizePattMutable(allocator, ast_binop.lhs, raw_src, idents);
 
+                    // For var_lc nodes, the identifier is in the ident field of the payload
+                    // Get the identifier from the var_lc node
+                    const var_ident = lhs_node.payload.ident;
+
                     // Register this as a mutable variable (mutability is encoded in patt_idx)
-                    try self.scope_state.addIdent(allocator, lhs_node.payload.ident, patt_idx);
+                    try self.scope_state.addIdent(allocator, var_ident, patt_idx);
                     try self.scope_state.recordVarPattern(allocator, patt_idx);
 
                     // Add to symbol table so lookups can find this definition
-                    try self.scope_state.symbol_table.put(allocator, lhs_node.payload.ident, ast_binop.lhs);
+                    try self.scope_state.symbol_table.put(allocator, var_ident, ast_binop.lhs);
 
                     // Canonicalize the expression (rhs)
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
@@ -1785,6 +2159,32 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asStmtIdx(node_idx);
         },
 
+        // Type annotations
+        .binop_colon => {
+            // Type annotation: `name : Type`
+            // Check if this actually has a binop payload
+            // It should always have a binop payload for binop_colon
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+
+            // The left side is the name being annotated
+            // The right side is the type expression
+            // For now, we'll just process both sides
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            // Mutate to a type annotation statement
+            self.mutateToStmt(node_idx, .type_anno);
+            return asStmtIdx(node_idx);
+        },
+
+        // Import statements
+        .import => {
+            // Import statement: import module.name
+            // For now, just mark it as an import statement
+            self.mutateToStmt(node_idx, .import);
+            return asStmtIdx(node_idx);
+        },
+
         // Expression nodes - error in statement context without assignment
         .num_literal_i32, .int_literal_i32, .lc => {
             try self.pushDiagnostic(allocator, .expr_in_stmt_context, node_region);
@@ -1815,8 +2215,9 @@ pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.
 
 /// Canonicalize an AST node that should be a pattern with specified mutability
 pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
-    const node = ast_param.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+    // Calculate the proper region for this node BEFORE any mutations
     const node_region = ast_param.region(node_idx, raw_src, idents);
+    const node = ast_param.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
 
     switch (node.tag) {
         .lc => {

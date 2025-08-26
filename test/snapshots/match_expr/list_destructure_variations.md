@@ -48,7 +48,7 @@ when list is {
 	]
 	=>
 	(x + y) + z
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -107,21 +107,15 @@ at 1:1 to 8:2
 **Parse Error**
 at 8:2 to 8:2
 
-**Unsupported Node**
-at 1:12 to 8:1
-
-**Unsupported Node**
-at 8:2 to 8:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

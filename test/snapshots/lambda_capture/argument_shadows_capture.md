@@ -42,9 +42,7 @@ x = 5(\x -> x)(10) # Should not capture outer `x` -- this should give a shadowin
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:6 to 3:10
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -53,9 +51,8 @@ at 3:6 to 3:10
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-x : _a
 ~~~

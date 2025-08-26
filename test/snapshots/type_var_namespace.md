@@ -95,13 +95,13 @@ app
 	],
 }
 
-process: (List(elem) -> elem)
+process : List elem -> elem
 process = \list -> {
 	elem = 42
 	
 
 # type variable 'elem' still refers to the function annotation's type parameter
-result: elem
+result : elem
 	List.first(list)
 	Result | .withDefault(elem)
 	
@@ -120,32 +120,17 @@ at 11:32 to 11:32
 **Parse Error**
 at 11:34 to 11:34
 
-**Unsupported Node**
-at 4:11 to 4:29
-
-**Unsupported Node**
-at 5:11 to 5:18
-
-**Unsupported Node**
-at 16:1 to 16:6
-
-**Unsupported Node**
-at 16:9 to 16:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -83,16 +83,14 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar O
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:2 to 1:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.binop_colon)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag apply_ident :type "_f")
+(expr :tag binop_colon :type "_f")
 ~~~
 # TYPES
 ~~~roc

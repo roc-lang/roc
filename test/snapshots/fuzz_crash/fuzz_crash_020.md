@@ -518,40 +518,38 @@ import pf.Stdout exposing [line]
 import Stdot.Cust
 import Bae as Gooe
 import Ba
-Map((a, b)): (Lis -> (ab -> List(b)))
-MapML(): (List() -> (ab -> List(b)))
-line: (
-) # Co
-Som: { foo: O, bar: g }
-Ml(a): {# ld
-}
+Map((a, b)) : Lis -> ab -> List b
+MapML() : List -> ab -> List b
+line : () # Co
+Som : {foo : O, bar : g}
+Ml(a) : {}
 
-Soine(a): {#
-} #
-Maybe(a): [Somne]
+Soine(a) : {} #
+Maybe(a) : [Somne]
 
-Mayine(a): [#
-] #)
+Mayine(a) : [] #)
 
 ane = \num -> if num 2 else 5
 
-one: U6
+one : U6
 add = \Rum -> {
 	1
-	if num {
-		dbg # bug
-		s: s
-		exp0: exp0
-	} else {
+	if num
+		{
+			dbg # bug
+			s : s
+			exp0 : exp0
+		}
+	else {
 		dbg
 		123
-		r: r
+		r : r
 	}
 }
 
 me = main!:Listlt(({  }, _))
 ma = \_ -> {
-	e: e
+	e : e
 	w = "d"
 	var er = 123
 	expect blaue
@@ -560,46 +558,20 @@ ma = \_ -> {
 
 #
 ...
-	me((
-		...
-	))
+	me((...))
 	crash ke
 	"Unr!"
 	i = "H, ${d}"
-	t = [
-		one((
-			er,
-			456,
-			9
-		))
-	]
-	for n in list { {
-		line!("Ag ${n} to ${er}")
-		ber + n
-	} }
-	rd = {
-		foo: 123,
-		bar: "H",
-		baz: tag,
-		qux: Ok(world),
-		ned: ned
+	t = [one((er, 456, 9))]
+	for n in list {
+		{
+			line!("Ag ${n} to ${er}")
+			ber + n
+		}
 	}
-	t = (
-		123,
-		"World",
-		tag,
-		O,
-		(nd, t),
-		[1, 2, 3]
-	)
-	m((
-		123,
-		"World",
-		ag1,
-		O,
-		(ne, tuple),
-		[1, 2, 3]
-	))
+	rd = { foo : 123, bar : "H", baz : tag, qux : Ok world, ned : ned }
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+	m((123, "World", ag1, O, (ne, tuple), [1, 2, 3]))
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
 	? | .od()
@@ -612,9 +584,9 @@ ma = \_ -> {
 }"
 )
 } # Cocl
-y: {  }
+y : {}
 e = {  }
-t: V((a, c))
+t : V (a, c)
 expect {
 	foo == 1
 	h == foo
@@ -725,142 +697,40 @@ at 110:2 to 110:2
 **Parse Error**
 at 111:1 to 111:1
 
-**Unsupported Node**
-at 4:1 to 4:32
-
-**Unsupported Node**
-at 6:1 to 8:5
-
-**Unsupported Node**
-at 10:1 to 10:19
-
-**Unsupported Node**
-at 11:1 to 12:4
-
-**Unsupported Node**
-at 13:13 to 13:33
-
-**Unsupported Node**
-at 17:3 to 20:14
-
-**Unsupported Node**
-at 22:8 to 22:9
-
-**Unsupported Node**
-at 30:12 to 30:19
-
-**Unsupported Node**
-at 32:13 to 32:14
-
-**Unsupported Node**
-at 35:7 to 35:13
-
-**Unsupported Node**
-at 38:7 to 38:13
-
-**Unsupported Node**
-at 74:1 to 74:1
-
-**Unsupported Node**
-at 74:7 to 74:7
-
-**Pattern in Expression Context**
-at 74:20 to 74:21
-
-**Unsupported Node**
-at 75:5 to 75:9
-
-**Unsupported Node**
-at 109:5 to 109:5
-
-**Unsupported Node**
-at 110:2 to 110:2
-
-**Unsupported Node**
-at 111:1 to 111:1
-
-**Unsupported Node**
-at 118:1 to 121:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "line")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.lookup "g")
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "one")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.unary_not)
-  (Expr.apply_tag)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "y")
-    (Expr.record_literal
-    )
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "t")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_minus)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

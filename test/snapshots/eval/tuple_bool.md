@@ -37,32 +37,21 @@ OpenRound UpperIdent Comma UpperIdent Comma UpperIdent Dot UpperIdent Comma Uppe
 ~~~
 # FORMATTED
 ~~~roc
-(
-	True,
-	False,
-	Bool.True,
-	Bool.False,
-	!True,
-	!False,
-	True && False,
-	!True || !True
-)
+(True, False, Bool.True, Bool.False, !True, !False, True && False, !True || !True)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:83 to 1:83
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_double_question)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_double_question :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

@@ -59,7 +59,7 @@ app
 	],
 }
 
-identity: (a -> a)
+identity : a -> a
 identity = \a -> a
 
 main! = \_ -> {  }
@@ -67,32 +67,18 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:12 to 4:18
-
-**Unsupported Node**
-at 5:12 to 5:16
-
-**Unsupported Node**
-at 7:1 to 7:6
-
-**Unsupported Node**
-at 7:9 to 7:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

@@ -28,9 +28,6 @@ NIL
 **Parse Error**
 at 1:9 to 1:9
 
-**Unsupported Node**
-at 1:9 to 1:9
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -39,7 +36,7 @@ at 1:9 to 1:9
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

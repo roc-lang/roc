@@ -71,7 +71,7 @@ module [
 
 import json.Json exposing [decode, encode]
 main = {
-	data = { name: "Alice", age: 30 }
+	data = { name : "Alice", age : 30 }
 	encoded = encode(data)
 	decoded = decode(encoded)
 	decoded
@@ -80,19 +80,17 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:42
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_plus)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

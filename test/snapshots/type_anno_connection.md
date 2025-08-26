@@ -60,39 +60,28 @@ module [
 	my_number,
 ]
 
-add_one: (U64 -> U64)
+add_one : U64 -> U64
 add_one = \x -> x + 1
 
-my_number: U64
+my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:11 to 3:21
-
-**Unsupported Node**
-at 4:11 to 4:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "my_number")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

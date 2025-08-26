@@ -158,24 +158,24 @@ app
 	],
 }
 
-Status: [Loading, Complete, Failed]
+Status : [Loading, Complete, Failed]
 
 # Tag union with mixed argument types
-Result: [Success(Str), Error(Str), Warning((Str, I32))]
+Result : [Success(Str), Error(Str), Warning((Str, I32))]
 
 # Nested tag unions
-Response: [Ok(Result), NetworkError, ParseError]
+Response : [Ok(Result), NetworkError, ParseError]
 
 # Multiple tag unions using similar tag names
-UserState: [Active(Str), Inactive, Suspended(Str)]
-ConnectionState: [Active, Disconnected, Connecting(Str)]
+UserState : [Active(Str), Inactive, Suspended(Str)]
+ConnectionState : [Active, Disconnected, Connecting(Str)]
 
 # Function using tag unions
-processResult: (Result -> Str)
+processResult : Result -> Str
 processResult = \_result -> "processed"
 
 # Function with nested tag union
-handleResponse: (Response -> Str)
+handleResponse : Response -> Str
 handleResponse = \_response -> "handled"
 
 main! = \_ -> {  }
@@ -183,78 +183,25 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:10 to 4:37
-
-**Unsupported Node**
-at 7:10 to 8:1
-
-**Unsupported Node**
-at 10:12 to 10:50
-
-**Unsupported Node**
-at 13:13 to 13:52
-
-**Unsupported Node**
-at 14:19 to 14:58
-
-**Unsupported Node**
-at 17:17 to 17:30
-
-**Unsupported Node**
-at 18:17 to 18:27
-
-**Unsupported Node**
-at 21:18 to 21:33
-
-**Unsupported Node**
-at 22:18 to 22:30
-
-**Unsupported Node**
-at 24:1 to 24:6
-
-**Unsupported Node**
-at 24:9 to 24:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processResult")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleResponse")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

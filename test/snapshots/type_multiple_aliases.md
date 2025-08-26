@@ -158,18 +158,14 @@ app
 	],
 }
 
-UserId: U64
-UserName: Str
-UserAge: U8
-User: { id: UserId, name: UserName, age: UserAge }
+UserId : U64
+UserName : Str
+UserAge : U8
+User : {id : UserId, name : UserName, age : UserAge}
 
-create_user: (UserId -> (UserName -> (UserAge -> User)))
-create_user = \(
-	id,
-	name,
-	age
-) -> { id: id, name: name, age: age }
-get_user_name: (User -> UserName)
+create_user : UserId -> UserName -> UserAge -> User
+create_user = \(id, name, age) -> { id : id, name : name, age : age }
+get_user_name : User -> UserName
 get_user_name = \user -> user.name
 main! = \_ -> {
 	user = create_user((123, "Alice", 25))
@@ -179,72 +175,24 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 8:15 to 8:48
-
-**Unsupported Node**
-at 9:15 to 9:31
-
-**Unsupported Node**
-at 11:17 to 11:33
-
-**Unsupported Node**
-at 12:17 to 12:24
-
-**Unsupported Node**
-at 14:1 to 14:6
-
-**Unsupported Node**
-at 14:9 to 14:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "id")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "create_user")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "get_user_name")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

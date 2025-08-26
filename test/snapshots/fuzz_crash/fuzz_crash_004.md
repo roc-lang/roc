@@ -27,12 +27,12 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
+  (Expr.str_literal_small)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

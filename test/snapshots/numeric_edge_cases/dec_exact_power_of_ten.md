@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.frac_literal_small 0.001)
+(Expr.binop_double_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag frac_literal_small :type "F64")
+(expr :tag binop_double_equals :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-F64
+[True, False]_others
 ~~~

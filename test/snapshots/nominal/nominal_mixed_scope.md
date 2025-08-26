@@ -70,7 +70,7 @@ module [
 
 LocalStatus := [Pending, Complete]
 
-processColor: (_ -> LocalStatus)
+processColor : _ -> LocalStatus
 processColor = \color -> {
 	import Color.RGB
 	
@@ -85,7 +85,7 @@ when color is {
 		RGB.Blue
 		=>
 		LocalStatus.Pending
-	} -> 
+	}
 }
 ~~~
 # EXPECTED
@@ -112,29 +112,17 @@ at 16:1 to 16:1
 **Parse Error**
 at 6:24 to 16:2
 
-**Unsupported Node**
-at 3:1 to 3:35
-
-**Unsupported Node**
-at 5:16 to 5:32
-
-**Unsupported Node**
-at 6:16 to 6:24
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processColor")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

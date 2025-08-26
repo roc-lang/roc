@@ -62,42 +62,28 @@ module [
 
 Color := [Red, Green, Blue]
 
-blue: Color
+blue : Color
 blue = Color.Blue
-yellow: Color
+yellow : Color
 yellow = Color.Yellow
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:28
-
-**Unsupported Node**
-at 6:8 to 6:13
-
-**Unsupported Node**
-at 9:10 to 9:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "blue")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "yellow")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

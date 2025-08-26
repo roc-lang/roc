@@ -286,36 +286,23 @@ module []
 import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
-processRequest: (Request -> Response)
+processRequest : Request -> Response
 processRequest = \req -> Http.defaultResponse
-parseJson: (Str -> Json.Value)
+parseJson : Str -> Json.Value
 parseJson = \input -> Json.parse(input)
 
-handleApi: (Http.Request -> Result((Http.Response, Json.Error)))
-handleApi = \request -> {
-	result = Json.decode(request.body),
-	when result is {
-		Ok(data)
-		=>
-		Ok(Http.success(data))
-		Err(err)
-		=>
-		Err(err)
-	} -> },
-	config: Json.Config,
-	config = Json.defaultConfig,
-	advancedParser: Json.Parser | Config,
-	Str
-} -> Result((Json.Value, Json.Parser | Error))
-advancedParser = \(
-	parserConfig,
-	input
-) -> Json.Parser | .parseWith((parserConfig, input))
-combineResults: (Result((a, err)) -> (Result((b, err)) -> Result(((a, b), err))))
-combineResults = \(
-	result1,
-	result2
-) -> when result1 is {
+handleApi : Http.Request -> Result (Http.Response, Json.Error)
+handleApi = \request -> { result = Json.decode(request.body), when result is {
+	Ok(data)
+	=>
+	Ok(Http.success(data))
+	Err(err)
+	=>
+	Err(err)
+}, config : Json.Config, config = Json.defaultConfig, advancedParser : Json.Parser | Config, Str } -> Result((Json.Value, Json.Parser | Error))
+advancedParser = \(parserConfig, input) -> Json.Parser | .parseWith((parserConfig, input))
+combineResults : Result (a, err) -> Result (b, err) -> Result ((a, b), err)
+combineResults = \(result1, result2) -> when result1 is {
 	Ok(value1)
 	=>
 	when result2 is {
@@ -325,8 +312,8 @@ combineResults = \(
 		Err(err)
 		=>
 		Err(err)
-	} -> Err(err) => Err(err)
-} -> 
+	}
+}
 ~~~
 # EXPECTED
 NIL
@@ -373,74 +360,26 @@ at 32:5 to 39:6
 **Parse Error**
 at 39:6 to 39:6
 
-**Unsupported Node**
-at 3:1 to 3:55
-
-**Unsupported Node**
-at 4:1 to 4:17
-
-**Unsupported Node**
-at 5:1 to 5:37
-
-**Unsupported Node**
-at 7:18 to 7:37
-
-**Unsupported Node**
-at 8:18 to 8:24
-
-**Unsupported Node**
-at 10:13 to 10:29
-
-**Unsupported Node**
-at 11:13 to 11:21
-
-**Unsupported Node**
-at 13:13 to 13:62
-
-**Unsupported Node**
-at 14:13 to 14:23
-
-**Unsupported Node**
-at 27:18 to 27:40
-
-**Unsupported Node**
-at 30:18 to 31:1
-
-**Unsupported Node**
-at 31:18 to 32:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processRequest")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "parseJson")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleApi")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "combineResults")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

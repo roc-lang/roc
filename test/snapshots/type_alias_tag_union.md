@@ -152,20 +152,20 @@ app
 	],
 }
 
-MyResult((ok, err)): [Good(ok), Bad(err)]
+MyResult((ok, err)) : [Good(ok), Bad(err)]
 
 # Using the type alias
-process: (MyResult((Str, I32)) -> Str)
+process : MyResult (Str, I32) -> Str
 process = \_result -> "processed"
 
 # Another type alias with a single parameter
-Option(a): [Some(a), None]
+Option(a) : [Some(a), None]
 
 # Using it with different types
-getString: (Option(Str) -> Str)
+getString : Option Str -> Str
 getString = \_opt -> "default"
 
-getNumber: (Option(I32) -> I32)
+getNumber : Option I32 -> I32
 getNumber = \_opt -> 0
 
 main! = \_ -> {  }
@@ -173,68 +173,24 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:21 to 4:41
-
-**Unsupported Node**
-at 7:11 to 7:36
-
-**Unsupported Node**
-at 8:11 to 8:21
-
-**Unsupported Node**
-at 11:13 to 11:28
-
-**Unsupported Node**
-at 14:13 to 14:31
-
-**Unsupported Node**
-at 15:13 to 15:20
-
-**Unsupported Node**
-at 17:13 to 17:31
-
-**Unsupported Node**
-at 18:13 to 18:20
-
-**Unsupported Node**
-at 20:1 to 20:6
-
-**Unsupported Node**
-at 20:9 to 20:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "getString")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "getNumber")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

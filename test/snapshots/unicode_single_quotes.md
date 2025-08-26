@@ -97,8 +97,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
 ~~~roc
 module []
 
-x = (
-	'a',
+x = ('a',
     'Ã©',
     'ðŸš€',
     '\u',
@@ -117,8 +116,7 @@ x = (
 y = 'u
 
 # Test backslash before EOF
-'\
-)©'
+'\)©'
 'ðŸš€'
 '\u'
 '\u)
@@ -270,105 +268,6 @@ at 20:5 to 20:5
 **Parse Error**
 at 23:1 to 23:1
 
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 5:7 to 5:7
-
-**Unsupported Node**
-at 5:8 to 5:8
-
-**Unsupported Node**
-at 6:5 to 6:5
-
-**Unsupported Node**
-at 6:7 to 6:7
-
-**Unsupported Node**
-at 6:8 to 6:8
-
-**Unsupported Node**
-at 6:9 to 6:9
-
-**Unsupported Node**
-at 6:10 to 6:10
-
-**Unsupported Node**
-at 7:5 to 7:5
-
-**Unsupported Node**
-at 7:9 to 7:9
-
-**Unsupported Node**
-at 8:5 to 8:5
-
-**Unsupported Node**
-at 8:8 to 8:8
-
-**Unsupported Node**
-at 8:9 to 8:9
-
-**Unsupported Node**
-at 9:5 to 9:5
-
-**Unsupported Node**
-at 9:9 to 9:9
-
-**Unsupported Node**
-at 10:5 to 10:5
-
-**Unsupported Node**
-at 10:10 to 10:10
-
-**Unsupported Node**
-at 11:5 to 11:5
-
-**Unsupported Node**
-at 11:14 to 11:14
-
-**Unsupported Node**
-at 11:15 to 11:15
-
-**Unsupported Node**
-at 12:5 to 12:5
-
-**Unsupported Node**
-at 12:11 to 12:11
-
-**Unsupported Node**
-at 13:9 to 13:9
-
-**Unsupported Node**
-at 14:9 to 14:9
-
-**Unsupported Node**
-at 15:5 to 15:5
-
-**Unsupported Node**
-at 15:7 to 15:7
-
-**Unsupported Node**
-at 16:5 to 16:5
-
-**Unsupported Node**
-at 16:10 to 16:10
-
-**Unsupported Node**
-at 17:5 to 17:5
-
-**Unsupported Node**
-at 17:8 to 17:8
-
-**Unsupported Node**
-at 18:1 to 18:1
-
-**Unsupported Node**
-at 20:5 to 20:5
-
-**Unsupported Node**
-at 23:1 to 23:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -385,23 +284,23 @@ at 23:1 to 23:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.apply_ident)
+  (Expr.binop_colon)
+  (Expr.binop_colon)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
+  (Expr.binop_colon)
   (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.binop_not_equals)
+  (Expr.malformed)
+  (Expr.binop_not_equals)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "ong")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -412,7 +311,7 @@ at 23:1 to 23:1
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -40,10 +40,10 @@ app
 }
 
 []{
-	f: platform
+	f : platform
 	""
 }{
-	o: 0
+	o : 0
 	
 }
 ~~~
@@ -62,38 +62,23 @@ at 2:4 to 2:4
 **Parse Error**
 at 1:20 to 2:5
 
-**Unsupported Node**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:9 to 1:9
-
-**Unsupported Node**
-at 2:4 to 2:4
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_or)
   (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "f")
-      (Expr.malformed)
-    )
-    (Expr.str_literal_small)
+    (Expr.malformed)
+    (Expr.binop_not_equals)
   )
   (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "o")
-      (Expr.num_literal_i32 0)
-    )
+    (Expr.malformed)
     (Expr.malformed)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

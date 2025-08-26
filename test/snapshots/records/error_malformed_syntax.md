@@ -22,9 +22,7 @@ OpenCurly LowerIdent OpColon String Comma OpColon Int Comma Comma LowerIdent OpC
 ~~~
 # FORMATTED
 ~~~roc
-{
-	name: "Alice"
-}
+{ name : "Alice" }
 ~~~
 # EXPECTED
 NIL
@@ -35,24 +33,15 @@ at 1:18 to 1:18
 **Parse Error**
 at 1:1 to 1:20
 
-**Unsupported Node**
-at 1:18 to 1:18
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.malformed)
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

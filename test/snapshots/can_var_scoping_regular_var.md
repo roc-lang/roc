@@ -128,7 +128,7 @@ count_ = count_ + 1
 nestedFunc = \_ -> {
 		count_ = count_ + 5 # Should cause error - different function
 		total_ = total_ * 2 # Should cause error - different function
-		count_: count_
+		count_ : count_
 	}
 	
 
@@ -139,9 +139,7 @@ result = nestedFunc({  })
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:16 to 4:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -150,7 +148,7 @@ at 4:16 to 4:24
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -152,16 +152,7 @@ main = {
 	
 
 # Test multiple qualified access
-combined = Str.concat((
-		client,
-		parser,
-		helper,
-		result1,
-		result2,
-		result3,
-		result4,
-		combined
-	))
+combined = Str.concat((client, parser, helper, result1, result2, result3, result4, combined))
 }
 ~~~
 # EXPECTED
@@ -173,48 +164,18 @@ at 34:5 to 34:5
 **Parse Error**
 at 23:19 to 35:1
 
-**Unsupported Node**
-at 3:1 to 3:17
-
-**Unsupported Node**
-at 4:1 to 4:47
-
-**Unsupported Node**
-at 5:1 to 5:27
-
-**Unsupported Node**
-at 8:14 to 8:18
-
-**Unsupported Node**
-at 9:14 to 9:18
-
-**Unsupported Node**
-at 10:14 to 10:17
-
-**Unsupported Node**
-at 13:15 to 13:19
-
-**Unsupported Node**
-at 16:15 to 16:19
-
-**Unsupported Node**
-at 23:16 to 23:19
-
-**Unsupported Node**
-at 34:5 to 34:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

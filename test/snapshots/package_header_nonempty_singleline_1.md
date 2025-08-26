@@ -19,7 +19,7 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIden
 package [
 	something,
 	SomeType,
-] packages {somePkg, ("../main.roc", other): "../../other/main.roc"}
+] packages {somePkg, ("../main.roc", other) : "../../other/main.roc"}
 
 ~~~
 # EXPECTED

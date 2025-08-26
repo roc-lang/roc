@@ -70,45 +70,25 @@ app
 	],
 }
 
-runEffect!: ((_a => _b) -> _a => _b)
-runEffect! = \(
-	fn!,
-	x
-) -> fn!(x)
+runEffect! : (_a => _b) -> _a => _b
+runEffect! = \(fn!, x) -> fn!(x)
 main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 3:36
-
-**Unsupported Node**
-at 4:1 to 4:11
-
-**Unsupported Node**
-at 4:14 to 4:23
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

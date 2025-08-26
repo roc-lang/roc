@@ -76,7 +76,7 @@ app
 	],
 }
 
-processNested: (List(Result((Str, Err))) -> List(Str))
+processNested : List Result (Str, Err) -> List Str
 processNested = \_list -> ["one", "two"]
 
 main! = \_ -> processNested([])
@@ -84,32 +84,18 @@ main! = \_ -> processNested([])
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:17 to 3:52
-
-**Unsupported Node**
-at 4:17 to 4:25
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "processNested")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -296,42 +296,28 @@ module []
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
-parseJson: (Str -> Result((Value, Error)))
+parseJson : Str -> Result (Value, Error)
 parseJson = \input -> Json.parse(input)
 
 # Test mixing exposed types with qualified access
-handleRequest: (Request -> Response)
-handleRequest = \req -> {
-	result = Json.decode(req.body),
-	when result is {
-		Ok(value)
-		=>
-		Http.ok(value)
-		Err(error)
-		=>
-		Http.badRequest(error)
-	} -> }
-
-# Test using exposed types in complex signatures,
-	processData: Config,
-	List(Value)
-} -> Result((List(Value), Error))
-processData = \(
-	config,
-	values
-) -> List.mapTry((
-	values,
-	\v -> (
-		Json.validateWith((config, v))
-	)
-))ServerConfig: {
-	jsonConfig: Config,
-	httpStatus: Status,
-	defaultResponse: Response,
-}
-createClient: (Config -> Http.Client)
+handleRequest : Request -> Response
+handleRequest = \req -> { result = Json.decode(req.body), when result is {
+	Ok(value)
+	=>
+	Http.ok(value)
+	Err(error)
+	=>
+	Http.badRequest(error)
+}, processData : Config, List(Value) } -> Result((List(Value), Error))
+processData = \(config, values) -> List.mapTry((values, \v -> (Json.validateWith((config, v)))))ServerConfig :
+	{
+		jsonConfig : Config,
+		httpStatus : Status,
+		defaultResponse : Response,
+	}
+createClient : Config -> Http.Client
 createClient = \config -> Http.clientWith(config)
-handleResponse: (Response -> Str)
+handleResponse : Response -> Str
 handleResponse = \response -> when response.status is {
 	Ok(status)
 	=>
@@ -339,17 +325,14 @@ handleResponse = \response -> when response.status is {
 	Err(error)
 	=>
 	Error.toString(error)
-} -> combineResults: Result((Value, Error)) -> (Status -> Result((Response, Error)))combineResults = \(
-	jsonResult,
-	httpStatus
-) -> when jsonResult is {
+}combineResults = \(jsonResult, httpStatus) -> when jsonResult is {
 	Ok(value)
 	=>
-	Ok({ body: Json.encode(value), status: httpStatus })
+	Ok({ body : Json.encode(value), status : httpStatus })
 	Err(error)
 	=>
 	Err(error)
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -405,95 +388,28 @@ at 51:5 to 54:6
 **Parse Error**
 at 54:6 to 54:6
 
-**Unsupported Node**
-at 3:1 to 3:48
-
-**Unsupported Node**
-at 4:1 to 4:63
-
-**Unsupported Node**
-at 5:1 to 5:37
-
-**Unsupported Node**
-at 8:13 to 9:1
-
-**Unsupported Node**
-at 9:13 to 9:21
-
-**Unsupported Node**
-at 12:17 to 12:36
-
-**Unsupported Node**
-at 13:17 to 13:23
-
-**Unsupported Node**
-at 23:15 to 24:5
-
-**Unsupported Node**
-at 37:16 to 37:36
-
-**Unsupported Node**
-at 38:16 to 38:25
-
-**Unsupported Node**
-at 41:18 to 41:33
-
-**Unsupported Node**
-at 42:18 to 43:5
-
-**Unsupported Node**
-at 50:18 to 51:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "parseJson")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleRequest")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "jsonConfig")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "httpStatus")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "defaultResponse")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "createClient")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleResponse")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

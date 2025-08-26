@@ -35,30 +35,25 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-platform "" requires main: Str -> Str exposes  []
+platform "" requires main : Str -> Str exposes  []
 
-entrypoint: (Str -> Str)
+entrypoint : Str -> Str
 entrypoint = main
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 7:14 to 7:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "entrypoint")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

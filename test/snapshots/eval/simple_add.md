@@ -78,44 +78,27 @@ module [
 	addU8,
 ]
 
-addU8: (U8 -> (U8 -> U8))
-addU8 = \(
-	a,
-	b
-) -> a + b
+addU8 : U8 -> U8 -> U8
+addU8 = \(a, b) -> a + b
 expect addU8((1, 2)) == 3
 expect addU8((0, 10)) == 10
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:9 to 3:21
-
-**Unsupported Node**
-at 4:9 to 4:16
-
-**Unsupported Node**
-at 6:1 to 6:24
-
-**Unsupported Node**
-at 7:1 to 7:26
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "addU8")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_minus)
+  (Expr.binop_minus)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

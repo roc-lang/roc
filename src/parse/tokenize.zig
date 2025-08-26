@@ -80,9 +80,9 @@ pub const Token = struct {
         NamedUnderscore,
         MalformedNamedUnderscoreUnicode,
 
-        OpaqueName,
-        MalformedOpaqueNameUnicode,
-        MalformedOpaqueNameWithoutName,
+        NominalName,
+        MalformedNominalNameUnicode,
+        MalformedNominalNameWithoutName,
 
         OpenRound,
         CloseRound,
@@ -224,7 +224,7 @@ pub const Token = struct {
                 .NoSpaceDotLowerIdent,
                 .NoSpaceDotUpperIdent,
                 .NamedUnderscore,
-                .OpaqueName,
+                .NominalName,
                 .OpenRound,
                 .CloseRound,
                 .OpenSquare,
@@ -309,8 +309,8 @@ pub const Token = struct {
                 .MalformedNumberNoDigits,
                 .MalformedNumberNoExponentDigits,
                 .MalformedNumberUnicodeSuffix,
-                .MalformedOpaqueNameUnicode,
-                .MalformedOpaqueNameWithoutName,
+                .MalformedNominalNameUnicode,
+                .MalformedNominalNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
                 .MalformedSingleQuoteUnclosed,
@@ -335,8 +335,8 @@ pub const Token = struct {
                 .MalformedNoSpaceDotUnicodeIdent,
                 .MalformedUnicodeIdent,
                 .MalformedDotUnicodeIdent,
-                .MalformedOpaqueNameUnicode,
-                .OpaqueName,
+                .MalformedNominalNameUnicode,
+                .NominalName,
                 => true,
                 else => false,
             };
@@ -1422,20 +1422,20 @@ pub const Tokenizer = struct {
                 },
 
                 '@' => {
-                    var tok: Token.Tag = .OpaqueName;
+                    var tok: Token.Tag = .NominalName;
                     const next = self.cursor.peekAt(1);
                     if (next) |n| {
                         if ((n >= 'a' and n <= 'z') or (n >= 'A' and n <= 'Z') or (n >= '0' and n <= '9') or n == '_' or n >= 0x80) {
                             self.cursor.pos += 1;
                             if (!self.cursor.chompIdentGeneral()) {
-                                tok = .MalformedOpaqueNameUnicode;
+                                tok = .MalformedNominalNameUnicode;
                             }
                         } else {
-                            tok = .MalformedOpaqueNameWithoutName;
+                            tok = .MalformedNominalNameWithoutName;
                             self.cursor.pos += 1;
                         }
                     } else {
-                        tok = .MalformedOpaqueNameWithoutName;
+                        tok = .MalformedNominalNameWithoutName;
                         self.cursor.pos += 1;
                     }
                     if (tok.isInterned()) {
@@ -1898,7 +1898,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append(alloc, 'z');
                 }
             },
-            .OpaqueName => {
+            .NominalName => {
                 try buf2.append(alloc, '@');
                 for (1..length) |_| {
                     try buf2.append(alloc, 'z');

@@ -121,23 +121,17 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:10 to 16:19
-
-**Unsupported Node**
-at 16:40 to 16:41
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.record_literal
-  )
+  (Expr.binop_double_slash)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "{}")
+(expr :tag block :type "_e")
 ~~~
 # TYPES
 ~~~roc

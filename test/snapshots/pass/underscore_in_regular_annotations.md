@@ -198,31 +198,29 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
 ~~~roc
 module []
 
-main: (_ -> _)
+main : _ -> _
 main = \x -> x
 
-identity: (a -> a)
+identity : a -> a
 identity = \x -> x
 
 # Function with underscore in annotation
-process: (List(_) -> Str)
+process : List _ -> Str
 process = \list -> "processed"
 
 # Record with underscore
-get_data: ({ field: _, other: U32 } -> U32)
+get_data : {field : _, other : U32} -> U32
 get_data = \record -> record.other
-handle_result: (Result((_, Str)) -> Str)
-handle_result = \result -> when result is (
-	{
-		Ok(_),
-		"success",
-		Err(msg),
-	} => msg
-) -> map: (a -> b) -> (List(a) -> List(b))map = \(
-	_,
-	_
-) -> []
-transform: ((_a -> _b) -> _b)
+handle_result : Result (_, Str) -> Str
+handle_result = \result -> when result is ({
+	Ok(_),
+	"success",
+	Err(msg),
+} => msg, }
+
+# Underscore in function arguments) => map : a -> b -> (List(a) -> List(b))map = \(_, _) -> []
+transform :
+	(_a -> _b) -> _b
 transform = \(_, b) -> b
 ~~~
 # EXPECTED
@@ -243,84 +241,27 @@ at 23:5 to 23:5
 **Parse Error**
 at 20:5 to 26:1
 
-**Unsupported Node**
-at 3:8 to 3:14
-
-**Unsupported Node**
-at 4:8 to 4:12
-
-**Unsupported Node**
-at 6:12 to 6:18
-
-**Unsupported Node**
-at 7:12 to 7:16
-
-**Unsupported Node**
-at 10:11 to 10:25
-
-**Unsupported Node**
-at 11:11 to 11:18
-
-**Unsupported Node**
-at 14:12 to 14:43
-
-**Unsupported Node**
-at 15:12 to 15:21
-
-**Unsupported Node**
-at 18:17 to 18:38
-
-**Unsupported Node**
-at 19:17 to 20:5
-
-**Unsupported Node**
-at 27:7 to 27:14
-
-**Unsupported Node**
-at 30:13 to 30:27
-
-**Unsupported Node**
-at 31:13 to 31:20
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "main")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "get_data")
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handle_result")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "transform")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

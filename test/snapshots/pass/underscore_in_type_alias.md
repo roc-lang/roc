@@ -86,13 +86,13 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
 ~~~roc
 module []
 
-MyType: _
+MyType : _
 
 OtherType := _
 
-ComplexType := List(_)
+ComplexType := List _
 
-RecordType := { field: _, other: U32 }
+RecordType := {field : _, other : U32}
 
 FunctionType := _ -> _
 
@@ -103,34 +103,11 @@ TagType := [Some(_), None]
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:10 to 3:11
-
-**Unsupported Node**
-at 5:1 to 5:15
-
-**Unsupported Node**
-at 7:1 to 7:23
-
-**Unsupported Node**
-at 9:1 to 9:38
-
-**Unsupported Node**
-at 11:1 to 11:23
-
-**Unsupported Node**
-at 13:1 to 13:25
-
-**Unsupported Node**
-at 15:1 to 15:26
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -141,7 +118,7 @@ at 15:1 to 15:26
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

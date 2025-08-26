@@ -23,17 +23,17 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 # FORMATTED
 ~~~roc
 when ... is {
-	{ name, address: { city, country } }
+	{ name, address : {city, country} }
 	=>
 	"${name} lives in ${city}, ${country}"
-	{ person: { name, age }, location: {
+	{ person : {name, age}, location : {
 		city
 	} }
 	=>
 	"${name} (${age.to_str()}) from ${city}"
 	{
-		data: {
-			info: {
+		data : {
+			info : {
 				value
 			}
 		}
@@ -48,7 +48,7 @@ when ... is {
 	{  }
 	=>
 	"empty"
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -77,24 +77,15 @@ at 1:1 to 7:2
 **Parse Error**
 at 7:2 to 7:2
 
-**Unsupported Node**
-at 1:7 to 1:10
-
-**Unsupported Node**
-at 1:11 to 7:1
-
-**Unsupported Node**
-at 7:2 to 7:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

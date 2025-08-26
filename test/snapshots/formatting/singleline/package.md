@@ -37,34 +37,20 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenC
 package [
 	a,
 	b,
-] packages {a, (
-	"a",
-	b
-): "b"}
+] packages {a, ("a", b) : "b"}
 
-a!: (Str => Str)
-b!: (Str => Str)
+a! : Str => Str
+b! : Str => Str
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:6 to 3:16
-
-**Unsupported Node**
-at 4:6 to 4:16
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -35,28 +35,22 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
 ~~~roc
 module []
 
-r: (a where module(a) | .h: s)
+r : a where module(a) | .h : s
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:11 to 2:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "r")
-    (Expr.malformed)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

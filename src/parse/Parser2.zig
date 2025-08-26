@@ -1208,7 +1208,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
 
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
-                const is_opaque = self.peek() == .OpColonEqual;
+                const is_nominal = self.peek() == .OpColonEqual;
                 const colon_pos = self.currentPosition();
                 self.advance(); // consume : or :=
 
@@ -1220,7 +1220,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
                     try self.parseExpr(); // Normal parsing
 
                 // Create type annotation/declaration node
-                const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
+                const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
                 return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
             }
@@ -1244,7 +1244,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
 
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
-                const is_opaque = self.peek() == .OpColonEqual;
+                const is_nominal = self.peek() == .OpColonEqual;
                 const colon_pos = self.currentPosition();
                 self.advance(); // consume : or :=
 
@@ -1253,7 +1253,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 const rhs = try self.parseExpr();
 
                 // Create type annotation/declaration node
-                const tag: AST.Node.Tag = if (is_opaque) .binop_colon_equals else .binop_colon;
+                const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
                 return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
             }

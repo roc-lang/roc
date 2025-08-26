@@ -79,31 +79,23 @@ module [
 	deserialize,
 ]
 
-deserialize: ((List(U8) -> Result((a, [DecodeErr])) where module(a) | .decode: List(U8)) -> Result((a, [DecodeErr])))
+deserialize : List U8 -> Result (a, [DecodeErr]) where module(a) | .decode : List U8 -> Result (a, [DecodeErr])
 deserialize = \_ -> ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 5:1
-
-**Unsupported Node**
-at 5:15 to 5:19
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "deserialize")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

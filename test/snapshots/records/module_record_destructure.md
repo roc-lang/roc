@@ -84,44 +84,36 @@ module [
 	extract_age,
 ]
 
-extract_age: ({
-	age: U64
-} -> U64)
+extract_age : {
+	age : U64
+} -> U64
 extract_age = \person -> {
 	{
-		age: age
+		age : age
 	} = person
 	
 
 (({
-		a: 0
+		a : 0
 	} | .a) + age) - ({
-		a: 0
+		a : 0
 	} | .a)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 3:35
-
-**Unsupported Node**
-at 4:15 to 4:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "extract_age")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

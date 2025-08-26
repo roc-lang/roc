@@ -37,7 +37,7 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
 ~~~
 # FORMATTED
 ~~~roc
-apple: [Apple, IsFruit(Bool)]
+apple : [Apple, IsFruit(Bool)]
 apple = Apple
 
 apple
@@ -45,18 +45,13 @@ apple
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:10 to 2:32
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "apple")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.lookup "apple")
+  (Expr.malformed)
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED
@@ -65,5 +60,4 @@ at 2:10 to 2:32
 ~~~
 # TYPES
 ~~~roc
-apple : []_others
 ~~~

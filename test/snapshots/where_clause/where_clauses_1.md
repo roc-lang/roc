@@ -85,33 +85,22 @@ module [
 	Decode,
 ]
 
-Hash((a, hasher)): ((a where module(a) | .hash: hasher) -> hasher, module(hasher) | Hasher)Decode(a): ((a where module(a) | .decode: List(U8)) -> a)
+Hash((a, hasher)) : ((a where module(a) | .hash : hasher) -> hasher, module(hasher) | Hasher)Decode(a) : a where module(a) | .decode : List U8 -> a
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 8:13 to 8:53
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

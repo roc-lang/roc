@@ -104,52 +104,29 @@ app
 	],
 }
 
-add: (I32 -> (I32 -> I32))
-add = \(
-	x,
-	y
-) -> { x: x, y: y } | .x
-double: (I32 -> I32)
+add : I32 -> I32 -> I32
+add = \(x, y) -> { x : x, y : y } | .x
+double : I32 -> I32
 double = \x -> add((x, x))
 main! = add((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:7 to 4:22
-
-**Unsupported Node**
-at 5:7 to 5:14
-
-**Unsupported Node**
-at 8:10 to 8:20
-
-**Unsupported Node**
-at 9:10 to 9:14
-
-**Unsupported Node**
-at 11:1 to 11:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "double")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

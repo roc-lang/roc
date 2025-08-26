@@ -151,10 +151,7 @@ identity = \x -> x
 identity2 = \y -> y
 
 # This function with two parameters should get types 'f, g -> (f, g)'
-pair = \(
-	first,
-	second
-) -> (first, second)
+pair = \(first, second) -> (first, second)
 main! = \_ -> {
 	result1 = identity(42)
 	result2 = identity2("hello")
@@ -165,21 +162,7 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 9:12 to 9:16
-
-**Unsupported Node**
-at 12:13 to 12:17
-
-**Unsupported Node**
-at 15:8 to 15:24
-
-**Unsupported Node**
-at 17:1 to 17:6
-
-**Unsupported Node**
-at 17:9 to 17:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -194,7 +177,7 @@ at 17:9 to 17:13
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

@@ -250,103 +250,44 @@ module []
 import json.Parser.Config
 import http.Client.Auth as HttpAuth
 import utils.String.Format exposing [padLeft]
-parseConfig: (Config.Settings -> Str)
+parseConfig : Config.Settings -> Str
 parseConfig = \settings -> Config.toString(settings)
 
 # Test multi-level value qualification
-authenticate: (Str -> (Str -> HttpAuth.Token))
-authenticate = \(
-	user,
-	pass
-) -> HttpAuth.login((user, pass))
-processData: (Config.Parser | Advanced -> (Str -> Result((Str, Config.Parser | Error))))
-processData = \(
-	advancedConfig,
-	input
-) -> (Config.Parser | Advanced) | .parseWith((advancedConfig, input))
-formatOutput: (Str -> Str)
+authenticate : Str -> Str -> HttpAuth.Token
+authenticate = \(user, pass) -> HttpAuth.login((user, pass))
+processData : Config.Parser | Advanced -> Str -> Result (Str, Config.Parser | Error)
+processData = \(advancedConfig, input) -> (Config.Parser | Advanced) | .parseWith((advancedConfig, input))
+formatOutput : Str -> Str
 formatOutput = \text -> padLeft((text, Config.defaultPadding))
-validateAuth: (HttpAuth.Credentials -> Result((HttpAuth.Token, HttpAuth.Error)))
+validateAuth : HttpAuth.Credentials -> Result (HttpAuth.Token, HttpAuth.Error)
 validateAuth = \creds -> HttpAuth.validate(creds)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:26
-
-**Unsupported Node**
-at 4:1 to 4:36
-
-**Unsupported Node**
-at 5:1 to 5:45
-
-**Unsupported Node**
-at 8:15 to 8:37
-
-**Unsupported Node**
-at 9:15 to 9:26
-
-**Unsupported Node**
-at 12:16 to 12:41
-
-**Unsupported Node**
-at 13:16 to 13:29
-
-**Unsupported Node**
-at 16:15 to 16:78
-
-**Unsupported Node**
-at 17:15 to 18:5
-
-**Unsupported Node**
-at 21:16 to 21:26
-
-**Unsupported Node**
-at 22:16 to 22:23
-
-**Unsupported Node**
-at 25:16 to 25:78
-
-**Unsupported Node**
-at 26:16 to 26:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "parseConfig")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "authenticate")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processData")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "formatOutput")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "validateAuth")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

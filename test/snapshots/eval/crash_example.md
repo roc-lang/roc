@@ -28,20 +28,17 @@ crash "This is a crash statement"
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:5 to 2:38
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.record_literal
-  )
+  (Expr.binop_double_slash)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

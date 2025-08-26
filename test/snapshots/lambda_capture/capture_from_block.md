@@ -50,15 +50,13 @@ b
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:10 to 3:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "b")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED
@@ -67,6 +65,4 @@ at 3:10 to 3:14
 ~~~
 # TYPES
 ~~~roc
-a : Num(_size)
-b : _c
 ~~~

@@ -74,9 +74,7 @@ sum_ = sum_ + sum # Reassign var - should work
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:12 to 4:20
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -85,7 +83,7 @@ at 4:12 to 4:20
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

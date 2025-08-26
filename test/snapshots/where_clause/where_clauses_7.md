@@ -95,10 +95,7 @@ module [
 	Hash,
 ]
 
-Hash((a, hasher)) # After header: (
-	(a # After var where module(a) | .hash: hasher # After method) # After method -> hasher,	# After first clause
-	module(hasher) | Hasher
-)Decode(a): (a where module(a) | .decode(List(U8) -> () -> a)))
+Hash((a, hasher)) : ((a where module(a) | .hash : hasher) # After method -> hasher, module(hasher) | Hasher)Decode(a) : a where module(a) | .decode(List(U8) -> () -> a))
 ~~~
 # EXPECTED
 NIL
@@ -109,28 +106,16 @@ at 16:3 to 16:3
 **Parse Error**
 at 14:12 to 16:9
 
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 1:1 to 1:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

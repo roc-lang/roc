@@ -50,16 +50,16 @@ module [
 	Bar,
 ]
 
-Foo: U64
+Foo : U64
 
 # Try to redeclare the same type (should error)
-Foo: Str
+Foo : Str
 
 # Declare another type that uses an undeclared type
-Bar: SomeUndeclaredType
+Bar : SomeUndeclaredType
 
 # Declare a type that properly uses a declared type
-Baz: Foo
+Baz : Foo
 ~~~
 # EXPECTED
 NIL
@@ -68,27 +68,15 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

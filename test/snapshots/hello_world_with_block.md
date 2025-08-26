@@ -79,25 +79,17 @@ Stdout.line!("Hello, world!")
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 6:1 to 6:17
-
-**Unsupported Node**
-at 8:1 to 8:6
-
-**Unsupported Node**
-at 8:9 to 8:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_plus)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

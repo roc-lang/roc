@@ -94,9 +94,9 @@ pub const Token = struct {
         NamedUnderscore,
         MalformedNamedUnderscoreUnicode,
 
-        OpaqueName,
-        MalformedOpaqueNameUnicode,
-        MalformedOpaqueNameWithoutName,
+        NominalName,
+        MalformedNominalNameUnicode,
+        MalformedNominalNameWithoutName,
 
         OpenRound,
         CloseRound,
@@ -246,7 +246,7 @@ pub const Token = struct {
                 .NoSpaceDotLowerIdent,
                 .NoSpaceDotUpperIdent,
                 .NamedUnderscore,
-                .OpaqueName,
+                .NominalName,
                 .OpenRound,
                 .CloseRound,
                 .OpenSquare,
@@ -333,8 +333,8 @@ pub const Token = struct {
                 .MalformedNumberNoDigits,
                 .MalformedNumberNoExponentDigits,
                 .MalformedNumberUnicodeSuffix,
-                .MalformedOpaqueNameUnicode,
-                .MalformedOpaqueNameWithoutName,
+                .MalformedNominalNameUnicode,
+                .MalformedNominalNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
                 .MalformedSingleQuoteUnclosed,
@@ -361,8 +361,8 @@ pub const Token = struct {
                 .MalformedNoSpaceDotUnicodeIdent,
                 .MalformedUnicodeIdent,
                 .MalformedDotUnicodeIdent,
-                .MalformedOpaqueNameUnicode,
-                .OpaqueName,
+                .MalformedNominalNameUnicode,
+                .NominalName,
                 => true,
                 else => false,
             };
@@ -1448,20 +1448,20 @@ pub const Tokenizer = struct {
                 },
 
                 '@' => {
-                    var tok: Token.Tag = .OpaqueName;
+                    var tok: Token.Tag = .NominalName;
                     const next = self.cursor.peekAt(1);
                     if (next) |n| {
                         if ((n >= 'a' and n <= 'z') or (n >= 'A' and n <= 'Z') or (n >= '0' and n <= '9') or n == '_' or n >= 0x80) {
                             self.cursor.pos += 1;
                             if (!self.cursor.chompIdentGeneral()) {
-                                tok = .MalformedOpaqueNameUnicode;
+                                tok = .MalformedNominalNameUnicode;
                             }
                         } else {
-                            tok = .MalformedOpaqueNameWithoutName;
+                            tok = .MalformedNominalNameWithoutName;
                             self.cursor.pos += 1;
                         }
                     } else {
-                        tok = .MalformedOpaqueNameWithoutName;
+                        tok = .MalformedNominalNameWithoutName;
                         self.cursor.pos += 1;
                     }
                     if (tok.isInterned()) {
@@ -1924,7 +1924,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append(alloc, 'z');
                 }
             },
-            .OpaqueName => {
+            .NominalName => {
                 try buf2.append(alloc, '@');
                 for (1..length) |_| {
                     try buf2.append(alloc, 'z');
@@ -2227,7 +2227,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
-            .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedUnknownToken, .MalformedNamedUnderscoreUnicode, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .String => {
+            .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedUnknownToken, .MalformedNamedUnderscoreUnicode, .MalformedNominalNameUnicode, .MalformedNominalNameWithoutName, .String => {
                 return error.Unsupported;
             },
             .MultilineString => {
@@ -2954,12 +2954,12 @@ pub const TokenIterator = struct {
                 };
             },
             '@' => {
-                // Opaque name (@Foo)
+                // Nominal name (@Foo)
                 self.cursor.pos += 1;
                 if (self.cursor.pos < self.cursor.buf.len) {
                     const next_char = self.cursor.buf[self.cursor.pos];
                     if (next_char >= 'A' and next_char <= 'Z') {
-                        // Consume the opaque name
+                        // Consume the nominal name
                         while (self.cursor.pos < self.cursor.buf.len) {
                             const c = self.cursor.buf[self.cursor.pos];
                             if ((c >= 'a' and c <= 'z') or
@@ -2976,7 +2976,7 @@ pub const TokenIterator = struct {
                         const ident = base.Ident.for_text(name_text);
                         const interned = try self.env.idents.insert(gpa, ident);
                         return Token{
-                            .tag = .OpaqueName,
+                            .tag = .NominalName,
                             .region = base.Region{
                                 .start = base.Region.Position{ .offset = @intCast(start) },
                                 .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
@@ -2986,7 +2986,7 @@ pub const TokenIterator = struct {
                     }
                 }
                 return Token{
-                    .tag = .MalformedOpaqueNameWithoutName,
+                    .tag = .MalformedNominalNameWithoutName,
                     .region = base.Region{
                         .start = base.Region.Position{ .offset = @intCast(start) },
                         .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },

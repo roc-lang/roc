@@ -252,43 +252,16 @@ asIas2
 ]
 
 # Where constraint
-A(a): (a where module(a) | .a1: (a -> (a -> () -> (
-	Str,
-	module(a) | .a2
-): (a -> (a -> () -> ((
-	Str,
-	B(b)
-): b where module(b) | .b1: (b -> (b -> () -> (
-	Str,
-	module(b) | .b2
-): (b -> (b -> () -> (
-	Str,
-	C((
-		a,
-		b
-	): (
-		a,
-		b
-	))
-)))))))))))))))D((
-	a,
-	b
-): C((
-	a,
-	b
-)))E: {
-	a: Str,
-	b: Str,
-}
-F: [
+A(a) : a where module(a) | .a1 : a -> a -> ) -> (Str, module(a) | .a2) : a -> a -> ) -> (Str, B(b)) : b where module(b) | .b1 : b -> b -> ) -> (Str, module(b) | .b2) : b -> b -> ) -> (Str, C((a, b) : (a, b)))D((a, b) : C (a, b))E :
+	{
+		a : Str,
+		b : Str,
+	}
+F : [
 	A,
 	B,
 ]
-g: (
-	e -> e where module(e) | A,
-	module(e) | B,
-	h
-) = 
+g : (e -> e where module(e) | A, module(e) | B, h) = 
 ~~~
 # EXPECTED
 NIL
@@ -410,87 +383,24 @@ at 31:2 to 31:2
 **Parse Error**
 at 31:2 to 31:2
 
-**Unsupported Node**
-at 4:1 to 4:29
-
-**Unsupported Node**
-at 5:1 to 5:24
-
-**Unsupported Node**
-at 5:25 to 5:25
-
-**Unsupported Node**
-at 5:32 to 5:32
-
-**Unsupported Node**
-at 5:38 to 5:38
-
-**Unsupported Node**
-at 5:45 to 5:45
-
-**Unsupported Node**
-at 5:46 to 5:46
-
-**Unsupported Node**
-at 8:8 to 12:2
-
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 12:19 to 12:19
-
-**Unsupported Node**
-at 14:5 to 14:11
-
-**Unsupported Node**
-at 18:3 to 18:3
-
-**Unsupported Node**
-at 31:2 to 31:2
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.apply_tag)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "b")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.binop_equals
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -73,39 +73,25 @@ app
 	],
 }
 
-processList: (List(Str) -> U64)
+processList : List Str -> U64
 processList = \list -> list.len()
 main! = \_ -> processList(["one", "two", "three"])
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 3:31
-
-**Unsupported Node**
-at 4:15 to 4:22
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "processList")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

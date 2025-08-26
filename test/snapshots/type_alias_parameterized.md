@@ -97,9 +97,9 @@ app
 	],
 }
 
-Pair((a, b)): (a, b)
+Pair((a, b)) : (a, b)
 
-swapPair: (Pair((a, b)) -> Pair((b, a)))
+swapPair : Pair (a, b) -> Pair (b, a)
 swapPair = \(x, y) -> (y, x)
 
 main! = \_ -> swapPair((1, 2))
@@ -107,39 +107,19 @@ main! = \_ -> swapPair((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:19 to 3:20
-
-**Unsupported Node**
-at 5:12 to 6:1
-
-**Unsupported Node**
-at 6:12 to 6:21
-
-**Unsupported Node**
-at 8:1 to 8:6
-
-**Unsupported Node**
-at 8:9 to 8:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "swapPair")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

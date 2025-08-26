@@ -85,31 +85,20 @@ module [
 	broken_fn3,
 ]
 
-broken_fn1: ((a -> b where module(a) | .method) -> b)
+broken_fn1 : a -> b where module(a) | .method -> b
 
 # Empty where clause
-broken_fn2: (((a -> b where broken_fn3: a) -> b where module(c) | .method: c) -> d)
+broken_fn2 : a -> b where broken_fn3 : a -> b where module(c) | .method : c -> d
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:14 to 6:26
-
-**Unsupported Node**
-at 9:14 to 15:30
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "broken_fn1")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "broken_fn2")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

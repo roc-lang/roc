@@ -22,8 +22,7 @@ if bool
 	{
 		A # Comment after expr
 	}
-else
-	B
+else B
 ~~~
 # EXPECTED
 NIL
@@ -33,13 +32,13 @@ at 1:1 to 1:9
 
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag if_else :type "[]_others")
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-[]_others
+_a
 ~~~

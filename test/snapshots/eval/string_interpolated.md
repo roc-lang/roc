@@ -43,15 +43,13 @@ NIL
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.str_literal_big)
+  (Expr.binop_lte)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Str")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-hello : Str
-world : Str
 ~~~

@@ -65,16 +65,16 @@ module [
 
 import MyResultModule
 
-handleResult: (MyResultModule.MyResultType((Str, I32)) -> Str)
+handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = \result -> {
 	when result is {
 		MyResultModule.MyResultType | Ok(value)
 		=>
-		value: value
+		value : value
 		MyResultModule.MyResultType | Err(code)
 		=>
 		"Error: $(code.toStr())"
-	} -> 
+	}
 }
 ~~~
 # EXPECTED
@@ -98,29 +98,17 @@ at 11:1 to 11:1
 **Parse Error**
 at 6:25 to 11:2
 
-**Unsupported Node**
-at 3:1 to 3:22
-
-**Unsupported Node**
-at 5:16 to 5:60
-
-**Unsupported Node**
-at 6:16 to 6:25
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleResult")
-    (Expr.malformed)
-  )
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

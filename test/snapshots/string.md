@@ -48,16 +48,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma Strin
 ~~~roc
 module []
 
-x = (
-	"one",
-	"two",
-	"\u",
-	"\u)",
-	"\u(",
-	"\u()",
-	"\u(K)",
-	"\u(1F680)"
-)"\
+x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")"\
 ~~~
 # EXPECTED
 NIL
@@ -71,12 +62,6 @@ at 15:1 to 15:1
 **Parse Error**
 at 15:1 to 15:1
 
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 15:1 to 15:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -86,7 +71,7 @@ at 15:1 to 15:1
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

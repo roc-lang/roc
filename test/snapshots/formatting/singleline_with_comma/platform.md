@@ -26,9 +26,9 @@ platform "pf" requires {(
 	R2,
 )} (
 	(
-		r1: R1 -> R2,
+		r1 : R1 -> R2,
 		r2,
-	): R1 -> R2,
+	) : R1 -> R2,
 ) exposes  [
 	E1,
 	E2,
@@ -36,7 +36,7 @@ platform "pf" requires {(
 	(
 		"pa1",
 		pa2,
-	): "pa2",
+	) : "pa2",
 )}
 
 ~~~

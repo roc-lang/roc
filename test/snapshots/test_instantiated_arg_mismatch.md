@@ -33,10 +33,7 @@ OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound Lower
 ~~~
 # FORMATTED
 ~~~roc
-{
-	pair: a,
-	a
-} -> (a, a)
+{ pair : a, a } -> (a, a)
 ~~~
 # EXPECTED
 NIL

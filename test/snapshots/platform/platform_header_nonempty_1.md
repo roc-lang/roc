@@ -36,15 +36,9 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma CloseCurly OpenCurly Low
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" # Comment after name requires {(
-	Main
-)} (
-	main!: List(Str) => {  }
-) exposes  [
+platform "foo" # Comment after name requires {(Main)} (main! : List Str => {  }) exposes  [
 	foo,
-] packages {some_pkg, (
-	"../some_pkg.roc"
-)}
+] packages {some_pkg, ("../some_pkg.roc")}
 
 ~~~
 # EXPECTED

@@ -217,127 +217,62 @@ app
 	],
 }
 
-UserId: U64
+UserId : U64
 
 # Generic type alias
-Result((ok, err)): [Ok(ok), Err(err)]
+Result((ok, err)) : [Ok(ok), Err(err)]
 
 # Record type alias
-Person: { name: Str, age: U64 }
+Person : {name : Str, age : U64}
 
 # Function type alias
-MapFn((a, b)): (a -> b)
+MapFn((a, b)) : a -> b
 
 # Complex nested type alias
-ApiResponse(data): Result((data, Str))
+ApiResponse(data) : Result (data, Str)
 
 # Type declaration with tag union
-Color: [Red, Green, Blue, Custom((U8, U8, U8))]
+Color : [Red, Green, Blue, Custom((U8, U8, U8))]
 
 # Type declaration with records and generics
-Container(item): {
-	contents: List(item),
-	metadata: { size: U64, created: Str }
-}
+Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
 
 main! = \_ -> {
-	userId: UserId
+	userId : UserId
 	userId = 123
 	
 
-person: Person
-	person = { name: "Alice", age: 30 }
+person : Person
+	person = { name : "Alice", age : 30 }
 	
 
-color: Color
+color : Color
 	color = Red
 	
 
-userId: userId
+userId : userId
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 7:19 to 7:37
-
-**Unsupported Node**
-at 13:15 to 13:21
-
-**Unsupported Node**
-at 19:9 to 20:1
-
-**Unsupported Node**
-at 27:1 to 27:6
-
-**Unsupported Node**
-at 27:9 to 27:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "contents")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "metadata")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "size")
-            (Expr.apply_tag)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "created")
-            (Expr.apply_tag)
-          )
-        )
-      )
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

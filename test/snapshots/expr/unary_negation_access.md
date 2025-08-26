@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.unary_neg)
+(Expr.unary_double_dot)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag unary_neg :type "_arg -> _ret")
+(expr :tag unary_double_dot :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_arg -> _ret
+_a
 ~~~

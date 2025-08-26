@@ -34,9 +34,9 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma LowerI
 # FORMATTED
 ~~~roc
 {
-	field_with_underscores: "underscore",
-	field123: "numbers",
-	camelCase: "camel",
+	field_with_underscores : "underscore",
+	field123 : "numbers",
+	camelCase : "camel",
 }
 ~~~
 # EXPECTED
@@ -45,26 +45,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "field_with_underscores")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "field123")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "camelCase")
-    (Expr.str_literal_big)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

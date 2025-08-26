@@ -72,46 +72,29 @@ module [
 	addTwoF64,
 ]
 
-addTwo: (I64 -> I64)
+addTwo : I64 -> I64
 addTwo = \x -> x + 2
 
 # Should successfully constrain literal 2.0 to F64
-addTwoF64: (F64 -> F64)
+addTwoF64 : F64 -> F64
 addTwoF64 = \x -> x + 2.0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:10 to 4:20
-
-**Unsupported Node**
-at 5:10 to 5:14
-
-**Unsupported Node**
-at 8:13 to 8:23
-
-**Unsupported Node**
-at 9:13 to 9:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "addTwo")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "addTwoF64")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

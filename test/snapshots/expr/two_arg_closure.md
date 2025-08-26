@@ -31,18 +31,16 @@ OpBar Underscore Comma Underscore OpBar Int ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:8
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

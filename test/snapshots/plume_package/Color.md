@@ -443,23 +443,14 @@ Color := [
 	Hex(Str),
 ]
 
-rgb: (U8 -> (U8 -> (U8 -> Color)))
-rgb = \(
-	r,
-	g,
-	b
-) -> Color.RGB((r, g, b))
-rgba: (U8 -> (U8 -> (U8 -> (U8 -> Color))))
-rgba = \(
-	r,
-	g,
-	b,
-	a
-) -> {
+rgb : U8 -> U8 -> U8 -> Color
+rgb = \(r, g, b) -> Color.RGB((r, g, b))
+rgba : U8 -> U8 -> U8 -> U8 -> Color
+rgba = \(r, g, b, a) -> {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
-hex: (Str -> Result((Color, [InvalidHex(Str)])))
+hex : Str -> Result (Color, [InvalidHex(Str)])
 hex = \str -> {
 	bytes = str.to_utf8()
 	is_char_in_hex_range = \b -> (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
@@ -536,8 +527,7 @@ hex = \str -> {
 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("
 	when bytes is {
-		[
-			'#', a, b, c, d, e, f] => {
+		['#', a, b, c, d, e, f] => {
             is_valid =
                 a.is_char_in_hex_range()
                 and b.is_char_in_hex_range()
@@ -546,27 +536,17 @@ hex = \str -> {
                 and e.is_char_in_hex_range()
                 and f.is_char_in_hex_range()
 
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex(",
-			a,
-			b,
-			c,
-			d,
-			e,
-			f
-		]
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex(", a, b, c, d, e, f]
 		=>
 		{
 			is_valid = ((((a.is_char_in_hex_range() && b.is_char_in_hex_range()) && c.is_char_in_hex_range()) && d.is_char_in_hex_range()) && e.is_char_in_hex_range()) && f.is_char_in_hex_range()
-			if is_valid
-				Ok(Color.Hex(str))
-			else
-				Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
 		_
 		=>
 		Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-	} -> }
-	to_str: Color
+	}
+	to_str : Color
 	->
 	Str
 	to_str = \color -> when color is {
@@ -578,21 +558,18 @@ hex = \str -> {
 		"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
 		Color.Named(inner)
 		=>
-		inner: inner
+		inner : inner
 		Color.Hex(inner)
 		=>
-		inner: inner
-	} -> expect
+		inner : inner
+	}
 	rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 	expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 	expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
-	named: Str
+	named : Str
 	->
 	Result((Color, [UnknownColor(Str)]))
-	named = \str -> if str.is_named_color()
-		Ok(Color.Named(str))
-	else
-		Err(UnknownColor("Unknown color ${str}"))
+	named = \str -> if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
 	is_named_color = \str -> {
 		colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
 		colors.contains(str)
@@ -653,51 +630,21 @@ at 62:5 to 63:9
 **Parse Error**
 at 27:13 to 72:1
 
-**Unsupported Node**
-at 10:1 to 15:1
-
-**Unsupported Node**
-at 17:7 to 17:26
-
-**Unsupported Node**
-at 18:7 to 18:17
-
-**Unsupported Node**
-at 20:8 to 20:31
-
-**Unsupported Node**
-at 21:8 to 21:21
-
-**Unsupported Node**
-at 26:7 to 27:1
-
-**Unsupported Node**
-at 27:7 to 27:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "rgb")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "rgba")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "hex")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_h")
 ~~~
 # TYPES
 ~~~roc

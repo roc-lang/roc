@@ -88,48 +88,25 @@ app
 	],
 }
 
-mapList: (List(a) -> ((a -> b) -> List(b)))
-mapList = \(
-	list,
-	fn
-) -> list.map(fn)
-main! = \_ -> mapList([
-	1,
-	2,
-	3,
-	4,
-	5
-])
+mapList : List a -> (a -> b) -> List b
+mapList = \(list, fn) -> list.map(fn)
+main! = \_ -> mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:11 to 3:39
-
-**Unsupported Node**
-at 4:11 to 4:22
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "mapList")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

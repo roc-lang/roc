@@ -152,7 +152,7 @@ app
 	],
 }
 
-processComplex: (Result((List(Maybe(a)), Dict((Str, Error(_b))))) -> List(a))
+processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
 processComplex = \result -> when result is {
 	Ok(maybeList)
 	=>
@@ -160,13 +160,10 @@ processComplex = \result -> when result is {
 	Err(_)
 	=>
 	[]
-} -> 
-
-# Test multiple levels of nesting
-deepNested: Maybe(Result((List(Dict((Str, a))), _b))) -> adeepNested = \_ -> {
+}deepNested = \_ -> {
 	crash "not implemented"
 }
-ComplexType((a, b)): Result((List(Maybe(a)), Dict((Str, Error(b)))))
+ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))
 main! = \_ -> processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
@@ -184,40 +181,19 @@ at 8:16 to 8:16
 **Parse Error**
 at 6:5 to 12:1
 
-**Unsupported Node**
-at 4:18 to 4:73
-
-**Unsupported Node**
-at 5:18 to 6:5
-
-**Unsupported Node**
-at 13:14 to 13:18
-
-**Unsupported Node**
-at 20:1 to 20:6
-
-**Unsupported Node**
-at 20:9 to 20:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "processComplex")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

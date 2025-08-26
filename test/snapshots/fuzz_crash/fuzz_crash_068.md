@@ -34,13 +34,13 @@ NIL
 ~~~clojure
 (Expr.block
   (Expr.block
-    (Expr.num_literal_i32 0)
+    (Expr.binop_star)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Num(_a)")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

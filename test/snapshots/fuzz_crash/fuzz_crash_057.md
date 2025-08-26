@@ -44,33 +44,22 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent
 ~~~roc
 module []
 
-s: ((b -> c where module(a) | .t: c, u): o)...
+s : (b -> c where module(a) | .t : c, u) : o...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:37 to 1:38
-
-**Unsupported Node**
-at 1:39 to 1:42
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "s")
-    (Expr.binop_colon
-      (Expr.malformed)
-      (Expr.lookup "o")
-    )
-  )
   (Expr.malformed)
+  (Expr.if_else)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

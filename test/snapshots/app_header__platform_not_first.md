@@ -22,7 +22,7 @@ app
 	somePkg: (
 		"../main.roc",
 		pf,
-	): "../main.roc" platform [
+	) : "../main.roc" platform [
 		main,
 	],
 }
@@ -42,5 +42,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : _a
+main : Str
 ~~~

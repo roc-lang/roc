@@ -331,10 +331,7 @@ anotherIdentity = \y -> y
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
-combine = \(
-	first,
-	second
-) -> (first, second)
+combine = \(first, second) -> (first, second)
 f = 1
 g = 2
 h = 3
@@ -372,27 +369,7 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 7:12 to 7:16
-
-**Unsupported Node**
-at 16:19 to 16:23
-
-**Unsupported Node**
-at 20:11 to 20:27
-
-**Unsupported Node**
-at 46:22 to 46:28
-
-**Unsupported Node**
-at 53:17 to 53:25
-
-**Unsupported Node**
-at 55:1 to 55:6
-
-**Unsupported Node**
-at 55:9 to 55:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -434,7 +411,7 @@ at 55:9 to 55:13
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_ac")
 ~~~
 # TYPES
 ~~~roc

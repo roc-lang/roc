@@ -61,31 +61,23 @@ module [
 	convert,
 ]
 
-convert: ((a -> b where module(a) | .to_b: a) -> b)
+convert : a -> b where module(a) | .to_b : a -> b
 convert = \a -> a.to_b()
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:11 to 3:47
-
-**Unsupported Node**
-at 4:11 to 4:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "convert")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

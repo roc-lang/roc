@@ -21,12 +21,10 @@ KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow Triple
 # FORMATTED
 ~~~roc
 when ... is {
-	[
-		'#'] => ...
+	['#'] => ...
 	['a', 'b'] => ...
 	_ => ...
-}	# ']
-	]
+}]
 	=>
 	...
 	['a', 'b'] => ...
@@ -39,7 +37,7 @@ when ... is {
 	_
 	=>
 	...
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -62,24 +60,15 @@ at 1:1 to 5:2
 **Parse Error**
 at 5:2 to 5:2
 
-**Unsupported Node**
-at 1:7 to 1:10
-
-**Unsupported Node**
-at 1:11 to 5:1
-
-**Unsupported Node**
-at 5:2 to 5:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

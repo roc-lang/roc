@@ -25,7 +25,7 @@ OpenCurly LowerIdent OpAmpersand LowerIdent OpColon Int CloseCurly ~~~
 ~~~roc
 person
 &
-age: 31
+age : 31
 ~~~
 # EXPECTED
 NIL
@@ -33,18 +33,12 @@ NIL
 **Parse Error**
 at 1:10 to 1:10
 
-**Unsupported Node**
-at 1:10 to 1:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "person")
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

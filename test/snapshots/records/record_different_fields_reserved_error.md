@@ -32,11 +32,11 @@ if : ((
 				(
 					"conditional",
 					when,
-				): "pattern match",
-			): "test assertion",
-		): "module load",
-	): Bool.true,
-): Bool.false)
+				) : "pattern match",
+			) : "test assertion",
+		) : "module load",
+	) : Bool.true,
+) : Bool.false)
 ~~~
 # EXPECTED
 NIL
@@ -65,18 +65,15 @@ at 8:1 to 8:1
 **Parse Error**
 at 1:1 to 8:2
 
-**Unsupported Node**
-at 2:5 to 8:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.unary_neg)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

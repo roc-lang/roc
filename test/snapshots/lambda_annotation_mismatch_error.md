@@ -72,46 +72,29 @@ module [
 	wrong_type_function,
 ]
 
-string_function: (Str -> Str)
+string_function : Str -> Str
 string_function = \x -> x + 42
 
 # Annotation says function returns I64, but implementation returns Frac(_prec)
-wrong_type_function: (I64 -> I64)
+wrong_type_function : I64 -> I64
 wrong_type_function = \x -> x * 3.14
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:19 to 4:29
-
-**Unsupported Node**
-at 5:19 to 5:23
-
-**Unsupported Node**
-at 8:23 to 8:33
-
-**Unsupported Node**
-at 9:23 to 9:27
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "string_function")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "wrong_type_function")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

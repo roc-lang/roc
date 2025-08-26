@@ -26,20 +26,15 @@ NIL
 **Parse Error**
 at 1:1 to 1:13
 
-**Unsupported Node**
-at 1:1 to 1:9
-
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.malformed)
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

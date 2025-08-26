@@ -32,7 +32,7 @@ module [
 	foo,
 ]
 
-foo: Str
+foo : Str
 foo = "one"
 ~~~
 # EXPECTED
@@ -42,16 +42,13 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

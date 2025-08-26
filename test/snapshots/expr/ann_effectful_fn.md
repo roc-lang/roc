@@ -45,7 +45,7 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-launchTheNukes: {  }
+launchTheNukes : {}
 =>
 Result
 Bool
@@ -60,26 +60,16 @@ NIL
 **Parse Error**
 at 2:25 to 2:25
 
-**Unsupported Node**
-at 2:25 to 2:25
-
-**Unsupported Node**
-at 3:22 to 3:25
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "launchTheNukes")
-    (Expr.record_literal
-    )
-  )
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.apply_tag)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.str_literal_small)
+  (Expr.str_literal_small)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -88,5 +78,4 @@ at 3:22 to 3:25
 ~~~
 # TYPES
 ~~~roc
-launchTheNukes : Error
 ~~~

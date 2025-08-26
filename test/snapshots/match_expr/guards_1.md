@@ -24,7 +24,7 @@ when value is {
 	x
 	if x > 0 => "positive: ${Num.toStr x}" x
 	if x < 0 => "negative: ${Num.toStr x}" _ => "other"
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -44,21 +44,15 @@ at 1:1 to 5:2
 **Parse Error**
 at 5:2 to 5:2
 
-**Unsupported Node**
-at 1:13 to 5:1
-
-**Unsupported Node**
-at 5:2 to 5:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

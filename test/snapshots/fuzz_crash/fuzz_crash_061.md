@@ -20,7 +20,7 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 # FORMATTED
 ~~~roc
 platform "
-requires{}{ requires n: 0 exposes  [
+requires{}{ requires n : 0 exposes  [
 	import,
 ]
 
@@ -71,18 +71,15 @@ at 1:1 to 2:33
 **Parse Error**
 at 2:33 to 2:34
 
-**Unsupported Node**
-at 2:33 to 2:34
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_or)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

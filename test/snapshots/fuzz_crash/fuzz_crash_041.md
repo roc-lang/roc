@@ -42,7 +42,7 @@ app
 
 []
 {
-	f: platform
+	f : platform
 	""
 } | (0, ) || )
 ~~~
@@ -64,25 +64,16 @@ at 1:29 to 1:29
 **Parse Error**
 at 1:29 to 1:29
 
-**Unsupported Node**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:6 to 1:20
-
-**Unsupported Node**
-at 1:1 to 1:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.lambda)
+  (Expr.binop_or)
+  (Expr.frac_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg -> Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

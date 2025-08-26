@@ -24,27 +24,21 @@ OpenSquare Int Comma String Comma Int CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-[
-	42,
-	"hello world",
-	100
-]
+[42, "hello world", 100]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 5:1
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_or)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_or :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-Error
+[True, False]_others
 ~~~

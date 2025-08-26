@@ -87,55 +87,26 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 ~~~roc
 module []
 
-foo: U64
-bar: Thing((a, b, _))
-biz: (a, b, c)
-add_one: (U8 -> (U16 -> U32))
-main!: (List(String) -> Result(({  }, _)))
-tag_tuple: Value((a, b, c))
+foo : U64
+bar : Thing (a, b, _)
+biz : (a, b, c)
+add_one : U8 -> U16 -> U32
+main! : List String -> Result ({  }, _)
+tag_tuple : Value (a, b, c)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 4:19 to 4:20
-
-**Unsupported Node**
-at 5:15 to 5:16
-
-**Unsupported Node**
-at 7:1 to 7:15
-
-**Unsupported Node**
-at 8:9 to 9:1
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "bar")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "biz")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "tag_tuple")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

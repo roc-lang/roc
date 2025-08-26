@@ -21,7 +21,7 @@ OpenCurly LowerIdent OpColon String CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-name: "Alice"
+name : "Alice"
 ~~~
 # EXPECTED
 NIL
@@ -29,18 +29,14 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
 ~~~

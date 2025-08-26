@@ -27,15 +27,9 @@ NIL
 **Parse Error**
 at 1:4 to 1:4
 
-**Unsupported Node**
-at 1:4 to 1:4
-
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.num_literal_i32 1)
-  (Expr.malformed)
-)
+(Expr.binop_plus)
 ~~~
 # SOLVED
 ~~~clojure

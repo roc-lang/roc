@@ -42,23 +42,17 @@ NIL
 **Parse Error**
 at 4:1 to 4:1
 
-**Unsupported Node**
-at 4:1 to 4:1
-
-**Unsupported Node**
-at 6:7 to 6:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.str_literal_small)
+  (Expr.binop_not_equals)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

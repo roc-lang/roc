@@ -30,9 +30,7 @@ UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-H{
-	o
-}foo = "on        (string 'onmo %')))
+H{ o }foo = "on        (string 'onmo %')))
 ~~~
 # EXPECTED
 NIL
@@ -46,26 +44,17 @@ at 1:2 to 3:1
 **Parse Error**
 at 5:5 to 5:5
 
-**Unsupported Node**
-at 2:6 to 2:6
-
-**Unsupported Node**
-at 5:5 to 5:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
-  (Expr.record_literal
-    (Expr.lookup "o")
-    (Expr.malformed)
-  )
+  (Expr.str_literal_small)
+  (Expr.binop_double_slash)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

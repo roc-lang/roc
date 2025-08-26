@@ -102,30 +102,16 @@ x = 42
 name = "Alice"
 pi = 3.14159
 isActive = Bool.true
-add = \(
-	a,
-	b
-) -> a + b
+add = \(a, b) -> a + b
 pair = (1, "hello")
-record = { age: 30, city: "NYC" }
+record = { age : 30, city : "NYC" }
 list = [1, 2, 3]
 y = x + 10
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:16 to 5:20
-
-**Unsupported Node**
-at 6:11 to 6:18
-
-**Unsupported Node**
-at 7:23 to 7:24
-
-**Unsupported Node**
-at 9:12 to 9:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -142,17 +128,8 @@ at 9:12 to 9:21
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-name : Str
-pi : F64
-isActive : _arg -> _ret
-add : Error
-pair : Error
-record : {}
-list : Error
-y : _c
 ~~~

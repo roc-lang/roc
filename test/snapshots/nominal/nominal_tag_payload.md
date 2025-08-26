@@ -117,10 +117,10 @@ module [
 
 Maybe(a) := [Some(a), None]
 
-some1: (a -> Maybe(a))
+some1 : a -> Maybe a
 some1 = \a -> Maybe.Some(a)
 
-none1: Maybe(_a)
+none1 : Maybe _a
 none1 = Maybe.None
 some2 = \a -> Maybe.Some(a)
 
@@ -129,37 +129,14 @@ none2 = Maybe.None
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:28
-
-**Unsupported Node**
-at 5:9 to 5:22
-
-**Unsupported Node**
-at 6:9 to 6:13
-
-**Unsupported Node**
-at 9:9 to 9:14
-
-**Unsupported Node**
-at 11:9 to 11:13
-
-**Unsupported Node**
-at 13:9 to 13:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "some1")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "none1")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -167,7 +144,7 @@ at 13:9 to 13:14
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

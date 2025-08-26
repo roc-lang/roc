@@ -27,7 +27,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "modu")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED

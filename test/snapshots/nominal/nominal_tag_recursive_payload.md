@@ -59,32 +59,24 @@ module [
 
 ConsList(a) := [Nil, Node(ConsList(a))]
 
-empty: ConsList(_a)
+empty : ConsList _a
 empty = ConsList.Nil
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:40
-
-**Unsupported Node**
-at 6:9 to 6:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "empty")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

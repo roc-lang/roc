@@ -88,24 +88,19 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-\{ a: a, x: (b, c), y: { d: d, e: e } } -> (((a + b) + c) + d) + e({ a: 1, x: (2, 3), y: { d: 4, e: 5 } })
+\{ a : a, x : (b, c), y : {d : d, e : e} } -> (((a + b) + c) + d) + e({ a : 1, x : (2, 3), y : {d : 4, e : 5} })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:2 to 1:31
-
-**Unsupported Node**
-at 1:69 to 1:70
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.binop_colon)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag apply_ident :type "_f")
+(expr :tag binop_colon :type "_f")
 ~~~
 # TYPES
 ~~~roc

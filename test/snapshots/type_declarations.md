@@ -135,83 +135,39 @@ module [
 	main,
 ]
 
-Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
+Map((a, b)) : List a -> (a -> b) -> List b
 
-Foo: (Bar, Baz)
+Foo : (Bar, Baz)
 
-Some(a): { foo: Ok(a), bar: Something }
+Some(a) : {foo : Ok a, bar : Something}
 
-Maybe(a): [Some(a), None]
+Maybe(a) : [Some(a), None]
 
-SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
+SomeFunc(a) : Maybe a -> a -> Maybe a
 
-MyType: U64
+MyType : U64
 
-MyType2: Module.Thingy
+MyType2 : Module.Thingy
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:13 to 3:41
-
-**Unsupported Node**
-at 5:16 to 5:17
-
-**Unsupported Node**
-at 9:12 to 9:27
-
-**Unsupported Node**
-at 11:15 to 11:38
-
-**Unsupported Node**
-at 15:11 to 15:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

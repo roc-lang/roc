@@ -78,45 +78,28 @@ app
 	],
 }
 
-helper: (I64 -> I64)
+helper : I64 -> I64
 helper = \n -> n * 2
 
-main: (I64 -> (I64 -> I64))
+main : I64 -> I64 -> I64
 main = \(_, _) -> helper(5)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:10 to 3:20
-
-**Unsupported Node**
-at 4:10 to 4:14
-
-**Unsupported Node**
-at 6:8 to 6:23
-
-**Unsupported Node**
-at 7:8 to 7:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "helper")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "main")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

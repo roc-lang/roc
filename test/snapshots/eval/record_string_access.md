@@ -25,7 +25,7 @@ OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 # FORMATTED
 ~~~roc
 {
-	foo: "Hello"
+	foo : "Hello"
 } | .foo
 ~~~
 # EXPECTED

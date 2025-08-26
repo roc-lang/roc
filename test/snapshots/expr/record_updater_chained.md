@@ -83,11 +83,11 @@ module [
 	final,
 ]
 
-person = { name: "Alice", age: 30, city: "Boston" }
-updated_one = { ..person }age: 31
+person = { name : "Alice", age : 30, city : "Boston" }
+updated_one = { ..person }age : 31
 }
-updated2 = { ..updated_one }city: "New York"}
-final = { ..updated2 }name: (("Alice Smith", age): 32)
+updated2 = { ..updated_one }city : "New York"}
+final = { ..updated2 }name : ("Alice Smith", age) : 32
 ~~~
 # EXPECTED
 NIL
@@ -110,57 +110,24 @@ at 6:9 to 6:23
 **Parse Error**
 at 6:52 to 6:52
 
-**Unsupported Node**
-at 4:15 to 4:23
-
-**Unsupported Node**
-at 4:35 to 4:35
-
-**Unsupported Node**
-at 5:12 to 5:25
-
-**Unsupported Node**
-at 5:46 to 5:46
-
-**Unsupported Node**
-at 6:9 to 6:19
-
-**Unsupported Node**
-at 6:47 to 6:48
-
-**Unsupported Node**
-at 6:52 to 6:52
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "city")
-    (Expr.str_literal_big)
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.binop_colon
-      (Expr.malformed)
-      (Expr.num_literal_i32 32)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

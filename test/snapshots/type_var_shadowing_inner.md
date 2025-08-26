@@ -88,11 +88,11 @@ app
 	],
 }
 
-outer: (a -> a)
+outer : a -> a
 outer = \x -> {
-	inner: a
+	inner : a
 	->
-	a # Shadows outer 'a' # Shadows outer 'a': a
+	a # Shadows outer 'a' : a
 	inner = \y -> y
 	
 
@@ -107,32 +107,17 @@ NIL
 **Parse Error**
 at 5:15 to 5:15
 
-**Unsupported Node**
-at 3:9 to 3:15
-
-**Unsupported Node**
-at 4:9 to 4:13
-
-**Unsupported Node**
-at 11:1 to 11:6
-
-**Unsupported Node**
-at 11:9 to 11:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "outer")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

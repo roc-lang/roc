@@ -92,7 +92,7 @@ app
 
 import pf.Stdout
 
-printName: ({ name: Str, age: U64 } => Str)
+printName : { name : Str, age : U64 } => Str
 printName = \person -> {
 	Stdout.line!(person.name)
 	person.name
@@ -102,36 +102,19 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
-
-**Unsupported Node**
-at 5:13 to 5:43
-
-**Unsupported Node**
-at 6:13 to 6:22
-
-**Unsupported Node**
-at 10:1 to 10:6
-
-**Unsupported Node**
-at 10:9 to 10:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "printName")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

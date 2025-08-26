@@ -55,22 +55,20 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 x = 5
 y = \_ -> {
 	x = 10
-	x: x
+	x : x
 }({  }) # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
 y
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:10 to 3:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "y")
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED
@@ -79,6 +77,4 @@ at 3:10 to 3:14
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-y : _a
 ~~~

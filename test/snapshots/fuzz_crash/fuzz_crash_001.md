@@ -29,18 +29,15 @@ NIL
 **Parse Error**
 at 1:4 to 1:4
 
-**Unsupported Node**
-at 1:4 to 1:4
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.frac_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg -> Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

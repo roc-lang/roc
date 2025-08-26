@@ -72,7 +72,8 @@ app
 	],
 }
 
-swap: ((a, b) -> (b, a))
+swap :
+	(a, b) -> (b, a)
 swap = \(x, y) -> (y, x)
 
 # Call it with two separate arguments instead of a tuple
@@ -82,26 +83,18 @@ main = swap((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:13 to 4:24
-
-**Unsupported Node**
-at 5:8 to 5:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "swap")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

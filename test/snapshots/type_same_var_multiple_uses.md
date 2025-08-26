@@ -64,7 +64,7 @@ app
 	],
 }
 
-pair: (a -> (a, a))
+pair : a -> (a, a)
 pair = \x -> (x, x)
 
 main! = \_ -> {  }
@@ -72,32 +72,18 @@ main! = \_ -> {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:8 to 3:19
-
-**Unsupported Node**
-at 4:8 to 4:12
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "pair")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

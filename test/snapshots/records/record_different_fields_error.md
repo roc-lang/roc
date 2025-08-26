@@ -16,7 +16,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma UpperIdent OpColon String Comma LowerIdent OpUnaryMinus LowerIdent OpColon String Comma LowerIdent MalformedUnknownToken LowerIdent OpColon String Comma LowerIdent MalformedOpaqueNameWithoutName LowerIdent OpColon String Comma CloseCurly ~~~
+OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma UpperIdent OpColon String Comma LowerIdent OpUnaryMinus LowerIdent OpColon String Comma LowerIdent MalformedUnknownToken LowerIdent OpColon String Comma LowerIdent MalformedNominalNameWithoutName LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
 (record_literal
@@ -45,10 +45,10 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma UpperI
 # FORMATTED
 ~~~roc
 {
-	_privateField: "leading underscore",
-	field_: "trailing underscore",
-	PascalCase: "pascal",
-	kebab - case: "kebab",
+	_privateField : "leading underscore",
+	field_ : "trailing underscore",
+	PascalCase : "pascal",
+	kebab - case : "kebab",
 	field,
 }
 ~~~
@@ -60,34 +60,13 @@ at 1:1 to 6:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "_privateField")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "field_")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.binop_minus
-      (Expr.lookup "kebab")
-      (Expr.lookup "case")
-    )
-    (Expr.str_literal_big)
-  )
-  (Expr.lookup "field")
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

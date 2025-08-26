@@ -62,48 +62,31 @@ module [
 	processValue,
 ]
 
-MyType: UnknownType
+MyType : UnknownType
 
-processValue: (UndeclaredResult -> Str)
+processValue : UndeclaredResult -> Str
 processValue = \value -> {
 	"processed"
 }
 
-AnotherType: SomeModule.MissingType
+AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:16 to 5:39
-
-**Unsupported Node**
-at 6:16 to 6:24
-
-**Unsupported Node**
-at 10:15 to 10:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processValue")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -103,10 +103,10 @@ app
 	],
 }
 
-process: ([Some(Str), None] -> Str)
+process : [Some(Str), None] -> Str
 process = \maybe -> "result"
 
-is_ok_ret_unqualified_bool: ([Ok(_ok), Err(_err)] -> Bool)
+is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = \result -> when result is {
 	Ok(_)
 	=>
@@ -114,16 +114,14 @@ is_ok_ret_unqualified_bool = \result -> when result is {
 	Err(_)
 	=>
 	False
-} -> 
-
-is_ok_ret_bool: [Ok(_ok2), Err(_err2)] -> Boolis_ok_ret_bool = \result -> when result is {
+}is_ok_ret_bool = \result -> when result is {
 	Ok(_)
 	=>
 	Bool.True
 	Err(_)
 	=>
 	Bool.False
-} -> main! = \_ -> {  }
+}
 ~~~
 # EXPECTED
 NIL
@@ -152,40 +150,19 @@ at 15:12 to 15:12
 **Parse Error**
 at 13:27 to 18:1
 
-**Unsupported Node**
-at 3:11 to 3:35
-
-**Unsupported Node**
-at 4:11 to 4:19
-
-**Unsupported Node**
-at 6:30 to 6:58
-
-**Unsupported Node**
-at 7:30 to 7:39
-
-**Unsupported Node**
-at 13:18 to 13:27
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "is_ok_ret_unqualified_bool")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

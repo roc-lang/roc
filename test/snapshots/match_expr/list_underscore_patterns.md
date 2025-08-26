@@ -44,7 +44,7 @@ when items is {
 	[]
 	=>
 	0 # match an empty list
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -91,21 +91,15 @@ at 1:1 to 8:2
 **Parse Error**
 at 8:2 to 8:2
 
-**Unsupported Node**
-at 1:13 to 7:13
-
-**Unsupported Node**
-at 8:2 to 8:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

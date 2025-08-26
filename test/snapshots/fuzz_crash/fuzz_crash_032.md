@@ -70,9 +70,9 @@ module [
 	r,
 ]
 
-LocalStatus: (lue => Loc = [Pending, Complete])
+LocalStatus : lue => Loc = [Pending, Complete]
 
-olor: (_ -> tus)
+olor : _ -> tus
 olor = \color -> {
 	import Color.RGB
 	
@@ -87,7 +87,7 @@ when color is {
 		B.Blue
 		=>
 		LocalStatus.Pending
-	} -> 
+	}
 }
 ~~~
 # EXPECTED
@@ -114,32 +114,17 @@ at 12:1 to 12:1
 **Parse Error**
 at 6:16 to 12:2
 
-**Unsupported Node**
-at 3:14 to 3:45
-
-**Unsupported Node**
-at 5:8 to 5:16
-
-**Unsupported Node**
-at 6:8 to 6:16
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "olor")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

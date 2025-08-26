@@ -67,9 +67,9 @@ app
 	],
 }
 
-UserId: U64
+UserId : U64
 
-getUser: (UserId -> Str)
+getUser : UserId -> Str
 getUser = \id -> if id > 10 "big" else "small"
 
 main! = \_ -> getUser(100)
@@ -80,36 +80,18 @@ NIL
 **Parse Error**
 at 6:16 to 6:29
 
-**Unsupported Node**
-at 5:11 to 5:24
-
-**Unsupported Node**
-at 6:11 to 6:16
-
-**Unsupported Node**
-at 8:1 to 8:6
-
-**Unsupported Node**
-at 8:9 to 8:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "getUser")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

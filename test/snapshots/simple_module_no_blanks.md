@@ -50,26 +50,18 @@ world = "World"
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:1 to 2:17
-
-**Unsupported Node**
-at 3:1 to 3:7
-
-**Unsupported Node**
-at 3:10 to 3:16
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

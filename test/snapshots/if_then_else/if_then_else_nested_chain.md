@@ -55,9 +55,11 @@ checkNumber = \num -> {
 		{
 			"zero"
 		}
-	else if num > 100 {
-		"large"
-	} else {
+	else if num > 100
+		{
+			"large"
+		}
+	else {
 		"positive"
 	}
 }
@@ -74,9 +76,6 @@ at 6:9 to 6:21
 **Parse Error**
 at 8:9 to 8:22
 
-**Unsupported Node**
-at 3:15 to 3:21
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -85,7 +84,7 @@ at 3:15 to 3:21
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

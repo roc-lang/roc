@@ -34,7 +34,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_ident)
+  (Expr.binop_colon)
 )
 ~~~
 # SOLVED

@@ -31,18 +31,16 @@ OpBar LowerIdent OpBar LowerIdent OpPlus Int ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:5
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

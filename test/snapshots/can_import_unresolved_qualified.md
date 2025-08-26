@@ -175,11 +175,11 @@ import http.Client as Http
 
 # Test unresolved qualified value
 main = Json.NonExistent | .method
-parseData: (Json.InvalidType -> Str)
+parseData : Json.InvalidType -> Str
 parseData = \data -> Json.stringify(data)
 
 # Test unresolved nested qualification
-processRequest: (Http.Server | Request -> Http.Server | Response)
+processRequest : Http.Server | Request -> Http.Server | Response
 processRequest = \req -> Http.Server | .defaultResponse
 result = Json.prase("test")
 
@@ -191,69 +191,16 @@ parser = ((Json.Parser | Advanced) | NonExistent) | .create
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
-
-**Unsupported Node**
-at 4:1 to 4:27
-
-**Unsupported Node**
-at 7:8 to 7:12
-
-**Unsupported Node**
-at 7:12 to 7:23
-
-**Unsupported Node**
-at 10:13 to 10:36
-
-**Unsupported Node**
-at 11:13 to 11:20
-
-**Unsupported Node**
-at 14:18 to 14:60
-
-**Unsupported Node**
-at 15:18 to 15:24
-
-**Unsupported Node**
-at 18:10 to 18:14
-
-**Unsupported Node**
-at 21:10 to 21:17
-
-**Unsupported Node**
-at 21:17 to 21:23
-
-**Unsupported Node**
-at 24:10 to 24:14
-
-**Unsupported Node**
-at 27:10 to 27:14
-
-**Unsupported Node**
-at 27:14 to 27:20
-
-**Unsupported Node**
-at 27:21 to 27:29
-
-**Unsupported Node**
-at 27:30 to 27:41
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "parseData")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processRequest")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -263,7 +210,7 @@ at 27:30 to 27:41
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

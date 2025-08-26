@@ -68,7 +68,7 @@ redeclareTest = \_ -> {
 	var x_ = 5
 	var x_ = 10 # Redeclare var - should warn but proceed
 	x_ = 15 # Reassign - should work without warning
-	x_: x_
+	x_ : x_
 }
 
 result = redeclareTest({  })
@@ -76,9 +76,7 @@ result = redeclareTest({  })
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:17 to 4:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -88,7 +86,7 @@ at 4:17 to 4:21
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

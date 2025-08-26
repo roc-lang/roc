@@ -40,39 +40,24 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-UnusedType := _
-
-UsedType := _
-
-value: UsedType
-value = 42
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:16
-
-**Unsupported Node**
-at 5:1 to 5:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "value")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

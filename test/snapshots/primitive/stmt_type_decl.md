@@ -38,28 +38,22 @@ module [
 	Foo,
 ]
 
-Foo((a, b)): (a, b, Str, U64)
+Foo((a, b)) : (a, b, Str, U64)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:24 to 3:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

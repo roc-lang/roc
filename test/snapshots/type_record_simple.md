@@ -70,39 +70,25 @@ app
 	],
 }
 
-get_name: ({ name: Str, age: U64 } -> Str)
+get_name : {name : Str, age : U64} -> Str
 get_name = \person -> person.name
 main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:12 to 3:42
-
-**Unsupported Node**
-at 4:12 to 4:21
-
-**Unsupported Node**
-at 6:1 to 6:6
-
-**Unsupported Node**
-at 6:9 to 6:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "get_name")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

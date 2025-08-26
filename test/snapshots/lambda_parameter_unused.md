@@ -176,19 +176,19 @@ app
 	],
 }
 
-add: (U64 -> U64)
+add : U64 -> U64
 add = \unused -> 42
 
 # Lambda with underscore parameter that is used - should warn
-multiply: (U64 -> U64)
+multiply : U64 -> U64
 multiply = \_factor -> _factor * 2
 
 # Lambda with unused underscore parameter - should be fine
-process: (U64 -> U64)
+process : U64 -> U64
 process = \_input -> 100
 
 # Lambda with used parameter - should be fine
-double: (U64 -> U64)
+double : U64 -> U64
 double = \value -> value * 2
 
 main! = \_ -> {
@@ -202,65 +202,24 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:7 to 4:17
-
-**Unsupported Node**
-at 5:7 to 5:16
-
-**Unsupported Node**
-at 8:12 to 8:22
-
-**Unsupported Node**
-at 9:12 to 9:22
-
-**Unsupported Node**
-at 12:11 to 12:21
-
-**Unsupported Node**
-at 13:11 to 13:20
-
-**Unsupported Node**
-at 16:10 to 16:20
-
-**Unsupported Node**
-at 17:10 to 17:18
-
-**Unsupported Node**
-at 19:1 to 19:6
-
-**Unsupported Node**
-at 19:9 to 19:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "multiply")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "double")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

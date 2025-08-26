@@ -58,25 +58,17 @@ module [
 ]
 
 import Decode exposing [Decode]
-decodeThings # After member name: (List(List(U8)) -> List(a) # After anno where module(a) | Decode)
+decodeThings : List List U8 -> List a where module(a) | Decode
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:31
-
-**Unsupported Node**
-at 7:3 to 9:20
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "decodeThings")
-    (Expr.malformed)
-  )
 )
 ~~~
 # SOLVED

@@ -50,9 +50,6 @@ NIL
 **Parse Error**
 at 5:5 to 5:5
 
-**Unsupported Node**
-at 5:5 to 5:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -61,7 +58,7 @@ at 5:5 to 5:5
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

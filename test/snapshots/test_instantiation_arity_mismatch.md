@@ -54,7 +54,7 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-identity: (a, b)
+identity : (a, b)
 -> (((a, b))
 identity = \pair -> pair
 
@@ -66,25 +66,13 @@ NIL
 **Parse Error**
 at 2:23 to 2:23
 
-**Unsupported Node**
-at 2:21 to 2:22
-
-**Unsupported Node**
-at 2:23 to 2:23
-
-**Unsupported Node**
-at 3:16 to 3:23
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.malformed)
-  )
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -93,5 +81,4 @@ at 3:16 to 3:23
 ~~~
 # TYPES
 ~~~roc
-identity : Error
 ~~~

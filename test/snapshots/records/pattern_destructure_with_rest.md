@@ -22,7 +22,7 @@ when person is {
 	{ first_name, ..others }
 	=>
 	Str.len(first_name) > Str.len(others.last_name)
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -39,21 +39,15 @@ at 1:1 to 3:2
 **Parse Error**
 at 3:2 to 3:2
 
-**Unsupported Node**
-at 1:14 to 3:1
-
-**Unsupported Node**
-at 3:2 to 3:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

@@ -32,14 +32,12 @@ LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-process_user!: ({ name: Str, age: U32, ..a } => Str)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:54
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

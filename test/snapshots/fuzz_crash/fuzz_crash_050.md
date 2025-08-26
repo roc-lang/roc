@@ -41,22 +41,16 @@ at 2:1 to 2:1
 **Parse Error**
 at 1:12 to 3:2
 
-**Pattern in Expression Context**
-at 1:9 to 1:10
-
-**Unsupported Node**
-at 2:1 to 2:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.lambda)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

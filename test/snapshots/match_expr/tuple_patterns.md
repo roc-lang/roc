@@ -31,7 +31,7 @@ when coord is {
 	y((x, y))
 	=>
 	x
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -57,21 +57,15 @@ at 1:1 to 6:2
 **Parse Error**
 at 6:2 to 6:2
 
-**Unsupported Node**
-at 1:13 to 6:1
-
-**Unsupported Node**
-at 6:2 to 6:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

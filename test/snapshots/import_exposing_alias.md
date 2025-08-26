@@ -81,7 +81,7 @@ encode
 astoJson]
 
 main = {
-	data = { name: "Bob", age: 25 }
+	data = { name : "Bob", age : 25 }
 	encoded = toJson(data)
 	decoded = fromJson(encoded)
 	decoded
@@ -102,38 +102,23 @@ at 3:55 to 3:55
 **Parse Error**
 at 3:64 to 3:64
 
-**Unsupported Node**
-at 3:1 to 3:34
-
-**Unsupported Node**
-at 3:35 to 3:35
-
-**Unsupported Node**
-at 3:46 to 3:46
-
-**Unsupported Node**
-at 3:55 to 3:55
-
-**Unsupported Node**
-at 3:64 to 3:64
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "fromJson")
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "encode")
-  (Expr.malformed)
-  (Expr.lookup "toJson")
+  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

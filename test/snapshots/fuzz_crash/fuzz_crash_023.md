@@ -953,39 +953,17 @@ asValueCategory
 import BadName as GoodName
 import BadNameMultiline.GoodNameMultiline
 
-Map((a, b)): (List(a) -> ((a -> b) -> List(b)))
-MapML((
-	a,
-	b
-): List(a -> (),
-		( -> ((a -> b) -> List((
-	b
-))))))Foo: (Bar, Baz)
-FooMultiline: (
-	Bar,
-	Baz
-)Some(a): { foo: Ok(a), bar: Something }
-SomeMl(a): {
-	foo: Ok(a),
-	bar: Something
-}
-SomeMultiline(a): {
-	foo # After field name: Ok(a),	# Comment after pattern record field
-	bar: Something# Another after pattern record field
-} # Comment after pattern record close
-
-Maybe(a): [Some(a), None]
-
-MaybeMultiline(a): [	# Comment after tag union open
-	Some(a),	# Comment after tag union member
-	None# Another after tag union member
-] # Comment after tag union close
-
-SomeFunc(a): (Maybe(a) -> (a -> Maybe(a)))
-
+Map((a, b)) : List a -> (a -> b) -> List b
+MapML((a, b) : List (a -> ),
+		( -> (a -> b) -> List (b)))Foo : (Bar, Baz)
+FooMultiline : (Bar, Baz)Some(a) : {foo : Ok a, bar : Something}
+SomeMl(a) : {foo : Ok a, bar : Something}
+SomeMultiline(a) : {foo : Ok a, bar : Something}
+Maybe(a) : [Some(a), None]
+MaybeMultiline(a) : [Some(a), None]
+SomeFunc(a) : Maybe a -> a -> Maybe a
 add_one_oneline = \num -> if num 2 else 5
-
-add_one: (U64 -> U64)
+add_one : U64 -> U64
 add_one = \num -> {
 	other = 1
 	if num
@@ -994,14 +972,12 @@ add_one = \num -> {
 			some_func()
 			0
 		}
-	else
-		{
-			dbg
-			123
-			other: other
-		}
+	else {
+		dbg
+		123
+		other : other
+	}
 }
-
 match_time = 1
 2 | 5
 3
@@ -1020,27 +996,18 @@ rest, # After last pattern in list
 123(((1, 2) | 5, 3))
 =>
 123
-{ foo: 1, bar: 2, ..rest }
+{ foo : 1, bar : 2, ..rest }
 =>
 12-->
 add(34)
-{	# After pattern record open
-	# After pattern record field name
-	foo # After pattern record field name: 1,	# After pattern record field
-	bar: 2,
-	..rest# After spread operator
-# After last field
+{ foo : 1, bar : 2, ..rest }
+=>
+12
+{ foo : 1, bar : 2 } | 7
 }
 =>
 12
-{ foo: 1, bar: 2 } | 7
-}
-=>
-12
-{
-	foo: 1,
-	bar: 2# After last record field
-} | 7, # After last record field
+{ foo : 1, bar : 2 } | 7, # After last record field
 }
 =>
 12
@@ -1054,63 +1021,26 @@ TwoArgs(("hello", Some("world")))
 =>
 1000
 }
-
-expect blah == 1 # Comment after expect statement
-
-main!: (List(String) -> Result(({  }, _)))
-main! = \_ -> {	# Yeah I can leave a comment here
-	world = "World",
-	var number = 123,
-	expect blah == 1,
-	tag = Blue,
-	return tag # Comment after return statement,	# Just a random comment!
-	
-
-# Just a random comment!
-...,
-	match_time((
-		...
-	)),
-	some_func(dbg # After debug),
-	42
-}crash "Unreachable!"
+expect blah == 1
+main! : List String -> Result ({  }, _)
+main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag, ..., match_time((...)), some_func(dbg # After debug), 42 }crash "Unreachable!"
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
-list = [
-	add_one(dbg # After dbg in list)
-]number, # after dbg expr as arg
+list = [add_one(dbg # After dbg in list)]number, # after dbg expr as arg
 )
 , # Comment one
 456, # Comment two
 789, # Comment three
 ]
-for n in list { {
-	Stdout.line!("Adding ${n} to ${number}")
-	number = number + n
-} }
-record = { foo: 123, bar: "Hello" }az: (
-	(
-		tag,
-		qux
-	): Ok(world),
-	punned
-)}
-tuple = (
-	123,
-	"World",
-	tag,
-	Ok(world),
-	(nested, tuple),
-	[1, 2, 3]
-)
-multiline_tuple = (
-	123,
-	"World",
-	tag1,
-	Ok(world),
-	(nested, tuple),
-	[1, 2, 3]
-)bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
+for n in list {
+	{
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+}
+record = { foo : 123, bar : "Hello" }az : ((tag, qux) : Ok world, punned)}
+tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
 ? | .static_dispatch_method()
 ? | .next_static_dispatch_method()
@@ -1124,9 +1054,9 @@ asa
 string?"
 )
 } # Comment after top-level decl
-empty: {  }
+empty : {}
 empty = {  }
-tuple: Value((a, b, c))
+tuple : Value (a, b, c)
 expect {
 	foo = 1
 	blah = 1
@@ -1409,485 +1339,134 @@ at 195:2 to 195:2
 **Parse Error**
 at 196:1 to 196:1
 
-**Unsupported Node**
-at 4:1 to 4:40
-
-**Unsupported Node**
-at 6:1 to 11:9
-
-**Unsupported Node**
-at 14:1 to 14:36
-
-**Unsupported Node**
-at 14:37 to 14:37
-
-**Unsupported Node**
-at 14:48 to 14:48
-
-**Unsupported Node**
-at 14:55 to 14:55
-
-**Unsupported Node**
-at 14:71 to 14:71
-
-**Unsupported Node**
-at 14:79 to 14:79
-
-**Unsupported Node**
-at 14:81 to 14:81
-
-**Unsupported Node**
-at 16:1 to 16:27
-
-**Unsupported Node**
-at 17:1 to 20:20
-
-**Unsupported Node**
-at 22:13 to 22:41
-
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 29:4 to 34:6
-
-**Unsupported Node**
-at 36:16 to 36:17
-
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 56:12 to 56:27
-
-**Unsupported Node**
-at 58:21 to 60:7
-
-**Unsupported Node**
-at 63:15 to 63:38
-
-**Unsupported Node**
-at 65:19 to 65:25
-
-**Unsupported Node**
-at 67:11 to 67:21
-
-**Unsupported Node**
-at 68:11 to 68:17
-
-**Unsupported Node**
-at 110:4 to 110:4
-
-**Unsupported Node**
-at 110:5 to 110:5
-
-**Unsupported Node**
-at 111:9 to 111:9
-
-**Unsupported Node**
-at 112:5 to 112:5
-
-**Unsupported Node**
-at 113:4 to 114:5
-
-**Unsupported Node**
-at 115:10 to 115:10
-
-**Unsupported Node**
-at 116:3 to 116:3
-
-**Unsupported Node**
-at 116:5 to 116:5
-
-**Unsupported Node**
-at 117:8 to 117:8
-
-**Unsupported Node**
-at 118:3 to 118:7
-
-**Unsupported Node**
-at 118:15 to 118:15
-
-**Unsupported Node**
-at 119:13 to 119:13
-
-**Unsupported Node**
-at 120:9 to 120:9
-
-**Unsupported Node**
-at 120:17 to 120:17
-
-**Unsupported Node**
-at 121:19 to 121:25
-
-**Unsupported Node**
-at 121:30 to 121:30
-
-**Unsupported Node**
-at 121:35 to 121:35
-
-**Unsupported Node**
-at 127:2 to 127:8
-
-**Unsupported Node**
-at 129:5 to 129:5
-
-**Unsupported Node**
-at 130:3 to 130:20
-
-**Unsupported Node**
-at 130:24 to 130:24
-
-**Unsupported Node**
-at 130:26 to 130:26
-
-**Unsupported Node**
-at 131:3 to 133:11
-
-**Unsupported Node**
-at 133:14 to 133:14
-
-**Unsupported Node**
-at 134:3 to 134:3
-
-**Unsupported Node**
-at 134:5 to 134:5
-
-**Unsupported Node**
-at 135:11 to 135:11
-
-**Unsupported Node**
-at 136:18 to 136:18
-
-**Unsupported Node**
-at 137:35 to 137:35
-
-**Unsupported Node**
-at 138:2 to 138:2
-
-**Unsupported Node**
-at 140:1 to 141:11
-
-**Unsupported Node**
-at 143:9 to 144:1
-
-**Unsupported Node**
-at 144:1 to 144:6
-
-**Unsupported Node**
-at 144:9 to 144:13
-
-**Unsupported Node**
-at 162:2 to 163:17
-
-**Unsupported Node**
-at 166:9 to 168:6
-
-**Unsupported Node**
-at 169:11 to 169:11
-
-**Unsupported Node**
-at 170:3 to 170:3
-
-**Unsupported Node**
-at 170:4 to 170:4
-
-**Unsupported Node**
-at 171:6 to 171:6
-
-**Unsupported Node**
-at 172:6 to 172:6
-
-**Unsupported Node**
-at 173:2 to 173:2
-
-**Unsupported Node**
-at 174:2 to 177:2
-
-**Unsupported Node**
-at 178:37 to 178:37
-
-**Unsupported Node**
-at 178:70 to 178:70
-
-**Unsupported Node**
-at 178:70 to 178:70
-
-**Unsupported Node**
-at 179:67 to 179:68
-
-**Unsupported Node**
-at 1:1 to 1:1
-
-**Unsupported Node**
-at 188:18 to 188:32
-
-**Unsupported Node**
-at 189:39 to 189:39
-
-**Unsupported Node**
-at 189:65 to 189:65
-
-**Unsupported Node**
-at 189:96 to 189:96
-
-**Unsupported Node**
-at 189:110 to 189:110
-
-**Unsupported Node**
-at 190:2 to 190:8
-
-**Unsupported Node**
-at 190:28 to 190:28
-
-**Unsupported Node**
-at 191:2 to 191:8
-
-**Unsupported Node**
-at 192:3 to 192:3
-
-**Unsupported Node**
-at 193:4 to 193:7
-
-**Unsupported Node**
-at 194:3 to 194:3
-
-**Unsupported Node**
-at 194:5 to 194:5
-
-**Unsupported Node**
-at 194:16 to 194:16
-
-**Unsupported Node**
-at 194:17 to 194:17
-
-**Unsupported Node**
-at 195:2 to 195:2
-
-**Unsupported Node**
-at 196:1 to 196:1
-
-**Unsupported Node**
-at 203:1 to 207:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.str_literal_big)
   (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.lookup "function")
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.apply_tag)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.malformed)
-  )
   (Expr.malformed)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
-  (Expr.lambda)
   (Expr.malformed)
-  (Expr.num_literal_i32 3)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "rest")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.frac_literal_small 3.14)
   (Expr.malformed)
-  (Expr.num_literal_i32 314)
-  (Expr.lambda)
   (Expr.malformed)
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.num_literal_i32 12)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-    (Expr.malformed)
-  )
+  (Expr.frac_literal_big)
   (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.lambda)
+  (Expr.binop_star)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.lambda)
+  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.apply_tag)
+  (Expr.binop_star)
+  (Expr.binop_double_equals)
   (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.apply_tag)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
   (Expr.malformed)
-  (Expr.lookup "dude")
-  (Expr.apply_tag)
+  (Expr.binop_colon)
   (Expr.malformed)
-  (Expr.num_literal_i32 1000)
+  (Expr.binop_colon)
   (Expr.malformed)
+  (Expr.binop_star)
+  (Expr.binop_double_slash)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
+  (Expr.binop_star)
   (Expr.malformed)
+  (Expr.binop_thick_arrow)
+  (Expr.binop_double_slash)
   (Expr.malformed)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
   (Expr.malformed)
-  (Expr.lookup "number")
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.binop_star)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
-  (Expr.num_literal_i32 456)
+  (Expr.binop_star)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
-  (Expr.num_literal_i32 789)
+  (Expr.str_literal_big)
+  (Expr.binop_thin_arrow)
   (Expr.malformed)
+  (Expr.binop_star)
   (Expr.malformed)
+  (Expr.binop_minus)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "az")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.apply_ident)
-  (Expr.lambda)
   (Expr.malformed)
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.apply_ident)
+  (Expr.binop_star)
   (Expr.malformed)
+  (Expr.binop_star)
   (Expr.malformed)
-  (Expr.lookup "a")
-  (Expr.lookup "string")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "empty")
-    (Expr.record_literal
-    )
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "tuple")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon)
+  (Expr.binop_colon)
+  (Expr.frac_literal_big)
+  (Expr.malformed)
+  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.binop_colon)
+  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.str_literal_big)
+  (Expr.str_literal_big)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_minus)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

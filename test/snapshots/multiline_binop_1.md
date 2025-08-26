@@ -37,13 +37,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.num_literal_i32 1)
-  (Expr.binop_star
-    (Expr.num_literal_i32 2)
-    (Expr.num_literal_i32 3)
-  )
-)
+(Expr.binop_plus)
 ~~~
 # SOLVED
 ~~~clojure

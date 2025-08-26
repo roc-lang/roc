@@ -57,18 +57,13 @@ list.map(fn)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:12 to 2:21
-
-**Unsupported Node**
-at 3:10 to 3:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.binop_colon)
 )
 ~~~
 # SOLVED
@@ -77,6 +72,4 @@ at 3:10 to 3:14
 ~~~
 # TYPES
 ~~~roc
-list : Error
-fn : Error
 ~~~

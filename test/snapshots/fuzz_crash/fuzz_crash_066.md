@@ -27,28 +27,22 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon OpenSquare Int CloseSquare ~~
 ~~~roc
 module []
 
-C: [0]
+C : [0]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:3 to 3:5
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

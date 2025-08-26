@@ -32,23 +32,21 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-\{ name: name, age: age } -> "Hello ${name}, you are ${age.to_str()} years old"
+\{ name : name, age : age } -> "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

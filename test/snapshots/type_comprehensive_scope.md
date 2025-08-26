@@ -208,142 +208,63 @@ module [
 	Node,
 ]
 
-MyU64: U64
-MyString: Str
-MyBool: Bool
+MyU64 : U64
+MyString : Str
+MyBool : Bool
 
 # Simple user-defined type
-Person: { name: Str, age: U64 }
+Person : {name : Str, age : U64}
 
 # Type with parameters
-Result((ok, err)): [Ok(ok), Err(err)]
+Result((ok, err)) : [Ok(ok), Err(err)]
 
 # Forward reference - Tree references Node before Node is defined
-Tree(a): [Branch(Node(a)), Leaf(a)]
+Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 # Node definition comes after Tree
-Node(a): { value: a, children: List(Tree(a)) }
+Node(a) : {value : a, children : List Tree a}
 
 # Using a previously defined type
-MyResult: Result((Str, U64))
+MyResult : Result (Str, U64)
 
 # Type redeclaration (should error)
-Person: U64
+Person : U64
 
 # Using an undeclared type (should error)
-BadType: SomeUndeclaredType
+BadType : SomeUndeclaredType
 
 # Using built-in types with parameters
-MyList: List(Str)
-MyDict: Dict((Str, U64))
+MyList : List Str
+MyDict : Dict (Str, U64)
 
 # Complex nested type using multiple declared types
-Complex: {
-	person: Person,
-	result: Result((Bool, Str)),
-	tree: Tree(U64)
-}
+Complex : {person : Person, result : Result (Bool, Str), tree : Tree U64}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 12:19 to 12:37
-
-**Unsupported Node**
-at 15:11 to 15:37
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "value")
-        (Expr.lookup "a")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "children")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "person")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "result")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "tree")
-        (Expr.apply_tag)
-      )
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

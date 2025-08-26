@@ -69,34 +69,23 @@ module [
 	process,
 ]
 
-process: (a -> (b -> ((
-	(c where module(a) | .convert: a) -> c,
-	module(b) | .transform
-): b -> c)))
+process : a -> b -> ((c where module(a) | .convert : a) -> c, module(b) | .transform) : b -> c
 process = ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:11 to 6:31
-
-**Unsupported Node**
-at 7:11 to 7:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

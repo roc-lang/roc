@@ -135,7 +135,8 @@ app
 	],
 }
 
-swap: ((a, b) -> (b, a))
+swap :
+	(a, b) -> (b, a)
 swap = \pair -> {
 	(x, y) = pair((y, x))
 }
@@ -155,32 +156,18 @@ result3 = swap(("foo", "bar"))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:13 to 4:24
-
-**Unsupported Node**
-at 5:8 to 5:15
-
-**Unsupported Node**
-at 11:1 to 11:6
-
-**Unsupported Node**
-at 11:9 to 11:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "swap")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

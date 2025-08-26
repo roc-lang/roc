@@ -38,7 +38,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 module []
 
 import u.R}
-g: (r -> R.a | E)
+g : r -> R.a | E
 ~~~
 # EXPECTED
 NIL
@@ -46,24 +46,12 @@ NIL
 **Parse Error**
 at 1:19 to 1:19
 
-**Unsupported Node**
-at 1:9 to 1:19
-
-**Unsupported Node**
-at 1:19 to 1:19
-
-**Unsupported Node**
-at 1:22 to 1:29
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.malformed)
-  )
 )
 ~~~
 # SOLVED

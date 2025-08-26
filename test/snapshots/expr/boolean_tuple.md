@@ -24,18 +24,16 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:13 to 1:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_double_question)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_double_question :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

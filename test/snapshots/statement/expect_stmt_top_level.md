@@ -47,22 +47,17 @@ expect foo != Bool.False
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:7 to 3:11
-
-**Unsupported Node**
-at 5:1 to 5:24
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_minus)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

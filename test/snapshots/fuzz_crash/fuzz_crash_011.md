@@ -38,20 +38,17 @@ at 1:1 to 1:8
 **Parse Error**
 at 1:9 to 1:9
 
-**Unsupported Node**
-at 1:9 to 1:9
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
+  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.str_literal_small)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

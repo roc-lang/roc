@@ -26,18 +26,15 @@ NIL
 **Parse Error**
 at 1:1 to 1:3
 
-**Unsupported Node**
-at 1:1 to 1:4
-
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_or)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_or :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-Error
+[True, False]_others
 ~~~

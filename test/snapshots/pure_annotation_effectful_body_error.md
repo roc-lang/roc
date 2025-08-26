@@ -70,7 +70,7 @@ app
 import pf.Stdout
 
 # This should be a type error: pure annotation but effectful body
-bad_function: (Str -> {  })
+bad_function : Str -> {}
 bad_function = \msg -> Stdout.line!(msg)
 
 main! = bad_function("This should fail")
@@ -78,33 +78,19 @@ main! = bad_function("This should fail")
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
-
-**Unsupported Node**
-at 6:16 to 6:24
-
-**Unsupported Node**
-at 7:16 to 7:22
-
-**Unsupported Node**
-at 9:1 to 9:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "bad_function")
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

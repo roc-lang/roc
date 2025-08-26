@@ -67,7 +67,7 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 \a -> {
 	2
 	\b -> {
-		b: b
+		b : b
 		\c -> b_loc + c
 	}
 }(100)(20)(3)
@@ -75,16 +75,14 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:4 to 1:8
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.binop_colon)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag apply_ident :type "_d")
+(expr :tag binop_colon :type "_d")
 ~~~
 # TYPES
 ~~~roc

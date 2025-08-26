@@ -43,7 +43,7 @@ module [
 ]
 
 {
-	pf: platform
+	pf : platform
 	".-/main._]where # A
 
 #el
@@ -71,23 +71,11 @@ at 4:8 to 4:8
 **Parse Error**
 at 1:18 to 7:9
 
-**Unsupported Node**
-at 1:24 to 1:24
-
-**Unsupported Node**
-at 1:33 to 1:33
-
-**Unsupported Node**
-at 4:8 to 4:8
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "pf")
-      (Expr.malformed)
-    )
+    (Expr.malformed)
     (Expr.malformed)
     (Expr.malformed)
     (Expr.malformed)
@@ -96,7 +84,7 @@ at 4:8 to 4:8
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

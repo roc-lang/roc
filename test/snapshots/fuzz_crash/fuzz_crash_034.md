@@ -31,8 +31,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.lookup "f")
+  (Expr.binop_star)
+  (Expr.str_literal_big)
 )
 ~~~
 # SOLVED

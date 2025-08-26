@@ -30,9 +30,6 @@ NIL
 **Parse Error**
 at 1:14 to 1:14
 
-**Unsupported Node**
-at 1:1 to 1:14
-
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)

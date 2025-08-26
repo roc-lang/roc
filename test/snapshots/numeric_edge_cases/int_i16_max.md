@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_i32 32767)
+(Expr.binop_star)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag num_literal_i32 :type "Num(_a)")
+(expr :tag binop_star :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc

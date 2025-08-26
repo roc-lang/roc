@@ -20,12 +20,12 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 # FORMATTED
 ~~~roc
 when person is {
-	{ name, address: {
+	{ name, address : {
 		city
 	} }
 	as
 	addr
-} as fullPerson => (fullPerson, addr, city) -> {
+} as fullPerson => (fullPerson, addr, city) => {
 	name
 } as simplePerson => (simplePerson, name, "unknown")
 ~~~
@@ -44,21 +44,15 @@ at 2:31 to 2:31
 **Parse Error**
 at 1:1 to 3:5
 
-**Unsupported Node**
-at 1:14 to 2:82
-
-**Unsupported Node**
-at 3:5 to 3:64
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

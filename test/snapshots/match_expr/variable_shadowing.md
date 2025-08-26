@@ -25,7 +25,7 @@ when (value, other) is {
 	x + y((None, x))
 	=>
 	x * 2
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -45,24 +45,15 @@ at 1:1 to 4:2
 **Parse Error**
 at 4:2 to 4:2
 
-**Unsupported Node**
-at 1:20 to 1:21
-
-**Unsupported Node**
-at 1:22 to 4:1
-
-**Unsupported Node**
-at 4:2 to 4:2
-
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.dot_num)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "Error")
+(expr :tag dot_num :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

@@ -290,27 +290,27 @@ import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
 
 # Simple qualified type
-simpleQualified: Color.RGB
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r : 255, g : 0, b : 0 })
 
 # Aliased qualified type
-aliasedQualified: ExtMod.DataType
+aliasedQualified : ExtMod.DataType
 aliasedQualified = ExtMod.DataType | Default
-multiLevelQualified: ModuleA.ModuleB | TypeC
+multiLevelQualified : ModuleA.ModuleB | TypeC
 multiLevelQualified = TypeC.new
-resultType: Result.Result((I32, Str))
+resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
 
 # Function returning qualified type
-getColor: ({  } -> Color.RGB)
-getColor = \_ -> Color.RGB({ r: 0, g: 255, b: 0 })
+getColor : {} -> Color.RGB
+getColor = \_ -> Color.RGB({ r : 0, g : 255, b : 0 })
 
 # Function accepting qualified type
-processColor: (Color.RGB -> Str)
+processColor : Color.RGB -> Str
 processColor = \color -> "Color processed"
 
 # Multiple qualified types in a function signature
-transform: (Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC)
+transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
 transform = \result -> when result is {
 	Result.Ok(rgb)
 	=>
@@ -318,7 +318,7 @@ transform = \result -> when result is {
 	Result.Err(err)
 	=>
 	TypeC.default
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -356,139 +356,40 @@ at 41:5 to 44:6
 **Parse Error**
 at 44:6 to 44:6
 
-**Unsupported Node**
-at 3:12 to 3:12
-
-**Unsupported Node**
-at 3:13 to 3:20
-
-**Unsupported Node**
-at 3:26 to 3:26
-
-**Unsupported Node**
-at 4:11 to 4:11
-
-**Unsupported Node**
-at 5:19 to 5:19
-
-**Unsupported Node**
-at 6:1 to 6:1
-
-**Unsupported Node**
-at 8:1 to 8:21
-
-**Unsupported Node**
-at 9:1 to 9:13
-
-**Unsupported Node**
-at 10:1 to 10:39
-
-**Unsupported Node**
-at 11:1 to 11:32
-
-**Unsupported Node**
-at 14:19 to 14:24
-
-**Unsupported Node**
-at 15:19 to 15:24
-
-**Unsupported Node**
-at 18:20 to 18:26
-
-**Unsupported Node**
-at 19:20 to 19:26
-
-**Unsupported Node**
-at 19:26 to 19:34
-
-**Unsupported Node**
-at 22:23 to 22:30
-
-**Unsupported Node**
-at 22:30 to 22:37
-
-**Unsupported Node**
-at 23:23 to 23:28
-
-**Unsupported Node**
-at 26:14 to 26:20
-
-**Unsupported Node**
-at 27:14 to 27:20
-
-**Unsupported Node**
-at 30:12 to 30:26
-
-**Unsupported Node**
-at 31:12 to 31:16
-
-**Unsupported Node**
-at 34:16 to 34:32
-
-**Unsupported Node**
-at 35:16 to 36:5
-
-**Unsupported Node**
-at 39:13 to 39:75
-
-**Unsupported Node**
-at 40:13 to 41:5
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.lambda)
+  (Expr.frac_literal_big)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
+  (Expr.binop_plus)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "simpleQualified")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "aliasedQualified")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "multiLevelQualified")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "resultType")
-    (Expr.apply_ident)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "getColor")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processColor")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "transform")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

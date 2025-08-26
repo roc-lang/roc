@@ -72,12 +72,13 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~
 # FORMATTED
 ~~~roc
-identity: a
+identity : a
 ->
 a
 identity = \x -> x
 
-needs_string: ((Str -> Str) -> Str)
+needs_string :
+	(Str -> Str) -> Str
 needs_string = \f -> f(["hello"])
 
 needs_string(identity)
@@ -88,34 +89,16 @@ NIL
 **Parse Error**
 at 2:18 to 2:18
 
-**Unsupported Node**
-at 2:18 to 2:18
-
-**Unsupported Node**
-at 3:16 to 3:20
-
-**Unsupported Node**
-at 5:22 to 5:40
-
-**Unsupported Node**
-at 6:20 to 6:24
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.lookup "a")
-  )
   (Expr.malformed)
-  (Expr.lookup "a")
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "needs_string")
-    (Expr.malformed)
-  )
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -124,6 +107,4 @@ at 6:20 to 6:24
 ~~~
 # TYPES
 ~~~roc
-identity : Error
-needs_string : Error
 ~~~

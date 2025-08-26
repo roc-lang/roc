@@ -58,23 +58,16 @@ module [
 	kind,
 ]
 
-Color: [
-	Red,
-	Green,
-	Blue,
-	Yellow,
-	Orange,
-	Purple
-]
+Color : [Red, Green, Blue, Yellow, Orange, Purple]
 
-kind: (Color -> Str)
+kind : Color -> Str
 kind = \color -> when color is {
 	Red
 	\Green -> Blue => "primary"
 	Yellow.Orange | Purple
 	=>
 	"secondary"
-} -> 
+}
 ~~~
 # EXPECTED
 NIL
@@ -91,32 +84,17 @@ at 6:16 to 9:2
 **Parse Error**
 at 9:2 to 9:2
 
-**Unsupported Node**
-at 3:9 to 3:51
-
-**Unsupported Node**
-at 5:8 to 5:20
-
-**Unsupported Node**
-at 6:8 to 6:16
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "kind")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

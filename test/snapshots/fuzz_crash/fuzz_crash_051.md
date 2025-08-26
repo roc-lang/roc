@@ -50,16 +50,13 @@ at 1:18 to 1:18
 **Parse Error**
 at 1:18 to 1:21
 
-**Unsupported Node**
-at 1:18 to 1:18
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.block
-    (Expr.num_literal_i32 0)
-    (Expr.num_literal_i32 0)
-    (Expr.apply_ident)
+    (Expr.binop_star)
+    (Expr.binop_star)
+    (Expr.binop_colon)
   )
 )
 ~~~

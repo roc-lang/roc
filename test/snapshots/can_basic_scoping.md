@@ -88,15 +88,13 @@ outerFunc = \_ -> {
 		z = x + y # x should resolve to 20, y to 10
 		z + 1
 	}
-	innerResult: innerResult
+	innerResult : innerResult
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 8:13 to 8:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -107,7 +105,7 @@ at 8:13 to 8:17
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

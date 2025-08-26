@@ -50,34 +50,23 @@ module [
 	Maybe,
 ]
 
-Maybe(a): [Some(a), None]
-Maybe(a): [Ok(a), Err]
+Maybe(a) : [Some(a), None]
+Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:12 to 3:27
-
-**Unsupported Node**
-at 4:12 to 4:23
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "[]_others")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

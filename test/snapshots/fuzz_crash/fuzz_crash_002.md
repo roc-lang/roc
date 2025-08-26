@@ -46,7 +46,7 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
 ~~~
 # FORMATTED
 ~~~roc
-modu: (((((((;: :): :): :): :): :): :): :)le[%]
+modu : ; : : : : : : : : : : : : : :le[%]
 ~~~
 # EXPECTED
 NIL
@@ -81,68 +81,17 @@ at 1:24 to 1:24
 **Parse Error**
 at 1:23 to 1:25
 
-**Unsupported Node**
-at 1:6 to 1:6
-
-**Unsupported Node**
-at 1:8 to 1:8
-
-**Unsupported Node**
-at 1:10 to 1:10
-
-**Unsupported Node**
-at 1:12 to 1:12
-
-**Unsupported Node**
-at 1:14 to 1:14
-
-**Unsupported Node**
-at 1:16 to 1:16
-
-**Unsupported Node**
-at 1:18 to 1:18
-
-**Unsupported Node**
-at 1:20 to 1:20
-
-**Unsupported Node**
-at 1:23 to 1:24
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "modu")
-    (Expr.binop_colon
-      (Expr.binop_colon
-        (Expr.binop_colon
-          (Expr.binop_colon
-            (Expr.binop_colon
-              (Expr.binop_colon
-                (Expr.binop_colon
-                  (Expr.malformed)
-                  (Expr.malformed)
-                )
-                (Expr.malformed)
-              )
-              (Expr.malformed)
-            )
-            (Expr.malformed)
-          )
-          (Expr.malformed)
-        )
-        (Expr.malformed)
-      )
-      (Expr.malformed)
-    )
-  )
-  (Expr.lookup "le")
   (Expr.malformed)
+  (Expr.str_literal_big)
+  (Expr.binop_or)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

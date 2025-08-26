@@ -29,23 +29,21 @@ OpBar OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpBar String ~~
 ~~~
 # FORMATTED
 ~~~roc
-\{ first_name: first_name, ..rest } -> "Hello ${first_name} ${rest.last_name}"
+\{ first_name : first_name, ..rest } -> "Hello ${first_name} ${rest.last_name}"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:23
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

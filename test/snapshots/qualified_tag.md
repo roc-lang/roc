@@ -46,12 +46,7 @@ test = Color.Red
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:21
-
-**Unsupported Node**
-at 5:8 to 5:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -61,7 +56,7 @@ at 5:8 to 5:13
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

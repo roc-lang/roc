@@ -44,53 +44,21 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{
-	name: "Alice",
-	age: 30,
-	active: Bool.true,
-	scores: [95, 87, 92],
-	balance: 1250.75
-}
+{ name : "Alice", age : 30, active : Bool.true, scores : [95, 87, 92], balance : 1250.75 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:35 to 1:39
-
-**Unsupported Node**
-at 1:54 to 1:66
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 30)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "active")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "scores")
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "balance")
-    (Expr.frac_literal_big big:<idx:6>)
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

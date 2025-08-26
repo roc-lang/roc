@@ -26,13 +26,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.lookup "when")
+(Expr.str_literal_big)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lookup :type "_a")
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
 ~~~roc
-_a
+Str
 ~~~

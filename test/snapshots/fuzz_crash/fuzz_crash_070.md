@@ -30,19 +30,17 @@ module []
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:9 to 1:10
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.lambda)
+  (Expr.binop_double_question)
+  (Expr.frac_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg -> _ret")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

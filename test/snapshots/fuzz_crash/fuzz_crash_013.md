@@ -31,7 +31,7 @@ at 1:2 to 1:3
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
+  (Expr.binop_star)
   (Expr.block
   )
 )

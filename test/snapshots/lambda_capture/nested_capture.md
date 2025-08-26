@@ -60,15 +60,13 @@ g(5) # Expect: 15
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:10 to 2:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_ident)
+  (Expr.binop_thick_arrow)
 )
 ~~~
 # SOLVED
@@ -77,6 +75,4 @@ at 2:10 to 2:14
 ~~~
 # TYPES
 ~~~roc
-f : Error
-g : _c
 ~~~

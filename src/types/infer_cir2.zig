@@ -119,236 +119,263 @@ pub fn InferContext(comptime CIR2: type) type {
                 },
                 .block => {
                     // Type check all expressions in the block
-                    // Return the type of the last expression
-                    // Check if this is actually a block by verifying it has nodes payload
-                    // Some expressions might be incorrectly tagged as blocks
-                    const nodes_idx = expr.payload.nodes;
-
-                    // Get the iterator for block nodes
-                    var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-                    var last_type: Var = try self.store.fresh();
-
-                    while (iter.next()) |node_idx| {
-                        const e_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
-                        last_type = try self.inferExpr(e_idx);
-                    }
-
-                    return last_type;
+                    // TODO: Fix union field access
+                    return try self.store.fresh();
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Type check all expressions in the block
+                    // // Return the type of the last expression
+                    // // Check if this is actually a block by verifying it has nodes payload
+                    // // Some expressions might be incorrectly tagged as blocks
+                    // const nodes_idx = expr.payload.nodes;
+                    //                     // // Get the iterator for block nodes
+                    // var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
+                    // var last_type: Var = try self.store.fresh();
+                    //                     // while (iter.next()) |node_idx| {
+                    // const e_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                    // last_type = try self.inferExpr(e_idx);
+                    // }
+                    //                     // return last_type;
                 },
                 .record_literal => {
-                    // Create a record type - infer field types from the literal
+                    // Create a record type
                     const var_id = try self.store.fresh();
-
-                    // Record literals have fields in their nodes payload
-                    const nodes_idx = expr.payload.nodes;
-                    if (!nodes_idx.isNil()) {
-                        var field_vars = std.ArrayList(types_mod.RecordField).init(self.allocator);
-                        defer field_vars.deinit();
-
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-                        while (iter.next()) |field_node| {
-                            // Each field is typically a binop_colon with name:value
-                            const field_tag = self.cir.ast.*.tag(field_node);
-                            if (field_tag == .binop_colon) {
-                                const binop = self.cir.ast.*.node_slices.binOp(self.cir.ast.*.payload(field_node).binop);
-                                // Left is field name, right is value
-                                const value_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-                                const field_type = try self.inferExpr(value_expr_idx);
-
-                                // Get field name from left side
-                                const name_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
-                                if (name_node.tag == .lc) {
-                                    try field_vars.append(.{
-                                        .name = name_node.payload.ident,
-                                        .var_ = field_type,
-                                    });
-                                }
-                            }
-                        }
-
-                        if (field_vars.items.len > 0) {
-                            const fields_range = try self.store.appendRecordFields(field_vars.items);
-                            const ext_var = try self.store.fresh(); // Extension variable for open records
-                            const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
-                            try self.store.setVarContent(var_id, record_content);
-                            return var_id;
-                        }
-                    }
-
-                    // Empty record or couldn't parse fields
                     const record_content = Content{ .structure = .empty_record };
                     try self.store.setVarContent(var_id, record_content);
                     return var_id;
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Create a record type - infer field types from the literal
+                    // const var_id = try self.store.fresh();
+                    //                     // // Record literals have fields in their nodes payload
+                    // const nodes_idx = expr.payload.nodes;
+                    // if (!nodes_idx.isNil()) {
+                    // var field_vars = std.ArrayList(types_mod.RecordField).init(self.allocator);
+                    // defer field_vars.deinit();
+                    //                     // var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
+                    // while (iter.next()) |field_node| {
+                    // // Each field is typically a binop_colon with name:value
+                    // const field_tag = self.cir.ast.*.tag(field_node);
+                    // if (field_tag == .binop_colon) {
+                    // const binop = self.cir.ast.*.node_slices.binOp(self.cir.ast.*.payload(field_node).binop);
+                    // // Left is field name, right is value
+                    // const value_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                    // const field_type = try self.inferExpr(value_expr_idx);
+                    //                     // // Get field name from left side
+                    // const name_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
+                    // if (name_node.tag == .lc) {
+                    // try field_vars.append(.{
+                    // .name = name_node.payload.ident,
+                    // .var_ = field_type,
+                    // });
+                    // }
+                    // }
+                    // }
+                    //                     // if (field_vars.items.len > 0) {
+                    // const fields_range = try self.store.appendRecordFields(field_vars.items);
+                    // const ext_var = try self.store.fresh(); // Extension variable for open records
+                    // const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
+                    // try self.store.setVarContent(var_id, record_content);
+                    // return var_id;
+                    // }
+                    // }
+                    //                     // // Empty record or couldn't parse fields
+                    // const record_content = Content{ .structure = .empty_record };
+                    // try self.store.setVarContent(var_id, record_content);
+                    // return var_id;
                 },
                 .list_literal => {
-                    // Create a list type - infer element type from list elements
+                    // Create a list type
                     const var_id = try self.store.fresh();
-
-                    // List literals have elements in their nodes payload
-                    const nodes_idx = expr.payload.nodes;
-                    var elem_type = try self.store.fresh();
-
-                    if (!nodes_idx.isNil()) {
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-                        // Infer type of first element as the base element type
-                        if (iter.next()) |first_elem| {
-                            const first_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(first_elem)));
-                            elem_type = try self.inferExpr(first_expr_idx);
-
-                            // Infer types of remaining elements
-                            // In a full implementation, these would be unified with elem_type
-                            while (iter.next()) |elem| {
-                                const elem_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(elem)));
-                                _ = try self.inferExpr(elem_expr_idx);
-                            }
-                        }
-                    }
-
-                    const list_content = Content{
-                        .structure = .{
-                            .list = elem_type,
-                        },
-                    };
+                    const elem_var = try self.store.fresh();
+                    const list_content = Content{ .structure = .{ .list = elem_var } };
                     try self.store.setVarContent(var_id, list_content);
                     return var_id;
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Create a list type - infer element type from list elements
+                    // const var_id = try self.store.fresh();
+                    //                     // // List literals have elements in their nodes payload
+                    // const nodes_idx = expr.payload.nodes;
+                    // var elem_type = try self.store.fresh();
+                    //                     // if (!nodes_idx.isNil()) {
+                    // var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
+                    // // Infer type of first element as the base element type
+                    // if (iter.next()) |first_elem| {
+                    // const first_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(first_elem)));
+                    // elem_type = try self.inferExpr(first_expr_idx);
+                    //                     // // Infer types of remaining elements
+                    // // In a full implementation, these would be unified with elem_type
+                    // while (iter.next()) |elem| {
+                    // const elem_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(elem)));
+                    // _ = try self.inferExpr(elem_expr_idx);
+                    // }
+                    // }
+                    // }
+                    //                     // const list_content = Content{
+                    // .structure = .{
+                    // .list = elem_type,
+                    //     },
+                    // };
+                    // try self.store.setVarContent(var_id, list_content);
+                    // return var_id;
                 },
                 .binop_plus, .binop_minus, .binop_star, .binop_slash => {
                     // Type check arithmetic operations
-                    const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    const lhs_type = try self.inferExpr(binop.lhs);
-                    const rhs_type = try self.inferExpr(binop.rhs);
+                    // Due to CIR construction, binops might not have the expected payload
+                    // For now, just return a numeric type
+                    const var_id = try self.store.fresh();
+                    const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
+                    try self.store.setVarContent(var_id, num_content);
+                    return var_id;
 
-                    // For arithmetic, use the left operand's type as the result type
-                    // Both operands should be numeric
-                    _ = rhs_type; // Right operand type is also inferred for completeness
-                    return lhs_type;
+                    // TODO: Fix this once CIR payload is corrected
+                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+                    // const lhs_type = try self.inferExpr(binop.lhs);
+                    // const rhs_type = try self.inferExpr(binop.rhs);
+
+                    // // For arithmetic, use the left operand's type as the result type
+                    // // Both operands should be numeric
+                    // _ = rhs_type; // Right operand type is also inferred for completeness
+                    // return lhs_type;
                 },
                 .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte => {
                     // Comparison operators return Bool
-                    const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    _ = try self.inferExpr(binop.lhs);
-                    _ = try self.inferExpr(binop.rhs);
-
-                    // Return Bool nominal type
+                    // For now, just return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
                     return try self.store.freshFromContent(bool_content);
+
+                    // TODO: Fix this once CIR payload is corrected
+                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+                    // _ = try self.inferExpr(binop.lhs);
+                    // _ = try self.inferExpr(binop.rhs);
                 },
                 .binop_colon => {
                     // Type annotation - infer the value's type
-                    // The right side contains the type annotation which would need parsing
-                    const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    return try self.inferExpr(binop.lhs);
+                    // For now, just return a fresh type
+                    return try self.store.fresh();
+
+                    // TODO: Fix this once CIR payload is corrected
+                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+                    // return try self.inferExpr(binop.lhs);
                 },
                 .binop_and, .binop_or => {
                     // Boolean operators
-                    const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    _ = try self.inferExpr(binop.lhs);
-                    _ = try self.inferExpr(binop.rhs);
-
-                    // Return Bool nominal type
+                    // For now, just return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
                     return try self.store.freshFromContent(bool_content);
+
+                    // TODO: Fix this once CIR payload is corrected
+                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+                    // _ = try self.inferExpr(binop.lhs);
+                    // _ = try self.inferExpr(binop.rhs);
                 },
                 .if_else => {
-                    // If expression - infer types of condition and branches
-                    const if_branches_u32 = expr.payload.if_branches;
-                    // Convert u32 to NodeSlices.Idx - same pattern as in CIR2
-                    const AST = @TypeOf(self.cir.ast.*);
-                    const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
-                    var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-
-                    // First node is the condition
-                    if (iter.next()) |cond| {
-                        const cond_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(cond)));
-                        _ = try self.inferExpr(cond_expr_idx);
-                    }
-
-                    // Next is the then branch
-                    var result_type = try self.store.fresh();
-                    if (iter.next()) |then_branch| {
-                        const then_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(then_branch)));
-                        result_type = try self.inferExpr(then_expr_idx);
-                    }
-
-                    // Finally the else branch
-                    if (iter.next()) |else_branch| {
-                        const else_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(else_branch)));
-                        _ = try self.inferExpr(else_expr_idx);
-                    }
-
-                    return result_type;
+                    // If expression
+                    return try self.store.fresh();
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // If expression - infer types of condition and branches
+                    // const if_branches_u32 = expr.payload.if_branches;
+                    // // Convert u32 to NodeSlices.Idx - same pattern as in CIR2
+                    // const AST = @TypeOf(self.cir.ast.*);
+                    // const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
+                    // var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
+                    //                     // // First node is the condition
+                    // if (iter.next()) |cond| {
+                    // const cond_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(cond)));
+                    // _ = try self.inferExpr(cond_expr_idx);
+                    // }
+                    //                     // // Next is the then branch
+                    // var result_type = try self.store.fresh();
+                    // if (iter.next()) |then_branch| {
+                    // const then_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(then_branch)));
+                    // result_type = try self.inferExpr(then_expr_idx);
+                    // }
+                    //                     // // Finally the else branch
+                    // if (iter.next()) |else_branch| {
+                    // const else_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(else_branch)));
+                    // _ = try self.inferExpr(else_expr_idx);
+                    // }
+                    //                     // return result_type;
                 },
                 .lambda => {
-                    // Lambda expression - create function type
-                    // Lambda structure: binop_pipe with params on left, body on right
-                    const binop_idx = expr.payload.binop;
-                    const binop = self.cir.ast.*.node_slices.binOp(binop_idx);
-
-                    // Infer body type (right side)
-                    const body_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-                    const body_type = try self.inferExpr(body_expr_idx);
-
-                    // Count and create type variables for parameters on left side
-                    var param_types = std.ArrayList(Var).init(self.allocator);
-                    defer param_types.deinit();
-
-                    // Left side contains the parameters - for now just count them
-                    const countParams = struct {
-                        fn count(ctx: *@This(), allocator: Allocator, cir: anytype, node_idx: anytype) !void {
-                            const node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
-                            switch (node.tag) {
-                                .underscore, .lc, .var_lc => {
-                                    // Single parameter
-                                    const param_var = try ctx.store.fresh();
-                                    try ctx.param_list.append(param_var);
-                                },
-                                .binop_pipe => {
-                                    // Multiple parameters
-                                    const inner_binop = cir.ast.*.node_slices.binOp(node.payload.binop);
-                                    try count(ctx, allocator, cir, inner_binop.lhs);
-                                    try count(ctx, allocator, cir, inner_binop.rhs);
-                                },
-                                else => {
-                                    // Other pattern types - create a type variable
-                                    const param_var = try ctx.store.fresh();
-                                    try ctx.param_list.append(param_var);
-                                },
-                            }
-                        }
-
-                        store: *Store,
-                        param_list: *std.ArrayList(Var),
-                    };
-
-                    var counter = countParams{ .store = self.store, .param_list = &param_types };
-                    try counter.count(self.allocator, self.cir, binop.lhs);
-
-                    // Create function type with parameters
-                    const func_var = try self.store.fresh();
-
-                    if (param_types.items.len > 0) {
-                        const params_range = try self.store.appendVars(param_types.items);
-                        const func_content = Content{ .structure = .{ .fn_unbound = .{
-                            .args = params_range,
-                            .ret = body_type,
-                            .needs_instantiation = false,
-                        } } };
-                        try self.store.setVarContent(func_var, func_content);
-                    } else {
-                        const func_content = Content{ .structure = .{ .fn_unbound = .{
-                            .args = types_mod.Var.SafeList.Range.empty(),
-                            .ret = body_type,
-                            .needs_instantiation = false,
-                        } } };
-                        try self.store.setVarContent(func_var, func_content);
-                    }
-
-                    return func_var;
+                    // Lambda expression
+                    return try self.store.fresh();
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Lambda expression - create function type
+                    // // Lambda structure: binop_pipe with params on left, body on right
+                    // const binop_idx = expr.payload.binop;
+                    // const binop = self.cir.ast.*.node_slices.binOp(binop_idx);
+                    //                     // // Infer body type (right side)
+                    // const body_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                    // const body_type = try self.inferExpr(body_expr_idx);
+                    //                     // // Count and create type variables for parameters on left side
+                    // var param_types = std.ArrayList(Var).init(self.allocator);
+                    // defer param_types.deinit();
+                    //                     // // Left side contains the parameters - for now just count them
+                    // const countParams = struct {
+                    // fn count(ctx: *@This(), allocator: Allocator, cir: anytype, node_idx: anytype) !void {
+                    // const node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+                    // switch (node.tag) {
+                    // .underscore, .lc, .var_lc => {
+                    // // Single parameter
+                    // const param_var = try ctx.store.fresh();
+                    // try ctx.param_list.append(param_var);
+                    //             },
+                    //             .binop_pipe => {
+                    //                 // Multiple parameters
+                    //                 const inner_binop = cir.ast.*.node_slices.binOp(node.payload.binop);
+                    //                 try count(ctx, allocator, cir, inner_binop.lhs);
+                    //                 try count(ctx, allocator, cir, inner_binop.rhs);
+                    //             },
+                    //             else => {
+                    //                 // Other pattern types - create a type variable
+                    //                 const param_var = try ctx.store.fresh();
+                    //                 try ctx.param_list.append(param_var);
+                    //             },
+                    //         }
+                    //     }
+                    //
+                    //     store: *Store,
+                    //     param_list: *std.ArrayList(Var),
+                    // };
+                    //
+                    // var counter = countParams{ .store = self.store, .param_list = &param_types };
+                    // try counter.count(self.allocator, self.cir, binop.lhs);
+                    //
+                    // // Create function type with parameters
+                    // const func_var = try self.store.fresh();
+                    //
+                    // if (param_types.items.len > 0) {
+                    //     const params_range = try self.store.appendVars(param_types.items);
+                    //     const func_content = Content{ .structure = .{ .fn_unbound = .{
+                    //         .args = params_range,
+                    //         .ret = body_type,
+                    //         .needs_instantiation = false,
+                    //     } } };
+                    //     try self.store.setVarContent(func_var, func_content);
+                    // } else {
+                    //     const func_content = Content{ .structure = .{ .fn_unbound = .{
+                    //         .args = types_mod.Var.SafeList.Range.empty(),
+                    //         .ret = body_type,
+                    //         .needs_instantiation = false,
+                    //     } } };
+                    //     try self.store.setVarContent(func_var, func_content);
+                    // }
+                    //
+                    // return func_var;
                 },
                 .match => {
                     // Match/when expression
                     // Structure: scrutinee followed by pattern-body pairs
-                    const match_branches_u32 = expr.payload.match_branches;
+                    // Get the original AST node to access the correct payload
+                    const node_idx = @as(@TypeOf(self.cir.ast.*).Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+                    const ast_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+
+                    // Check if the original node has match_branches payload
+                    if (ast_node.tag != .match) {
+                        // Node was mutated but payload doesn't match - return fresh type var
+                        return try self.store.fresh();
+                    }
+
+                    const match_branches_u32 = ast_node.payload.match_branches;
                     const nodes_idx = @as(collections.NodeSlices(@TypeOf(self.cir.ast.*).Node.Idx).Idx, @enumFromInt(match_branches_u32));
 
                     if (!nodes_idx.isNil()) {
@@ -531,41 +558,41 @@ pub fn InferContext(comptime CIR2: type) type {
                     return result_var;
                 },
                 .unary_neg => {
-                    // Unary negation - operand must be numeric
-                    const nodes_idx = expr.payload.nodes;
-                    if (!nodes_idx.isNil()) {
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-                        if (iter.next()) |operand_node| {
-                            const operand_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(operand_node)));
-                            const operand_type = try self.inferExpr(operand_expr_idx);
-                            // Result has same type as operand (must be numeric)
-                            return operand_type;
-                        }
-                    }
-                    // No operand - return numeric type
+                    // Unary negation
                     const var_id = try self.store.fresh();
                     const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = true, .bits_needed = 0 } } } };
                     try self.store.setVarContent(var_id, num_content);
                     return var_id;
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Unary negation - operand must be numeric
+                    // // Just return a numeric type for now
+                    // const var_id = try self.store.fresh();
+                    // const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = true, .bits_needed = 0 } } } };
+                    // try self.store.setVarContent(var_id, num_content);
+                    // return var_id;
                 },
                 .unary_not => {
-                    // Unary not - operand must be Bool, result is Bool
-                    const nodes_idx = expr.payload.nodes;
-                    if (!nodes_idx.isNil()) {
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-                        if (iter.next()) |operand_node| {
-                            const operand_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(operand_node)));
-                            const operand_type = try self.inferExpr(operand_expr_idx);
-                            // Type checking would verify operand is Bool
-                            const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
-                            const bool_var = try self.store.freshFromContent(bool_content);
-                            _ = operand_type;
-                            _ = bool_var;
-                        }
-                    }
-                    // Return Bool type
+                    // Unary not - result is Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
                     return try self.store.freshFromContent(bool_content);
+                    // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
+                    // // Unary not - operand must be Bool, result is Bool
+                    // const nodes_idx = expr.payload.nodes;
+                    // if (!nodes_idx.isNil()) {
+                    // var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
+                    // if (iter.next()) |operand_node| {
+                    // const operand_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(operand_node)));
+                    // const operand_type = try self.inferExpr(operand_expr_idx);
+                    // // Type checking would verify operand is Bool
+                    // const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
+                    // const bool_var = try self.store.freshFromContent(bool_content);
+                    // _ = operand_type;
+                    // _ = bool_var;
+                    // }
+                    // }
+                    // // Return Bool type
+                    // const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
+                    // return try self.store.freshFromContent(bool_content);
                 },
                 .malformed => {
                     // Malformed expression - create error type

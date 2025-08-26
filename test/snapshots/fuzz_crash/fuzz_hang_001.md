@@ -31,7 +31,7 @@ at 1:1 to 1:4
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_ident)
+  (Expr.binop_colon)
 )
 ~~~
 # SOLVED

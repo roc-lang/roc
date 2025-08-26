@@ -41,19 +41,16 @@ at 1:1 to 1:9
 **Parse Error**
 at 1:10 to 1:10
 
-**Unsupported Node**
-at 1:10 to 1:10
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.lambda)
+  (Expr.binop_star)
+  (Expr.frac_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_arg -> _ret")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

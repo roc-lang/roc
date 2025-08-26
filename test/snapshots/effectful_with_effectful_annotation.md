@@ -70,7 +70,7 @@ app
 import pf.Stdout
 
 # Function with effectful annotation using fat arrow
-print_msg!: (Str => {  })
+print_msg! : Str => {  }
 print_msg! = \msg -> Stdout.line!(msg)
 
 main! = print_msg!("Hello, world!")
@@ -78,36 +78,19 @@ main! = print_msg!("Hello, world!")
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
-
-**Unsupported Node**
-at 6:14 to 6:22
-
-**Unsupported Node**
-at 7:1 to 7:11
-
-**Unsupported Node**
-at 7:14 to 7:20
-
-**Unsupported Node**
-at 9:1 to 9:6
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.malformed)
-  )
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

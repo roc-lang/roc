@@ -90,16 +90,18 @@ OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon String Comma LowerIden
 # FORMATTED
 ~~~roc
 {
-	person: { name: "Alice", age: 30 },
-	address: {
-		street: "123 Main St",
-		city: "Springfield",
-		coordinates: { lat: 42.1234, lng: -71.5678 },
-	},
-	contact: {
-		email: "alice@example.com",
-		phone: { home: "555-1234", work: "555-5678" },
-	},
+	person : {name : "Alice", age : 30},
+	address :
+		{
+			street : "123 Main St",
+			city : "Springfield",
+			coordinates : {lat : 42.1234, lng : -71.5678},
+		},
+	contact :
+		{
+			email : "alice@example.com",
+			phone : {home : "555-1234", work : "555-5678"},
+		},
 }
 ~~~
 # EXPECTED
@@ -108,75 +110,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "person")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.num_literal_i32 30)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "address")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "street")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "city")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "coordinates")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "lat")
-            (Expr.frac_literal_big alice@example.com)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "lng")
-            (Expr.unary_neg)
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "contact")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "email")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "phone")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "home")
-            (Expr.str_literal_big)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "work")
-            (Expr.str_literal_big)
-          )
-        )
-      )
-    )
-  )
-)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-{}
+_a
 ~~~

@@ -60,38 +60,24 @@ module [
 import styles.Color as CC
 
 # instantiating an RGB nominal tab union from the styles.Color module
-blue: CC.Color
+blue : CC.Color
 blue = CC.Color | RGB((0, 0, 255))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:1 to 4:26
-
-**Unsupported Node**
-at 7:8 to 7:10
-
-**Unsupported Node**
-at 8:8 to 8:10
-
-**Unsupported Node**
-at 8:10 to 8:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "blue")
-    (Expr.lambda)
-  )
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

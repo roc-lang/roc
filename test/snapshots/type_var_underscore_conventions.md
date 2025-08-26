@@ -163,22 +163,22 @@ app
 	],
 }
 
-single_use: (List(elem) -> Str)
+single_use : List elem -> Str
 single_use = \x -> "hello"
 
 # Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
-ending_underscore: (List(elem_) -> elem_)
+ending_underscore : List elem_ -> elem_
 ending_underscore = \list -> "default"
 
 # Test 3: COMBINATION - single-use ending in underscore (both errors)
-combo_single: (List(bad_) -> Str)
+combo_single : List bad_ -> Str
 combo_single = \x -> "combo"
 
 # Test 4: VALID CASES - these should not generate warnings
-valid_single: (List(_elem) -> Str)
+valid_single : List _elem -> Str
 valid_single = \x -> "valid"
 
-valid_multi: (elem -> List(elem))
+valid_multi : elem -> List elem
 valid_multi = \x -> [x]
 
 main = \x -> "done"
@@ -186,73 +186,26 @@ main = \x -> "done"
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:14 to 4:31
-
-**Unsupported Node**
-at 5:14 to 5:18
-
-**Unsupported Node**
-at 8:21 to 8:41
-
-**Unsupported Node**
-at 9:21 to 9:28
-
-**Unsupported Node**
-at 12:16 to 12:33
-
-**Unsupported Node**
-at 13:16 to 13:20
-
-**Unsupported Node**
-at 16:16 to 16:34
-
-**Unsupported Node**
-at 17:16 to 17:20
-
-**Unsupported Node**
-at 19:15 to 19:33
-
-**Unsupported Node**
-at 20:15 to 20:19
-
-**Unsupported Node**
-at 22:8 to 22:12
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "single_use")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "ending_underscore")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "combo_single")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "valid_single")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "valid_multi")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

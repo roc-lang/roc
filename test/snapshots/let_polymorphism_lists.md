@@ -218,33 +218,6 @@ at 13:26 to 13:26
 **Parse Error**
 at 14:30 to 14:30
 
-**Unsupported Node**
-at 4:17 to 4:18
-
-**Unsupported Node**
-at 7:12 to 7:21
-
-**Unsupported Node**
-at 8:12 to 8:30
-
-**Unsupported Node**
-at 9:14 to 9:29
-
-**Unsupported Node**
-at 12:26 to 12:26
-
-**Unsupported Node**
-at 13:26 to 13:26
-
-**Unsupported Node**
-at 14:30 to 14:30
-
-**Unsupported Node**
-at 17:13 to 17:17
-
-**Unsupported Node**
-at 23:8 to 23:12
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -253,11 +226,11 @@ at 23:8 to 23:12
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "my_empty_list")
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "my_empty_list")
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.lookup "my_empty_list")
+  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -266,7 +239,7 @@ at 23:8 to 23:12
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

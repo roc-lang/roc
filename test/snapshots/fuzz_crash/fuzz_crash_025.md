@@ -121,31 +121,31 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~roc
 module []
 
-a: U8
+a : U8
 a = 255
 
-b: U16
+b : U16
 b = 65535
 
-c: U32
+c : U32
 c = 429496729
 U64
 d = 18446744073709551615
 
-e: U128
-e = 3402823669209384634633746074317682114553.14: I8
+e : U128
+e = 3402823669209384634633746074317682114553.14 : I8
 f = 8
 
-g: I16
+g : I16
 g = -32768
 
-h: I32
+h : I32
 h = -483648
 
-i: I64
+i : I64
 i = -92233725808
 
-j: I128
+j : I128
 j = -17011687303715884105728
 ~~~
 # EXPECTED
@@ -155,60 +155,30 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "a")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "b")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "c")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "e")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.binop_equals
-      (Expr.lookup "e")
-      (Expr.frac_literal_big big:<idx:21>)
-    )
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "h")
-    (Expr.apply_tag)
-  )
+  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "i")
-    (Expr.apply_tag)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "j")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_k")
 ~~~
 # TYPES
 ~~~roc

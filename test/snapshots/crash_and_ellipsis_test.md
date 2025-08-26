@@ -139,17 +139,17 @@ app
 	],
 }
 
-testEllipsis: (U64 -> U64)
+testEllipsis : U64 -> U64
 testEllipsis = \_ -> ...
 
 # Test crash statement
-testCrash: (U64 -> U64)
+testCrash : U64 -> U64
 testCrash = \_ -> {
 	crash "This is a crash message"
 }
 
 # Test crash with different message
-testCrashSimple: (U64 -> U64)
+testCrashSimple : U64 -> U64
 testCrashSimple = \_ -> {
 	crash "oops"
 }
@@ -164,54 +164,22 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:16 to 4:26
-
-**Unsupported Node**
-at 5:16 to 5:20
-
-**Unsupported Node**
-at 8:13 to 8:23
-
-**Unsupported Node**
-at 9:13 to 9:17
-
-**Unsupported Node**
-at 14:19 to 14:29
-
-**Unsupported Node**
-at 15:19 to 15:23
-
-**Unsupported Node**
-at 19:1 to 19:6
-
-**Unsupported Node**
-at 19:9 to 19:13
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "testEllipsis")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "testCrash")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "testCrashSimple")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

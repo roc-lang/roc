@@ -36,12 +36,8 @@ app
 	platform,
 }
 
-[]{
-	f: platform,
-	"",
-	r: "
-}
-}
+[]{ f : platform, "", r : "
+} }
 ~~~
 # EXPECTED
 NIL
@@ -55,35 +51,16 @@ at 1:9 to 1:9
 **Parse Error**
 at 1:22 to 1:22
 
-**Unsupported Node**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:9 to 1:9
-
-**Unsupported Node**
-at 1:22 to 1:22
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "f")
-      (Expr.malformed)
-    )
-    (Expr.str_literal_small)
-    (Expr.binop_colon
-      (Expr.lookup "r")
-      (Expr.malformed)
-    )
-  )
+  (Expr.binop_or)
+  (Expr.binop_double_slash)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

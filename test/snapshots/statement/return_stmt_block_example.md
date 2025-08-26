@@ -66,16 +66,15 @@ module [
 	foo,
 ]
 
-foo: (U64 -> Result((Str, [TooBig])))
+foo : U64 -> Result (Str, [TooBig])
 foo = \num -> {
 	str = if num > 10
 		{
 			return Err(TooBig)
 		}
-	else
-		{
-			"SMALL"
-		}
+	else {
+		"SMALL"
+	}
 	Ok(str)
 }
 ~~~
@@ -85,25 +84,16 @@ NIL
 **Parse Error**
 at 5:11 to 5:25
 
-**Unsupported Node**
-at 3:7 to 4:1
-
-**Unsupported Node**
-at 4:7 to 4:13
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Error")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
