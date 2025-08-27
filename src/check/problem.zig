@@ -1732,7 +1732,7 @@ pub const ReportBuilder = struct {
 /// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
-    const ALIGNMENT = 16;
+    const ALIGNMENT = std.mem.Alignment.@"16";
 
     problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
 

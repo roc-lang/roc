@@ -12,7 +12,7 @@ const CompactWriter = @This();
 /// All serialized data must be aligned to this boundary to ensure proper
 /// memory access patterns and avoid alignment faults on architectures that
 /// require aligned memory access.
-pub const SERIALIZATION_ALIGNMENT = @"16";
+pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
 const ZEROS: [16]u8 = [_]u8{0} ** 16;
 
@@ -141,13 +141,13 @@ pub fn appendAlloc(
 
     // When we deserialize, we align the bytes we're deserializing into to ALIGNMENT,
     // which means that we can't serialize anything with alignment higher than that.
-    std.debug.assert(alignment <= SERIALIZATION_ALIGNMENT);
+    std.debug.assert(alignment <= SERIALIZATION_ALIGNMENT.toByteUnits());
 
     // Pad up front to the alignment of T
     try self.padToAlignment(allocator, alignment);
 
     // Allocate a single item of type T
-    const items = try allocator.alignedAlloc(T, alignment, 1);
+    const items = try allocator.alignedAlloc(T, std.mem.Alignment.fromByteUnits(alignment), 1);
     const answer = &items[0];
 
     // Track the allocated memory for cleanup

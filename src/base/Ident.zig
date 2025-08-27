@@ -242,7 +242,7 @@ pub const Store = struct {
         size += @sizeOf(u32); // next_unique_name
 
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT);
+        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT.toByteUnits());
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
