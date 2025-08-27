@@ -250,7 +250,7 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
-          sudo apt install -y expect ncat ripgrep
+          sudo apt install -y expect ncat ripgrep tree
 
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
@@ -258,6 +258,7 @@ jobs:
           brew install expect
           brew install nmap  # includes ncat
           brew install ripgrep
+          brew install tree
 
       - name: prepare testing
         run: |
