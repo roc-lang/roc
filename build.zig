@@ -357,7 +357,7 @@ fn addMainExe(
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
 
-    // Create test platform host static library (int)
+    // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
         .root_module = b.createModule(.{
@@ -378,6 +378,36 @@ fn addMainExe(
     const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
+
+    // Cross-compile int platform host libraries for musl targets
+    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+    };
+
+    for (cross_compile_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Create cross-compiled int host library
+        const cross_int_host_lib = b.addLibrary(.{
+            .name = b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/int/platform/host.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = true,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        cross_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+        cross_int_host_lib.bundle_compiler_rt = true;
+
+        // Copy to target-specific directory
+        const copy_cross_int_host = b.addUpdateSourceFiles();
+        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_int_host.step);
+    }
 
     // Create builtins static library at build time with minimal dependencies
     const builtins_obj = b.addObject(.{

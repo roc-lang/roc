@@ -1963,8 +1963,13 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     // Import needed modules
     const target_mod = @import("target.zig");
     const app_stub = @import("app_stub.zig");
+    const cross_compilation = @import("cross_compilation.zig");
 
     std.log.info("Building {s} for cross-compilation", .{args.path});
+
+    // Detect host target
+    const host_target = cross_compilation.detectHostTarget();
+    std.log.info("Host: {} ({s})", .{ host_target, host_target.toTriple() });
 
     // Parse target if provided, otherwise use native with musl preference
     const target = if (args.target) |target_str| blk: {
@@ -1977,14 +1982,26 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
 
     std.log.info("Target: {} ({s})", .{ target, target.toTriple() });
 
-    // Only support test platforms for now (int and str)
+    // Validate cross-compilation support
+    const cross_validation = cross_compilation.validateCrossCompilation(host_target, target);
+    switch (cross_validation) {
+        .supported => {
+            std.log.info("Cross-compilation from {s} to {s} is supported", .{ @tagName(host_target), @tagName(target) });
+        },
+        .unsupported_host_target, .unsupported_cross_compilation, .missing_toolchain => {
+            const stderr = std.io.getStdErr().writer();
+            try cross_compilation.printCrossCompilationError(stderr, cross_validation);
+            std.process.exit(1);
+        },
+    }
+
+    // Only support int test platform for cross-compilation
     const platform_type = if (std.mem.indexOf(u8, args.path, "/int/") != null)
         "int"
-    else if (std.mem.indexOf(u8, args.path, "/str/") != null)
-        "str"
     else {
-        std.log.err("roc build currently only supports test platforms (int and str)", .{});
+        std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
         std.log.err("Your app path: {s}", .{args.path});
+        std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
         std.process.exit(1);
     };
 
@@ -2003,9 +2020,19 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
         std.process.exit(1);
     };
 
-    // Get host library path
+    // Get target-specific host library path
     const host_lib_filename = if (builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
-    const host_lib_path = try std.fs.path.join(gpa, &.{ platform_dir, host_lib_filename });
+    const host_lib_path = blk: {
+        // Try target-specific host library first
+        const target_specific_path = try std.fs.path.join(gpa, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
+        std.fs.cwd().access(target_specific_path, .{}) catch {
+            // Fallback to generic host library
+            std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
+            gpa.free(target_specific_path);
+            break :blk try std.fs.path.join(gpa, &.{ platform_dir, host_lib_filename });
+        };
+        break :blk target_specific_path;
+    };
     defer gpa.free(host_lib_path);
 
     std.fs.cwd().access(host_lib_path, .{}) catch |err| {
@@ -2072,20 +2099,20 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             "/lib",
             "/usr/lib",
         };
-        
+
         for (common_lib_paths) |lib_path| {
             // Check if the directory exists before adding it
             std.fs.cwd().access(lib_path, .{}) catch continue;
             const search_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{lib_path});
             try extra_args.append(search_arg);
         }
-        
+
         // Add dynamic linker path
         if (target.getDynamicLinkerPath()) |dl_path| {
             const dl_arg = try std.fmt.allocPrint(gpa, "--dynamic-linker={s}", .{dl_path});
             try extra_args.append(dl_arg);
         } else |_| {}
-        
+
         try extra_args.append("-lc");
     }
 

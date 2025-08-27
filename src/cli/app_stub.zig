@@ -144,7 +144,8 @@ fn addRocCallAbiStub(
     } else if (std.mem.eql(u8, name, "multiplyInts")) {
         try multiplyIntsImplementation(&wip, llvm_builder);
     } else if (std.mem.eql(u8, name, "processString")) {
-        try processStringImplementation(&wip, llvm_builder);
+        // processString not supported in cross-compilation stubs - only int platform supported
+        _ = try wip.retVoid();
     } else {
         // Default: just return void for unknown functions
         _ = try wip.retVoid();
@@ -163,16 +164,10 @@ pub fn getTestPlatformEntrypoints(allocator: Allocator, platform_type: []const u
         entrypoints[0] = PlatformEntrypoint{ .name = "addInts" };
         entrypoints[1] = PlatformEntrypoint{ .name = "multiplyInts" };
         return entrypoints;
-    } else if (std.mem.eql(u8, platform_type, "str")) {
-        // Based on test/str/platform/host.zig:
-        // extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
-        const entrypoints = try allocator.alloc(PlatformEntrypoint, 1);
-        entrypoints[0] = PlatformEntrypoint{ .name = "processString" };
-        return entrypoints;
     }
 
-    // Default/unknown platforms - return empty array
-    return try allocator.alloc(PlatformEntrypoint, 0);
+    // Only int platform supported for cross-compilation
+    return error.PlatformNotSupported;
 }
 
 /// Detect platform type from file path
@@ -190,30 +185,30 @@ fn addIntsImplementation(wip: *std.zig.llvm.Builder.WipFunction, llvm_builder: *
     // Get function parameters: ops, ret_ptr, arg_ptr
     const ret_ptr = wip.arg(1); // ret_ptr: *anyopaque -> where to store the i64 result
     const arg_ptr = wip.arg(2); // arg_ptr: *anyopaque -> points to struct { a: i64, b: i64 }
-    
+
     // Cast arg_ptr to pointer to struct { i64, i64 }
     const i64_type = .i64;
     const args_struct_type = try llvm_builder.structType(.normal, &[_]std.zig.llvm.Builder.Type{ i64_type, i64_type });
     const args_ptr_type = try llvm_builder.ptrType(.default);
     const args_ptr = try wip.cast(.bitcast, arg_ptr, args_ptr_type, "args_ptr");
-    
+
     // Load the two i64 values from the args struct
     const zero = try llvm_builder.intConst(.i32, 0);
     const one = try llvm_builder.intConst(.i32, 1);
-    
+
     const a_ptr = try wip.gep(.inbounds, args_struct_type, args_ptr, &[_]std.zig.llvm.Builder.Value{ zero.toValue(), zero.toValue() }, "a_ptr");
     const b_ptr = try wip.gep(.inbounds, args_struct_type, args_ptr, &[_]std.zig.llvm.Builder.Value{ zero.toValue(), one.toValue() }, "b_ptr");
-    
+
     const a = try wip.load(.normal, i64_type, a_ptr, .default, "a");
     const b = try wip.load(.normal, i64_type, b_ptr, .default, "b");
-    
+
     // Add the two values
     const result = try wip.bin(.add, a, b, "result");
-    
+
     // Cast ret_ptr and store the result
     const ret_i64_ptr = try wip.cast(.bitcast, ret_ptr, args_ptr_type, "ret_i64_ptr");
     _ = try wip.store(.normal, result, ret_i64_ptr, .default);
-    
+
     // Return void
     _ = try wip.retVoid();
 }
@@ -223,57 +218,30 @@ fn multiplyIntsImplementation(wip: *std.zig.llvm.Builder.WipFunction, llvm_build
     // Get function parameters: ops, ret_ptr, arg_ptr
     const ret_ptr = wip.arg(1); // ret_ptr: *anyopaque -> where to store the i64 result
     const arg_ptr = wip.arg(2); // arg_ptr: *anyopaque -> points to struct { a: i64, b: i64 }
-    
+
     // Cast arg_ptr to pointer to struct { i64, i64 }
     const i64_type = .i64;
     const args_struct_type = try llvm_builder.structType(.normal, &[_]std.zig.llvm.Builder.Type{ i64_type, i64_type });
     const args_ptr_type = try llvm_builder.ptrType(.default);
     const args_ptr = try wip.cast(.bitcast, arg_ptr, args_ptr_type, "args_ptr");
-    
+
     // Load the two i64 values from the args struct
     const zero = try llvm_builder.intConst(.i32, 0);
     const one = try llvm_builder.intConst(.i32, 1);
-    
+
     const a_ptr = try wip.gep(.inbounds, args_struct_type, args_ptr, &[_]std.zig.llvm.Builder.Value{ zero.toValue(), zero.toValue() }, "a_ptr");
     const b_ptr = try wip.gep(.inbounds, args_struct_type, args_ptr, &[_]std.zig.llvm.Builder.Value{ zero.toValue(), one.toValue() }, "b_ptr");
-    
+
     const a = try wip.load(.normal, i64_type, a_ptr, .default, "a");
     const b = try wip.load(.normal, i64_type, b_ptr, .default, "b");
-    
+
     // Multiply the two values
     const result = try wip.bin(.mul, a, b, "result");
-    
+
     // Cast ret_ptr and store the result
     const ret_i64_ptr = try wip.cast(.bitcast, ret_ptr, args_ptr_type, "ret_i64_ptr");
     _ = try wip.store(.normal, result, ret_i64_ptr, .default);
-    
-    // Return void
-    _ = try wip.retVoid();
-}
 
-/// Generate implementation for processString: simple stub that copies input to output
-/// TODO: Implement proper string concatenation with "Got the following from the host: " + input + "\n"
-fn processStringImplementation(wip: *std.zig.llvm.Builder.WipFunction, llvm_builder: *std.zig.llvm.Builder) !void {
-    // Get function parameters: ops, ret_ptr, arg_ptr
-    const ret_ptr = wip.arg(1); // ret_ptr: *anyopaque -> where to store the RocStr result
-    const arg_ptr = wip.arg(2); // arg_ptr: *anyopaque -> points to struct { str: RocStr }
-    
-    const ptr_type = try llvm_builder.ptrType(.default);
-    const usize_type = .i64; // Use i64 for usize on 64-bit systems
-    
-    // RocStr struct type: { ?[*]u8, usize, usize } (bytes, length, capacity_or_alloc_ptr)
-    const roc_str_type = try llvm_builder.structType(.normal, &[_]std.zig.llvm.Builder.Type{ ptr_type, usize_type, usize_type });
-    
-    // Cast pointers
-    const args_ptr = try wip.cast(.bitcast, arg_ptr, ptr_type, "args_ptr");
-    const ret_roc_str_ptr = try wip.cast(.bitcast, ret_ptr, ptr_type, "ret_roc_str_ptr");
-    
-    // Load the input RocStr (first field of args struct)
-    const input_roc_str = try wip.load(.normal, roc_str_type, args_ptr, .default, "input_roc_str");
-    
-    // For now, just copy the input to output (simplified implementation)
-    _ = try wip.store(.normal, input_roc_str, ret_roc_str_ptr, .default);
-    
     // Return void
     _ = try wip.retVoid();
 }
