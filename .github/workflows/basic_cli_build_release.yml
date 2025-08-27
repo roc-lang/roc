@@ -216,7 +216,9 @@ jobs:
       - name: Set OS-specific variables
         id: vars
         run: |
-          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+          if [[ "${{ matrix.os }}" =~ ^ubuntu-.*-arm$ ]]; then
+            echo "os_pattern=linux_arm64" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" = "macos-13" ]; then
             echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
