@@ -187,7 +187,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
-TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
+TYPE MISMATCH - fuzz_crash_019.md:84:2:84:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -872,18 +872,17 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_019.md:84:2:86:3:**
+**fuzz_crash_019.md:84:2:84:4:**
 ```roc
 	me(
-		..., # r
-	)crash ke"Unr!" #)
 ```
+	^^
 
 It has the type:
-    __arg -> _ret_
+    _[Blue]_others, [Tb]_others2 -> Error_
 
 But here it's being used as:
-    _[Blue]_others, [Tb]_others2 -> Error_
+    __arg -> _ret_
 
 # TOKENS
 ~~~zig
@@ -1847,7 +1846,7 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
-		(patt @49.1-49.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(patt @49.1-49.3 (type "Error"))
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
@@ -1879,7 +1878,7 @@ expect {
 	(expressions
 		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
-		(expr @49.6-69.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(expr @49.6-69.3 (type "Error"))
 		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

@@ -289,6 +289,10 @@ pub const IntValue = struct {
     }
 };
 
+/// The size a user enters after a number literal to explicitly indicate the size
+/// eg 2u8, 50i16
+pub const IntSuffix = enum { u8, u16, u32, u64, u128, i8, i16, i32, i64, i128 };
+
 // RocDec type definition (for missing export)
 // Must match the structure of builtins.RocDec
 pub const RocDec = builtins.dec.RocDec;

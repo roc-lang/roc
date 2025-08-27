@@ -61,7 +61,9 @@ pub fn Scratch(comptime T: type) type {
         /// Should be used wherever the scratch items will not be used,
         /// as in when parsing fails.
         pub fn clearFrom(self: *Self, start: u32) void {
-            self.items.shrinkRetainingCapacity(start);
+            if (self.items.items.len > start) {
+                self.items.shrinkRetainingCapacity(start);
+            }
         }
     };
 }

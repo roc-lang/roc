@@ -26,7 +26,7 @@ The first argument being passed to this function has the wrong type:
 This argument has the type:
     _(Num(_size), Num(_size2))_
 
-But the function needs the first argument to be:
+But `f` needs the first argument to be:
     _(Str, Str)_
 
 # TOKENS
@@ -74,14 +74,6 @@ EndOfFile(7:1-7:1),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-2.33 (name "f")
-		(ty-fn @2.9-2.33 (effectful false)
-			(ty-tuple @2.9-2.19
-				(ty @2.10-2.13 (name "Str"))
-				(ty @2.15-2.18 (name "Str")))
-			(ty-tuple @2.23-2.33
-				(ty @2.24-2.27 (name "Str"))
-				(ty @2.29-2.32 (name "Str")))))
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "f"))
 		(e-lambda @3.9-3.14

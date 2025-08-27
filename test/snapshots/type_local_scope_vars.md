@@ -102,10 +102,6 @@ main! = |_| {}
 			(args
 				(p-assign @4.10-4.11 (ident "x")))
 			(e-block @4.13-9.2
-				(s-type-anno @5.5-5.19 (name "inner")
-					(ty-fn @5.13-5.19 (effectful false)
-						(ty-var @5.13-5.14 (name "b"))
-						(ty-var @5.18-5.19 (name "b"))))
 				(s-let @6.5-6.18
 					(p-assign @6.5-6.10 (ident "inner"))
 					(e-lambda @6.13-6.18

@@ -269,7 +269,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -890,18 +890,17 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**syntax_grab_bag.md:155:2:157:3:**
+**syntax_grab_bag.md:155:2:155:12:**
 ```roc
 	match_time(
-		..., # Single args with comment
-	)
 ```
+	^^^^^^^^^^
 
 It has the type:
-    __arg -> _ret_
+    _[Red][Blue, Green]_others, _arg -> Error_
 
 But here it's being used as:
-    _[Red][Blue, Green]_others, _arg2 -> Error_
+    __arg2 -> _ret_
 
 # TOKENS
 ~~~zig
@@ -2430,7 +2429,7 @@ expect {
 	(defs
 		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
-		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "List(Error) -> Result({  }, _d)"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
@@ -2475,7 +2474,7 @@ expect {
 	(expressions
 		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
-		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "List(Error) -> Result({  }, _d)"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

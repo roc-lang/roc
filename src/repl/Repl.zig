@@ -277,7 +277,14 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
 
     // Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(self.allocator, "repl");
+    const module_name = "repl";
+    try cir.initCIRFields(self.allocator, module_name);
+
+    const comomn_idents: Check.CommonIdents = .{
+        .module_name = try cir.insertIdent(base.Ident.for_text(module_name)),
+        .list = try cir.insertIdent(base.Ident.for_text("List")),
+        .box = try cir.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create czer
     //
@@ -295,7 +302,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
 
     // Type check
-    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, comomn_idents) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
     };
     defer checker.deinit();

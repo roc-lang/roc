@@ -31,6 +31,112 @@ const ProblemStore = @import("problem.zig").Store;
 
 const Self = @This();
 
+gpa: std.mem.Allocator,
+// not owned
+types: *types_mod.Store,
+cir: *ModuleEnv,
+regions: *Region.List,
+other_modules: []const *ModuleEnv,
+common_idents: CommonIdents,
+// owned
+snapshots: SnapshotStore,
+problems: ProblemStore,
+unify_scratch: unifier.Scratch,
+occurs_scratch: occurs.Scratch,
+// annos - new
+anno_free_vars: base.Scratch(FreeVar),
+decl_free_vars: base.Scratch(FreeVar),
+scratch_vars: base.Scratch(Var),
+scratch_tags: base.Scratch(types_mod.Tag),
+scratch_record_fields: base.Scratch(types_mod.RecordField),
+// annos/instantiation - old
+var_map: std.AutoHashMap(Var, Var),
+annotation_rigid_var_subs: Instantiate.RigidToFlexSubs,
+anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
+/// Cache for imported types. This cache lives for the entire type-checking session
+/// of a module, so the same imported type can be reused across the entire module.
+import_cache: ImportCache,
+/// Maps variables to the expressions that constrained them (for better error regions)
+constraint_origins: std.AutoHashMap(Var, Var),
+
+/// A map of rigid variables that we build up during a branch of type checking
+const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
+
+/// A struct of common idents
+pub const CommonIdents = struct {
+    module_name: base.Ident.Idx,
+    list: base.Ident.Idx,
+    box: base.Ident.Idx,
+};
+
+/// Init type solver
+/// Does *not* own types_store or cir, but *does* own other fields
+pub fn init(
+    gpa: std.mem.Allocator,
+    types: *types_mod.Store,
+    cir: *const ModuleEnv,
+    other_modules: []const *ModuleEnv,
+    regions: *Region.List,
+    common_idents: CommonIdents,
+) std.mem.Allocator.Error!Self {
+    return .{
+        .gpa = gpa,
+        .types = types,
+        .cir = @constCast(cir),
+        .other_modules = other_modules,
+        .regions = regions,
+        .common_idents = common_idents,
+        .snapshots = try SnapshotStore.initCapacity(gpa, 512),
+        .problems = try ProblemStore.initCapacity(gpa, 64),
+        .unify_scratch = try unifier.Scratch.init(gpa),
+        .occurs_scratch = try occurs.Scratch.init(gpa),
+        .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
+        .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
+        .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
+        .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
+        .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
+        .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .import_cache = ImportCache{},
+        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+    };
+}
+
+/// Deinit owned fields
+pub fn deinit(self: *Self) void {
+    self.problems.deinit(self.gpa);
+    self.snapshots.deinit();
+    self.unify_scratch.deinit();
+    self.occurs_scratch.deinit();
+    self.var_map.deinit();
+    self.anno_free_vars.deinit(self.gpa);
+    self.decl_free_vars.deinit(self.gpa);
+    self.annotation_rigid_var_subs.deinit(self.gpa);
+    self.anonymous_rigid_var_subs.deinit(self.gpa);
+    self.scratch_vars.deinit(self.gpa);
+    self.scratch_tags.deinit(self.gpa);
+    self.scratch_record_fields.deinit(self.gpa);
+    self.import_cache.deinit(self.gpa);
+    self.constraint_origins.deinit();
+}
+
+/// Assert that type vars and regions in sync
+pub inline fn debugAssertArraysInSync(self: *const Self) void {
+    if (builtin.mode == .Debug) {
+        const region_nodes = self.regions.len();
+        const type_nodes = self.types.len();
+        if (!(region_nodes == type_nodes)) {
+            std.debug.panic(
+                "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
+                .{ type_nodes, region_nodes },
+            );
+        }
+    }
+}
+
+// import caches //
+
 /// Key for the import cache: module index + expression index in that module
 const ImportCacheKey = struct {
     module_idx: CIR.Import.Idx,
@@ -65,80 +171,6 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
         return a.module_idx == b.module_idx and a.node_idx == b.node_idx;
     }
 }, 80);
-
-gpa: std.mem.Allocator,
-// not owned
-types: *types_mod.Store,
-cir: *ModuleEnv,
-regions: *Region.List,
-other_modules: []const *ModuleEnv,
-// owned
-snapshots: SnapshotStore,
-problems: ProblemStore,
-unify_scratch: unifier.Scratch,
-occurs_scratch: occurs.Scratch,
-var_map: std.AutoHashMap(Var, Var),
-annotation_rigid_var_subs: Instantiate.RigidToFlexSubs,
-anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
-/// Cache for imported types. This cache lives for the entire type-checking session
-/// of a module, so the same imported type can be reused across the entire module.
-import_cache: ImportCache,
-/// Maps variables to the expressions that constrained them (for better error regions)
-constraint_origins: std.AutoHashMap(Var, Var),
-
-/// Init type solver
-/// Does *not* own types_store or cir, but *does* own other fields
-pub fn init(
-    gpa: std.mem.Allocator,
-    types: *types_mod.Store,
-    cir: *const ModuleEnv,
-    other_modules: []const *ModuleEnv,
-    regions: *Region.List,
-) std.mem.Allocator.Error!Self {
-    return .{
-        .gpa = gpa,
-        .types = types,
-        .cir = @constCast(cir),
-        .other_modules = other_modules,
-        .regions = regions,
-        .snapshots = try SnapshotStore.initCapacity(gpa, 512),
-        .problems = try ProblemStore.initCapacity(gpa, 64),
-        .unify_scratch = try unifier.Scratch.init(gpa),
-        .occurs_scratch = try occurs.Scratch.init(gpa),
-        .var_map = std.AutoHashMap(Var, Var).init(gpa),
-        .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
-        .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
-        .import_cache = ImportCache{},
-        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
-    };
-}
-
-/// Deinit owned fields
-pub fn deinit(self: *Self) void {
-    self.problems.deinit(self.gpa);
-    self.snapshots.deinit();
-    self.unify_scratch.deinit();
-    self.occurs_scratch.deinit();
-    self.var_map.deinit();
-    self.annotation_rigid_var_subs.deinit(self.gpa);
-    self.anonymous_rigid_var_subs.deinit(self.gpa);
-    self.import_cache.deinit(self.gpa);
-    self.constraint_origins.deinit();
-}
-
-/// Assert that type vars and regions in sync
-pub inline fn debugAssertArraysInSync(self: *const Self) void {
-    if (builtin.mode == .Debug) {
-        const region_nodes = self.regions.len();
-        const type_nodes = self.types.len();
-        if (!(region_nodes == type_nodes)) {
-            std.debug.panic(
-                "Arrays out of sync:\n type_nodes={}\n  region_nodes={}\n ",
-                .{ type_nodes, region_nodes },
-            );
-        }
-    }
-}
 
 // unify //
 
@@ -401,6 +433,14 @@ fn fresh(self: *Self, new_region: Region) Allocator.Error!Var {
 }
 
 /// The the region for a variable
+fn freshRedirect(self: *Self, redirect_to: Var, new_region: Region) Allocator.Error!Var {
+    const var_ = try self.types.freshRedirect(redirect_to);
+    try self.fillInRegionsThrough(var_);
+    self.setRegionAt(var_, new_region);
+    return var_;
+}
+
+/// The the region for a variable
 fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator.Error!Var {
     const var_ = try self.types.freshFromContent(content);
     try self.fillInRegionsThrough(var_);
@@ -408,7 +448,12 @@ fn freshFromContent(self: *Self, content: Content, new_region: Region) Allocator
     return var_;
 }
 
-// external types //
+/// The the region for a variable
+fn freshBool(self: *Self, new_region: Region) Allocator.Error!Var {
+    return try self.generateTypeDeclInstance(&.{}, new_region, can.Can.BUILTIN_BOOL);
+}
+
+// external type lookups //
 
 const ExternalType = struct {
     local_var: Var,
@@ -494,9 +539,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         const annotation = self.cir.store.getAnnotation(anno_idx);
         const expr = self.cir.store.getExpr(def.expr);
 
-        const anno_var = ModuleEnv.varFrom(annotation.type_anno);
-        self.annotation_rigid_var_subs.items.clearRetainingCapacity();
-        try self.checkAnnotation(annotation.type_anno);
+        self.anno_free_vars.items.clearRetainingCapacity();
+        const anno_var = try self.generateAnnoType(
+            FreeVarCtx{ .scratch = &self.anno_free_vars, .start = 0 },
+            annotation.type_anno,
+        );
 
         if (expr == .e_lambda) {
             // Special handling for lambda expressions with annotations
@@ -524,19 +571,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
                 _ = try self.unifyWithAnnotation(expr_var, anno_var);
             } else {
                 // Shouldn't happen - closures should contain lambdas
-                _ = try self.checkExpr(def.expr);
-                _ = try self.unifyWithAnnotation(expr_var, anno_var);
+                _ = try self.checkExprNew(def.expr, .{ .with_expected_annotation = anno_var });
             }
         } else {
             // Check the expr
-            _ = try self.checkExpr(def.expr);
-
-            // Unify the expression with its annotation
-            _ = try self.unifyWithAnnotation(expr_var, anno_var);
+            _ = try self.checkExprNew(def.expr, .{ .with_expected_annotation = anno_var });
         }
     } else {
         // Check the expr
-        _ = try self.checkExpr(def.expr);
+        _ = try self.checkExprNew(def.expr, .anonymous);
     }
 
     // Unify the def with its expression
@@ -549,198 +592,472 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
 // annotations //
 
-/// Check the types for the provided pattern
-pub fn checkAnnotation(self: *Self, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
+/// The context use for free var generation
+const FreeVarCtx = struct {
+    scratch: *base.Scratch(FreeVar),
+    start: usize,
+
+    // TODO: Do we need rank here?
+
+    pub fn sliceFreeVars(self: *const @This()) []FreeVar {
+        return self.scratch.items.items[self.start..];
+    }
+};
+
+/// Given an annotation, generate the corrosponding type based on the CIR
+///
+/// This function will write the type into the type var node at `anno_idx`
+fn generateAnnoType(self: *Self, free_vars_ctx: FreeVarCtx, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const anno = self.cir.store.getTypeAnno(anno_idx);
-    const anno_var = ModuleEnv.varFrom(anno_idx);
     const anno_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_idx));
 
     switch (anno) {
-        .ty_lookup_external => |a| {
-            const resolved_external = try self.resolveVarFromExternal(a.module_idx, a.target_node_idx) orelse {
-                // If we could not copy the type, set error and continue
-                try self.types.setVarContent(ModuleEnv.varFrom(anno_idx), .err);
-                return;
-            };
+        .rigid_var => |rigid| {
+            // If we have a rigid var, first check if we've seen it before
+            // If so, we redirect this instance to the previously seen instance
+            for (free_vars_ctx.sliceFreeVars()) |cached_rigid| {
+                if (cached_rigid.ident.idx == rigid.name.idx) {
+                    return try self.freshRedirect(cached_rigid.var_, anno_region);
+                }
+            }
 
-            self.annotation_rigid_var_subs.items.clearRetainingCapacity();
-            const instantatied_var = try self.instantiateVar(
-                resolved_external.local_var,
-                &self.annotation_rigid_var_subs,
-                .{ .explicit = anno_region },
-            );
-            try self.types.setVarRedirect(anno_var, instantatied_var);
+            // If this is the first time we've seen this var, then add it to the map
+            return try self.freshFromContent(.{ .rigid_var = rigid.name }, anno_region);
+        },
+        .underscore => {
+            return try self.freshFromContent(.{ .flex_var = null }, anno_region);
+        },
+        .lookup => |lookup| {
+            switch (lookup.base) {
+                .builtin => |builtin_type| {
+                    return try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region);
+                },
+                .local => |local| {
+                    return try self.generateTypeDeclInstance(&.{}, anno_region, local.decl_idx);
+                },
+                .external => |external| {
+                    // TODO External
+                    const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                        // TODO?
+                        return try self.freshFromContent(.err, anno_region);
+                    };
+                    return try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                },
+            }
         },
         .apply => |a| {
-            // For apply annotation, the root anno's var is intitally set to be
-            // a redirect to backing type declaration.
-            try self.checkApplyAnno(anno_var, anno_region, a.args);
-        },
-        .apply_external => |a| {
-            const resolved_external = try self.resolveVarFromExternal(a.module_idx, a.target_node_idx) orelse {
-                // If we could not copy the type, set error and continue
-                try self.types.setVarContent(ModuleEnv.varFrom(anno_idx), .err);
-                return;
-            };
+            const scratch_vars_top = self.scratch_vars.top();
+            defer self.scratch_vars.clearFrom(scratch_vars_top);
 
-            try self.checkApplyAnno(resolved_external.local_var, anno_region, a.args);
-        },
-        .tag_union => |tag_union| {
-            const args_anno_slice = self.cir.store.sliceTypeAnnos(tag_union.tags);
-            for (args_anno_slice) |arg_anno_idx| {
-                try self.checkAnnotation(arg_anno_idx);
+            // Generate the types for the arguments
+            const anno_args = self.cir.store.sliceTypeAnnos(a.args);
+            for (anno_args) |anno_arg| {
+                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                    free_vars_ctx,
+                    anno_arg,
+                ));
             }
-        },
-        .tuple => |tuple| {
-            const args_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
-            for (args_anno_slice) |arg_anno_idx| {
-                try self.checkAnnotation(arg_anno_idx);
-            }
-        },
-        .record => |rec| {
-            const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
-            for (recs_anno_slice) |rec_anno_idx| {
-                const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
-                try self.checkAnnotation(rec_field.ty);
+            const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
+
+            switch (a.base) {
+                .builtin => |builtin_type| {
+                    return try self.generateBuiltinTypeInstance(a.name, builtin_type, args_var_slice, anno_region);
+                },
+                .local => |local| {
+                    return try self.generateTypeDeclInstance(args_var_slice, anno_region, local.decl_idx);
+                },
+                .external => |external| {
+                    // TODO External
+                    const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                        // TODO?
+                        return try self.freshFromContent(.err, anno_region);
+                    };
+                    return try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                },
             }
         },
         .@"fn" => |func| {
+            const scratch_vars_top = self.scratch_vars.top();
+            defer self.scratch_vars.clearFrom(scratch_vars_top);
+
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.checkAnnotation(arg_anno_idx);
+                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                    free_vars_ctx,
+                    arg_anno_idx,
+                ));
             }
-            try self.checkAnnotation(func.ret);
+            const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
+
+            const fn_ret_var = try self.generateAnnoType(free_vars_ctx, func.ret);
+
+            const fn_type = blk: {
+                if (func.effectful) {
+                    break :blk try self.types.mkFuncEffectful(args_var_slice, fn_ret_var);
+                } else {
+                    break :blk try self.types.mkFuncPure(args_var_slice, fn_ret_var);
+                }
+            };
+            return try self.freshFromContent(fn_type, anno_region);
+        },
+        .tag_union => |tag_union| {
+            const scratch_tags_top = self.scratch_tags.top();
+            defer self.scratch_tags.clearFrom(scratch_tags_top);
+
+            const tag_anno_slices = self.cir.store.sliceTypeAnnos(tag_union.tags);
+            for (tag_anno_slices) |tag_anno_idx| {
+                // Get the tag anno
+                const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
+                std.debug.assert(tag_type_anno == .tag);
+                const tag = tag_type_anno.tag;
+
+                const scratch_vars_top = self.scratch_vars.top();
+                defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+                // Generate the types for each tag arg
+                const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
+                for (tag_anno_args_slice) |tag_arg_idx| {
+                    try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                        free_vars_ctx,
+                        tag_arg_idx,
+                    ));
+                }
+                const tag_vars_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
+
+                // Add the processed tag to scratch
+                try self.scratch_tags.append(self.gpa, try self.types.mkTag(
+                    tag.name,
+                    tag_vars_slice,
+                ));
+            }
+
+            // Get the slice of tags
+            const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+            std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
+
+            // Process the ext if it exists. Absence means it's a closed union
+            const ext_var = blk: {
+                if (tag_union.ext) |ext_anno_idx| {
+                    break :blk try self.generateAnnoType(free_vars_ctx, ext_anno_idx);
+                } else {
+                    break :blk try self.freshFromContent(.{ .structure = .empty_tag_union }, anno_region);
+                }
+            };
+
+            // Create the type for the anno in the store
+            return try self.freshFromContent(try self.types.mkTagUnion(tags_slice, ext_var), anno_region);
+        },
+        .tag => {
+            // This indicates a malformed type annotation. Tags should only
+            // exist as direct childen of tag_unions
+            std.debug.assert(false);
+            return try self.freshFromContent(.err, anno_region);
+        },
+        .record => |rec| {
+            const scratch_record_fields_top = self.scratch_record_fields.top();
+            defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
+
+            const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
+
+            for (recs_anno_slice) |rec_anno_idx| {
+                const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
+
+                const record_field_var = try self.generateAnnoType(free_vars_ctx, rec_field.ty);
+
+                // Add the processed tag to scratch
+                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                    .name = rec_field.name,
+                    .var_ = record_field_var,
+                });
+            }
+
+            // Get the slice of record_fields
+            const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
+            std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
+
+            // Process the ext if it exists. Absence means it's a closed union
+            // TODO: Capture ext in record field CIR
+            // const ext_var = blk: {
+            //     if (rec.ext) |ext_anno_idx| {
+            //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
+            //         break :blk ModuleEnv.varFrom(ext_anno_idx);
+            //     } else {
+            //         break :blk try self.freshFromContent(.{ .structure = .empty_record }, anno_region);
+            //     }
+            // };
+            const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, anno_region);
+
+            // Create the type for the anno in the store
+            return try self.freshFromContent(
+                .{ .structure = types_mod.FlatType{ .record = .{
+                    .fields = fields_type_range,
+                    .ext = ext_var,
+                } } },
+                anno_region,
+            );
+        },
+        .tuple => |tuple| {
+            const scratch_vars_top = self.scratch_vars.top();
+            defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+            const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+            for (elems_anno_slice) |arg_anno_idx| {
+                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                    free_vars_ctx,
+                    arg_anno_idx,
+                ));
+            }
+            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+            return try self.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } }, anno_region);
         },
         .parens => |parens| {
-            try self.checkAnnotation(parens.anno);
+            return try self.generateAnnoType(free_vars_ctx, parens.anno);
         },
-        else => {},
+        .malformed => {
+            return try self.freshFromContent(.err, anno_region);
+        },
     }
 }
 
-/// Check and process a type application annotation (e.g., Maybe(x), List(String)).
+/// Generate a type variable from the provided type declaration, substituting
+/// the type arguments in the declaration with the type arguments provided
 ///
-/// This function handles annotations where a polymorphic type is applied with specific
-/// type arguments. It creates a mapping from the type definition's rigid variables
-/// to the annotation's rigid variables, preserving rigid constraints.
+/// Writes the resulting type into the slot at `ret_var`
 ///
-/// Example:
-///   Type definition: Maybe(a) := [Some(a), None]
-///   Annotation:      Maybe(x)
-///   Result:          Creates mapping a[rigid] → x[rigid], then applies it
-///                    to get [Some(x[rigid]), None] where x stays rigid
-///
-/// Parameters:
-/// * `anno_var` - Variable for the annotation (initially points to the type definition)
-/// * `anno_region` - Source region for error reporting
-/// * `anno_args_span` - The type arguments in the annotation (e.g., 'x' in Maybe(x))
-pub fn checkApplyAnno(
+/// Steps:
+/// 1. Lookup the provided declaration
+/// 2. Assert arities from the decl match the actual provided args
+/// 3. Iterate over the decl args & the actual args together
+///     * Build up a substituion map of decl_arg -> actual_arg
+/// 4. Generate the instance of the decl type using the substitution map
+fn generateTypeDeclInstance(
     self: *Self,
-    anno_var: Var,
+    anno_args: []Var,
     anno_region: Region,
-    anno_args_span: CIR.TypeAnno.Span,
-) std.mem.Allocator.Error!void {
-    // Clear any previous rigid variable mappings
-    self.annotation_rigid_var_subs.items.clearRetainingCapacity();
+    decl_idx: CIR.Statement.Idx,
+) std.mem.Allocator.Error!Var {
+    const decl_free_vars_top = self.decl_free_vars.top();
+    defer self.decl_free_vars.clearFrom(decl_free_vars_top);
 
-    // Get the base type definition that this annotation references
-    const type_base = self.types.resolveVar(anno_var).desc.content;
+    const decl = self.cir.store.getStatement(decl_idx);
+    switch (decl) {
+        .s_alias_decl => |alias| {
+            // Get the type header's args
+            const header = self.cir.store.getTypeHeader(alias.header);
+            const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
-    const anno_args = self.cir.store.sliceTypeAnnos(anno_args_span);
+            // Then check arity
+            if (header_args.len != anno_args.len) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = header.name,
+                    .region = anno_region,
+                    .num_expected_args = @intCast(header_args.len),
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
 
-    switch (type_base) {
-        .alias => |alias| {
-            const base_arg_vars = self.types.sliceAliasArgs(alias);
-            try self.buildRigidVarMapping(alias.ident.ident_idx, base_arg_vars, anno_args, anno_var);
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
+
+            // Next, generate the provided arg types and build the map of rigid variables in the header
+            for (header_args, anno_args) |header_arg_idx, anno_arg_var| {
+                const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
+                switch (header_arg) {
+                    .rigid_var => |rigid| {
+                        // Then, if it is a rigid var, add to our mapping
+                        try self.decl_free_vars.append(self.gpa, .{ .ident = rigid.name, .var_ = anno_arg_var });
+                    },
+                    else => {},
+                }
+            }
+
+            // Now we have a built of list of rigid variables for the decl lhs (header).
+            // With this in hand, we can now generate the type for the lhs (body).
+            return try self.generateAnnoType(
+                FreeVarCtx{ .scratch = &self.decl_free_vars, .start = decl_free_vars_top },
+                alias.anno,
+            );
         },
-        .structure => |flat_type| switch (flat_type) {
-            .nominal_type => |nominal| {
-                const base_arg_vars = self.types.sliceNominalArgs(nominal);
-                try self.buildRigidVarMapping(nominal.ident.ident_idx, base_arg_vars, anno_args, anno_var);
-            },
-            else => {
-                // Do we need to handle cases like `List` or `Box` here? They
-                // have args, but it depends how they're added to scope in
-                // canonicalize. If they're added as aliases, then we don't, but
-                // if when we lookup `List` in scope, for example, we use the
-                // primitive directly, then we do
+        .s_nominal_decl => |nominal| {
+            // Get the type header's args
+            const header = self.cir.store.getTypeHeader(nominal.header);
+            const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
-            },
+            // Then check arity
+            if (header_args.len != anno_args.len) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = header.name,
+                    .region = anno_region,
+                    .num_expected_args = @intCast(header_args.len),
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
+
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
+
+            // Next, generate the provided arg types and build the map of rigid variables in the header
+            for (header_args, anno_args) |header_arg_idx, anno_arg_var| {
+                const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
+                switch (header_arg) {
+                    .rigid_var => |rigid| {
+                        // Then, if it is a rigid var, add to our mapping
+                        try self.decl_free_vars.append(self.gpa, .{ .ident = rigid.name, .var_ = anno_arg_var });
+                    },
+                    else => {},
+                }
+            }
+
+            // Now we have a built of list of rigid variables for the decl lhs (header).
+            // With this in hand, we can now generate the type for the lhs (body).
+            //
+            // This is necessary because even though nominal types unify only by
+            // name, args, and origin module, if the rhs of the nominal type is
+            // invalid (ie an .err) then that error must propgate "through" the
+            // nominal type. So the whole thing must be  materialized here.
+            const backing_var = try self.generateAnnoType(
+                FreeVarCtx{ .scratch = &self.decl_free_vars, .start = decl_free_vars_top },
+                nominal.anno,
+            );
+
+            return try self.freshFromContent(try self.types.mkNominal(
+                .{ .ident_idx = header.name },
+                backing_var,
+                anno_args,
+                self.common_idents.module_name,
+            ), anno_region);
+        },
+        .s_runtime_error => {
+            return try self.freshFromContent(.err, anno_region);
         },
         else => {
-            // Non-parameterized types don't need rigid variable mapping
+            // This indicates a malformed type anno, where the decl is not a real decl
+            std.debug.assert(false);
+            return try self.freshFromContent(.err, anno_region);
         },
     }
-
-    // Apply the rigid variable substitution to the type definition
-    // This converts the base type (e.g., Maybe(a)) to use the annotation's
-    // rigid variables (e.g., Maybe(x)) while preserving rigidity
-    const instantiated_var = try self.instantiateVar(
-        anno_var,
-        &self.annotation_rigid_var_subs,
-        .{ .explicit = anno_region },
-    );
-
-    // Redirect the annotation variable to point to the substituted type
-    try self.types.setVarRedirect(anno_var, instantiated_var);
 }
 
-/// Build the mapping from base type rigid variables to annotation rigid variables
+/// Generate a type variable from the builtin
 ///
-/// For each parameter in the base type definition, if it's a rigid variable,
-/// map it to the corresponding argument in the annotation.
-///
-/// Example: Maybe(a) + annotation args [x] → mapping["a"] = x[rigid]
-fn buildRigidVarMapping(
+/// Writes the resulting type into the slot at `ret_var`
+fn generateBuiltinTypeInstance(
     self: *Self,
-    base_name: Ident.Idx,
-    base_arg_vars: []const types_mod.Var,
-    anno_args: []const CIR.TypeAnno.Idx,
-    anno_var: types_mod.Var,
-) std.mem.Allocator.Error!void {
-    // Ensure we have the same number of parameters and arguments
-    if (base_arg_vars.len != anno_args.len) {
-        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
-            .type_name = base_name,
-            .anno_var = anno_var,
-            .num_expected_args = @intCast(base_arg_vars.len),
-            .num_actual_args = @intCast(anno_args.len),
-        } });
-        // Base type parameter is in error state - propagate error
-        try self.types.setVarContent(anno_var, .err);
-        return;
-    }
+    anno_builtin_name: Ident.Idx,
+    anno_builtin_type: CIR.TypeAnno.Builtin,
+    anno_args: []Var,
+    anno_region: Region,
+) std.mem.Allocator.Error!Var {
+    switch (anno_builtin_type) {
+        .str => return try self.freshFromContent(.{ .structure = .str }, anno_region),
+        .u8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u8 } }, anno_region),
+        .u16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u16 } }, anno_region),
+        .u32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u32 } }, anno_region),
+        .u64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u64 } }, anno_region),
+        .u128 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u128 } }, anno_region),
+        .i8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i8 } }, anno_region),
+        .i16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i16 } }, anno_region),
+        .i32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i32 } }, anno_region),
+        .i64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i64 } }, anno_region),
+        .i128 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_i128 } }, anno_region),
+        .f32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_f32 } }, anno_region),
+        .f64 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_f64 } }, anno_region),
+        .dec => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.frac_dec } }, anno_region),
+        .list => {
+            // Then check arity
+            if (anno_args.len != 1) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = anno_builtin_name,
+                    .region = anno_region,
+                    .num_expected_args = 1,
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
 
-    for (base_arg_vars, anno_args) |base_arg_var, anno_arg_idx| {
-        const base_arg_resolved = self.types.resolveVar(base_arg_var).desc.content;
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
 
-        switch (base_arg_resolved) {
-            .rigid_var => |ident| {
-                // Found a rigid variable in the base type - map it to the annotation argument
-                const ident_text = self.cir.getIdent(ident);
+            // Create the type
+            return try self.freshFromContent(.{ .structure = .{ .list = anno_args[0] } }, anno_region);
+        },
+        .box => {
+            // Then check arity
+            if (anno_args.len != 1) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = anno_builtin_name,
+                    .region = anno_region,
+                    .num_expected_args = 1,
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
 
-                const anno_arg_var = ModuleEnv.varFrom(anno_arg_idx);
-                const anno_arg_var_inst = try self.instantiateVar(anno_arg_var, &self.annotation_rigid_var_subs, .use_last_var);
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
 
-                try self.annotation_rigid_var_subs.append(self.gpa, .{
-                    .ident = ident_text,
-                    .var_ = anno_arg_var_inst,
-                });
-            },
-            .err => {
-                // Base type parameter is in error state - propagate error
-                try self.types.setVarContent(anno_var, .err);
-                return;
-            },
-            else => {
-                // Base type parameter is not a rigid variable (unexpected)
-                // This should only happen for rigid variables in well-formed type definitions
-                std.debug.assert(base_arg_resolved != .flex_var);
-            },
-        }
+            // Create the type
+            return try self.freshFromContent(.{ .structure = .{ .box = anno_args[0] } }, anno_region);
+        },
+        .num => {
+            // Then check arity
+            if (anno_args.len != 1) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = anno_builtin_name,
+                    .region = anno_region,
+                    .num_expected_args = 1,
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
+
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
+
+            // Create the type
+            return try self.freshFromContent(.{ .structure = .{
+                .num = .{ .num_poly = .{ .var_ = anno_args[0], .requirements = .{ .sign_needed = false, .bits_needed = 0 } } },
+            } }, anno_region);
+        },
+        .frac => {
+            // Then check arity
+            if (anno_args.len != 1) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = anno_builtin_name,
+                    .region = anno_region,
+                    .num_expected_args = 1,
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
+
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
+
+            // Create the type
+            return try self.freshFromContent(.{ .structure = .{
+                .num = .{ .frac_poly = .{ .var_ = anno_args[0], .requirements = .{ .fits_in_f32 = false, .fits_in_dec = true } } },
+            } }, anno_region);
+        },
+        .int => {
+            // Then check arity
+            if (anno_args.len != 1) {
+                _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                    .type_name = anno_builtin_name,
+                    .region = anno_region,
+                    .num_expected_args = 1,
+                    .num_actual_args = @intCast(anno_args.len),
+                } });
+
+                // Set error and return
+                return try self.freshFromContent(.err, anno_region);
+            }
+
+            // Create the type
+            return try self.freshFromContent(.{ .structure = .{
+                .num = .{ .int_poly = .{ .var_ = anno_args[0], .requirements = .{ .sign_needed = false, .bits_needed = 0 } } },
+            } }, anno_region);
+        },
     }
 }
 
@@ -814,7 +1131,141 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
     }
 }
 
-// expr //
+// expr NEW //
+
+pub const ExprMode = union(enum) {
+    anonymous,
+    with_expected: Var,
+    with_expected_annotation: Var,
+};
+
+pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, mode: ExprMode) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const expr = self.cir.store.getExpr(expr_idx);
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+
+    var does_fx = false; // Does this expression potentially perform any side effects?
+
+    switch (expr) {
+        // str //
+        .e_str_segment => |_| {
+            try self.types.setVarContent(expr_var, .{ .structure = .str });
+        },
+        .e_str => |str| {
+            // Iterate over the string segments, capturing if any error'd
+            const segment_expr_idx_slice = self.cir.store.sliceExpr(str.span);
+            var did_err = false;
+            for (segment_expr_idx_slice) |seg_expr_idx| {
+                // Check the segment
+                does_fx = try self.checkExprNew(seg_expr_idx, .anonymous) or does_fx;
+
+                // Check if it errored
+                const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+                did_err = did_err or self.types.resolveVar(seg_var).desc.content == .err;
+            }
+
+            if (did_err) {
+                // If any segment errored, propgate that error to the root string
+                try self.types.setVarContent(expr_var, .err);
+            } else {
+                // Otherwise, set the type of this expr to be string
+                try self.types.setVarContent(expr_var, .{ .structure = .str });
+            }
+        },
+        // nums //
+        .e_num => |num| {
+            try self.types.setVarContent(expr_var, .{ .structure = .{ .num = .{ .num_unbound = num.requirements } } });
+        },
+        .e_int => |num| {
+            const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = num.requirements } } }, expr_region);
+            try self.types.setVarContent(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{ .var_ = int_var, .requirements = num.requirements } } } });
+        },
+        // list //
+        .e_list => |list| {
+            const elems = self.cir.store.exprSlice(list.elems);
+
+            if (elems.len == 0) {
+                // If we have no elems, then set the type and move on
+                try self.types.setVarContent(expr_var, .{ .structure = .list_unbound });
+            } else {
+                // Here, we use the list's 1st element as the element var to
+                // constrain the rest of the list
+
+                // Check the first elem
+                does_fx = try self.checkExprNew(elems[0], .anonymous) or does_fx;
+
+                // Iterate over the remaining elements
+                const elem_var = ModuleEnv.varFrom(elems[0]);
+                var last_elem_expr_idx = elems[0];
+                for (elems[1..], 1..) |elem_expr_idx, i| {
+                    does_fx = try self.checkExprNew(elem_expr_idx, .anonymous) or does_fx;
+                    const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
+
+                    // Unify each element's var with the list's elem var
+                    const result = try self.unify(elem_var, cur_elem_var);
+                    self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
+                        .last_elem_expr = last_elem_expr_idx,
+                        .incompatible_elem_index = @intCast(i),
+                        .list_length = @intCast(elems.len),
+                    } });
+
+                    // If we errored, check the rest of the elements without comparing
+                    // to the elem_var to catch their individual errors
+                    if (!result.isOk()) {
+                        for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
+                            does_fx = try self.checkExpr(remaining_elem_expr_idx) or does_fx;
+                        }
+
+                        // Break to avoid cascading errors
+                        break;
+                    }
+
+                    last_elem_expr_idx = elem_expr_idx;
+                }
+
+                try self.types.setVarContent(expr_var, .{ .structure = .{ .list = elem_var } });
+            }
+        },
+        // tuple //
+        .e_tuple => |tuple| {
+            // Check tuple elements
+            const elems_slice = self.cir.store.exprSlice(tuple.elems);
+            for (elems_slice) |single_elem_expr_idx| {
+                does_fx = try self.checkExpr(single_elem_expr_idx) or does_fx;
+                try self.scratch_vars.append(self.gpa, ModuleEnv.varFrom(single_elem_expr_idx));
+            }
+
+            // Cast the elems idxs to vars (this works because Anno Idx are 1-1 with type Vars)
+            const elem_vars_slice = try self.types.appendVars(@ptrCast(elems_slice));
+
+            // Set the type in the store
+            try self.types.setVarContent(expr_var, .{ .structure = .{
+                .tuple = .{ .elems = elem_vars_slice },
+            } });
+        },
+        else => {
+            try self.types.setVarContent(expr_var, .err);
+        },
+    }
+
+    // If we were provided with an expected type, unify against it
+    switch (mode) {
+        .anonymous => {},
+        .with_expected => |expected_var| {
+            _ = try self.unify(expected_var, expr_var);
+        },
+        .with_expected_annotation => |expected_var| {
+            _ = try self.unifyWithAnnotation(expected_var, expr_var);
+        },
+    }
+
+    return does_fx;
+}
+
+// expr OLD //
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
@@ -830,9 +1281,9 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
     const does_fx = self.checkExprWithExpectedAndAnnotationHelp(expr_idx, expected_type, from_annotation);
     if (expected_type) |expected| {
         if (from_annotation) {
-            _ = try self.unifyWithAnnotation(ModuleEnv.varFrom(expr_idx), expected);
+            _ = try self.unifyWithAnnotation(expected, ModuleEnv.varFrom(expr_idx));
         } else {
-            _ = try self.unify(ModuleEnv.varFrom(expr_idx), expected);
+            _ = try self.unify(expected, ModuleEnv.varFrom(expr_idx));
         }
     }
     return does_fx;
@@ -868,6 +1319,7 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                 }
             }
         },
+        .e_num => |_| {},
         .e_frac_f32 => |_| {
             // Fractional literals have their type constraints (fits_in_f32, fits_in_dec)
             // created during canonicalization. No additional checking needed here.
@@ -990,8 +1442,8 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             does_fx = try self.checkExpr(func_expr_idx) or does_fx; // func_expr could be effectful, e.g. `(mk_fn!())(arg)`
 
             // Then, check all the arguments
-            const call_args = all_exprs[1..];
-            for (call_args) |arg_expr_idx| {
+            const actual_args = all_exprs[1..];
+            for (actual_args) |arg_expr_idx| {
                 // Each arg could also be effectful, e.g. `fn(mk_arg!(), mk_arg!())`
                 does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
             }
@@ -1001,13 +1453,13 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             if (func_expr != .e_runtime_error) {
                 const func_expr_region = self.cir.store.getRegionAt(ModuleEnv.nodeIdxFrom(func_expr_idx));
 
-                const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                const call_func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
-                const resolved_func = self.types.resolveVar(call_func_var);
+                const ret_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                const expected_fn_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
+                const resolved_func = self.types.resolveVar(expected_fn_var);
 
                 // Check if this is an annotated function that needs instantiation
                 // We only instantiate if the function actually contains type variables
-                var cur_call_func_var = call_func_var;
+                var cur_call_func_var = expected_fn_var;
                 var current_content = resolved_func.desc.content;
 
                 content_switch: switch (current_content) {
@@ -1020,19 +1472,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                                 std.debug.assert(resolved_expected_func.desc.content == .structure);
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_effectful);
-                                const expected_func = resolved_expected_func.desc.content.structure.fn_effectful;
+                                const expected_fn = resolved_expected_func.desc.content.structure.fn_effectful;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
-
-                                // Unify with expected type if provided
-                                if (expected_type) |expected| {
-                                    if (from_annotation) {
-                                        _ = try self.unifyWithAnnotation(call_var, expected);
-                                    } else {
-                                        _ = try self.unify(call_var, expected);
-                                    }
-                                }
-
+                                does_fx = try self.unifyFunctionCall(actual_args, ret_var, expected_fn_var, expected_fn, expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1043,19 +1485,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                                 std.debug.assert(resolved_expected_func.desc.content == .structure);
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
-                                const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
+                                const expected_fn = resolved_expected_func.desc.content.structure.fn_pure;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region, func_expr_idx) or does_fx;
-
-                                // Unify with expected type if provided
-                                if (expected_type) |expected| {
-                                    if (from_annotation) {
-                                        _ = try self.unifyWithAnnotation(call_var, expected);
-                                    } else {
-                                        _ = try self.unify(call_var, expected);
-                                    }
-                                }
-
+                                does_fx = try self.unifyFunctionCall(actual_args, ret_var, expected_fn_var, expected_fn, func_expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1066,9 +1498,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                                 std.debug.assert(resolved_expected_func.desc.content == .structure);
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
-                                const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
+                                const expected_fn = resolved_expected_func.desc.content.structure.fn_unbound;
 
-                                does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
+                                does_fx = try self.unifyFunctionCall(actual_args, ret_var, expected_fn_var, expected_fn, expr_region, func_expr_idx) or does_fx;
                                 return does_fx;
                             }
                         },
@@ -1091,15 +1523,11 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                 // We didn't handle the function call above (either because it wasn't a function
                 // or it didn't need instantiation), so fall back on this logic.
-                const arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
+                const arg_vars: []Var = @constCast(@ptrCast(@alignCast(actual_args)));
 
                 // Create an unbound function type with the call result as return type
                 // The unification will propagate the actual return type to the call
-                //
-                // TODO: Do we need to insert a CIR placeholder node here as well?
-                // What happens if later this type variable has a problem, and we
-                // try to look up its region in CIR?
-                const func_content = try self.types.mkFuncUnbound(arg_vars, call_var);
+                const func_content = try self.types.mkFuncUnbound(arg_vars, ret_var);
                 const expected_func_var = try self.freshFromContent(func_content, expr_region);
                 _ = try self.unify(expected_func_var, cur_call_func_var);
             }
@@ -1190,6 +1618,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, unary);
         },
         .e_block => |block| {
+            const anno_free_vars_top = self.anno_free_vars.top();
+            defer self.anno_free_vars.clearFrom(anno_free_vars_top);
+
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
@@ -1199,12 +1630,13 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                         // Check pattern and expression, then unify
                         try self.checkPattern(decl_stmt.pattern);
                         if (decl_stmt.anno) |anno_idx| {
-                            // TODO: When instantiating, use the parent type variables
-                            // map here to allow `forall` behavior
                             const annotation = self.cir.store.getAnnotation(anno_idx);
-                            try self.checkAnnotation(annotation.type_anno);
+                            const anno_var = try self.generateAnnoType(
+                                FreeVarCtx{ .scratch = &self.anno_free_vars, .start = 0 },
+                                annotation.type_anno,
+                            );
 
-                            does_fx = try self.checkExprWithExpectedAndAnnotation(decl_stmt.expr, ModuleEnv.varFrom(annotation.type_anno), true) or does_fx;
+                            does_fx = try self.checkExprWithExpectedAndAnnotation(decl_stmt.expr, anno_var, true) or does_fx;
                         } else {
                             does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
                         }
@@ -1225,7 +1657,6 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                     },
                 }
             }
-
             // Check the final expression
             does_fx = try self.checkExpr(block.final_expr) or does_fx;
 
@@ -1471,9 +1902,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 /// Helper function to unify a call expression with a function type
 fn unifyFunctionCall(
     self: *Self,
-    call_var: Var, // var for the entire call expr
-    call_func_var: Var, // var for the fn itself
-    call_args: []const CIR.Expr.Idx, // var for the fn args
+    args_vars: []const CIR.Expr.Idx, // var for the fn args
+    ret_var: Var, // var for the return type
+    expected_fn_var: Var, // var for the fn itself (must be instantiated)
     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
     region: Region,
     func_expr_idx: CIR.Expr.Idx, // the function expression for name extraction
@@ -1499,11 +1930,17 @@ fn unifyFunctionCall(
 
     // Only unify arguments if counts match - otherwise let the normal
     // unification process handle the arity mismatch error
-    if (expected_args.len == call_args.len) {
+    if (expected_args.len == args_vars.len) {
         // For function signatures with bound type variables, unify arguments with each other first
         // This ensures proper error placement for cases like mk_pair("1", 2) where a, a -> Pair(a)
 
         // Find arguments that share the same type variable
+        //
+        // TODO(jared): This is not doing what it's intended to do, I think.
+        // It's unifying variables if they're the the same var, but if they're
+        // the same var they don't need to be unified? I think setting up
+        // scope correct so all flex vars  are redirected to the same var in
+        // canonicalize shouold do the same thing.
         for (expected_args, 0..) |expected_arg_1, i| {
             const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
 
@@ -1516,8 +1953,8 @@ fn unifyFunctionCall(
             for (expected_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
                 if (expected_arg_1 == expected_arg_2) {
                     // These two arguments are bound by the same type variable - unify them first
-                    const arg_1 = @as(Var, @enumFromInt(@intFromEnum(call_args[i])));
-                    const arg_2 = @as(Var, @enumFromInt(@intFromEnum(call_args[j])));
+                    const arg_1 = @as(Var, @enumFromInt(@intFromEnum(args_vars[i])));
+                    const arg_2 = @as(Var, @enumFromInt(@intFromEnum(args_vars[j])));
 
                     const unify_result = try self.unify(arg_1, arg_2);
 
@@ -1530,7 +1967,7 @@ fn unifyFunctionCall(
                                 .second_arg_var = arg_2,
                                 .first_arg_index = @intCast(i),
                                 .second_arg_index = @intCast(j),
-                                .num_args = @intCast(call_args.len),
+                                .num_args = @intCast(args_vars.len),
                             },
                         });
                         return false; // Early return on error
@@ -1540,7 +1977,7 @@ fn unifyFunctionCall(
         }
 
         // Apply constraint propagation for numeric literals with concrete types
-        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+        for (expected_args, args_vars) |expected_arg, arg_expr_idx| {
             const expected_resolved = self.types.resolveVar(expected_arg);
 
             // Only apply constraint propagation for concrete types, not type variables
@@ -1556,37 +1993,39 @@ fn unifyFunctionCall(
 
         // Regular unification using the argument vars
         var arg_index: u32 = 0;
-        for (expected_args, call_args) |expected_arg, arg_expr_idx| {
+        for (expected_args, args_vars) |expected_arg, arg_expr_idx| {
             const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
 
+            // TODO: Do we need this?
             // Instantiate polymorphic arguments before unification
-            var arg_to_unify = actual_arg;
-            if (self.types.needsInstantiation(actual_arg)) {
-                arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
-            }
+            // var arg_to_unify = actual_arg;
+            // if (self.types.needsInstantiation(actual_arg)) {
+            //     arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
+            // }
 
-            const arg_result = try self.unify(expected_arg, arg_to_unify);
+            const arg_result = try self.unify(expected_arg, actual_arg);
             self.setDetailIfTypeMismatch(arg_result, .{
                 .incompatible_fn_call_arg = .{
-                    .fn_name = null, // Get function name for better error message
+                    .fn_name = func_name,
                     .arg_var = actual_arg,
                     .incompatible_arg_index = arg_index,
-                    .num_args = @intCast(call_args.len),
+                    .num_args = @intCast(args_vars.len),
                 },
             });
             arg_index += 1;
         }
         // The call's type is the instantiated return type
-        _ = try self.unify(call_var, expected_func.ret);
+        _ = try self.unify(ret_var, expected_func.ret);
     } else {
         // Arity mismatch - arguments already checked
 
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
-        const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
-        const func_content = try self.types.mkFuncUnbound(actual_arg_vars, call_var);
-        const expected_func_var = try self.freshFromContent(func_content, region);
-        _ = try self.unify(call_func_var, expected_func_var);
+        const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(args_vars)));
+        const actual_func_content = try self.types.mkFuncUnbound(actual_arg_vars, ret_var);
+        const actual_func_var = try self.freshFromContent(actual_func_content, region);
+        _ = try self.unify(actual_func_var, expected_fn_var);
+        try self.types.setVarRedirect(ret_var, actual_func_var);
     }
 
     return false;
@@ -1830,7 +2269,8 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
 
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+
+            const fresh_bool = try self.freshBool(expr_region);
             _ = try self.unify(expr_var, fresh_bool);
 
             return does_fx;
@@ -1839,7 +2279,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             var does_fx = try self.checkExpr(binop.lhs);
             does_fx = try self.checkExpr(binop.rhs) or does_fx;
 
-            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.freshBool(expr_region);
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1848,7 +2288,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.freshBool(expr_region);
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1863,7 +2303,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             var does_fx = try self.checkExpr(binop.lhs);
             does_fx = try self.checkExpr(binop.rhs) or does_fx;
 
-            const lhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+            const lhs_fresh_bool = try self.freshBool(expr_region);
             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -1872,7 +2312,7 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const rhs_fresh_bool = try self.freshBool(expr_region);
                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
@@ -1930,7 +2370,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, u
     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
     // Create a fresh boolean variable for the operation
-    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.freshBool(expr_region);
 
     // Unify operand and result with the boolean type
     _ = try self.unify(operand_var, bool_var);
@@ -2076,7 +2516,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+    const bool_var = try self.freshBool(expr_region);
     const first_cond_result = try self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -2096,7 +2536,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+        const branch_bool_var = try self.freshBool(expr_region);
         const cond_result = try self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -2119,7 +2559,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
 
-                const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });
+                const fresh_bool = try self.freshBool(expr_region);
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 

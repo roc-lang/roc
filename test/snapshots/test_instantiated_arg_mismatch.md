@@ -78,13 +78,6 @@ EndOfFile(7:1-7:1),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-2.26 (name "pair")
-		(ty-fn @2.12-2.26 (effectful false)
-			(ty-var @2.12-2.13 (name "a"))
-			(ty-var @2.15-2.16 (name "a"))
-			(ty-tuple @2.20-2.26
-				(ty-var @2.21-2.22 (name "a"))
-				(ty-var @2.24-2.25 (name "a")))))
 	(s-let @3.5-3.25
 		(p-assign @3.5-3.9 (ident "pair"))
 		(e-lambda @3.12-3.25

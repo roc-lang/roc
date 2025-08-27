@@ -17,22 +17,9 @@ identity = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_var_annotation_body_connection.md:6:13:6:14
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_annotation_body_connection.md:6:13:6:14:**
-```roc
-    thing = x  # refers to the value from the function parameter
-```
-            ^
-
-The type annotation says it should have the type:
-    _a_
-
-But here it's being used as:
-    _a_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -106,8 +93,6 @@ main! = |_| {}
 			(args
 				(p-assign @4.13-4.14 (ident "x")))
 			(e-block @4.16-8.2
-				(s-type-anno @5.5-5.14 (name "thing")
-					(ty-var @5.13-5.14 (name "a")))
 				(s-let @6.5-6.14
 					(p-assign @6.5-6.10 (ident "thing"))
 					(e-lookup-local @6.13-6.14
@@ -130,9 +115,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "Error -> Error"))
+		(patt @4.1-4.9 (type "a -> a"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.12-8.2 (type "Error -> Error"))
+		(expr @4.12-8.2 (type "a -> a"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

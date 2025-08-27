@@ -667,6 +667,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         },
         .rigid_var => |ident_idx| {
             _ = try self.buf.writer().write(self.getIdent(ident_idx));
+            _ = try self.buf.writer().write("[r]");
         },
         else => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);

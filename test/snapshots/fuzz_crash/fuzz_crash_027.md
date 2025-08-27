@@ -226,7 +226,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
 TYPE MISMATCH - fuzz_crash_027.md:142:10:142:47
 # PROBLEMS
 **LEADING ZERO**
@@ -907,18 +907,17 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:111:2:113:3:**
+**fuzz_crash_027.md:111:2:111:12:**
 ```roc
 	match_time(
-		..., #
-	)
 ```
+	^^^^^^^^^^
 
 It has the type:
-    __arg -> _ret_
+    _[Red, Blue]_others, _arg -> Error_
 
 But here it's being used as:
-    _[Red, Blue]_others, _arg2 -> Error_
+    __arg2 -> _ret_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2196,7 +2195,7 @@ expect {
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Error -> Error"))
-		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
+		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "List(Error) -> Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
@@ -2231,7 +2230,7 @@ expect {
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Error -> Error"))
-		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
+		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-148.2 (type "List(Error) -> Error"))
 		(expr @151.9-151.11 (type "{}"))))
 ~~~
