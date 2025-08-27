@@ -213,6 +213,11 @@ pub const CRTFiles = struct {
 /// Get vendored CRT object files for a platform target
 /// All CRT files must be provided by the platform in its targets/ directory
 pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir: []const u8) !CRTFiles {
+    // macOS and Windows targets don't need vendored CRT files - they use system libraries
+    if (target.isMacOS() or target.isWindows()) {
+        return CRTFiles{}; // Return empty CRTFiles struct
+    }
+
     // Build path to the vendored CRT files
     const target_subdir = switch (target) {
         .x64musl => "x64musl",

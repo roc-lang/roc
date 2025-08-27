@@ -131,6 +131,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add SDK path
             try args.append("-syslibroot");
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+
+            // Link against system libraries on macOS
+            try args.append("-lSystem");
         },
         .linux => {
             // Add linker name for Linux
