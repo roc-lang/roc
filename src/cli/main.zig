@@ -557,7 +557,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
             std.process.exit(1);
         }
     else
-        try gpa.dupe(u8, exe_base_name);
+        gpa.dupe(u8, exe_base_name) catch |err| {
+            std.log.err("Failed to duplicate executable name: {}", .{err});
+            std.process.exit(1);
+        };
     defer if (exe_name.ptr != exe_base_name.ptr) gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
