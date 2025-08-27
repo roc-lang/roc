@@ -12,7 +12,7 @@ permissions: {}
 
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.br
+  ARCHIVE_FORMAT: .tar.gz
   # Make a new basic-cli git tag and set it here before starting this workflow
   RELEASE_TAG: 0.20.0
 
@@ -275,6 +275,7 @@ jobs:
           cp -r examples ../..
           cp -r tests ../..
           cp -r ci ../..
+          cp -r Cargo.toml ../..
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
 
