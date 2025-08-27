@@ -281,10 +281,12 @@ jobs:
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
 
-      - name: Remove tests that dont work on musl
+      - name: Remove things that dont work on musl
         if: startsWith(matrix.os, 'ubuntu-')
         run:
           rm basic-cli-platform/examples/file-accessed-modified-created-time.roc
+          sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' File.roc
+          rm File.roc.bak
 
       - name: run tests
         run: |
