@@ -1288,6 +1288,68 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
 
+    // Run gdb on the temp executable for debugging information
+    {
+        var gdb_child = std.process.Child.init(&.{ "gdb", "-batch", "-ex", "run", "-ex", "bt", "-ex", "disas $pc-10,$pc+10", "-ex", "quit", temp_exe_path }, gpa);
+
+        gdb_child.stdout_behavior = .Pipe;
+        gdb_child.stderr_behavior = .Pipe;
+
+        // Spawn the process first
+        gdb_child.spawn() catch |err| {
+            std.log.warn("Failed to spawn gdb on {s}: {}", .{ temp_exe_path, err });
+            // Continue without gdb output
+            return;
+        };
+
+        // Read stdout
+        const gdb_stdout = if (gdb_child.stdout) |stdout|
+            stdout.reader().readAllAlloc(gpa, 1024 * 1024) catch |err| blk: {
+                std.log.warn("Failed to read gdb stdout: {}", .{err});
+                break :blk null;
+            }
+        else
+            null;
+        defer if (gdb_stdout) |stdout| gpa.free(stdout);
+
+        // Read stderr
+        const gdb_stderr = if (gdb_child.stderr) |stderr|
+            stderr.reader().readAllAlloc(gpa, 1024 * 1024) catch |err| blk: {
+                std.log.warn("Failed to read gdb stderr: {}", .{err});
+                break :blk null;
+            }
+        else
+            null;
+        defer if (gdb_stderr) |stderr| gpa.free(stderr);
+
+        // Wait for the process to complete
+        const gdb_result = gdb_child.wait() catch |err| {
+            std.log.warn("Failed to wait for gdb: {}", .{err});
+            return;
+        };
+
+        switch (gdb_result) {
+            .Exited => |code| {
+                if (code == 0) {
+                    std.log.info("GDB analysis of {s}:", .{temp_exe_path});
+                    if (gdb_stdout) |stdout| {
+                        std.log.info("GDB stdout:\n{s}", .{stdout});
+                    }
+                    if (gdb_stderr) |stderr| {
+                        if (stderr.len > 0) {
+                            std.log.info("GDB stderr:\n{s}", .{stderr});
+                        }
+                    }
+                } else {
+                    std.log.warn("GDB exited with code {}", .{code});
+                }
+            },
+            else => {
+                std.log.warn("GDB terminated abnormally: {}", .{gdb_result});
+            },
+        }
+    }
+
     // Spawn the child process
     std.log.debug("Spawning child process: {s}", .{temp_exe_path});
     std.log.debug("Child process working directory: {s}", .{child.cwd.?});
