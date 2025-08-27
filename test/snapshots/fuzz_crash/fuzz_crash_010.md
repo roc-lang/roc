@@ -19,7 +19,6 @@ PARSE ERROR - fuzz_crash_010.md:1:2:1:3
 PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
-PARSE ERROR - fuzz_crash_010.md:5:35:5:35
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -94,23 +93,13 @@ This is an unexpected parsing error. Please check your syntax.
      ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `string_unclosed`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:5:35:5:35:**
-```roc
-    "on        (string 'onmo %')))
-```
-                                  ^
-
-
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
 CloseSquare(2:6-2:7),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),
-StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
+StringStart(5:5-5:6),StringPart(5:6-5:35),StringEnd(5:35-5:35),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

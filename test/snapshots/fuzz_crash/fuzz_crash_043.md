@@ -72,7 +72,8 @@ o:0}0
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpenCurly(1:20-1:21),
-LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseCurly(2:4-2:5),Int(2:5-2:6),EndOfFile(2:6-2:6),
+LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseCurly(2:4-2:5),Int(2:5-2:6),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -98,7 +99,6 @@ LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseCurly(2:4-2:5),Int(2:5-2:
 app [] { f: platform "" }
 
 o : 
-
 ~~~
 # CANONICALIZE
 ~~~clojure

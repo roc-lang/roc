@@ -27,7 +27,8 @@ modu
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
+LowerIdent(1:1-1:5),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -37,7 +38,6 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

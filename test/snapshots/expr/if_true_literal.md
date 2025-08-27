@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),UpperIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),EndOfFile(1:17-1:17),
+KwIf(1:1-1:3),UpperIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

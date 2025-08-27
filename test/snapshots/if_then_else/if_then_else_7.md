@@ -31,7 +31,8 @@ KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),
 Int(2:2-2:3),
 CloseCurly(3:1-3:2),KwElse(3:3-3:7),OpenCurly(3:8-3:9),
 Int(4:2-4:3),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

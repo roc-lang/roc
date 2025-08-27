@@ -147,7 +147,8 @@ This might be a syntax error, an unsupported language feature, or a typo.
 OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpBackArrow(1:15-1:17),
 LowerIdent(2:5-2:6),OpColon(2:6-2:7),Int(2:8-2:9),Comma(2:9-2:10),
 LowerIdent(3:5-3:6),OpColon(3:6-3:7),Int(3:8-3:9),Comma(3:9-3:10),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

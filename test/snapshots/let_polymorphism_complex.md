@@ -202,7 +202,8 @@ CloseCurly(102:5-102:6),Comma(102:6-102:7),
 CloseCurly(103:1-103:2),
 LowerIdent(105:1-105:5),OpAssign(105:6-105:7),OpBar(105:8-105:9),Underscore(105:9-105:10),OpBar(105:10-105:11),OpenCurly(105:12-105:13),
 LowerIdent(107:5-107:15),NoSpaceDotLowerIdent(107:15-107:21),OpPlus(107:22-107:23),Int(107:24-107:26),
-CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
+CloseCurly(108:1-108:2),
+EndOfFile(109:1-109:1),
 ~~~
 # PARSE
 ~~~clojure

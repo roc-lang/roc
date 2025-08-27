@@ -37,7 +37,8 @@ You can fix this by either defining `SomeType` in this module, or by removing it
 ~~~zig
 KwPackage(1:1-1:8),
 OpenSquare(2:2-2:3),LowerIdent(2:3-2:12),Comma(2:12-2:13),UpperIdent(2:14-2:22),Comma(2:22-2:23),CloseSquare(2:23-2:24),
-OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),CloseCurly(3:28-3:29),EndOfFile(3:29-3:29),
+OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),CloseCurly(3:28-3:29),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

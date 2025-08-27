@@ -89,7 +89,8 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:10),
 LowerIdent(8:1-8:5),OpColon(8:6-8:7),UpperIdent(8:8-8:13),
 LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:12),
 LowerIdent(11:1-11:6),OpColon(11:7-11:8),UpperIdent(11:9-11:14),
-LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14-12:14),
+LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),
+EndOfFile(13:1-13:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -126,6 +127,7 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 module [red, green, blue]
 
 import Color
+
 
 red : Color
 red = Red

@@ -228,7 +228,8 @@ UpperIdent(27:3-27:5),NoSpaceOpenRound(27:5-27:6),LowerIdent(27:6-27:7),Comma(27
 UpperIdent(28:3-28:5),NoSpaceOpenRound(28:5-28:6),OpenCurly(28:6-28:7),LowerIdent(28:8-28:9),Comma(28:9-28:10),LowerIdent(28:11-28:12),Comma(28:12-28:13),CloseCurly(28:14-28:15),CloseRound(28:15-28:16),OpFatArrow(28:17-28:19),LowerIdent(28:20-28:21),
 UpperIdent(29:3-29:5),NoSpaceOpenRound(29:5-29:6),OpenSquare(29:6-29:7),LowerIdent(29:7-29:8),Comma(29:8-29:9),LowerIdent(29:10-29:11),Comma(29:11-29:12),CloseSquare(29:12-29:13),CloseRound(29:13-29:14),OpFatArrow(29:15-29:17),LowerIdent(29:18-29:19),
 CloseCurly(30:2-30:3),
-CloseCurly(31:1-31:2),EndOfFile(31:2-31:2),
+CloseCurly(31:1-31:2),
+EndOfFile(32:1-32:1),
 ~~~
 # PARSE
 ~~~clojure

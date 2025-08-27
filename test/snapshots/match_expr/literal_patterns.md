@@ -67,7 +67,8 @@ UpperIdent(2:5-2:11),OpFatArrow(2:12-2:14),Int(2:15-2:16),
 UpperIdent(3:5-3:9),OpFatArrow(3:10-3:12),StringStart(3:13-3:14),StringPart(3:14-3:19),StringEnd(3:19-3:20),
 UpperIdent(4:5-4:13),OpFatArrow(4:14-4:16),Int(4:17-4:18),
 Int(5:5-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

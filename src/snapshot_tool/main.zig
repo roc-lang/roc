@@ -1625,7 +1625,8 @@ pub const Content = struct {
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
-            source = value.extract(content);
+            // trailing newlines are part of the source
+            source = content[value.start..value.end];
         } else {
             return Error.MissingSnapshotSource;
         }
@@ -2048,12 +2049,15 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         },
         .header => {
             try fmt.formatHeader(parse_ast.*, formatted.writer().any());
+            try formatted.append('\n');
         },
         .expr => {
             try fmt.formatExpr(parse_ast.*, formatted.writer().any());
+            try formatted.append('\n');
         },
         .statement => {
             try fmt.formatStatement(parse_ast.*, formatted.writer().any());
+            try formatted.append('\n');
         },
         .package => {
             try fmt.formatAst(parse_ast.*, formatted.writer().any());
@@ -2071,13 +2075,12 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     }
 
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
-    const display_content = if (is_changed) formatted.items else "NO CHANGE";
+    const display_content = if (is_changed) formatted.items else "NO CHANGE\n";
 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
     try output.md_writer.writeAll(display_content);
-    try output.md_writer.writeAll("\n");
 
     // HTML FORMATTED section
     if (output.html_writer) |writer| {

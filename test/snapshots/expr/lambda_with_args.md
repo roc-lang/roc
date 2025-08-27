@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),LowerIdent(1:5-1:6),OpBar(1:6-1:7),LowerIdent(1:8-1:9),OpPlus(1:10-1:11),LowerIdent(1:12-1:13),EndOfFile(1:13-1:13),
+OpBar(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),LowerIdent(1:5-1:6),OpBar(1:6-1:7),LowerIdent(1:8-1:9),OpPlus(1:10-1:11),LowerIdent(1:12-1:13),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

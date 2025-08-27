@@ -23,7 +23,8 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
+Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

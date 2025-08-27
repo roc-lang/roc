@@ -23,7 +23,8 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),O
 LowerIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),OpArrow(3:14-3:16),UpperIdent(3:17-3:20),
 LowerIdent(4:1-4:7),OpAssign(4:8-4:9),OpBar(4:10-4:11),LowerIdent(4:11-4:12),OpBar(4:12-4:13),LowerIdent(4:14-4:15),OpStar(4:16-4:17),Int(4:18-4:19),
 LowerIdent(6:1-6:5),OpColon(6:6-6:7),UpperIdent(6:8-6:11),Comma(6:11-6:12),UpperIdent(6:13-6:16),OpArrow(6:17-6:19),UpperIdent(6:20-6:23),
-LowerIdent(7:1-7:5),OpAssign(7:6-7:7),OpBar(7:8-7:9),Underscore(7:9-7:10),Comma(7:10-7:11),Underscore(7:12-7:13),OpBar(7:13-7:14),LowerIdent(7:15-7:21),NoSpaceOpenRound(7:21-7:22),Int(7:22-7:23),CloseRound(7:23-7:24),EndOfFile(7:24-7:24),
+LowerIdent(7:1-7:5),OpAssign(7:6-7:7),OpBar(7:8-7:9),Underscore(7:9-7:10),Comma(7:10-7:11),Underscore(7:12-7:13),OpBar(7:13-7:14),LowerIdent(7:15-7:21),NoSpaceOpenRound(7:21-7:22),Int(7:22-7:23),CloseRound(7:23-7:24),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

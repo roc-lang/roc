@@ -99,7 +99,8 @@ This is an unexpected parsing error. Please check your syntax.
 Int(1:1-1:4),NoSpaceDotInt(1:4-1:6),
 Int(2:1-2:4),
 Int(3:1-3:4),NoSpaceDotInt(3:4-3:6),
-Int(4:1-4:3),EndOfFile(4:3-4:3),
+Int(4:1-4:3),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -114,7 +115,6 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # FORMATTED
 ~~~roc
-
 
 
 

@@ -54,7 +54,8 @@ CloseCurly(7:5-7:6),KwElse(7:7-7:11),OpenCurly(7:12-7:13),
 StringStart(8:9-8:10),StringPart(8:10-8:15),StringEnd(8:15-8:16),
 CloseCurly(9:5-9:6),
 UpperIdent(10:5-10:7),NoSpaceOpenRound(10:7-10:8),LowerIdent(10:8-10:11),CloseRound(10:11-10:12),
-CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
+CloseCurly(11:1-11:2),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -47,7 +47,8 @@ module[]import u.R}g:r->R.a.E
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),LowerIdent(1:16-1:17),NoSpaceDotUpperIdent(1:17-1:19),CloseCurly(1:19-1:20),LowerIdent(1:20-1:21),OpColon(1:21-1:22),LowerIdent(1:22-1:23),OpArrow(1:23-1:25),UpperIdent(1:25-1:26),NoSpaceDotLowerIdent(1:26-1:28),NoSpaceDotUpperIdent(1:28-1:30),EndOfFile(1:30-1:30),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),LowerIdent(1:16-1:17),NoSpaceDotUpperIdent(1:17-1:19),CloseCurly(1:19-1:20),LowerIdent(1:20-1:21),OpColon(1:21-1:22),LowerIdent(1:22-1:23),OpArrow(1:23-1:25),UpperIdent(1:25-1:26),NoSpaceDotLowerIdent(1:26-1:28),NoSpaceDotUpperIdent(1:28-1:30),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -248,7 +248,8 @@ KwMatch(8:5-8:10),LowerIdent(8:11-8:16),OpenCurly(8:17-8:18),UpperIdent(8:19-8:2
 UpperIdent(9:1-9:6),OpFatArrow(9:7-9:9),UpperIdent(9:10-9:21),OpUnaryMinus(9:21-9:22),UpperIdent(9:22-9:30),
 UpperIdent(10:3-10:4),NoSpaceDotUpperIdent(10:4-10:9),OpFatArrow(10:10-10:12),UpperIdent(10:13-10:24),NoSpaceDotUpperIdent(10:24-10:32),
 CloseCurly(11:5-11:6),
-CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
+CloseCurly(12:1-12:2),
+EndOfFile(13:1-13:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -305,6 +306,7 @@ module [tus, r]
 
 LocalStatus : lue => Loc
 
+
 olor : _ -> tus
 olor = |color| {
 		Color.RGB
@@ -312,7 +314,7 @@ olor = |color| {
 	match color {
 		RGB => LocalStatus.Pending
 		Green => LocalStatus
-					=> Complete
+		 => Complete
 		B.Blue => LocalStatus.Pending
 	}
 }

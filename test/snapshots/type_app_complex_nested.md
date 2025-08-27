@@ -115,7 +115,8 @@ LowerIdent(13:1-13:11),OpAssign(13:12-13:13),OpBar(13:14-13:15),Underscore(13:15
 KwCrash(14:2-14:7),StringStart(14:8-14:9),StringPart(14:9-14:24),StringEnd(14:24-14:25),
 CloseCurly(15:1-15:2),
 UpperIdent(18:1-18:12),NoSpaceOpenRound(18:12-18:13),LowerIdent(18:13-18:14),Comma(18:14-18:15),LowerIdent(18:16-18:17),CloseRound(18:17-18:18),OpColon(18:19-18:20),UpperIdent(18:21-18:27),NoSpaceOpenRound(18:27-18:28),UpperIdent(18:28-18:32),NoSpaceOpenRound(18:32-18:33),UpperIdent(18:33-18:38),NoSpaceOpenRound(18:38-18:39),LowerIdent(18:39-18:40),CloseRound(18:40-18:41),CloseRound(18:41-18:42),Comma(18:42-18:43),UpperIdent(18:44-18:48),NoSpaceOpenRound(18:48-18:49),UpperIdent(18:49-18:52),Comma(18:52-18:53),UpperIdent(18:54-18:59),NoSpaceOpenRound(18:59-18:60),LowerIdent(18:60-18:61),CloseRound(18:61-18:62),CloseRound(18:62-18:63),CloseRound(18:63-18:64),
-LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),LowerIdent(20:13-20:27),NoSpaceOpenRound(20:27-20:28),UpperIdent(20:28-20:30),NoSpaceOpenRound(20:30-20:31),OpenSquare(20:31-20:32),UpperIdent(20:32-20:36),NoSpaceOpenRound(20:36-20:37),Int(20:37-20:39),CloseRound(20:39-20:40),Comma(20:40-20:41),UpperIdent(20:42-20:46),CloseSquare(20:46-20:47),CloseRound(20:47-20:48),CloseRound(20:48-20:49),EndOfFile(20:49-20:49),
+LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),LowerIdent(20:13-20:27),NoSpaceOpenRound(20:27-20:28),UpperIdent(20:28-20:30),NoSpaceOpenRound(20:30-20:31),OpenSquare(20:31-20:32),UpperIdent(20:32-20:36),NoSpaceOpenRound(20:36-20:37),Int(20:37-20:39),CloseRound(20:39-20:40),Comma(20:40-20:41),UpperIdent(20:42-20:46),CloseSquare(20:46-20:47),CloseRound(20:47-20:48),CloseRound(20:48-20:49),
+EndOfFile(21:1-21:1),
 ~~~
 # PARSE
 ~~~clojure

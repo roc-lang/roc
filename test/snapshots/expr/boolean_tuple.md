@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),UpperIdent(1:2-1:6),Comma(1:6-1:7),UpperIdent(1:8-1:13),CloseRound(1:13-1:14),EndOfFile(1:14-1:14),
+OpenRound(1:1-1:2),UpperIdent(1:2-1:6),Comma(1:6-1:7),UpperIdent(1:8-1:13),CloseRound(1:13-1:14),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

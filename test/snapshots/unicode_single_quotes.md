@@ -106,8 +106,8 @@ This escape sequence is not recognized.
 
 ```roc
 '\
+
 ```
- ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -275,7 +275,8 @@ MalformedSingleQuoteTooLong(16:5-16:11),Comma(16:11-16:12),
 MalformedSingleQuoteUnclosed(17:5-17:9),
 CloseRound(18:1-18:2),
 LowerIdent(20:1-20:2),OpAssign(20:3-20:4),MalformedSingleQuoteUnclosed(20:5-20:7),
-MalformedSingleQuoteUnclosed(23:1-23:3),EndOfFile(23:3-23:3),
+MalformedSingleQuoteUnclosed(23:1-23:3),
+EndOfFile(24:1-24:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -313,23 +314,22 @@ x = (
 	'a',
 	'é',
 	'🚀',
-		,
-		,
-		,
-		,
+	,
+	,
+	,
+	,
 	'\u(1F680)',
-		,
+	,
 	'\\',
 	'\'',
-		,
-		,
-		,
+	,
+	,
+	,
 )
 
 y = 
 
 # Test backslash before EOF
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -120,7 +120,8 @@ LowerIdent(6:1-6:12),OpAssign(6:13-6:14),OpBar(6:15-6:16),LowerIdent(6:16-6:20),
 StringStart(7:5-7:6),StringPart(7:6-7:15),StringEnd(7:15-7:16),
 UpperIdent(10:1-10:12),OpColon(10:13-10:14),OpenCurly(10:15-10:16),
 UpperIdent(11:5-11:11),OpColon(11:12-11:13),OpenSquare(11:14-11:15),UpperIdent(11:15-11:22),Comma(11:22-11:23),UpperIdent(11:24-11:31),CloseSquare(11:31-11:32),
-CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
+CloseCurly(12:1-12:2),
+EndOfFile(13:1-13:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -174,7 +175,6 @@ processData = |data|
 
 # In a nested module scope, redeclare Result
 InnerModule : 
-
 
 ~~~
 # CANONICALIZE

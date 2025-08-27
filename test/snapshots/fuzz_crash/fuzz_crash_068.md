@@ -71,7 +71,8 @@ module[]({0})
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-1:10),OpenCurly(1:10-1:11),Int(1:11-1:12),CloseCurly(1:12-1:13),CloseRound(1:13-1:14),EndOfFile(1:14-1:14),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-1:10),OpenCurly(1:10-1:11),Int(1:11-1:12),CloseCurly(1:12-1:13),CloseRound(1:13-1:14),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -88,7 +89,6 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NoSpaceOpenRound(1:9-
 # FORMATTED
 ~~~roc
 module []
-
 ~~~
 # CANONICALIZE
 ~~~clojure

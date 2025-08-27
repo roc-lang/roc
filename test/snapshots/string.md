@@ -31,6 +31,7 @@ INVALID ESCAPE SEQUENCE - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
+PARSE ERROR - string.md:15:3:15:3
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -82,8 +83,8 @@ This escape sequence is not recognized.
 
 ```roc
 "\
+
 ```
- ^
 
 
 **UNCLOSED STRING**
@@ -117,6 +118,17 @@ This is an unexpected parsing error. Please check your syntax.
  ^
 
 
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**string.md:15:3:15:3:**
+```roc
+"\
+```
+  ^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -130,7 +142,8 @@ StringStart(9:2-9:3),MalformedStringPart(9:3-9:7),StringEnd(9:7-9:8),Comma(9:8-9
 StringStart(10:2-10:3),MalformedStringPart(10:3-10:8),StringEnd(10:8-10:9),Comma(10:9-10:10),
 StringStart(11:2-11:3),StringPart(11:3-11:12),StringEnd(11:12-11:13),Comma(11:13-11:14),
 CloseRound(12:1-12:2),
-StringStart(15:1-15:2),MalformedStringPart(15:2-15:3),EndOfFile(15:3-15:3),
+StringStart(15:1-15:2),MalformedStringPart(15:2-15:3),StringEnd(15:3-15:3),
+EndOfFile(16:1-16:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -153,7 +166,8 @@ StringStart(15:1-15:2),MalformedStringPart(15:2-15:3),EndOfFile(15:3-15:3),
 				(e-string @11.2-11.13
 					(e-string-part @11.3-11.12 (raw "\u(1F680)")))))
 		(s-malformed @15.1-15.2 (tag "statement_unexpected_token"))
-		(s-malformed @15.2-15.3 (tag "statement_unexpected_token"))))
+		(s-malformed @15.2-15.3 (tag "statement_unexpected_token"))
+		(s-malformed @15.3-15.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -171,7 +185,6 @@ x = (
 )
 
 # Test backslash before EOF
-
 ~~~
 # CANONICALIZE
 ~~~clojure

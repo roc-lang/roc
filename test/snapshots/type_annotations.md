@@ -60,7 +60,8 @@ LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),NamedUnderscore(5:8-5:10),Comma(5:10-5:11),NamedUnderscore(5:12-5:14),Comma(5:14-5:15),NamedUnderscore(5:16-5:18),CloseRound(5:18-5:19),
 LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14),Comma(6:14-6:15),UpperIdent(6:16-6:19),OpArrow(6:20-6:22),UpperIdent(6:23-6:26),CloseRound(6:26-6:27),
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),
-LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8:18-8:19),NoSpaceOpenRound(8:19-8:20),NamedUnderscore(8:20-8:22),Comma(8:22-8:23),NamedUnderscore(8:24-8:26),Comma(8:26-8:27),NamedUnderscore(8:28-8:30),CloseRound(8:30-8:31),CloseRound(8:31-8:32),EndOfFile(8:32-8:32),
+LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8:18-8:19),NoSpaceOpenRound(8:19-8:20),NamedUnderscore(8:20-8:22),Comma(8:22-8:23),NamedUnderscore(8:24-8:26),Comma(8:26-8:27),NamedUnderscore(8:28-8:30),CloseRound(8:30-8:31),CloseRound(8:31-8:32),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

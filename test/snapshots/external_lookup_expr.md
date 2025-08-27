@@ -23,7 +23,8 @@ Json.utf8
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),EndOfFile(1:10-1:10),
+UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),OpBar(1:4-1:5),OpBar(1:6-1:7),LowerIdent(1:7-1:8),OpBar(1:8-1:9),OpBar(1:10-1:11),LowerIdent(1:11-1:12),OpBar(1:12-1:13),OpBar(1:14-1:15),LowerIdent(1:15-1:16),OpBar(1:16-1:17),OpBar(1:18-1:19),LowerIdent(1:19-1:20),OpBar(1:20-1:21),LowerIdent(1:22-1:23),OpPlus(1:24-1:25),LowerIdent(1:26-1:27),OpPlus(1:28-1:29),LowerIdent(1:30-1:31),OpPlus(1:32-1:33),LowerIdent(1:34-1:35),OpPlus(1:36-1:37),LowerIdent(1:38-1:39),CloseRound(1:39-1:40),NoSpaceOpenRound(1:40-1:41),Int(1:41-1:42),CloseRound(1:42-1:43),NoSpaceOpenRound(1:43-1:44),Int(1:44-1:45),CloseRound(1:45-1:46),NoSpaceOpenRound(1:46-1:47),Int(1:47-1:48),CloseRound(1:48-1:49),NoSpaceOpenRound(1:49-1:50),Int(1:50-1:51),CloseRound(1:51-1:52),NoSpaceOpenRound(1:52-1:53),Int(1:53-1:54),CloseRound(1:54-1:55),EndOfFile(1:55-1:55),
+OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),OpBar(1:4-1:5),OpBar(1:6-1:7),LowerIdent(1:7-1:8),OpBar(1:8-1:9),OpBar(1:10-1:11),LowerIdent(1:11-1:12),OpBar(1:12-1:13),OpBar(1:14-1:15),LowerIdent(1:15-1:16),OpBar(1:16-1:17),OpBar(1:18-1:19),LowerIdent(1:19-1:20),OpBar(1:20-1:21),LowerIdent(1:22-1:23),OpPlus(1:24-1:25),LowerIdent(1:26-1:27),OpPlus(1:28-1:29),LowerIdent(1:30-1:31),OpPlus(1:32-1:33),LowerIdent(1:34-1:35),OpPlus(1:36-1:37),LowerIdent(1:38-1:39),CloseRound(1:39-1:40),NoSpaceOpenRound(1:40-1:41),Int(1:41-1:42),CloseRound(1:42-1:43),NoSpaceOpenRound(1:43-1:44),Int(1:44-1:45),CloseRound(1:45-1:46),NoSpaceOpenRound(1:46-1:47),Int(1:47-1:48),CloseRound(1:48-1:49),NoSpaceOpenRound(1:49-1:50),Int(1:50-1:51),CloseRound(1:51-1:52),NoSpaceOpenRound(1:52-1:53),Int(1:53-1:54),CloseRound(1:54-1:55),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -55,7 +55,8 @@ UpperIdent(8:5-8:9),NoSpaceOpenRound(8:9-8:10),Int(8:10-8:11),CloseRound(8:11-8:
 UpperIdent(9:5-9:10),NoSpaceOpenRound(9:10-9:11),Int(9:11-9:12),CloseRound(9:12-9:13),Comma(9:13-9:14),
 UpperIdent(10:5-10:9),NoSpaceOpenRound(10:9-10:10),UpperIdent(10:10-10:12),NoSpaceOpenRound(10:12-10:13),UpperIdent(10:13-10:17),NoSpaceOpenRound(10:17-10:18),Int(10:18-10:20),CloseRound(10:20-10:21),CloseRound(10:21-10:22),CloseRound(10:22-10:23),Comma(10:23-10:24),
 UpperIdent(11:5-11:11),NoSpaceOpenRound(11:11-11:12),UpperIdent(11:12-11:14),NoSpaceOpenRound(11:14-11:15),UpperIdent(11:15-11:19),NoSpaceOpenRound(11:19-11:20),UpperIdent(11:20-11:24),CloseRound(11:24-11:25),CloseRound(11:25-11:26),CloseRound(11:26-11:27),Comma(11:27-11:28),
-CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
+CloseSquare(12:1-12:2),
+EndOfFile(13:1-13:1),
 ~~~
 # PARSE
 ~~~clojure

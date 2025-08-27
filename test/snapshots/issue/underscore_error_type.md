@@ -123,7 +123,8 @@ LowerIdent(20:1-20:4),OpColon(20:5-20:6),UpperIdent(20:7-20:18),
 LowerIdent(21:1-21:4),OpAssign(21:5-21:6),OpBar(21:7-21:8),LowerIdent(21:8-21:9),OpBar(21:9-21:10),LowerIdent(21:11-21:12),
 UpperIdent(23:1-23:9),OpColonEqual(23:10-23:12),OpenRound(23:13-23:14),Underscore(23:14-23:15),Comma(23:15-23:16),UpperIdent(23:17-23:20),CloseRound(23:20-23:21),
 LowerIdent(25:1-25:5),OpColon(25:6-25:7),UpperIdent(25:8-25:16),
-LowerIdent(26:1-26:5),OpAssign(26:6-26:7),OpenRound(26:8-26:9),StringStart(26:9-26:10),StringPart(26:10-26:15),StringEnd(26:15-26:16),Comma(26:16-26:17),Int(26:18-26:20),CloseRound(26:20-26:21),EndOfFile(26:21-26:21),
+LowerIdent(26:1-26:5),OpAssign(26:6-26:7),OpenRound(26:8-26:9),StringStart(26:9-26:10),StringPart(26:10-26:15),StringEnd(26:15-26:16),Comma(26:16-26:17),Int(26:18-26:20),CloseRound(26:20-26:21),
+EndOfFile(27:1-27:1),
 ~~~
 # PARSE
 ~~~clojure

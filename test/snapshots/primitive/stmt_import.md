@@ -86,7 +86,8 @@ import json.Json [foo, BAR]
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquare(3:18-3:19),LowerIdent(3:19-3:22),Comma(3:22-3:23),UpperIdent(3:24-3:27),CloseSquare(3:27-3:28),EndOfFile(3:28-3:28),
+KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquare(3:18-3:19),LowerIdent(3:19-3:22),Comma(3:22-3:23),UpperIdent(3:24-3:27),CloseSquare(3:27-3:28),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -105,7 +106,6 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 module []
 
 import json.Json
-
 ~~~
 # CANONICALIZE
 ~~~clojure

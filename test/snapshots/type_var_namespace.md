@@ -105,7 +105,8 @@ LowerIdent(10:5-10:11),OpColon(10:12-10:13),LowerIdent(10:14-10:18),
 LowerIdent(11:5-11:11),OpAssign(11:12-11:13),UpperIdent(11:14-11:18),NoSpaceDotLowerIdent(11:18-11:24),NoSpaceOpenRound(11:24-11:25),LowerIdent(11:25-11:29),CloseRound(11:29-11:30),OpPizza(11:31-11:33),UpperIdent(11:34-11:40),NoSpaceDotLowerIdent(11:40-11:52),NoSpaceOpenRound(11:52-11:53),LowerIdent(11:53-11:57),CloseRound(11:57-11:58),
 LowerIdent(13:5-13:11),
 CloseCurly(14:1-14:2),
-LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),EndOfFile(16:15-16:15),
+LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),
+EndOfFile(17:1-17:1),
 ~~~
 # PARSE
 ~~~clojure

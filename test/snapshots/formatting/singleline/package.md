@@ -38,7 +38,8 @@ You can fix this by either defining `b!` in this module, or by removing it from 
 ~~~zig
 KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:16),CloseSquare(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:21),OpColon(1:21-1:22),StringStart(1:23-1:24),StringPart(1:24-1:25),StringEnd(1:25-1:26),Comma(1:26-1:27),LowerIdent(1:28-1:29),OpColon(1:29-1:30),StringStart(1:31-1:32),StringPart(1:32-1:33),StringEnd(1:33-1:34),CloseCurly(1:35-1:36),
 LowerIdent(3:1-3:3),OpColon(3:4-3:5),UpperIdent(3:6-3:9),OpFatArrow(3:10-3:12),UpperIdent(3:13-3:16),
-LowerIdent(4:1-4:3),OpColon(4:4-4:5),UpperIdent(4:6-4:9),OpFatArrow(4:10-4:12),UpperIdent(4:13-4:16),EndOfFile(4:16-4:16),
+LowerIdent(4:1-4:3),OpColon(4:4-4:5),UpperIdent(4:6-4:9),OpFatArrow(4:10-4:12),UpperIdent(4:13-4:16),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -25,7 +25,7 @@ module[]{
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),
-EndOfFile(2:2-2:2),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -38,8 +38,6 @@ EndOfFile(2:2-2:2),
 # FORMATTED
 ~~~roc
 module []
-
-
 ~~~
 # CANONICALIZE
 ~~~clojure

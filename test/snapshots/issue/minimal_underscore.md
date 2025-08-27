@@ -26,7 +26,8 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),EndOfFile(3:13-3:13),
+UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure

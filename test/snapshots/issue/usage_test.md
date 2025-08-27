@@ -46,7 +46,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 UpperIdent(3:1-3:11),OpColonEqual(3:12-3:14),Underscore(3:15-3:16),
 UpperIdent(5:1-5:9),OpColonEqual(5:10-5:12),Underscore(5:13-5:14),
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:17),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),Int(8:9-8:11),EndOfFile(8:11-8:11),
+LowerIdent(8:1-8:6),OpAssign(8:7-8:8),Int(8:9-8:11),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

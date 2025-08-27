@@ -22,7 +22,8 @@ OpenCurly(1:1-1:2),
 LowerIdent(2:5-2:19),OpColon(2:20-2:21),OpenCurly(2:22-2:23),CloseCurly(2:23-2:24),OpFatArrow(2:25-2:27),UpperIdent(2:28-2:34),UpperIdent(2:35-2:39),UpperIdent(2:40-2:53),
 LowerIdent(3:5-3:19),OpAssign(3:20-3:21),OpBar(3:22-3:23),OpenCurly(3:23-3:24),CloseCurly(3:24-3:25),OpBar(3:25-3:26),TripleDot(3:27-3:30),
 LowerIdent(5:5-5:19),NoSpaceOpenRound(5:19-5:20),OpenCurly(5:20-5:21),CloseCurly(5:21-5:22),CloseRound(5:22-5:23),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

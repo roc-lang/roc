@@ -23,7 +23,8 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig
-OpBinaryMinus(1:1-1:2),SingleQuote(1:2-1:5),EndOfFile(1:5-1:5),
+OpBinaryMinus(1:1-1:2),SingleQuote(1:2-1:5),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

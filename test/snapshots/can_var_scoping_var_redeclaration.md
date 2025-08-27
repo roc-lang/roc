@@ -47,7 +47,8 @@ KwVar(6:2-6:5),LowerIdent(6:6-6:8),OpAssign(6:9-6:10),Int(6:11-6:13),
 LowerIdent(7:2-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),
 LowerIdent(8:2-8:4),
 CloseCurly(9:1-9:2),
-LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),EndOfFile(11:27-11:27),
+LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure

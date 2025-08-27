@@ -133,7 +133,8 @@ OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),LowerIdent(2:8-2:13),CloseSquare(2:13-2:1
 OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:20),CloseSquare(3:20-3:21),OpFatArrow(3:22-3:24),LowerIdent(3:25-3:30),
 OpenSquare(4:5-4:6),DoubleDot(4:6-4:8),LowerIdent(4:8-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:19),CloseSquare(4:19-4:20),OpFatArrow(4:21-4:23),LowerIdent(4:24-4:28),
 OpenSquare(5:5-5:6),LowerIdent(5:6-5:11),Comma(5:11-5:12),DoubleDot(5:13-5:15),LowerIdent(5:15-5:20),Comma(5:20-5:21),LowerIdent(5:22-5:26),CloseSquare(5:26-5:27),OpFatArrow(5:28-5:30),LowerIdent(5:31-5:36),OpPlus(5:37-5:38),LowerIdent(5:39-5:43),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

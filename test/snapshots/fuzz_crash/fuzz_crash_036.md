@@ -9,7 +9,7 @@ module[]{B
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_036.md:1:9:1:10
-PARSE ERROR - fuzz_crash_036.md:1:11:1:11
+PARSE ERROR - fuzz_crash_036.md:2:1:2:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -38,16 +38,17 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**fuzz_crash_036.md:1:11:1:11:**
+**fuzz_crash_036.md:2:1:2:1:**
 ```roc
-module[]{B
+
 ```
-          ^
+^
 
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),UpperIdent(1:10-1:11),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -56,7 +57,7 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),U
 		(exposes @1.7-1.9))
 	(statements
 		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.11 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

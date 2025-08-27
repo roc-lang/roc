@@ -1072,7 +1072,8 @@ KwExpect(155:1-155:7),OpenCurly(155:8-155:9),
 LowerIdent(156:2-156:5),OpAssign(156:6-156:7),Int(156:8-156:9),
 LowerIdent(157:2-157:6),OpAssign(157:7-157:8),Int(157:9-157:10),
 LowerIdent(158:2-158:6),OpEquals(158:7-158:9),LowerIdent(158:10-158:13),
-CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
+CloseCurly(159:1-159:2),
+EndOfFile(160:1-160:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -1659,8 +1660,8 @@ main! = |_| { # Yeah Ie
 	tag_with = Ok(number)
 	ited = "Hello, ${world}"
 	list = [
-				, # afarg
-				,
+		, # afarg
+		,
 		456, # ee
 	]
 	for n in list {

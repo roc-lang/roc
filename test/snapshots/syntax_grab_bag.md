@@ -1084,7 +1084,8 @@ KwExpect(203:1-203:7),OpenCurly(203:8-203:9),
 LowerIdent(204:2-204:5),OpAssign(204:6-204:7),Int(204:8-204:9),
 LowerIdent(205:2-205:6),OpAssign(205:7-205:8),Int(205:9-205:10),
 LowerIdent(206:2-206:6),OpEquals(206:7-206:9),LowerIdent(206:10-206:13),
-CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
+CloseCurly(207:1-207:2),
+EndOfFile(208:1-208:1),
 ~~~
 # PARSE
 ~~~clojure

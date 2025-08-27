@@ -24,7 +24,8 @@ Int(1:1-1:2),
 OpPlus(2:2-2:3),
 Int(6:2-6:3),
 OpStar(7:3-7:4),
-Int(8:3-8:4),EndOfFile(8:4-8:4),
+Int(8:3-8:4),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

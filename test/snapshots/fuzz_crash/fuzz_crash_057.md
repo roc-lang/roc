@@ -23,7 +23,8 @@ module[]s:b->c where module(a).t:c,u:o...
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),OpArrow(1:12-1:14),LowerIdent(1:14-1:15),KwWhere(1:16-1:21),KwModule(1:22-1:28),NoSpaceOpenRound(1:28-1:29),LowerIdent(1:29-1:30),CloseRound(1:30-1:31),NoSpaceDotLowerIdent(1:31-1:33),OpColon(1:33-1:34),LowerIdent(1:34-1:35),Comma(1:35-1:36),LowerIdent(1:36-1:37),OpColon(1:37-1:38),LowerIdent(1:38-1:39),TripleDot(1:39-1:42),EndOfFile(1:42-1:42),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),OpArrow(1:12-1:14),LowerIdent(1:14-1:15),KwWhere(1:16-1:21),KwModule(1:22-1:28),NoSpaceOpenRound(1:28-1:29),LowerIdent(1:29-1:30),CloseRound(1:30-1:31),NoSpaceDotLowerIdent(1:31-1:33),OpColon(1:33-1:34),LowerIdent(1:34-1:35),Comma(1:35-1:36),LowerIdent(1:36-1:37),OpColon(1:37-1:38),LowerIdent(1:38-1:39),TripleDot(1:39-1:42),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -48,7 +49,6 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),
 module []
 s : b -> c where module(a).t : c
 u : o
-
 ~~~
 # CANONICALIZE
 ~~~clojure

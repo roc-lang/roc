@@ -23,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
+OpBang(1:1-1:2),LowerIdent(1:2-1:9),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

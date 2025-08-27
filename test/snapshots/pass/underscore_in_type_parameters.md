@@ -103,7 +103,8 @@ UpperIdent(4:1-4:7),NoSpaceOpenRound(4:7-4:8),Underscore(4:8-4:9),CloseRound(4:9
 UpperIdent(7:1-7:8),NoSpaceOpenRound(7:8-7:9),Underscore(7:9-7:10),Comma(7:10-7:11),LowerIdent(7:12-7:13),CloseRound(7:13-7:14),OpColon(7:15-7:16),LowerIdent(7:17-7:18),
 UpperIdent(10:1-10:8),NoSpaceOpenRound(10:8-10:9),LowerIdent(10:9-10:10),Comma(10:10-10:11),Underscore(10:12-10:13),CloseRound(10:13-10:14),OpColon(10:15-10:16),LowerIdent(10:17-10:18),
 UpperIdent(13:1-13:12),NoSpaceOpenRound(13:12-13:13),Underscore(13:13-13:14),Comma(13:14-13:15),LowerIdent(13:16-13:17),CloseRound(13:17-13:18),OpColon(13:19-13:20),OpenCurly(13:21-13:22),LowerIdent(13:23-13:28),OpColon(13:28-13:29),LowerIdent(13:30-13:31),CloseCurly(13:32-13:33),
-UpperIdent(16:1-16:10),NoSpaceOpenRound(16:10-16:11),Underscore(16:11-16:12),Comma(16:12-16:13),Underscore(16:14-16:15),Comma(16:15-16:16),LowerIdent(16:17-16:18),CloseRound(16:18-16:19),OpColon(16:20-16:21),LowerIdent(16:22-16:23),EndOfFile(16:23-16:23),
+UpperIdent(16:1-16:10),NoSpaceOpenRound(16:10-16:11),Underscore(16:11-16:12),Comma(16:12-16:13),Underscore(16:14-16:15),Comma(16:15-16:16),LowerIdent(16:17-16:18),CloseRound(16:18-16:19),OpColon(16:20-16:21),LowerIdent(16:22-16:23),
+EndOfFile(17:1-17:1),
 ~~~
 # PARSE
 ~~~clojure

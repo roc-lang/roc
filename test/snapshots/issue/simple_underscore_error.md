@@ -31,7 +31,8 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:14),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Int(6:7-6:9),EndOfFile(6:9-6:9),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Int(6:7-6:9),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

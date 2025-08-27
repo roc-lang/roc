@@ -25,7 +25,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),OpBar(3:7-3:8),LowerIdent(3:8-3:11),OpBar(3:11-3:12),OpenCurly(3:13-3:14),
 KwDbg(5:5-5:8),LowerIdent(5:9-5:12),NoSpaceDotLowerIdent(5:12-5:19),NoSpaceOpenRound(5:19-5:20),CloseRound(5:20-5:21),
 KwDbg(8:5-8:8),NoSpaceOpenRound(8:8-8:9),LowerIdent(8:9-8:12),CloseRound(8:12-8:13),
-CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
+CloseCurly(9:1-9:2),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure

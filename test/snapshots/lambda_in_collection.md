@@ -33,7 +33,8 @@ CloseCurly(7:2-7:3),Comma(7:3-7:4),
 OpBar(8:2-8:3),LowerIdent(8:3-8:4),Comma(8:4-8:5),LowerIdent(8:6-8:7),OpBar(8:7-8:8),OpenCurly(8:9-8:10),
 LowerIdent(9:3-9:4),OpBinaryMinus(9:5-9:6),LowerIdent(9:7-9:8),
 CloseCurly(10:2-10:3),Comma(10:3-10:4),
-CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
+CloseRound(11:1-11:2),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure

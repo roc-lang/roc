@@ -53,7 +53,8 @@ This type is referenced here:
 # TOKENS
 ~~~zig
 Int(1:1-1:2),LowerIdent(1:3-1:4),OpColon(1:4-1:5),UpperIdent(1:5-1:6),
-DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
+DotUpperIdent(2:1-2:3),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -67,7 +68,6 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 # FORMATTED
 ~~~roc
 b : S
-
 ~~~
 # CANONICALIZE
 ~~~clojure

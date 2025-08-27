@@ -13,7 +13,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:12),StringEnd(1:12-1:13),EndOfFile(1:13-1:13),
+StringStart(1:1-1:2),StringPart(1:2-1:12),StringEnd(1:12-1:13),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

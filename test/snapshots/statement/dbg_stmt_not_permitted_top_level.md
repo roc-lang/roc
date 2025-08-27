@@ -30,7 +30,8 @@ dbg "foo"
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
 KwDbg(4:1-4:4),StringStart(4:5-4:6),StringPart(4:6-4:9),StringEnd(4:9-4:10),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),EndOfFile(6:10-6:10),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure

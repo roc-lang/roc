@@ -155,7 +155,8 @@ LowerIdent(59:5-59:12),OpAssign(59:13-59:14),LowerIdent(59:15-59:22),NoSpaceOpen
 LowerIdent(60:5-60:12),OpAssign(60:13-60:14),LowerIdent(60:15-60:33),NoSpaceOpenRound(60:33-60:34),UpperIdent(60:34-60:38),CloseRound(60:38-60:39),
 LowerIdent(61:5-61:12),OpAssign(61:13-61:14),LowerIdent(61:15-61:28),NoSpaceOpenRound(61:28-61:29),Float(61:29-61:33),CloseRound(61:33-61:34),
 LowerIdent(64:5-64:6),OpPlus(64:7-64:8),LowerIdent(64:9-64:10),
-CloseCurly(65:1-65:2),EndOfFile(65:2-65:2),
+CloseCurly(65:1-65:2),
+EndOfFile(66:1-66:1),
 ~~~
 # PARSE
 ~~~clojure

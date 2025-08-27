@@ -178,7 +178,8 @@ LowerIdent(21:1-21:2),OpAssign(21:3-21:4),Int(21:5-21:12),
 LowerIdent(23:1-23:2),OpColon(23:3-23:4),UpperIdent(23:5-23:8),
 LowerIdent(24:1-24:2),OpAssign(24:3-24:4),Int(24:5-24:17),
 LowerIdent(26:1-26:2),OpColon(26:3-26:4),UpperIdent(26:5-26:9),
-LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29),
+LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),
+EndOfFile(28:1-28:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -247,8 +248,10 @@ b = 65535
 c : U32
 c = 429496729
 
+
 e : U128
 e = 3402823669209384634633746074317682114553.14
+
 
 
 g : I16

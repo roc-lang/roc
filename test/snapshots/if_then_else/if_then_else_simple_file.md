@@ -59,7 +59,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),Int(3:10-3:11),UpperIdent(3:12-3:13),
 KwElse(5:5-5:9),OpenCurly(5:10-5:11),
 StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),
-CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
+CloseCurly(7:5-7:6),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -29,7 +29,8 @@ import pf.Stdout exposing [line!, write!]
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
 KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:33),Comma(3:33-3:34),LowerIdent(3:35-3:41),CloseSquare(3:41-3:42),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

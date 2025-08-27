@@ -35,7 +35,8 @@ module[]0 f
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),Int(1:9-1:10),LowerIdent(1:11-1:12),EndOfFile(1:12-1:12),
+KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),Int(1:9-1:10),LowerIdent(1:11-1:12),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -49,7 +50,6 @@ KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),Int(1:9-1:10),LowerId
 # FORMATTED
 ~~~roc
 module []
-
 ~~~
 # CANONICALIZE
 ~~~clojure

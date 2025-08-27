@@ -22,7 +22,8 @@ If you want to represent nothing, try using an empty record: `{}`.
 
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),CloseRound(1:2-1:3),EndOfFile(1:3-1:3),
+OpenRound(1:1-1:2),CloseRound(1:2-1:3),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure

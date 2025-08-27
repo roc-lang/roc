@@ -28,7 +28,8 @@ LowerIdent(5:2-5:5),OpAssign(5:6-5:7),LowerIdent(5:8-5:13),
 KwVar(6:2-6:5),LowerIdent(6:6-6:10),OpAssign(6:11-6:12),LowerIdent(6:13-6:18),OpStar(6:19-6:20),Int(6:21-6:22),
 LowerIdent(8:2-8:6),OpAssign(8:7-8:8),LowerIdent(8:9-8:13),OpPlus(8:14-8:15),LowerIdent(8:16-8:19),
 LowerIdent(9:2-9:5),OpPlus(9:6-9:7),LowerIdent(9:8-9:12),
-CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
+CloseCurly(10:1-10:2),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure

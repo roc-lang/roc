@@ -56,7 +56,8 @@ LowerIdent(21:1-21:12),OpColon(21:13-21:14),UpperIdent(21:15-21:19),NoSpaceOpenR
 LowerIdent(22:1-22:12),OpAssign(22:13-22:14),OpBar(22:15-22:16),NamedUnderscore(22:16-22:20),OpBar(22:20-22:21),Int(22:22-22:24),
 LowerIdent(25:1-25:15),OpColon(25:16-25:17),LowerIdent(25:18-25:19),OpArrow(25:20-25:22),UpperIdent(25:23-25:29),NoSpaceOpenRound(25:29-25:30),UpperIdent(25:30-25:36),NoSpaceOpenRound(25:36-25:37),LowerIdent(25:37-25:38),Comma(25:38-25:39),UpperIdent(25:40-25:43),CloseRound(25:43-25:44),Comma(25:44-25:45),UpperIdent(25:46-25:49),CloseRound(25:49-25:50),
 LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:24),OpBar(26:24-26:25),UpperIdent(26:26-26:28),NoSpaceOpenRound(26:28-26:29),UpperIdent(26:29-26:31),NoSpaceOpenRound(26:31-26:32),LowerIdent(26:32-26:37),CloseRound(26:37-26:38),CloseRound(26:38-26:39),
-LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),EndOfFile(28:18-28:18),
+LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),
+EndOfFile(29:1-29:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -30,7 +30,8 @@ f = || {
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),OpBar(3:5-3:6),OpBar(3:6-3:7),OpenCurly(3:8-3:9),
 KwCrash(4:5-4:10),Int(4:11-4:12),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure

@@ -27,7 +27,8 @@ CloseSquare(4:2-4:3),
 OpenCurly(5:2-5:3),
 LowerIdent(6:3-6:5),OpColon(6:5-6:6),KwPlatform(6:7-6:15),StringStart(6:16-6:17),StringPart(6:17-6:28),StringEnd(6:28-6:29),Comma(6:29-6:30),
 LowerIdent(7:3-7:8),OpColon(7:8-7:9),StringStart(7:10-7:11),StringPart(7:11-7:31),StringEnd(7:31-7:32),Comma(7:32-7:33),
-CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
+CloseCurly(8:2-8:3),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure

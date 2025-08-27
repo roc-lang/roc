@@ -36,7 +36,8 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),OpBar(1:5-1:6),LowerIdent(1:6-1:7),OpBar(1:7-1:8),LowerIdent(1:9-1:10),OpPlus(1:11-1:12),LowerIdent(1:13-1:14),EndOfFile(1:14-1:14),
+OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),OpBar(1:5-1:6),LowerIdent(1:6-1:7),OpBar(1:7-1:8),LowerIdent(1:9-1:10),OpPlus(1:11-1:12),LowerIdent(1:13-1:14),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
