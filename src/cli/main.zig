@@ -2042,17 +2042,52 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     var object_files = std.ArrayList([]const u8).init(gpa);
     defer object_files.deinit();
 
-    // Add CRT files in correct order
-    if (crt_files.crt1_o) |crt1| try object_files.append(crt1);
-    if (crt_files.crti_o) |crti| try object_files.append(crti);
-
     // Add our app stub and host library
     try object_files.append(app_stub_obj);
     try object_files.append(host_lib_path);
 
-    // Add libc.a for static linking
-    if (crt_files.libc_a) |libc| try object_files.append(libc);
-    if (crt_files.crtn_o) |crtn| try object_files.append(crtn);
+    // Setup platform files based on target
+    var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+    defer platform_files_pre.deinit();
+    var platform_files_post = std.ArrayList([]const u8).init(gpa);
+    defer platform_files_post.deinit();
+    var extra_args = std.ArrayList([]const u8).init(gpa);
+    defer extra_args.deinit();
+
+    // Add CRT files in correct order
+    if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
+    if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
+    if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
+
+    // For static linking with musl, add libc.a
+    if (crt_files.libc_a) |libc| {
+        try platform_files_post.append(libc);
+    } else if (target.isDynamic()) {
+        // For dynamic linking with glibc, add common library search paths
+        const common_lib_paths = [_][]const u8{
+            "/lib/x86_64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+            "/lib64",
+            "/usr/lib64",
+            "/lib",
+            "/usr/lib",
+        };
+        
+        for (common_lib_paths) |lib_path| {
+            // Check if the directory exists before adding it
+            std.fs.cwd().access(lib_path, .{}) catch continue;
+            const search_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{lib_path});
+            try extra_args.append(search_arg);
+        }
+        
+        // Add dynamic linker path
+        if (target.getDynamicLinkerPath()) |dl_path| {
+            const dl_arg = try std.fmt.allocPrint(gpa, "--dynamic-linker={s}", .{dl_path});
+            try extra_args.append(dl_arg);
+        } else |_| {}
+        
+        try extra_args.append("-lc");
+    }
 
     // Determine output path
     const output_path = if (args.output) |output|
@@ -2072,6 +2107,9 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
     const link_config = linker_mod.LinkConfig{
         .object_files = object_files.items,
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+        .extra_args = extra_args.items,
         .output_path = output_path,
         .target_abi = target_abi,
     };
