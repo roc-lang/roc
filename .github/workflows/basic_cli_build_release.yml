@@ -281,6 +281,11 @@ jobs:
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
 
+      - name: Remove tests that dont work on musl
+        if: startsWith(matrix.os, 'ubuntu-')
+        run:
+          rm examples/file-accessed-modified-created-time.roc
+
       - name: run tests
         run: |
           # no need to build platform anymore
