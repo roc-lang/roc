@@ -80,7 +80,7 @@ pub const TestEnv = struct {
         return self.allocation_map.count();
     }
 
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.C) void {
+    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         const self: *TestEnv = @ptrCast(@alignCast(env));
 
         // Allocate memory using the testing allocator with comptime alignment
@@ -110,7 +110,7 @@ pub const TestEnv = struct {
         roc_alloc.answer = result;
     }
 
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.C) void {
+    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
         const self: *TestEnv = @ptrCast(@alignCast(env));
 
         if (self.allocation_map.fetchRemove(roc_dealloc.ptr)) |entry| {
@@ -128,25 +128,25 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.C) void {
+    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         _ = env;
         _ = roc_realloc;
         @panic("Test realloc not implemented yet");
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {
+    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
         _ = env;
         const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
         std.debug.print("DBG: {s}\n", .{message});
     }
 
-    fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+    fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
         _ = env;
         const message = @as([*]u8, @ptrCast(roc_expect.utf8_bytes))[0..roc_expect.len];
         std.debug.print("EXPECT FAILED: {s}\n", .{message});
     }
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) noreturn {
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) noreturn {
         _ = env;
         const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
         @panic(message);
@@ -160,11 +160,11 @@ pub fn WithOverflow(comptime T: type) type {
 }
 
 /// Function type for incrementing reference count
-pub const Inc = fn (?[*]u8) callconv(.C) void;
+pub const Inc = fn (?[*]u8) callconv(.c) void;
 /// Function type for incrementing reference count by a specific amount
-pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
+pub const IncN = fn (?[*]u8, u64) callconv(.c) void;
 /// Function type for decrementing reference count
-pub const Dec = fn (?[*]u8) callconv(.C) void;
+pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// Special refcount value that marks data with whole-program lifetime.
 /// When a refcount equals this value, it indicates static/constant data that should
 /// never be decremented or freed. This is used for string literals, constant data,
@@ -184,7 +184,7 @@ pub const REFCOUNT_STATIC_DATA: isize = 0;
 /// - Testing with simple data types that don't need reference counting
 /// - Working with primitive types that don't contain pointers to refcounted data
 /// - As a placeholder when the decrement operation is handled elsewhere
-pub fn rcNone(_: ?[*]u8) callconv(.C) void {}
+pub fn rcNone(_: ?[*]u8) callconv(.c) void {}
 
 /// Enum representing different integer widths and signedness for runtime type information
 pub const IntWidth = enum(u8) {
@@ -209,7 +209,7 @@ const Refcount = enum {
 const RC_TYPE: Refcount = .atomic;
 
 /// Increments reference count of an RC pointer by specified amount
-pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
     if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
@@ -246,7 +246,7 @@ pub fn decrefRcPtrC(
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
 
@@ -266,7 +266,7 @@ pub fn decrefCheckNullC(
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
         return @call(
@@ -285,7 +285,7 @@ pub fn decrefDataPtrC(
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const data_ptr = @intFromPtr(bytes);
@@ -304,7 +304,7 @@ pub fn decrefDataPtrC(
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
@@ -324,7 +324,7 @@ pub fn freeDataPtrC(
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
@@ -345,7 +345,7 @@ pub fn freeRcPtrC(
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
     return free_ptr_to_refcount(bytes, alignment, elements_refcounted, roc_ops);
 }
@@ -443,7 +443,7 @@ inline fn decref_ptr_to_refcount(
 /// Handles tag bits in the pointer and extracts the reference count
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
-) callconv(.C) bool {
+) callconv(.c) bool {
     const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
@@ -552,7 +552,7 @@ pub fn allocateWithRefcountC(
     element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) [*]u8 {
+) callconv(.c) [*]u8 {
     return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, roc_ops);
 }
 
@@ -656,7 +656,7 @@ pub const UpdateMode = enum(u8) {
 ///
 /// Note: On most operating systems, this will be affected by ASLR and different each run.
 /// In WebAssembly, the value will be constant for the entire build.
-pub fn dictPseudoSeed() callconv(.C) u64 {
+pub fn dictPseudoSeed() callconv(.c) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }
 

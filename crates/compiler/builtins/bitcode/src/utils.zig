@@ -10,19 +10,19 @@ pub fn WithOverflow(comptime T: type) type {
 }
 
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
 
 // This should never be passed a null pointer.
-extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
+extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
-extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void;
+extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.c) void;
 
 // Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
-pub fn test_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void {
+pub fn test_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.c) void {
     roc_dbg(loc, message, src);
 }
 
@@ -31,22 +31,22 @@ extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
 extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
 extern fn getppid() c_int;
 
-fn testing_roc_getppid() callconv(.C) c_int {
+fn testing_roc_getppid() callconv(.c) c_int {
     return getppid();
 }
 
-fn roc_getppid_windows_stub() callconv(.C) c_int {
+fn roc_getppid_windows_stub() callconv(.c) c_int {
     return 0;
 }
 
-fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.c) c_int {
     return shm_open(name, oflag, mode);
 }
-fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.c) *anyopaque {
     return mmap(addr, length, prot, flags, fd, offset);
 }
 
-fn testing_roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void {
+fn testing_roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.c) void {
     _ = message;
     _ = src;
     _ = loc;
@@ -73,7 +73,7 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
+fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.c) ?*anyopaque {
     const real_alignment = 16;
     if (nominal_alignment > real_alignment) {
         @panic("alignments larger than that of 2 usize are not currently supported");
@@ -98,7 +98,7 @@ fn testing_roc_alloc(size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaq
     return data_ptr;
 }
 
-fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, nominal_alignment: u32) callconv(.C) ?*anyopaque {
+fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, nominal_alignment: u32) callconv(.c) ?*anyopaque {
     const real_alignment = 16;
     if (nominal_alignment > real_alignment) {
         @panic("alignments larger than that of 2 usize are not currently supported");
@@ -119,7 +119,7 @@ fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, nomi
     return new_ptr;
 }
 
-fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
+fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.c) void {
     const alignment = 16;
     const size_of_size = @sizeOf(usize);
     const alignments_needed = size_of_size / alignment + comptime if (size_of_size % alignment == 0) 0 else 1;
@@ -138,7 +138,7 @@ fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
     std.testing.allocator.free(slice);
 }
 
-fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
+fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.c) void {
     _ = c_ptr;
     _ = tag_id;
 
@@ -162,7 +162,7 @@ pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.c) void {
     _ = c_ptr;
     _ = crash_tag;
 
@@ -174,9 +174,9 @@ pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     //    std.c.exit(1);
 }
 
-pub const Inc = fn (?[*]u8) callconv(.C) void;
-pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
-pub const Dec = fn (?[*]u8) callconv(.C) void;
+pub const Inc = fn (?[*]u8) callconv(.c) void;
+pub const IncN = fn (?[*]u8, u64) callconv(.c) void;
+pub const Dec = fn (?[*]u8) callconv(.c) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
 
@@ -201,7 +201,7 @@ const Refcount = enum {
 
 const RC_TYPE: Refcount = .atomic;
 
-pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
     if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
@@ -236,7 +236,7 @@ pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) void {
+) callconv(.c) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
 
@@ -250,7 +250,7 @@ pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) void {
+) callconv(.c) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
         return @call(.always_inline, decref_ptr_to_refcount, .{ isizes - 1, alignment, elements_refcounted });
@@ -261,7 +261,7 @@ pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const data_ptr = @intFromPtr(bytes);
@@ -277,7 +277,7 @@ pub fn decrefDataPtrC(
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
@@ -293,7 +293,7 @@ pub fn freeDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
@@ -310,7 +310,7 @@ pub fn freeRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) void {
+) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
     return free_ptr_to_refcount(bytes, alignment, elements_refcounted);
 }
@@ -396,7 +396,7 @@ inline fn decref_ptr_to_refcount(
 
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
-) callconv(.C) bool {
+) callconv(.c) bool {
     const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
@@ -495,7 +495,7 @@ pub fn allocateWithRefcountC(
     data_bytes: usize,
     element_alignment: u32,
     elements_refcounted: bool,
-) callconv(.C) [*]u8 {
+) callconv(.c) [*]u8 {
     return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted);
 }
 
@@ -591,6 +591,6 @@ test "increfC, static data" {
 // Note: On esstentially all OSes, this will be affected by ASLR and different each run.
 // In wasm, the value will be constant to the build as a whole.
 // Either way, it can not be know by an attacker unless they get access to the executable.
-pub fn dictPseudoSeed() callconv(.C) u64 {
+pub fn dictPseudoSeed() callconv(.c) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }

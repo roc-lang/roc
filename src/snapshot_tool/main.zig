@@ -2707,7 +2707,7 @@ pub const SnapshotOps = struct {
     }
 };
 
-fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
@@ -2731,7 +2731,7 @@ fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
     // Calculate where the size metadata is stored
@@ -2753,7 +2753,7 @@ fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) v
     snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
     // Calculate where the size metadata is stored for the old allocation
@@ -2783,19 +2783,19 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = dbg_args;
     _ = env;
     @panic("snapshotRocDbg not implemented yet");
 }
 
-fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = expect_args;
     _ = env;
     @panic("snapshotRocExpectFailed not implemented yet");
 }
 
-fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     _ = env;
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
     std.log.err("Test program crashed: {s}", .{msg_slice});
