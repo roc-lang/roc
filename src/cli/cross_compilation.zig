@@ -88,7 +88,12 @@ pub fn isGlibcTarget(target: RocTarget) bool {
 
 /// Validate cross-compilation from host to target
 pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompilationResult {
-    // For now, only support musl targets (static linking)
+    // Native compilation (host == target) is always supported
+    if (host == target) {
+        return CrossCompilationResult{ .supported = {} };
+    }
+
+    // For actual cross-compilation, only support musl targets (static linking)
     if (!isMuslTarget(target)) {
         if (isGlibcTarget(target)) {
             return CrossCompilationResult{

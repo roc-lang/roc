@@ -674,14 +674,39 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
         if (std.mem.indexOf(u8, platform_paths.host_lib_path, "/int/") != null and std.mem.indexOf(u8, platform_paths.host_lib_path, "platform") != null) {
             std.log.debug("Detected int platform - using musl static linking", .{});
-            // Int platform: use musl static linking
+            // Int platform: use musl static linking with target-specific libraries
             target_abi = .musl;
             if (builtin.target.os.tag == .linux) {
-                platform_files_pre.append("test/int/platform/vendored/musl/crt1.o") catch {
+                // Use native target-specific libraries (x64musl for x64 hosts, etc.)
+                const native_target = if (builtin.target.cpu.arch.isX86())
+                    "x64musl"
+                else if (builtin.target.cpu.arch == .aarch64)
+                    "arm64musl"
+                else
+                    "x64musl"; // fallback
+
+                const crt1_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch {
+                    std.log.err("Failed to allocate crt1 path", .{});
+                    std.process.exit(1);
+                };
+                defer gpa.free(crt1_path);
+                const libc_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch {
+                    std.log.err("Failed to allocate libc path", .{});
+                    std.process.exit(1);
+                };
+                defer gpa.free(libc_path);
+
+                platform_files_pre.append(gpa.dupe(u8, crt1_path) catch {
+                    std.log.err("Failed to duplicate crt1 path", .{});
+                    std.process.exit(1);
+                }) catch {
                     std.log.err("Failed to add musl crt1.o", .{});
                     std.process.exit(1);
                 };
-                platform_files_post.append("test/int/platform/vendored/musl/libc.a") catch {
+                platform_files_post.append(gpa.dupe(u8, libc_path) catch {
+                    std.log.err("Failed to duplicate libc path", .{});
+                    std.process.exit(1);
+                }) catch {
                     std.log.err("Failed to add musl libc.a", .{});
                     std.process.exit(1);
                 };
