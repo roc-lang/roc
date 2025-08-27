@@ -283,7 +283,7 @@ jobs:
 
       - name: Remove things that dont work on musl
         if: startsWith(matrix.os, 'ubuntu-')
-        run:
+        run: |
           rm basic-cli-platform/examples/file-accessed-modified-created-time.roc
           sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' basic-cli-platform/platform/File.roc
           rm basic-cli-platform/platform/File.roc.bak
