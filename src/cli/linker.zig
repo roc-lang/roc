@@ -74,7 +74,7 @@ pub const LinkConfig = struct {
     /// Target OS tag - for cross-compilation support
     target_os: ?std.Target.Os.Tag = null, // null means detect from system
 
-    /// Target CPU architecture - for cross-compilation support  
+    /// Target CPU architecture - for cross-compilation support
     target_arch: ?std.Target.Cpu.Arch = null, // null means detect from system
 
     /// Output executable path
@@ -121,7 +121,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     // Use target OS if provided, otherwise fall back to host OS
     const target_os = config.target_os orelse builtin.target.os.tag;
     const target_arch = config.target_arch orelse builtin.target.cpu.arch;
-    
+
     switch (target_os) {
         .macos => {
             // Add linker name for macOS

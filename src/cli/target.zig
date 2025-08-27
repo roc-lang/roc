@@ -52,9 +52,7 @@ pub const RocTarget = enum {
             .x64freebsd => .freebsd,
             .x64openbsd => .openbsd,
             .x64netbsd => .netbsd,
-            .x64musl, .x64glibc, .x64linux, .x64elf, 
-            .arm64musl, .arm64glibc, .arm64linux, 
-            .arm32musl, .arm32linux => .linux,
+            .x64musl, .x64glibc, .x64linux, .x64elf, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => .linux,
             .wasm32 => .wasi,
         };
     }
@@ -63,15 +61,14 @@ pub const RocTarget = enum {
     pub fn toCpuArch(self: RocTarget) std.Target.Cpu.Arch {
         return switch (self) {
             // x64 targets
-            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, 
-            .x64musl, .x64glibc, .x64linux, .x64elf => .x86_64,
-            
+            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, .x64musl, .x64glibc, .x64linux, .x64elf => .x86_64,
+
             // arm64 targets
             .arm64mac, .arm64win, .arm64linux, .arm64musl, .arm64glibc => .aarch64,
-            
+
             // arm32 targets
             .arm32linux, .arm32musl => .arm,
-            
+
             // WebAssembly
             .wasm32 => .wasm32,
         };
