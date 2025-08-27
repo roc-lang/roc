@@ -2100,7 +2100,8 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     };
 
     // Get target-specific host library path
-    const host_lib_filename = if (builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+    // Use target OS to determine library filename, not host OS
+    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
     const host_lib_path = blk: {
         // Try target-specific host library first
         const target_specific_path = try std.fs.path.join(gpa, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
