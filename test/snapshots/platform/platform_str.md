@@ -24,7 +24,8 @@ KwRequires(2:5-2:13),OpenCurly(2:14-2:15),CloseCurly(2:15-2:16),OpenCurly(2:17-2
 KwExposes(3:5-3:12),OpenSquare(3:13-3:14),CloseSquare(3:14-3:15),
 KwPackages(4:5-4:13),OpenCurly(4:14-4:15),CloseCurly(4:15-4:16),
 KwProvides(5:5-5:13),OpenCurly(5:14-5:15),LowerIdent(5:16-5:29),OpColon(5:29-5:30),StringStart(5:31-5:32),StringPart(5:32-5:45),StringEnd(5:45-5:46),CloseCurly(5:47-5:48),
-LowerIdent(7:1-7:14),OpColon(7:15-7:16),UpperIdent(7:17-7:20),OpArrow(7:21-7:23),UpperIdent(7:24-7:27),EndOfFile(7:27-7:27),
+LowerIdent(7:1-7:14),OpColon(7:15-7:16),UpperIdent(7:17-7:20),OpArrow(7:21-7:23),UpperIdent(7:24-7:27),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure

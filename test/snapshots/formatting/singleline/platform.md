@@ -42,7 +42,7 @@ KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:13),StringEnd(1:13-
 KwRequires(2:2-2:10),OpenCurly(2:11-2:12),UpperIdent(2:13-2:15),Comma(2:15-2:16),UpperIdent(2:17-2:19),CloseCurly(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:26),OpColon(2:27-2:28),UpperIdent(2:29-2:31),OpArrow(2:32-2:34),UpperIdent(2:35-2:37),Comma(2:37-2:38),LowerIdent(2:39-2:41),OpColon(2:42-2:43),UpperIdent(2:44-2:46),OpArrow(2:47-2:49),UpperIdent(2:50-2:52),CloseCurly(2:53-2:54),
 KwExposes(3:2-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:17),CloseSquare(3:17-3:18),
 KwPackages(4:2-4:10),OpenCurly(4:11-4:12),LowerIdent(4:13-4:16),OpColon(4:16-4:17),StringStart(4:18-4:19),StringPart(4:19-4:22),StringEnd(4:22-4:23),Comma(4:23-4:24),LowerIdent(4:25-4:28),OpColon(4:28-4:29),StringStart(4:30-4:31),StringPart(4:31-4:34),StringEnd(4:34-4:35),CloseCurly(4:36-4:37),
-KwProvides(6:2-6:10),OpenSquare(6:11-6:12),LowerIdent(6:12-6:15),Comma(6:15-6:16),LowerIdent(6:17-6:20),CloseSquare(6:20-6:21),
+KwProvides(6:2-6:10),OpenCurly(6:11-6:12),LowerIdent(6:13-6:16),OpColon(6:16-6:17),StringStart(6:18-6:19),StringPart(6:19-6:34),StringEnd(6:34-6:35),Comma(6:35-6:36),LowerIdent(6:37-6:40),OpColon(6:40-6:41),StringStart(6:42-6:43),StringPart(6:43-6:58),StringEnd(6:58-6:59),CloseCurly(6:60-6:61),
 EndOfFile(7:1-7:1),
 ~~~
 # PARSE
