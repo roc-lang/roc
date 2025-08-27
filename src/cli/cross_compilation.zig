@@ -56,14 +56,14 @@ pub fn detectHostTarget() RocTarget {
     return switch (builtin.target.cpu.arch) {
         .x86_64 => switch (builtin.target.os.tag) {
             .linux => .x64glibc, // Default to glibc on Linux hosts
-            .windows => .x64windows,
-            .macos => .x64macos,
+            .windows => .x64win,
+            .macos => .x64mac,
             else => .x64glibc,
         },
         .aarch64 => switch (builtin.target.os.tag) {
             .linux => .arm64glibc,
-            .windows => .arm64windows,
-            .macos => .arm64macos,
+            .windows => .arm64win,
+            .macos => .arm64mac,
             else => .arm64glibc,
         },
         else => .x64glibc, // Fallback
