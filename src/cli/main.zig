@@ -1978,10 +1978,10 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     std.log.info("Target: {} ({s})", .{ target, target.toTriple() });
 
     // Only support test platforms for now (int and str)
-    const platform_type = if (std.mem.indexOf(u8, args.path, "/int/") != null) 
-        "int" 
-    else if (std.mem.indexOf(u8, args.path, "/str/") != null) 
-        "str" 
+    const platform_type = if (std.mem.indexOf(u8, args.path, "/int/") != null)
+        "int"
+    else if (std.mem.indexOf(u8, args.path, "/str/") != null)
+        "str"
     else {
         std.log.err("roc build currently only supports test platforms (int and str)", .{});
         std.log.err("Your app path: {s}", .{args.path});
@@ -2025,7 +2025,7 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     // Create temp directory for build artifacts
     const temp_dir = try std.fs.path.join(gpa, &.{ "zig-cache", "roc_build" });
     defer gpa.free(temp_dir);
-    
+
     std.fs.cwd().makePath(temp_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
@@ -2045,22 +2045,22 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     // Add CRT files in correct order
     if (crt_files.crt1_o) |crt1| try object_files.append(crt1);
     if (crt_files.crti_o) |crti| try object_files.append(crti);
-    
+
     // Add our app stub and host library
     try object_files.append(app_stub_obj);
     try object_files.append(host_lib_path);
-    
+
     // Add libc.a for static linking
     if (crt_files.libc_a) |libc| try object_files.append(libc);
     if (crt_files.crtn_o) |crtn| try object_files.append(crtn);
 
     // Determine output path
-    const output_path = if (args.output) |output| 
+    const output_path = if (args.output) |output|
         try gpa.dupe(u8, output)
     else blk: {
         const basename = std.fs.path.basename(args.path);
         const name_without_ext = if (std.mem.endsWith(u8, basename, ".roc"))
-            basename[0..basename.len - 4]
+            basename[0 .. basename.len - 4]
         else
             basename;
         break :blk try gpa.dupe(u8, name_without_ext);

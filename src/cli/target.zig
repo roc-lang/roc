@@ -162,9 +162,7 @@ pub const RocTarget = enum {
     /// Check if target is Linux-based
     pub fn isLinux(self: RocTarget) bool {
         return switch (self) {
-            .x64musl, .x64glibc, .x64linux,
-            .arm64musl, .arm64glibc, .arm64linux,
-            .arm32musl, .arm32linux => true,
+            .x64musl, .x64glibc, .x64linux, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => true,
             else => false,
         };
     }
@@ -174,30 +172,30 @@ pub const RocTarget = enum {
         return switch (self) {
             // x64 glibc targets
             .x64glibc, .x64linux => "/lib64/ld-linux-x86-64.so.2",
-            
+
             // arm64 glibc targets
             .arm64glibc, .arm64linux => "/lib/ld-linux-aarch64.so.1",
-            
+
             // arm32 glibc targets
             .arm32linux => "/lib/ld-linux-armhf.so.3",
-            
+
             // Static linking targets don't need dynamic linker
             .x64musl, .arm64musl, .arm32musl => return error.StaticLinkingTarget,
-            
+
             // macOS uses dyld
             .x64mac, .arm64mac => "/usr/lib/dyld",
-            
+
             // Windows doesn't use ELF-style dynamic linker
             .x64win, .arm64win => return error.WindowsTarget,
-            
+
             // BSD variants
             .x64freebsd => "/libexec/ld-elf.so.1",
             .x64openbsd => "/usr/libexec/ld.so",
             .x64netbsd => "/usr/libexec/ld.elf_so",
-            
+
             // Generic ELF doesn't have a specific linker
             .x64elf => return error.NoKnownLinkerPath,
-            
+
             // WebAssembly doesn't use dynamic linker
             .wasm32 => return error.WebAssemblyTarget,
         };
@@ -206,10 +204,10 @@ pub const RocTarget = enum {
 
 /// CRT (C runtime) file paths for linking
 pub const CRTFiles = struct {
-    crt1_o: ?[]const u8 = null,      // crt1.o or Scrt1.o (for PIE)
-    crti_o: ?[]const u8 = null,      // crti.o
-    crtn_o: ?[]const u8 = null,      // crtn.o
-    libc_a: ?[]const u8 = null,      // libc.a (for static linking)
+    crt1_o: ?[]const u8 = null, // crt1.o or Scrt1.o (for PIE)
+    crti_o: ?[]const u8 = null, // crti.o
+    crtn_o: ?[]const u8 = null, // crtn.o
+    libc_a: ?[]const u8 = null, // libc.a (for static linking)
 };
 
 /// Get vendored CRT object files for a platform target
@@ -227,7 +225,7 @@ pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir
     };
 
     const targets_dir = try std.fs.path.join(allocator, &[_][]const u8{ platform_dir, "targets", target_subdir });
-    
+
     var result = CRTFiles{};
 
     if (target.isStatic()) {
