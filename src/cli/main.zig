@@ -1089,6 +1089,180 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     defer gpa.free(temp_exe_path);
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
+    // TEMP --- Print all CPU instruction mnemonics used in temp_exe_path (deduplicated) using objdump ---
+    const Disasm = struct {
+        fn runCapture(gpa2: Allocator, args: []const []const u8) ![]u8 {
+            var child = std.process.Child.init(args, gpa2);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            try child.spawn();
+
+            const out = try child.stdout.?.reader().readAllAlloc(gpa2, 64 * 1024 * 1024);
+            const term = try child.wait();
+            return switch (term) {
+                .Exited => |code| if (code == 0) out else error.ChildFailed,
+                else => error.ChildFailed,
+            };
+        }
+
+        fn isHexToken(tok: []const u8) bool {
+            if (tok.len == 0) return false;
+            for (tok) |ch| if (!std.ascii.isHex(ch)) return false;
+            return true;
+        }
+
+        fn isX86Prefix(tok: []const u8) bool {
+            return std.mem.eql(u8, tok, "rep") or
+                std.mem.eql(u8, tok, "repe") or
+                std.mem.eql(u8, tok, "repz") or
+                std.mem.eql(u8, tok, "repne") or
+                std.mem.eql(u8, tok, "repnz") or
+                std.mem.eql(u8, tok, "lock");
+        }
+
+        fn isIdentStart(ch: u8) bool {
+            return std.ascii.isAlphabetic(ch) or ch == '.' or ch == '_';
+        }
+        fn isIdentChar(ch: u8) bool {
+            return std.ascii.isAlphanumeric(ch) or ch == '.' or ch == '_';
+        }
+        fn skipWs(s: []const u8, start: usize) usize {
+            var i = start;
+            while (i < s.len and (s[i] == ' ' or s[i] == '\t')) : (i += 1) {}
+            return i;
+        }
+
+        /// Extract the mnemonic from an `objdump -d` line.
+        /// Returns null if the line isn't an instruction.
+        fn extractMnemonicFromObjdumpLine(line: []const u8) ?[]const u8 {
+            const colon_i = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+
+            // Left side must be a hex address
+            const addr = std.mem.trim(u8, line[0..colon_i], " \t");
+            if (!@This().isHexToken(addr)) return null;
+
+            var i: usize = colon_i + 1;
+            i = @This().skipWs(line, i);
+
+            // Skip the hex byte dump column (tokens of pure hex)
+            while (i < line.len) {
+                var j = i;
+                while (j < line.len and line[j] != ' ' and line[j] != '\t') : (j += 1) {}
+                const tok = line[i..j];
+                if (tok.len >= 2 and @This().isHexToken(tok)) {
+                    i = @This().skipWs(line, j);
+                    continue;
+                }
+                break;
+            }
+
+            // Now the mnemonic column should start here
+            i = @This().skipWs(line, i);
+            if (i >= line.len or !@This().isIdentStart(line[i])) return null;
+
+            var start = i;
+            i += 1;
+            while (i < line.len and @This().isIdentChar(line[i])) : (i += 1) {}
+            var mn = line[start..i];
+
+            // Handle x86 prefixes like "lock"/"rep*"
+            if (@This().isX86Prefix(mn)) {
+                i = @This().skipWs(line, i);
+                if (i >= line.len or !@This().isIdentStart(line[i])) return null;
+                start = i;
+                i += 1;
+                while (i < line.len and @This().isIdentChar(line[i])) : (i += 1) {}
+                mn = line[start..i];
+            }
+
+            // Stop at whitespace, comma, or other operand separators to avoid including operands
+            var end = start;
+            while (end < line.len and @This().isIdentChar(line[end])) : (end += 1) {}
+            mn = line[start..end];
+
+            // Filter out known register names and segment prefixes that might be misidentified
+            const known_registers = [_][]const u8{
+                "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+                "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+                "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+                "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+                "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
+                "cs", "ds", "es", "fs", "gs", "ss",
+                "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+                "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+                "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
+                "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
+            };
+
+            for (known_registers) |reg| {
+                if (std.ascii.eqlIgnoreCase(mn, reg)) {
+                    return null; // This is a register, not an instruction
+                }
+            }
+
+            return if (mn.len > 0) mn else null;
+        }
+
+        fn toLowerAlloc(gpa2: Allocator, s: []const u8) ![]u8 {
+            var out = try gpa2.alloc(u8, s.len);
+            for (s, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+            return out;
+        }
+    };
+
+    var disasm_out: ?[]u8 = null;
+    var used_variant: []const u8 = "";
+
+    // Prefer Intel syntax for x86; if objdump rejects it (non-x86), fall back.
+    const try_intel = Disasm.runCapture(gpa, &.{ "objdump", "-d", "-M", "intel", temp_exe_path }) catch null;
+    if (try_intel) |t| {
+        disasm_out = t;
+        used_variant = "objdump -d -M intel";
+    } else {
+        const try_plain = Disasm.runCapture(gpa, &.{ "objdump", "-d", temp_exe_path }) catch null;
+        if (try_plain) |t| {
+            disasm_out = t;
+            used_variant = "objdump -d";
+        }
+    }
+
+    if (disasm_out) |text| {
+        defer gpa.free(text);
+
+        var uniq = std.StringHashMap(void).init(gpa);
+        defer {
+            var it = uniq.keyIterator();
+            while (it.next()) |k| gpa.free(k.*);
+            uniq.deinit();
+        }
+
+        var line_it = std.mem.splitScalar(u8, text, '\n');
+        while (line_it.next()) |line| {
+            const maybe_mn = Disasm.extractMnemonicFromObjdumpLine(line) orelse continue;
+            const lower = Disasm.toLowerAlloc(gpa, maybe_mn) catch continue;
+
+            const gop = uniq.getOrPut(lower) catch {
+                gpa.free(lower);
+                break;
+            };
+            if (gop.found_existing) {
+                gpa.free(lower);
+            } else {
+                gop.key_ptr.* = lower;
+            }
+        }
+
+        std.log.info("Instruction mnemonics found via {s}:", .{used_variant});
+        var it2 = uniq.keyIterator();
+        while (it2.next()) |k| {
+            std.log.info("  {s}", .{k.*});
+        }
+    } else {
+        std.log.warn("Failed to disassemble with objdump; skipping instruction list.", .{});
+    }
+    // --- end objdump-only section ---
+
+
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
