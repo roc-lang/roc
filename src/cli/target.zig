@@ -43,6 +43,40 @@ pub const RocTarget = enum {
         return null;
     }
 
+    /// Get the OS tag for this RocTarget
+    pub fn toOsTag(self: RocTarget) std.Target.Os.Tag {
+        return switch (self) {
+            // x64 targets
+            .x64mac, .arm64mac => .macos,
+            .x64win, .arm64win => .windows,
+            .x64freebsd => .freebsd,
+            .x64openbsd => .openbsd,
+            .x64netbsd => .netbsd,
+            .x64musl, .x64glibc, .x64linux, .x64elf, 
+            .arm64musl, .arm64glibc, .arm64linux, 
+            .arm32musl, .arm32linux => .linux,
+            .wasm32 => .wasi,
+        };
+    }
+
+    /// Get the CPU architecture for this RocTarget
+    pub fn toCpuArch(self: RocTarget) std.Target.Cpu.Arch {
+        return switch (self) {
+            // x64 targets
+            .x64mac, .x64win, .x64freebsd, .x64openbsd, .x64netbsd, 
+            .x64musl, .x64glibc, .x64linux, .x64elf => .x86_64,
+            
+            // arm64 targets
+            .arm64mac, .arm64win, .arm64linux, .arm64musl, .arm64glibc => .aarch64,
+            
+            // arm32 targets
+            .arm32linux, .arm32musl => .arm,
+            
+            // WebAssembly
+            .wasm32 => .wasm32,
+        };
+    }
+
     /// Convert Roc target to LLVM target triple
     pub fn toTriple(self: RocTarget) []const u8 {
         return switch (self) {

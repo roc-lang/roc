@@ -2158,12 +2158,15 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
     const link_config = linker_mod.LinkConfig{
+        .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
         .object_files = object_files.items,
         .platform_files_pre = platform_files_pre.items,
         .platform_files_post = platform_files_post.items,
         .extra_args = extra_args.items,
         .output_path = output_path,
         .target_abi = target_abi,
+        .target_os = target.toOsTag(),
+        .target_arch = target.toCpuArch(),
     };
 
     try linker_mod.link(gpa, link_config);
