@@ -252,8 +252,7 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
-          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
-          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+          sudo apt install -y expect ncat ripgrep
 
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
