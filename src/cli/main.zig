@@ -1182,16 +1182,16 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
 
             // Filter out known register names and segment prefixes that might be misidentified
             const known_registers = [_][]const u8{
-                "rax",   "rbx",   "rcx",   "rdx",   "rsi",   "rdi",   "rbp",  "rsp",
-                "r8",    "r9",    "r10",   "r11",   "r12",   "r13",   "r14",  "r15",
-                "eax",   "ebx",   "ecx",   "edx",   "esi",   "edi",   "ebp",  "esp",
-                "ax",    "bx",    "cx",    "dx",    "si",    "di",    "bp",   "sp",
-                "al",    "ah",    "bl",    "bh",    "cl",    "ch",    "dl",   "dh",
-                "cs",    "ds",    "es",    "fs",    "gs",    "ss",    "xmm0", "xmm1",
-                "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",  "xmm8", "xmm9",
-                "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "ymm0", "ymm1",
-                "ymm2",  "ymm3",  "ymm4",  "ymm5",  "ymm6",  "ymm7",  "ymm8", "ymm9",
-                "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
+                "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+                "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+                "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+                "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+                "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
+                "cs", "ds", "es", "fs", "gs", "ss",
+                "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+                "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+                "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
+                "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
             };
 
             for (known_registers) |reg| {
@@ -1262,6 +1262,7 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     }
     // --- end objdump-only section ---
 
+
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
@@ -1287,68 +1288,6 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     // Forward stdout and stderr
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-
-    // Run gdb on the temp executable for debugging information
-    {
-        var gdb_child = std.process.Child.init(&.{ "gdb", "-batch", "-ex", "run", "-ex", "bt", "-ex", "disas $pc-10,$pc+10", "-ex", "quit", temp_exe_path }, gpa);
-
-        gdb_child.stdout_behavior = .Pipe;
-        gdb_child.stderr_behavior = .Pipe;
-
-        // Spawn the process first
-        gdb_child.spawn() catch |err| {
-            std.log.warn("Failed to spawn gdb on {s}: {}", .{ temp_exe_path, err });
-            // Continue without gdb output
-            return;
-        };
-
-        // Read stdout
-        const gdb_stdout = if (gdb_child.stdout) |stdout|
-            stdout.reader().readAllAlloc(gpa, 1024 * 1024) catch |err| blk: {
-                std.log.warn("Failed to read gdb stdout: {}", .{err});
-                break :blk null;
-            }
-        else
-            null;
-        defer if (gdb_stdout) |stdout| gpa.free(stdout);
-
-        // Read stderr
-        const gdb_stderr = if (gdb_child.stderr) |stderr|
-            stderr.reader().readAllAlloc(gpa, 1024 * 1024) catch |err| blk: {
-                std.log.warn("Failed to read gdb stderr: {}", .{err});
-                break :blk null;
-            }
-        else
-            null;
-        defer if (gdb_stderr) |stderr| gpa.free(stderr);
-
-        // Wait for the process to complete
-        const gdb_result = gdb_child.wait() catch |err| {
-            std.log.warn("Failed to wait for gdb: {}", .{err});
-            return;
-        };
-
-        switch (gdb_result) {
-            .Exited => |code| {
-                if (code == 0) {
-                    std.log.info("GDB analysis of {s}:", .{temp_exe_path});
-                    if (gdb_stdout) |stdout| {
-                        std.log.info("GDB stdout:\n{s}", .{stdout});
-                    }
-                    if (gdb_stderr) |stderr| {
-                        if (stderr.len > 0) {
-                            std.log.info("GDB stderr:\n{s}", .{stderr});
-                        }
-                    }
-                } else {
-                    std.log.warn("GDB exited with code {}", .{code});
-                }
-            },
-            else => {
-                std.log.warn("GDB terminated abnormally: {}", .{gdb_result});
-            },
-        }
-    }
 
     // Spawn the child process
     std.log.debug("Spawning child process: {s}", .{temp_exe_path});
