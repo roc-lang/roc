@@ -26,7 +26,7 @@ main! = |_| getName({name: "luke", age:21})
 This argument has the type:
     _{ name: Str, age: Num(_size) }_
 
-But the function needs the first argument to be:
+But `getName` needs the first argument to be:
     _{ age: U64, name: Str }_
 
 # TOKENS

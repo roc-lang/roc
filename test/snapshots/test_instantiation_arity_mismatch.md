@@ -24,10 +24,10 @@ This expression is used in an unexpected way:
     ^^^^^^^^
 
 It has the type:
-    _Num(_size), Num(_size2) -> _ret_
+    _(a, b) -> (a, b)_
 
 But here it's being used as:
-    _(a, b) -> (a, b)_
+    _Num(_size), Num(_size2) -> _ret_
 
 # TOKENS
 ~~~zig
@@ -73,14 +73,6 @@ EndOfFile(7:1-7:1),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-2.32 (name "identity")
-		(ty-fn @2.16-2.32 (effectful false)
-			(ty-tuple @2.16-2.22
-				(ty-var @2.17-2.18 (name "a"))
-				(ty-var @2.20-2.21 (name "b")))
-			(ty-tuple @2.26-2.32
-				(ty-var @2.27-2.28 (name "a"))
-				(ty-var @2.30-2.31 (name "b")))))
 	(s-let @3.5-3.27
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.27

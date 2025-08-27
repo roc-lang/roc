@@ -277,7 +277,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
-TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
+TYPE MISMATCH - fuzz_crash_023.md:155:2:155:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -985,18 +985,17 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_023.md:155:2:157:3:**
+**fuzz_crash_023.md:155:2:155:12:**
 ```roc
 	match_time(
-		..., # Single args with comment
-	)
 ```
+	^^^^^^^^^^
 
 It has the type:
-    __arg -> _ret_
+    _[Red][Blue, Green]_others, _arg -> Error_
 
 But here it's being used as:
-    _[Red][Blue, Green]_others, _arg2 -> Error_
+    __arg2 -> _ret_
 
 # TOKENS
 ~~~zig
@@ -2262,8 +2261,6 @@ expect {
 							(p-assign @148.2-148.5 (ident "tag"))))
 					(s-expr @178.45-178.46
 						(e-runtime-error (tag "expr_not_canonicalized")))
-					(s-type-anno @178.47-178.71 (name "qux")
-						(ty-malformed @178.52-178.71))
 					(s-let @179.2-179.68
 						(p-assign @179.2-179.7 (ident "tuple"))
 						(e-tuple @179.10-179.68
@@ -2512,7 +2509,7 @@ expect {
 	(defs
 		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
-		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "List(Error) -> Result({  }, _d)"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
@@ -2557,7 +2554,7 @@ expect {
 	(expressions
 		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
-		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "List(Error) -> Result({  }, _d)"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

@@ -87,10 +87,11 @@ pub const Tag = enum {
     // Type Annotation
     ty_apply,
     ty_apply_external,
-    ty_var,
-    ty_ident,
+    ty_rigid_var,
+    ty_lookup,
     ty_underscore,
     ty_tag_union,
+    ty_tag,
     ty_tuple,
     ty_record,
     ty_record_field,

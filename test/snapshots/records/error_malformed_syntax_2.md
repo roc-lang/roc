@@ -96,8 +96,6 @@ EndOfFile(2:1-2:1),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-1.28
-	(s-type-anno @1.3-1.10 (name "age")
-		(ty-malformed @1.8-1.10))
 	(s-expr @1.10-1.11
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-let @1.12-1.26

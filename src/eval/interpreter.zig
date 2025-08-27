@@ -705,6 +705,29 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
             },
+            .e_num => |int_lit| {
+                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
+                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
+                var result_value = try self.pushStackValue(expr_layout);
+
+                if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
+                    result_value.setInt(int_lit.value.toI128());
+                    self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
+                } else if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .frac and expr_layout.data.scalar.data.frac == .dec) {
+                    // Integer literal with decimal layout - convert to RocDec
+                    const int_val = int_lit.value.toI128();
+                    const dec_value = RocDec{ .num = int_val * RocDec.one_point_zero_i128 };
+
+                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
+                    result_ptr.* = dec_value;
+                    result_value.is_initialized = true;
+
+                    self.traceInfo("Pushed integer literal {d} as decimal", .{int_val});
+                } else {
+                    self.traceError("Integer literal: expected integer or decimal layout, got {}", .{expr_layout.tag});
+                    return error.TypeMismatch;
+                }
+            },
 
             .e_frac_f32 => |float_lit| {
                 const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);

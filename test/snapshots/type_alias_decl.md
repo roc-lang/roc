@@ -280,13 +280,9 @@ main! = |_| {
 			(args
 				(p-underscore @27.10-27.11))
 			(e-block @27.13-39.2
-				(s-type-anno @29.5-29.20 (name "userId")
-					(ty @29.14-29.20 (name "UserId")))
 				(s-let @30.5-30.17
 					(p-assign @30.5-30.11 (ident "userId"))
 					(e-int @30.14-30.17 (value "123")))
-				(s-type-anno @32.5-32.20 (name "person")
-					(ty @32.14-32.20 (name "Person")))
 				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person"))
 					(e-record @33.14-33.40
@@ -296,8 +292,6 @@ main! = |_| {
 									(e-literal @33.23-33.28 (string "Alice"))))
 							(field (name "age")
 								(e-int @33.36-33.38 (value "30"))))))
-				(s-type-anno @35.5-35.18 (name "color")
-					(ty @35.13-35.18 (name "Color")))
 				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))

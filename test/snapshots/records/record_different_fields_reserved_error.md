@@ -493,8 +493,6 @@ EndOfFile(9:1-9:1),
 (e-block @1.1-8.2
 	(s-expr @2.5-2.23
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno @3.5-3.12 (name "when")
-		(ty-malformed @3.11-3.12))
 	(s-expr @3.12-3.25
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @3.25-3.26

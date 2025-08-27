@@ -48,11 +48,6 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.2-2.32 (name "apple")
-		(ty-tag-union @2.10-2.32
-			(ty @2.11-2.16 (name "Apple"))
-			(ty-apply @2.18-2.31 (symbol "IsFruit")
-				(ty @2.26-2.30 (name "Bool")))))
 	(s-let @3.2-3.15
 		(p-assign @3.2-3.7 (ident "apple"))
 		(e-tag @3.10-3.15 (name "Apple")))

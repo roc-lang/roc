@@ -108,11 +108,11 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 33;
+pub const MODULEENV_EXPR_NODE_COUNT = 34;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
-pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
+pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the ModuleEnv
 pub const MODULEENV_PATTERN_NODE_COUNT = 16;
 
@@ -324,13 +324,43 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_int => {
+            // Get requirements
+            const sign_needed: bool = node.data_1 != 0;
+            const bits_needed: u8 = @intCast(node.data_2);
+
             // Read i128 from extra_data (stored as 4 u32s in data_1)
-            const value_as_u32s = store.extra_data.items.items[node.data_1..][0..4];
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+
+            // Suffix
+            const suffix_parts = store.extra_data.items.items[node.data_3 + 4 ..][0..2];
+            const has_suffix: bool = suffix_parts[0] != 0;
+            var suffix: ?types.Num.Int.Precision = null;
+            if (has_suffix) {
+                suffix = @enumFromInt(suffix_parts[1]);
+            }
 
             // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
                 .e_int = .{
                     .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
+                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
+                    .suffix = suffix,
+                },
+            };
+        },
+        .expr_num => {
+            // Get requirements
+            const sign_needed: bool = node.data_1 != 0;
+            const bits_needed: u8 = @intCast(node.data_2);
+
+            // Read i128 from extra_data (stored as 4 u32s in data_1)
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+
+            // Retrieve type variable from data_2 and requirements from data_3
+            return CIR.Expr{
+                .e_num = .{
+                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
+                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
                 },
             };
         },
@@ -958,30 +988,74 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .ty_apply => return CIR.TypeAnno{ .apply = .{
-            .symbol = @bitCast(node.data_1),
-            .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
-        } },
-        .ty_apply_external => {
-            const extra_data_idx = node.data_3;
-            const args_start = store.extra_data.items.items[extra_data_idx];
-            const args_len = store.extra_data.items.items[extra_data_idx + 1];
-            return CIR.TypeAnno{ .apply_external = .{
-                .module_idx = @enumFromInt(node.data_1),
-                .target_node_idx = @intCast(node.data_2),
+        .ty_apply => {
+            const name: Ident.Idx = @bitCast(node.data_1);
+            const args_start = node.data_2;
+
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const args_len = extra_data[0];
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
+            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
+                switch (base_enum) {
+                    .builtin => {
+                        break :blk .{ .builtin = @enumFromInt(extra_data[2]) };
+                    },
+                    .local => {
+                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[2]) } };
+                    },
+                    .external => {
+                        break :blk .{ .external = .{
+                            .module_idx = @enumFromInt(extra_data[2]),
+                            .target_node_idx = @intCast(extra_data[3]),
+                        } };
+                    },
+                }
+            };
+
+            return CIR.TypeAnno{ .apply = .{
+                .name = name,
+                .base = type_base,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
             } };
         },
-        .ty_var => return CIR.TypeAnno{ .ty_var = .{
+        .ty_rigid_var => return CIR.TypeAnno{ .rigid_var = .{
             .name = @bitCast(node.data_1),
         } },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
-        .ty_ident => return CIR.TypeAnno{ .ty = .{
-            .symbol = @bitCast(node.data_1),
-        } },
+        .ty_lookup => {
+            const name: Ident.Idx = @bitCast(node.data_1);
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(node.data_2);
+
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
+                switch (base_enum) {
+                    .builtin => {
+                        break :blk .{ .builtin = @enumFromInt(extra_data[0]) };
+                    },
+                    .local => {
+                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[0]) } };
+                    },
+                    .external => {
+                        break :blk .{ .external = .{
+                            .module_idx = @enumFromInt(extra_data[0]),
+                            .target_node_idx = @intCast(extra_data[1]),
+                        } };
+                    },
+                }
+            };
+
+            return CIR.TypeAnno{ .lookup = .{
+                .name = name,
+                .base = type_base,
+            } };
+        },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
             .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+        } },
+        .ty_tag => return CIR.TypeAnno{ .tag = .{
+            .name = @bitCast(node.data_1),
+            .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
         } },
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
@@ -1002,12 +1076,6 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_parens => return CIR.TypeAnno{ .parens = .{
             .anno = @enumFromInt(node.data_1),
         } },
-        .ty_lookup_external => return CIR.TypeAnno{
-            .ty_lookup_external = .{
-                .module_idx = @enumFromInt(node.data_1),
-                .target_node_idx = @intCast(node.data_2),
-            },
-        },
         .ty_malformed => return CIR.TypeAnno{ .malformed = .{
             .diagnostic = @enumFromInt(node.data_1),
         } },
@@ -1239,6 +1307,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
         .e_int => |e| {
             node.tag = .expr_int;
 
+            // Store requirements
+            node.data_1 = @intFromBool(e.requirements.sign_needed);
+            node.data_2 = @intCast(e.requirements.bits_needed);
+
             // Store i128 value in extra_data
             const extra_data_start = store.extra_data.len();
 
@@ -1251,7 +1323,36 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             }
 
             // Store the extra_data index in data_1
-            node.data_1 = @intCast(extra_data_start);
+            node.data_3 = @intCast(extra_data_start);
+
+            // Save the suffix
+            if (e.suffix) |suffix| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(suffix));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+        },
+        .e_num => |e| {
+            node.tag = .expr_num;
+
+            // Store requirements
+            node.data_1 = @intFromBool(e.requirements.sign_needed);
+            node.data_2 = @intCast(e.requirements.bits_needed);
+
+            // Store i128 value in extra_data
+            const extra_data_start = store.extra_data.len();
+
+            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
+            // We always store as i128 internally
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                _ = try store.extra_data.append(store.gpa, word);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_list => |e| {
             node.tag = .expr_list;
@@ -1813,36 +1914,68 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 
     switch (typeAnno) {
         .apply => |a| {
-            node.data_1 = @bitCast(a.symbol);
+            node.data_1 = @bitCast(a.name);
             node.data_2 = a.args.span.start;
-            node.data_3 = a.args.span.len;
+
+            const ed_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, a.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(a.base))));
+            switch (a.base) {
+                .builtin => |builtin_type| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+                },
+                .local => |local| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                },
+                .external => |ext| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
+                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                },
+            }
+
+            node.data_3 = @intCast(ed_start);
+
             node.tag = .ty_apply;
         },
-        .apply_external => |a| {
-            node.data_1 = @intFromEnum(a.module_idx);
-            node.data_2 = a.target_node_idx;
-            const ed_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, a.args.span.start);
-            _ = try store.extra_data.append(store.gpa, a.args.span.len);
-            node.data_3 = @intCast(ed_start);
-            node.tag = .ty_apply_external;
-        },
-        .ty_var => |tv| {
+        .rigid_var => |tv| {
             node.data_1 = @bitCast(tv.name);
-            node.tag = .ty_var;
+            node.tag = .ty_rigid_var;
         },
         .underscore => |_| {
             node.tag = .ty_underscore;
         },
-        .ty => |t| {
-            node.data_1 = @bitCast(t.symbol);
-            node.tag = .ty_ident;
+        .lookup => |t| {
+            node.data_1 = @bitCast(t.name);
+            node.data_2 = @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base)));
+
+            const ed_start = store.extra_data.len();
+            switch (t.base) {
+                .builtin => |builtin_type| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+                },
+                .local => |local| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                },
+                .external => |ext| {
+                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
+                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                },
+            }
+            node.data_3 = @intCast(ed_start);
+
+            node.tag = .ty_lookup;
         },
         .tag_union => |tu| {
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
             node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) else 0;
             node.tag = .ty_tag_union;
+        },
+        .tag => |t| {
+            node.data_1 = @bitCast(t.name);
+            node.data_2 = t.args.span.start;
+            node.data_3 = t.args.span.len;
+            node.tag = .ty_tag;
         },
         .tuple => |t| {
             node.data_1 = t.elems.span.start;
@@ -1866,11 +1999,6 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .parens => |p| {
             node.data_1 = @intFromEnum(p.anno);
             node.tag = .ty_parens;
-        },
-        .ty_lookup_external => |tle| {
-            node.tag = .ty_lookup_external;
-            node.data_1 = @intFromEnum(tle.module_idx);
-            node.data_2 = tle.target_node_idx;
         },
         .malformed => |m| {
             node.data_1 = @intFromEnum(m.diagnostic);

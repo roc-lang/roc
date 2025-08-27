@@ -29,7 +29,7 @@ The first argument being passed to this function has the wrong type:
 This argument has the type:
     _List(Str)_
 
-But the function needs the first argument to be:
+But `f` needs the first argument to be:
     _Str_
 
 # TOKENS
@@ -92,10 +92,6 @@ EndOfFile(10:1-10:1),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-9.2
-	(s-type-anno @2.5-2.22 (name "identity")
-		(ty-fn @2.16-2.22 (effectful false)
-			(ty-var @2.16-2.17 (name "a"))
-			(ty-var @2.21-2.22 (name "a"))))
 	(s-let @3.5-3.21
 		(p-assign @3.5-3.13 (ident "identity"))
 		(e-lambda @3.16-3.21
@@ -103,14 +99,6 @@ EndOfFile(10:1-10:1),
 				(p-assign @3.17-3.18 (ident "x")))
 			(e-lookup-local @3.20-3.21
 				(p-assign @3.17-3.18 (ident "x")))))
-	(s-type-anno @5.5-5.41 (name "needs_string")
-		(ty-parens @5.20-5.41
-			(ty-fn @5.21-5.40 (effectful false)
-				(ty-parens @5.21-5.33
-					(ty-fn @5.22-5.32 (effectful false)
-						(ty @5.22-5.25 (name "Str"))
-						(ty @5.29-5.32 (name "Str"))))
-				(ty @5.37-5.40 (name "Str")))))
 	(s-let @6.5-6.36
 		(p-assign @6.5-6.17 (ident "needs_string"))
 		(e-lambda @6.20-6.36

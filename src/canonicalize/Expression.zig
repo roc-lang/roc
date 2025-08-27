@@ -44,7 +44,7 @@ const Self = Expr;
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
     /// An integer literal with a specific value.
-    /// Represents whole numbers in various bases (decimal, hex, octal, binary).
+    /// Represents whole integer in various bases (decimal, hex, octal, binary).
     ///
     /// ```roc
     /// 42          # Decimal integer
@@ -54,6 +54,14 @@ pub const Expr = union(enum) {
     /// ```
     e_int: struct {
         value: CIR.IntValue,
+        requirements: types.Num.IntRequirements,
+        suffix: ?types.Num.Int.Precision,
+    },
+    /// An integer literal with a specific value.
+    /// Represents whole numbers in base 10 that could later become either an Int or a Frac
+    e_num: struct {
+        value: CIR.IntValue,
+        requirements: types.Num.IntRequirements,
     },
     /// A 32-bit floating-point literal.
     e_frac_f32: struct {
@@ -127,7 +135,7 @@ pub const Expr = union(enum) {
     /// ["one", "two", "three"]
     /// ```
     e_list: struct {
-        elem_var: TypeVar,
+        elem_var: TypeVar, // TODO: Remove
         elems: Expr.Span,
     },
     /// Empty list constant `[]`
@@ -469,6 +477,26 @@ pub const Expr = union(enum) {
             .e_int => |int_expr| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-int");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                const value_i128: i128 = @bitCast(int_expr.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                try tree.pushStringPair("value", value_str);
+
+                if (int_expr.suffix) |suffix| {
+                    try tree.pushStringPair("suffix", @tagName(suffix));
+                } else {
+                    try tree.pushStringPair("suffix", "none");
+                }
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_num => |int_expr| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-num");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 

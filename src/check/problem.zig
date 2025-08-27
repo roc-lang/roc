@@ -173,7 +173,7 @@ pub const InvalidBoolBinop = struct {
 /// an annotation
 pub const TypeApplyArityMismatch = struct {
     type_name: base.Ident.Idx,
-    anno_var: Var,
+    region: base.Region,
     num_expected_args: u32,
     num_actual_args: u32,
 };
@@ -1438,10 +1438,8 @@ pub const ReportBuilder = struct {
         try self.buf.writer().print("{d}", .{data.num_actual_args});
         const num_actual_args = try report.addOwnedString(self.buf.items);
 
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.anno_var)));
-
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        const region_info = self.module_env.calcRegionInfo(data.region);
 
         try report.document.addReflowingText("The type ");
         try report.document.addAnnotated(type_name, .type_variable);

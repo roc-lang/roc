@@ -341,8 +341,6 @@ main = |_| {
 						(p-assign @19.16-19.25 (ident "container"))))
 				(s-expr @19.50-19.51
 					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-type-anno @19.52-19.67 (name "data")
-					(ty-var @19.58-19.67 (name "new_value")))
 				(e-empty_record @19.38-19.69))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
