@@ -293,3 +293,8 @@ jobs:
           # no need to build platform anymore
           cd basic-cli-platform
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
+
+      
+      - name: print directory tree on test failure
+        if: failure()
+        run: tree basic-cli-platform
