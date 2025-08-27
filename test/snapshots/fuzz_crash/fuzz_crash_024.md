@@ -38,9 +38,7 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	module ],
-]
+module [module ]]
 
 {
 	pf : platform

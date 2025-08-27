@@ -265,12 +265,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "me")
     (malformed malformed:expr_unexpected_token)
   )
-  (unary_not <unary>)
-  (apply_uc
-    (uc "Listlt")
-    (tuple_literal
-      (record_literal)
-      (underscore)
+  (binop_colon
+    (not_lc "main")
+    (apply_uc
+      (uc "Listlt")
+      (tuple_literal
+        (record_literal)
+        (underscore)
+      )
     )
   )
   (binop_equals
@@ -519,12 +521,12 @@ import Stdot.Cust
 import Bae as Gooe
 import Ba
 Map((a, b)) : Lis -> ab -> List b
-MapML() : List -> ab -> List b
+MapML(,
+) : List -> ab -> List b
 line : () # Co
 Som : {foo : O, bar : g}
 Ml(a) : {}
-
-Soine(a) : {} #
+Soine(a) : {}
 Maybe(a) : [Somne]
 
 Mayine(a) : [] #)
@@ -547,7 +549,9 @@ add = \Rum -> {
 	}
 }
 
-me = main!:Listlt(({  }, _))
+me = nt
+
+main! : Listlt ({  }, _)
 ma = \_ -> {
 	e : e
 	w = "d"
@@ -560,9 +564,13 @@ ma = \_ -> {
 ...
 	me((...))
 	crash ke
-	"Unr!"
+	"Unr!" #)
 	i = "H, ${d}"
-	t = [one((er, 456, 9))]
+	t = [one((
+		er,
+		456,		# two
+		9,
+	))]
 	for n in list {
 		{
 			line!("Ag ${n} to ${er}")
@@ -571,7 +579,9 @@ ma = \_ -> {
 	}
 	rd = { foo : 123, bar : "H", baz : tag, qux : Ok world, ned : ned }
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-	m((123, "World", ag1, O, (ne, tuple), [1, 2, 3]))
+	m(
+		(123, "World", ag1, O, (ne, tuple), [1, 2, 3]),
+	)
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
 	? | .od()
@@ -580,12 +590,15 @@ ma = \_ -> {
 	?
 	Stdo
 	!"Ho${ #
-	r(nu)
-}"
+	r(nu) # xpr
+}
+"
 )
 } # Cocl
+
 y : {}
 e = {  }
+
 t : V (a, c)
 expect {
 	foo == 1
@@ -606,9 +619,6 @@ at 41:3 to 41:3
 
 **Parse Error**
 at 44:3 to 44:3
-
-**Parse Error**
-at 52:2 to 52:10
 
 **Parse Error**
 at 55:7 to 55:7
@@ -632,19 +642,10 @@ at 67:8 to 67:8
 at 68:11 to 68:11
 
 **Parse Error**
-at 52:2 to 71:1
-
-**Parse Error**
 at 71:1 to 71:1
 
 **Parse Error**
 at 72:2 to 72:2
-
-**Parse Error**
-at 74:1 to 74:1
-
-**Parse Error**
-at 74:7 to 74:7
 
 **Parse Error**
 at 86:2 to 86:2
@@ -716,8 +717,7 @@ at 111:1 to 111:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.unary_not)
-  (Expr.binop_thin_arrow)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

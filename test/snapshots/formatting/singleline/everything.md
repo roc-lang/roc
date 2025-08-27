@@ -278,7 +278,9 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
               (lc "y")
             )
           )
-          (match <174 branches>)
+          (match
+            (scrutinee               (lc "x")
+))
         )
       )
       (args
@@ -297,29 +299,30 @@ module []
 
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-asIas1
+as
+Ias1
 I22
-asIas2]
+as
+Ias2]
 
 # Where constraint
 A(a) : ((a where module(a) | .a1 : (a, a)) -> Str, module(a) | .a2) : (a, a) -> Str
 B(b) : ((b where module(b) | .b1 : (b, b)) -> Str, module(b) | .b2) : (b, b) -> Str
+
 C((a, b)) : (a, b)
 D((a, b)) : C (a, b)
 E : {a : Str, b : Str}
 F : [A, B]
-g : (e -> e where module(e) | A, module(e) | B)h = \(x, y) -> {
+
+g : (e -> e where module(e) | A, module(e) | B)
+
+h = \(x, y) -> {
 	h1 = { h11 : x, h12 : x, h13 : {h131 : x, h132 : y} }
 	h2 = h((x, y))
 	h3 = A((x, y))
 	h4 = [x, y]
 	h5 = (x, y)
-	match x {
-		Z1((a, b)) => a
-		Z2(a, b) => a
-		Z3({ a, b }) => a
-		Z4([a, b]) => a
-	}
+	match x
 }
 ~~~
 # EXPECTED
@@ -338,9 +341,6 @@ at 5:38 to 5:38
 at 5:45 to 5:45
 
 **Parse Error**
-at 25:2 to 25:10
-
-**Parse Error**
 at 26:14 to 26:14
 
 **Parse Error**
@@ -351,15 +351,6 @@ at 28:16 to 28:16
 
 **Parse Error**
 at 29:14 to 29:14
-
-**Parse Error**
-at 25:2 to 31:1
-
-**Parse Error**
-at 31:1 to 31:1
-
-**Parse Error**
-at 18:12 to 31:2
 
 # CANONICALIZE
 ~~~clojure

@@ -34,9 +34,7 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Foo,
-]
+module [Foo]
 
 Foo((a, b)) : (a, b, Str, U64)
 ~~~

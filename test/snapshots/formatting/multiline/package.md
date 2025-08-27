@@ -42,13 +42,7 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare
 ~~~
 # FORMATTED
 ~~~roc
-package [
-	a,
-	b,
-] packages {a, ((
-	"a",
-	b,
-) : "b")}
+package [a, b] packages {a, (("a", b) : "b")}
 
 a! : Str => Str
 b! : Str => Str

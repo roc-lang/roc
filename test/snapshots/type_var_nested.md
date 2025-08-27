@@ -69,51 +69,53 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (lc "map_result")
     (lambda
       (body
-        (binop_thin_arrow
-          (record_literal
-            (match <38 branches>)
-            (binop_colon
-              (lc "identity")
-              (lc "a")
-            )
-            (malformed malformed:expr_unexpected_token)
-            (binop_colon
-              (lc "a")
-              (lc "a")
-            )
-            (binop_equals
-              (lc "identity")
-              (lambda
-                (body
-                  (lc "x")
-                )
-                (args
-                  (lc "x")
-                )
-              )
-            )
-            (binop_colon
-              (lc "make_pair")
-              (lc "a")
-            )
-            (lc "b")
-          )
-          (record_literal
-            (binop_colon
-              (lc "first")
-              (lc "a")
-            )
-            (binop_colon
-              (lc "second")
-              (lc "b")
-            )
-          )
+        (block
+          (match
+            (scrutinee               (lc "result")
+))
         )
       )
       (args
         (tuple_literal
           (lc "result")
           (lc "transform")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "identity")
+    (binop_thin_arrow
+      (lc "a")
+      (lc "a")
+    )
+  )
+  (binop_equals
+    (lc "identity")
+    (lambda
+      (body
+        (lc "x")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_colon
+    (lc "make_pair")
+    (binop_thin_arrow
+      (lc "a")
+      (binop_thin_arrow
+        (lc "b")
+        (record_literal
+          (binop_colon
+            (lc "first")
+            (lc "a")
+          )
+          (binop_colon
+            (lc "second")
+            (lc "b")
+          )
         )
       )
     )
@@ -221,50 +223,43 @@ app
 }
 
 map_result : Result (a, e) -> (a -> b) -> Result (b, e)
-map_result = \(result, transform) -> { match result {
-        Ok(value) => Ok(transform(value))
-        Err(error) => Err(error)
-    }, 
+map_result = \(result, transform) -> {
+	match result
+}
 
 # Simple identity function with type variable
-identity : a, a : a, identity = \x -> x, 
+identity : a -> a
+identity = \x -> x
 
 # Nested type variables in records
-make_pair : a, b } -> { first : a, second : b }
+make_pair : a -> b -> {first : a, second : b}
 make_pair = \(x, y) -> { first : x, second : y }
+
+# Function that works with lists of any type
 list_length : List _a -> U64
 list_length = \_lst -> 42
+
+# Nested Result types
 wrap_in_result : a -> Result (Result((a, Str)), Str)
 wrap_in_result = \value -> Ok(Ok(value))
+
 main = \_ -> "done"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 6:5 to 6:18
-
-**Parse Error**
 at 7:19 to 7:19
 
 **Parse Error**
 at 8:20 to 8:20
 
-**Parse Error**
-at 6:5 to 10:1
-
-**Parse Error**
-at 10:1 to 10:1
-
-**Parse Error**
-at 13:14 to 13:14
-
-**Parse Error**
-at 5:34 to 17:18
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

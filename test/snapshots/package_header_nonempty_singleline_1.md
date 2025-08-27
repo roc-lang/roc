@@ -16,10 +16,7 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-package [
-	something,
-	SomeType,
-] packages {somePkg, ("../main.roc", other) : "../../other/main.roc"}
+package [something, SomeType] packages {somePkg, ("../main.roc", other) : "../../other/main.roc"}
 
 ~~~
 # EXPECTED

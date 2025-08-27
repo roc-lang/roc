@@ -72,6 +72,7 @@ app
 
 runEffect! : (_a => _b) -> _a => _b
 runEffect! = \(fn!, x) -> fn!(x)
+
 main! = \_ -> {  }
 ~~~
 # EXPECTED

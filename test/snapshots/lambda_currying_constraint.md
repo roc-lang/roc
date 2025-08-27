@@ -145,11 +145,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	makeAdder,
-	curriedAdd,
-	applyTwice,
-]
+module [makeAdder, curriedAdd, applyTwice]
 
 makeAdder : a -> a -> a
 makeAdder = \x -> \y -> x + y
@@ -162,6 +158,8 @@ curriedAdd = makeAdder(5)
 applyTwice :
 	(a -> a) -> a -> a
 applyTwice = \(f, x) -> f(f(x))
+
+# Should constrain the literal 3 to I64
 addThreeTwice : I64 -> I64
 addThreeTwice = \n -> applyTwice(\x -> (x + 3, n))
 ~~~

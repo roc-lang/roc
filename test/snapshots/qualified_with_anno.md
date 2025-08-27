@@ -40,14 +40,7 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColonEqual OpenSquare Up
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	value,
-]
-
-MyType := [TagA, TagB]
-
-value : MyType
-value = MyType.TagA
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -91,11 +91,11 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Hash,
-]
+module [Hash]
 
-Hash((a, hasher)) : ((a where module(a) | .hash : hasher) # After method -> hasher, module(hasher) | Hasher)Decode(a) : a where module(a) | .decode(List(U8) -> () -> a))
+Hash((a, hasher)) : ((a where module(a) | .hash : hasher) # After where -> hasher, module(hasher) | Hasher)
+
+Decode(a) : a where module(a) | .decode(List(U8) -> () -> a))
 ~~~
 # EXPECTED
 NIL
@@ -104,7 +104,7 @@ NIL
 at 16:3 to 16:3
 
 **Parse Error**
-at 14:12 to 16:9
+at 14:9 to 16:9
 
 # CANONICALIZE
 ~~~clojure

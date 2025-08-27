@@ -74,7 +74,38 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "is_ok_ret_unqualified_bool")
     (lambda
       (body
-        (match <46 branches>)
+        (match
+          (scrutinee             (lc "result")
+))
+      )
+      (args
+        (lc "result")
+      )
+    )
+  )
+  (binop_colon
+    (lc "is_ok_ret_bool")
+    (binop_thin_arrow
+      (list_literal
+        (apply_uc
+          (uc "Ok")
+          (lc "_ok2")
+        )
+        (apply_uc
+          (uc "Err")
+          (lc "_err2")
+        )
+      )
+      (uc "Bool")
+    )
+  )
+  (binop_equals
+    (lc "is_ok_ret_bool")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "result")
+))
       )
       (args
         (lc "result")
@@ -82,13 +113,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     )
   )
   (binop_equals
-    (lc "is_ok_ret_bool")
+    (not_lc "main")
     (lambda
       (body
-        (match <71 branches>)
+        (record_literal)
       )
       (args
-        (lc "result")
+        (underscore)
       )
     )
   )
@@ -107,20 +138,14 @@ process : [Some(Str), None] -> Str
 process = \maybe -> "result"
 
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
-is_ok_ret_unqualified_bool = \result -> match result {
-    Ok(_) => True
-    Err(_) => False
-}is_ok_ret_bool = \result -> match result {
-    Ok(_) => Bool.True
-    Err(_) => Bool.False
-}
+is_ok_ret_unqualified_bool = \result -> match result
+is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
+is_ok_ret_bool = \result -> match result
+main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 7:39 to 7:52
-
 **Parse Error**
 at 8:11 to 8:11
 
@@ -128,23 +153,16 @@ at 8:11 to 8:11
 at 9:12 to 9:12
 
 **Parse Error**
-at 7:39 to 12:1
-
-**Parse Error**
-at 13:27 to 13:40
-
-**Parse Error**
 at 14:11 to 14:11
 
 **Parse Error**
 at 15:12 to 15:12
 
-**Parse Error**
-at 13:27 to 18:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

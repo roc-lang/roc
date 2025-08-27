@@ -16,18 +16,17 @@ match value {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare KwIf UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpGreaterThan Int OpFatArrow String OpenSquare LowerIdent Comma LowerIdent CloseSquare KwIf LowerIdent OpEquals LowerIdent OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <27 branches>)
+(match
+  (scrutinee     (lc "value")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match value
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:13
-
 **Parse Error**
 at 2:16 to 2:16
 
@@ -42,12 +41,6 @@ at 2:25 to 3:5
 
 **Parse Error**
 at 3:12 to 4:5
-
-**Parse Error**
-at 1:1 to 5:2
-
-**Parse Error**
-at 5:2 to 5:2
 
 # CANONICALIZE
 ~~~clojure

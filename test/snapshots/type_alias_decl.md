@@ -224,19 +224,14 @@ Result((ok, err)) : [Ok(ok), Err(err)]
 
 # Record type alias
 Person : {name : Str, age : U64}
-
-# Function type alias
 MapFn((a, b)) : a -> b
 
 # Complex nested type alias
 ApiResponse(data) : Result (data, Str)
-
-# Type declaration with tag union
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
 
 # Type declaration with records and generics
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
-
 main! = \_ -> {
 	userId : UserId
 	userId = 123

@@ -106,8 +106,13 @@ import pf.Stdout
 
 # Pure function with no annotation
 multiply = \(x, y) -> x * y
+
+# Function with no type annotation - should infer effectfulness from body
 print_number! = \n -> Stdout.line!(n)
+
+# Another effectful function with no annotation
 process! = \x -> print_number!(multiply((x, 2)))
+
 main! = process!(42)
 ~~~
 # EXPECTED

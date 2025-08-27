@@ -167,14 +167,13 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 	},
 	callback : \
 		x,
-	 -> ((
-		x + 1,
-		nested,
-	) :
-		{
-			items : [Some("first"), None, Some("third")],
-			result : Success {data : [1, 2, 3], timestamp : "2024-01-01"},
-		}),
+	 -> (
+		(x + 1, nested) :
+			{
+				items : [Some("first"), None, Some("third")],
+				result : Success {data : [1, 2, 3], timestamp : "2024-01-01"},
+			},
+	),
 }
 ~~~
 # EXPECTED

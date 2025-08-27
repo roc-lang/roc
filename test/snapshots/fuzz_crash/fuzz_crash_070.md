@@ -24,8 +24,7 @@ KwModule OpenSquare CloseSquare OpenRound CloseRound Int Dot LowerIdent ~~~
 ~~~roc
 module []
 
-()
-0 | .t
+()0 | .t
 ~~~
 # EXPECTED
 NIL

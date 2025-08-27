@@ -89,6 +89,7 @@ app
 compose :
 	((_b -> _c) -> _a -> _b) -> _a -> _c
 compose = \(f, g) -> \x -> f(g(x))
+
 main! = \_ -> {  }
 ~~~
 # EXPECTED

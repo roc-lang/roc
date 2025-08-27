@@ -52,10 +52,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	ConsList,
-	empty,
-]
+module [ConsList, empty]
 
 ConsList(a) := [Nil, Node(ConsList(a))]
 

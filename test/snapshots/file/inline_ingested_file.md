@@ -41,11 +41,11 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpCol
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
-"users.json"asdata : Str
+"users.json"
+as
+data : Str
 import Json
 
 foo = Json.parse(data)

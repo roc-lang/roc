@@ -72,6 +72,7 @@ app
 
 getField : {field : a, other : _b} -> a
 getField = \record -> record.field
+
 main! = \_ -> {  }
 ~~~
 # EXPECTED

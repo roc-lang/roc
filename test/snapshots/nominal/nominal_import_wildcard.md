@@ -56,11 +56,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwI
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	red,
-	green,
-	blue,
-]
+module [red, green, blue]
 
 import Color
 *

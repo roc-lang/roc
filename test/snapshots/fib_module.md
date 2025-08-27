@@ -30,9 +30,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	fib,
-]
+module [fib]
 
 fib = \n -> if n <= 1 n else fib(n - 1) + fib(n - 2)
 ~~~

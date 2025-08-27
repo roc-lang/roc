@@ -98,10 +98,8 @@ app
 }
 
 Pair((a, b)) : (a, b)
-
 swapPair : Pair (a, b) -> Pair (b, a)
 swapPair = \(x, y) -> (y, x)
-
 main! = \_ -> swapPair((1, 2))
 ~~~
 # EXPECTED

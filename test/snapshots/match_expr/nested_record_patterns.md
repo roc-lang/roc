@@ -18,18 +18,17 @@ match ... {
 KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent CloseCurly OpFatArrow String OpenCurly CloseCurly OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <33 branches>)
+(match
+  (scrutinee     (ellipsis)
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:11
-
 **Parse Error**
 at 2:42 to 2:42
 
@@ -44,12 +43,6 @@ at 5:16 to 5:16
 
 **Parse Error**
 at 6:8 to 6:8
-
-**Parse Error**
-at 1:1 to 7:2
-
-**Parse Error**
-at 7:2 to 7:2
 
 # CANONICALIZE
 ~~~clojure

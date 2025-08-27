@@ -151,12 +151,10 @@ foo : BadType
 foo = 42
 
 BadList := List _
-
 bar : BadList
 bar = [1, 2, 3]
 
 BadRecord := {field : _, other : U32}
-
 baz : BadRecord
 baz = { field : "hi", other : 5 }
 
@@ -166,7 +164,6 @@ qux : BadFunction
 qux = \x -> x
 
 BadTuple := (_, U32)
-
 quux : BadTuple
 quux = ("hello", 42)
 ~~~

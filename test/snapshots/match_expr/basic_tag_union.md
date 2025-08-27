@@ -16,18 +16,17 @@ match color {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <9 branches>)
+(match
+  (scrutinee     (lc "color")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match color
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:13
-
 **Parse Error**
 at 2:6 to 2:6
 
@@ -36,12 +35,6 @@ at 3:7 to 3:7
 
 **Parse Error**
 at 4:8 to 4:8
-
-**Parse Error**
-at 1:1 to 5:2
-
-**Parse Error**
-at 5:2 to 5:2
 
 # CANONICALIZE
 ~~~clojure

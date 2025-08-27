@@ -116,13 +116,19 @@ x = ('a',
 y = 'u
 
 # Test backslash before EOF
-'\)©'
-'ðŸš€'
-'\u'
-'\u)
+'\)
+©
 '
-'\u((')
-'\u()()'
+'ð
+Ÿ
+š
+€
+'
+'\u'
+'\u
+)
+'
+'\u((')'\u()()'
 '\u((1F680)F680)
 '
 '\u((K)'
@@ -148,7 +154,8 @@ y = 'u
 # Test backslash before EOF
 '\
 ''
-'long'
+'l
+ong'
 '\'
 )
 

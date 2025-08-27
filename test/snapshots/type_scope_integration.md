@@ -45,10 +45,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Foo,
-	Bar,
-]
+module [Foo, Bar]
 
 Foo : U64
 

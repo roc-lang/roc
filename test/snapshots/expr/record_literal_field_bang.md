@@ -40,9 +40,7 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 ~~~roc
 {
 	answer : 42,
-	launchTheNukes! : \
-		{  },
-	 -> (...),
+	launchTheNukes! : \{  } -> (...),
 }
 ~~~
 # EXPECTED

@@ -38,10 +38,7 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	hello,
-	world,
-]
+module [hello, world]
 
 import pf.Stdout
 hello! = Stdout.line!("Hello")

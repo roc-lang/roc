@@ -35,9 +35,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerId
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	test,
-]
+module [test]
 
 test = {
 	x = 42

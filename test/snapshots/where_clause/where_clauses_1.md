@@ -80,12 +80,11 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Hash,
-	Decode,
-]
+module [Hash, Decode]
 
-Hash((a, hasher)) : ((a where module(a) | .hash : hasher) -> hasher, module(hasher) | Hasher)Decode(a) : a where module(a) | .decode : List U8 -> a
+Hash((a, hasher)) : ((a where module(a) | .hash : hasher) -> hasher, module(hasher) | Hasher)
+
+Decode(a) : a where module(a) | .decode : List U8 -> a
 ~~~
 # EXPECTED
 NIL

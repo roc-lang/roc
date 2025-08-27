@@ -466,6 +466,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "match_time")
     (malformed malformed:expr_unexpected_token)
   )
+  (num_literal_i32 1)
   (malformed malformed:expr_unexpected_token)
   (binop_pipe
     (num_literal_i32 2)
@@ -938,9 +939,11 @@ pf: "../basic-cli/platform.roc" platform [
 import pf.Stdout exposing [line, write]
 import pf # Comment after qualifier.StdoutMultiline # Comment after ident exposing [line, write]
 import pkg.Something exposing [func]
-asfunction
+as
+function
 Type
-asValueCategory
+as
+ValueCategory
 .*
 ]
 
@@ -948,22 +951,29 @@ import BadName as GoodName
 import BadNameMultiline.GoodNameMultiline
 
 Map((a, b)) : List a -> (a -> b) -> List b
-MapML((a, b) : List (a -> ),
-		( -> (a -> b) -> List (b)))Foo : (Bar, Baz)
-FooMultiline : (Bar, Baz)Some(a) : {foo : Ok a, bar : Something}
+MapML(
+	(a, b) : List (a -> ),
+		( -> (a -> b) -> List (b)),
+)
+Foo : (Bar, Baz)
+FooMultiline : (Bar, Baz)
+Some(a) : {foo : Ok a, bar : Something}
 SomeMl(a) : {foo : Ok a, bar : Something}
-SomeMultiline(a) : {foo : Ok a, bar : Something}
+SomeMultiline(a) : {foo # After field name : Ok a, bar : Something}
 Maybe(a) : [Some(a), None]
-MaybeMultiline(a) : [Some(a), None]
+
+MaybeMultiline(a) : [Some(a), None] # Comment after tag union close
+
 SomeFunc(a) : Maybe a -> a -> Maybe a
 add_one_oneline = \num -> if num 2 else 5
+
 add_one : U64 -> U64
 add_one = \num -> {
 	other = 1
 	if num
 		{
 			dbg # After debug
-			some_func()
+			some_func() # After debug expr
 			0
 		}
 	else {
@@ -972,7 +982,9 @@ add_one = \num -> {
 		other : other
 	}
 }
-match_time = 1
+
+match_time = [
+1
 2 | 5
 3
 ..as # Before alias
@@ -1001,7 +1013,8 @@ add(34)
 }
 =>
 12
-{ foo : 1, bar : 2 } | 7, # After last record field
+{ foo : 1, bar : 2 } | 7
+, # After last record field
 }
 =>
 12
@@ -1015,12 +1028,19 @@ TwoArgs(("hello", Some("world")))
 =>
 1000
 }
-expect blah == 1
+
+expect blah == 1 # Comment after expect statement
+
 main! : List String -> Result ({  }, _)
-main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag, ..., match_time((...)), some_func(dbg # After debug), 42 }crash "Unreachable!"
+main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag # Comment after return statement, 
+
+# Just a random comment!
+..., match_time((...)), some_func(dbg # After debug), 42 } # Comment after crash keyword
+crash "Unreachable!" # Comment after crash statement
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
-list = [add_one(dbg # After dbg in list)]number, # after dbg expr as arg
+list = [add_one(dbg # After dbg in list)]
+number, # after dbg expr as arg
 )
 , # Comment one
 456, # Comment two
@@ -1034,25 +1054,26 @@ for n in list {
 }
 record = { foo : 123, bar : "Hello", baz : tag, qux : Ok world, punned }
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
+multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
+bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
-? | .static_dispatch_method()
-? | .next_static_dispatch_method()
-? | .record_field
-?
+? | .static_dispatch_method()? | .next_static_dispatch_method()? | .record_field?
 Stdout.line!(interpolated)?
-Stdout.line!("How about ${ # Comment after string interpolation open)
-Num.toStr(number)
+Stdout.line!("How about ${ # Comment after string interpolation open)Num.toStr(number) # Comment after string interpolation expr
 }
-asa
-string?"
+as
+a
+string?
+"
 )
 } # Comment after top-level decl
+
 empty : {}
 empty = {  }
+
 tuple : Value (a, b, c)
 expect {
-	foo = 1
+	foo = 1 # This should work too
 	blah = 1
 	blah == foo
 }
@@ -1115,9 +1136,6 @@ at 71:3 to 71:3
 at 75:3 to 75:3
 
 **Parse Error**
-at 84:2 to 84:10
-
-**Parse Error**
 at 93:4 to 93:4
 
 **Parse Error**
@@ -1148,16 +1166,10 @@ at 108:3 to 108:9
 at 84:10 to 108:20
 
 **Parse Error**
-at 84:2 to 108:27
-
-**Parse Error**
 at 108:27 to 108:27
 
 **Parse Error**
 at 109:3 to 109:3
-
-**Parse Error**
-at 110:4 to 110:4
 
 **Parse Error**
 at 110:5 to 110:5
@@ -1304,7 +1316,7 @@ at 190:28 to 190:28
 at 192:3 to 192:3
 
 **Parse Error**
-at 191:8 to 193:4
+at 191:2 to 193:4
 
 **Parse Error**
 at 194:3 to 194:3
@@ -1355,6 +1367,7 @@ at 196:1 to 196:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.binop_star)
   (Expr.malformed)
   (Expr.frac_literal_big)
   (Expr.malformed)

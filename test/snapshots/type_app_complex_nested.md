@@ -67,11 +67,38 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "processComplex")
     (lambda
       (body
-        (match <50 branches>)
+        (match
+          (scrutinee             (lc "result")
+))
       )
       (args
         (lc "result")
       )
+    )
+  )
+  (binop_colon
+    (lc "deepNested")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "Maybe")
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (apply_uc
+              (uc "List")
+              (apply_uc
+                (uc "Dict")
+                (tuple_literal
+                  (uc "Str")
+                  (lc "a")
+                )
+              )
+            )
+            (lc "_b")
+          )
+        )
+      )
+      (lc "a")
     )
   )
   (binop_equals
@@ -153,12 +180,13 @@ app
 }
 
 processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
-processComplex = \result -> match result {
-        Ok(maybeList) => []
-        Err(_) => []
-    }deepNested = \_ -> {
+processComplex = \result -> match result
+deepNested : Maybe Result (List(Dict((Str, a))), _b) -> a
+deepNested = \_ -> {
 	crash "not implemented"
 }
+
+# Test type alias with complex nesting
 ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))
 main! = \_ -> processComplex(Ok([Some(42), None]))
 ~~~
@@ -166,20 +194,15 @@ main! = \_ -> processComplex(Ok([Some(42), None]))
 NIL
 # PROBLEMS
 **Parse Error**
-at 6:5 to 6:18
-
-**Parse Error**
 at 7:23 to 7:23
 
 **Parse Error**
 at 8:16 to 8:16
 
-**Parse Error**
-at 6:5 to 12:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

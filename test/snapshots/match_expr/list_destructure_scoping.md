@@ -15,29 +15,22 @@ match list {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <10 branches>)
+(match
+  (scrutinee     (lc "list")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match list
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:12
-
-**Parse Error**
 at 2:13 to 2:13
 
 **Parse Error**
 at 3:21 to 3:21
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure

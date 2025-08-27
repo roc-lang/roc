@@ -55,9 +55,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 foo : Bool -> Bool
 foo = \a -> {

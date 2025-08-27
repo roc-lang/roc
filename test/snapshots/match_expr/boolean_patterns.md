@@ -15,29 +15,22 @@ match isReady {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <6 branches>)
+(match
+  (scrutinee     (lc "isReady")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match isReady
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:15
-
-**Parse Error**
 at 2:7 to 2:7
 
 **Parse Error**
 at 3:8 to 3:8
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure

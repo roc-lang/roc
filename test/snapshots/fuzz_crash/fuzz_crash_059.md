@@ -42,7 +42,8 @@ app
 	f : platform
 	""
 }import B.G
-if 0 {  } else ||0
+if 0 {  } else ||
+0
 ~~~
 # EXPECTED
 NIL

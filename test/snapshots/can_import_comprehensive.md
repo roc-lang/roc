@@ -145,14 +145,25 @@ main = {
 	client = Http.get
 	parser = Json.utf8
 	helper = Str.trim
-	result1 = Json.parse
-	result2 = Http.post
-	result3 = get
+	
+
+# Test direct module access
+result1 = Json.parse
+	
+
+# Test aliased module access
+result2 = Http.post
+	
+
+# Test exposed items (should work without module prefix)
+result3 = get
 	result4 = post
 	
 
 # Test multiple qualified access
-combined = Str.concat((client, parser, helper, result1, result2, result3, result4, combined))
+combined = Str.concat(
+
+(client, parser, helper, result1, result2, result3, result4, combined))
 }
 ~~~
 # EXPECTED
@@ -162,7 +173,7 @@ NIL
 at 34:5 to 34:5
 
 **Parse Error**
-at 23:19 to 35:1
+at 23:16 to 35:1
 
 # CANONICALIZE
 ~~~clojure

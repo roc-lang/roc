@@ -57,10 +57,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	MyType,
-	processValue,
-]
+module [MyType, processValue]
 
 MyType : UnknownType
 

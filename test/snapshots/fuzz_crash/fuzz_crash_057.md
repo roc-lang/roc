@@ -44,7 +44,8 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent
 ~~~roc
 module []
 
-s : (b -> c where module(a) | .t : c, u) : o...
+s : (b -> c where module(a) | .t : c, u) : o
+...
 ~~~
 # EXPECTED
 NIL

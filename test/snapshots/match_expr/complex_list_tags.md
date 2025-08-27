@@ -19,18 +19,17 @@ match events {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound CloseSquare OpFatArrow String OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow String OpenSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow String OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <52 branches>)
+(match
+  (scrutinee     (lc "events")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match events
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:14
-
 **Parse Error**
 at 2:8 to 2:8
 
@@ -75,12 +74,6 @@ at 6:52 to 6:52
 
 **Parse Error**
 at 7:7 to 7:7
-
-**Parse Error**
-at 1:1 to 8:2
-
-**Parse Error**
-at 8:2 to 8:2
 
 # CANONICALIZE
 ~~~clojure

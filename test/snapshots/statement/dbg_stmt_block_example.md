@@ -48,14 +48,15 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 foo = \num -> {
 	dbg
 	num.to_str()
-	dbg((num)
+	
+
+# expression - prints out the value of num and then returns it
+dbg((num)
 }
 ~~~
 # EXPECTED

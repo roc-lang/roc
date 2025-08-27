@@ -47,9 +47,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	convert_me,
-]
+module [convert_me]
 
 convert_me : a -> b where module(a) | .convert : a -> b
 convert_me = ...

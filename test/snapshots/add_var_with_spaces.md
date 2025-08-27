@@ -26,9 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign LowerIdent OpPlus
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	add2,
-]
+module [add2]
 
 add2 = x + 2
 ~~~

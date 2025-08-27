@@ -75,6 +75,7 @@ app
 
 processList : List Str -> U64
 processList = \list -> list.len()
+
 main! = \_ -> processList(["one", "two", "three"])
 ~~~
 # EXPECTED

@@ -27,9 +27,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign KwIf Int UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 foo = if 1
 	A

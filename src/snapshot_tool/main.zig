@@ -1210,7 +1210,7 @@ fn processSnapshotContent(
         } else if (isStatementNode(node.tag)) {
             maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
         } else if (isPatternNode(node.tag)) {
-            maybe_patt_idx = try cir.canonicalizePatt(allocator, node_idx, content.source, &env.idents);
+            maybe_patt_idx = try cir.canonicalizePatt(allocator, node_idx);
         } else {
             // Default to statement for file-level nodes
             maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
@@ -2589,8 +2589,38 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
             try writer.print(" <{} branches>", .{node.payload.if_branches});
         },
         .match => {
-            // Match nodes have match_branches as a count
-            try writer.print(" <{} branches>", .{node.payload.match_branches});
+            // Match nodes store nodes in the nodes payload field
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+
+                // First node is the scrutinee
+                if (iter.next()) |scrutinee_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(scrutinee ");
+                    try outputASTNodeAsSExpr(writer, ast, env, scrutinee_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                // Remaining nodes are branches (each is a binop_thick_arrow node)
+                var branch_num: usize = 1;
+                while (iter.next()) |branch_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.print("(branch{} ", .{branch_num});
+
+                    // Each branch is a complete expression (usually a binop_thick_arrow)
+                    try outputASTNodeAsSExpr(writer, ast, env, branch_idx, indent + 2);
+
+                    try writer.writeAll(")");
+                    branch_num += 1;
+                }
+            }
         },
 
         // Dot accessors

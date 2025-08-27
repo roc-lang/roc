@@ -31,10 +31,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	message,
-	greet,
-]
+module [message, greet]
 
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
 

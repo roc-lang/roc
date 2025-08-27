@@ -27,9 +27,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign String LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 name = "luc"
 foo = "hello ${name}"

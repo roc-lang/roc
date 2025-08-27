@@ -39,15 +39,14 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	red,
-]
+module [red]
 
 import design.Styles.Color exposing [Encoder]
-asCE]
+as
+CE]
 
 red : CE
-red = ...
+red = ... # not implemented
 ~~~
 # EXPECTED
 NIL

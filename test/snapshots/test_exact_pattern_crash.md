@@ -205,18 +205,20 @@ app
 }
 
 Pair((a, b)) : (a, b)
-
-# Function that uses the alias and will need instantiation
 swap_pair : Pair (a, b) -> Pair (b, a)
 swap_pair = \(x, y) -> (y, x)
-
-# Another polymorphic function to create more complex instantiation
 map_pair : Pair (a, b) -> (a -> c) -> (b -> d) -> Pair (c, d)
 map_pair = \((x, y), f, g) -> (f(x), g(y))
 main = {
 	p1 = swap_pair((1, 2))
-	p2 = map_pair((3, 4, \x -> x + 1, \y -> y * 2))
-	p2
+	
+
+# This should fail - map_pair expects a tuple but gets four separate arguments
+# And the instantiated types from map_pair should cause issues
+p2 = map_pair((3, 4, \x -> x + 1, \y -> y * 2))
+	
+
+p2
 }
 ~~~
 # EXPECTED

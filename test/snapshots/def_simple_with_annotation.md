@@ -28,12 +28,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent LowerId
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
-
-foo : Str
-foo = "one"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

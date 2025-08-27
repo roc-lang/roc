@@ -250,14 +250,21 @@ update_data = \(container, new_value) -> {
 	&
 	data : new_value
 }
+
+# Used with different record types
 updated_int = update_data((int_container, 100))
 updated_str = update_data((str_container, "world"))
+
+# Function returning polymorphic record
 identity_record = \x -> {
 	value : x
 }
+
+# Used at different types
 int_record = identity_record(42)
 str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
+
 main = \_ -> {
 	int_container.count + str_container.count
 }

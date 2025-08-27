@@ -15,34 +15,70 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <21 branches>)
+(match
+  (scrutinee     (lc "person")
+)
+  (branch1     (binop_thick_arrow
+      (binop_as
+        (block
+          (record_literal
+            (lc "name")
+            (binop_colon
+              (lc "address")
+              (block
+                (lc "city")
+              )
+            )
+          )
+          (malformed malformed:expr_unexpected_token)
+          (lc "addr")
+        )
+        (lc "fullPerson")
+      )
+      (tuple_literal
+        (lc "fullPerson")
+        (lc "addr")
+        (lc "city")
+      )
+    )
+)
+  (branch2     (binop_thick_arrow
+      (binop_as
+        (block
+          (lc "name")
+        )
+        (lc "simplePerson")
+      )
+      (tuple_literal
+        (lc "simplePerson")
+        (lc "name")
+        (str_literal_big "unknown")
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-match person { {
-	{ name, address : {
-		city
-	} }
-	as
-	addr
-} as fullPerson => (fullPerson, addr, city) => {
-	name
-} as simplePerson => (simplePerson, name, "unknown") }
+match person
+	{
+		{ name, address : {
+			city
+		} }
+		as
+		addr
+	} as fullPerson => (fullPerson, addr, city)
+	{
+		name
+	} as simplePerson => (simplePerson, name, "unknown")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:14
-
-**Parse Error**
 at 2:5 to 2:31
 
 **Parse Error**
 at 2:31 to 2:31
-
-**Parse Error**
-at 1:1 to 3:5
 
 # CANONICALIZE
 ~~~clojure

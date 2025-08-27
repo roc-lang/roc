@@ -24,9 +24,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent UpperId
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	nums,
-]
+module [nums]
 
 nums : List
 U8

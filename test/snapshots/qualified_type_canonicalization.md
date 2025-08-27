@@ -263,7 +263,9 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
     (lc "transform")
     (lambda
       (body
-        (match <135 branches>)
+        (match
+          (scrutinee             (lc "result")
+))
       )
       (args
         (lc "result")
@@ -274,12 +276,10 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Color,
-	ModuleA,
-]
+module [Color, ModuleA]
 
-.ModuleB.TypeC
+.
+ModuleB.TypeC
 Result
 ExternalModule
 ]
@@ -296,8 +296,12 @@ simpleQualified = Color.RGB({ r : 255, g : 0, b : 0 })
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
 aliasedQualified = ExtMod.DataType | Default
+
+# Multi-level qualified type
 multiLevelQualified : ModuleA.ModuleB | TypeC
 multiLevelQualified = TypeC.new
+
+# Using qualified type with generics
 resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
 
@@ -311,10 +315,7 @@ processColor = \color -> "Color processed"
 
 # Multiple qualified types in a function signature
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
-transform = \result -> match result {
-        Result.Ok(rgb) => TypeC.fromColor(rgb)
-        Result.Err(err) => TypeC.default
-    }
+transform = \result -> match result
 ~~~
 # EXPECTED
 NIL
@@ -338,19 +339,10 @@ at 5:19 to 5:19
 at 6:1 to 6:1
 
 **Parse Error**
-at 41:5 to 41:18
-
-**Parse Error**
 at 42:24 to 42:24
 
 **Parse Error**
 at 43:25 to 43:25
-
-**Parse Error**
-at 41:5 to 44:6
-
-**Parse Error**
-at 44:6 to 44:6
 
 # CANONICALIZE
 ~~~clojure

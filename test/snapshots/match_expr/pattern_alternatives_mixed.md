@@ -19,18 +19,17 @@ match ... {
 KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpBar String OpFatArrow String UpperIdent OpenRound Underscore CloseRound OpBar UpperIdent OpenRound Underscore CloseRound OpFatArrow String OpenSquare CloseSquare OpBar OpenSquare Underscore CloseSquare OpFatArrow String OpenRound Int Comma Underscore CloseRound OpBar OpenRound Underscore Comma Int CloseRound OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <39 branches>)
+(match
+  (scrutinee     (ellipsis)
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:11
-
 **Parse Error**
 at 2:12 to 2:12
 
@@ -48,12 +47,6 @@ at 6:18 to 6:18
 
 **Parse Error**
 at 7:4 to 7:4
-
-**Parse Error**
-at 1:1 to 8:2
-
-**Parse Error**
-at 8:2 to 8:2
 
 # CANONICALIZE
 ~~~clojure

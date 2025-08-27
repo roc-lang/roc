@@ -47,7 +47,9 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
     (lambda
       (body
         (block
-          (match <30 branches>)
+          (match
+            (scrutinee               (lc "result")
+))
         )
       )
       (args
@@ -59,40 +61,23 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	handleResult,
-]
+module [handleResult]
 
 import MyResultModule
 
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = \result -> {
-	match result {
-        MyResultModule.MyResultType.Ok(value) => value
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-    }
+	match result
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 7:5 to 7:18
-
-**Parse Error**
 at 8:47 to 8:47
 
 **Parse Error**
 at 9:47 to 9:47
-
-**Parse Error**
-at 7:5 to 11:1
-
-**Parse Error**
-at 11:1 to 11:1
-
-**Parse Error**
-at 6:25 to 11:2
 
 # CANONICALIZE
 ~~~clojure

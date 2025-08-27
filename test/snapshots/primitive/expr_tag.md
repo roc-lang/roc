@@ -22,9 +22,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 foo = FortyTwo
 ~~~

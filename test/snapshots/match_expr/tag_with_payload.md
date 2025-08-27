@@ -16,18 +16,17 @@ match shape {
 KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow Float OpStar LowerIdent OpStar LowerIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent OpStar LowerIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpFatArrow Float OpStar LowerIdent OpStar LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <29 branches>)
+(match
+  (scrutinee     (lc "shape")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match shape
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:13
-
 **Parse Error**
 at 2:20 to 2:20
 
@@ -36,12 +35,6 @@ at 3:30 to 3:30
 
 **Parse Error**
 at 4:28 to 4:28
-
-**Parse Error**
-at 1:1 to 5:2
-
-**Parse Error**
-at 5:2 to 5:2
 
 # CANONICALIZE
 ~~~clojure

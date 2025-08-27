@@ -67,10 +67,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	string_function,
-	wrong_type_function,
-]
+module [string_function, wrong_type_function]
 
 string_function : Str -> Str
 string_function = \x -> x + 42

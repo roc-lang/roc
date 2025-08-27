@@ -19,7 +19,9 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
     (uc "C")
     (binop_or
       (lc "k")
-      (match <4 branches>)
+      (match
+        (scrutinee           (num_literal_i32 0)
+))
     )
   )
 )
@@ -28,24 +30,13 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 ~~~roc
 module []
 
-C : k || match 0 {0|#
-0"
-}
+C : k || match 0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:14 to 1:21
-
-**Parse Error**
 at 2:2 to 2:2
-
-**Parse Error**
-at 1:14 to 3:2
-
-**Parse Error**
-at 3:2 to 3:2
 
 # CANONICALIZE
 ~~~clojure

@@ -17,18 +17,17 @@ match Answer {
 KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow String UpperIdent OpFatArrow Int Int OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <12 branches>)
+(match
+  (scrutinee     (uc "Answer")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match Answer
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:14
-
 **Parse Error**
 at 2:12 to 2:12
 
@@ -40,12 +39,6 @@ at 4:14 to 4:14
 
 **Parse Error**
 at 5:8 to 5:8
-
-**Parse Error**
-at 1:1 to 6:2
-
-**Parse Error**
-at 6:2 to 6:2
 
 # CANONICALIZE
 ~~~clojure

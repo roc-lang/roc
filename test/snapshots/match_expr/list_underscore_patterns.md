@@ -19,18 +19,17 @@ match items {
 KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot CloseSquare OpFatArrow LowerIdent OpenSquare Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <31 branches>)
+(match
+  (scrutinee     (lc "items")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match items
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:13
-
 **Parse Error**
 at 2:9 to 2:9
 
@@ -63,12 +62,6 @@ at 6:18 to 6:18
 
 **Parse Error**
 at 7:8 to 7:8
-
-**Parse Error**
-at 1:1 to 8:2
-
-**Parse Error**
-at 8:2 to 8:2
 
 # CANONICALIZE
 ~~~clojure

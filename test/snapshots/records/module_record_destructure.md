@@ -80,9 +80,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon OpenCurly LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	extract_age,
-]
+module [extract_age]
 
 extract_age : {
 	age : U64

@@ -33,7 +33,8 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~roc
 f{
 	o,
-}foo = "onmo %
+}
+foo = "onmo %
 ~~~
 # EXPECTED
 NIL

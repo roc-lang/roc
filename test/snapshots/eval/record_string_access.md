@@ -32,7 +32,7 @@ OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 NIL
 # PROBLEMS
 **Unsupported Node**
-at 1:1 to 1:18
+at 1:1 to 1:19
 
 # CANONICALIZE
 ~~~clojure

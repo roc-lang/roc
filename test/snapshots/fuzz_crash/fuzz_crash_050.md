@@ -28,7 +28,8 @@ KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
 ~~~roc
 module []
 
-_0 = {
+_
+0 = {
 	
 }
 ~~~

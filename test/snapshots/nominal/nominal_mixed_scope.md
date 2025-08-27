@@ -51,7 +51,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
             (uc "Color")
             (uc "RGB")
           )
-          (match <33 branches>)
+          (match
+            (scrutinee               (lc "color")
+))
         )
       )
       (args
@@ -63,10 +65,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	LocalStatus,
-	processColor,
-]
+module [LocalStatus, processColor]
 
 LocalStatus := [Pending, Complete]
 
@@ -75,19 +74,12 @@ processColor = \color -> {
 	import Color.RGB
 	
 
-match color {
-        RGB.Red => LocalStatus.Pending
-        RGB.Green => LocalStatus.Complete
-        RGB.Blue => LocalStatus.Pending
-    }
+match color
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 11:5 to 11:17
-
 **Parse Error**
 at 12:17 to 12:17
 
@@ -96,15 +88,6 @@ at 13:19 to 13:19
 
 **Parse Error**
 at 14:18 to 14:18
-
-**Parse Error**
-at 11:5 to 16:1
-
-**Parse Error**
-at 16:1 to 16:1
-
-**Parse Error**
-at 6:24 to 16:2
 
 # CANONICALIZE
 ~~~clojure

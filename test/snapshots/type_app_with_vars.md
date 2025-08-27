@@ -90,6 +90,7 @@ app
 
 mapList : List a -> (a -> b) -> List b
 mapList = \(list, fn) -> list.map(fn)
+
 main! = \_ -> mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED

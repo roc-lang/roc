@@ -246,13 +246,24 @@ module []
 
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-asIas1
+as
+Ias1
 I22
-asIas2
+as
+Ias2
 ]
 
 # Where constraint
-A(a) : a where module(a) | .a1 : a -> a -> ) -> (Str, module(a) | .a2) : a -> a -> ) -> (Str, B(b)) : b where module(b) | .b1 : b -> b -> ) -> (Str, module(b) | .b2) : b -> b -> ) -> (Str, C((a, b) : (a, b)))D((a, b) : C (a, b))E :
+A(a) : a where module(a) | .a1 : a -> a -> ) -> (Str, module(a) | .a2) : a -> a -> ) -> (Str, B(b)) : b where module(b) | .b1 : b -> b -> ) -> (Str, module(b) | .b2) : b -> b -> ) -> (
+	Str,
+	C(
+		(a, b) : (a, b),
+	),
+)
+D(
+	(a, b) : C (a, b),
+)
+E :
 	{
 		a : Str,
 		b : Str,
@@ -261,6 +272,7 @@ F : [
 	A,
 	B,
 ]
+
 g : (e -> e where module(e) | A, module(e) | B, h) = 
 ~~~
 # EXPECTED
@@ -348,9 +360,6 @@ at 23:13 to 23:13
 at 25:2 to 25:2
 
 **Parse Error**
-at 25:2 to 25:10
-
-**Parse Error**
 at 26:12 to 26:12
 
 **Parse Error**
@@ -367,15 +376,6 @@ at 28:17 to 28:17
 
 **Parse Error**
 at 29:15 to 29:15
-
-**Parse Error**
-at 25:2 to 31:1
-
-**Parse Error**
-at 31:1 to 31:1
-
-**Parse Error**
-at 18:13 to 31:2
 
 **Parse Error**
 at 31:2 to 31:2

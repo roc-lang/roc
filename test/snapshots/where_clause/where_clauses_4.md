@@ -55,9 +55,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSq
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	decodeThings,
-]
+module [decodeThings]
 
 import Decode exposing [Decode]
 decodeThings : List List U8 -> List a where module(a) | Decode

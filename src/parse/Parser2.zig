@@ -12,6 +12,7 @@ const collections = @import("collections");
 
 const AST = @import("AST2.zig");
 const Node = AST.Node;
+const Region = base.Region;
 const Position = base.Region.Position;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
@@ -23,11 +24,17 @@ const Ident = base.Ident;
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 const MAX_PARSE_STACK_SIZE: usize = 10_000;
 
+/// Temporary helper to create a Region from start and end positions
+/// TODO: Update all callers to compute proper end positions
+fn makeRegion(start: Position, end: Position) Region {
+    return Region{ .start = start, .end = end };
+}
+
 /// Info about an operator for precedence parsing
 const OpInfo = struct {
     left: ?Node.Idx, // null for unary operators
     op_tag: Token.Tag,
-    op_pos: Position,
+    op_region: Region,
     min_bp: u8,
 };
 
@@ -53,6 +60,7 @@ gpa: std.mem.Allocator,
 token_iter: tokenize_iter.TokenIterator,
 lookahead: ?Token, // Single token lookahead - LL(1) parser, no more!
 last_position: Position, // Track last valid position for error reporting
+last_region: Region, // Track last consumed token's region
 ast: *AST,
 byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
@@ -74,6 +82,7 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .token_iter = token_iter,
         .lookahead = null,
         .last_position = Position{ .offset = 0 },
+        .last_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } },
         .ast = ast,
         .byte_slices = byte_slices,
         .scratch_nodes = .{},
@@ -166,41 +175,44 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
             left = switch (self.peek()) {
                 .LowerIdent => blk: {
                     const ident = self.currentIdent();
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
 
                     // Check for ! suffix for effectful functions/values
                     const is_effectful = self.peek() == .OpBang;
+                    var final_region = region;
                     if (is_effectful) {
+                        // Include the ! in the region
+                        final_region.end = self.currentRegion().end;
                         self.advance(); // consume the !
                     }
 
                     if (ident) |id| {
                         const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
-                        break :blk try self.ast.appendNode(self.gpa, pos, node_tag, .{ .ident = id });
+                        break :blk try self.ast.appendNode(self.gpa, final_region, node_tag, .{ .ident = id });
                     } else {
-                        break :blk try self.pushMalformed(.expr_unexpected_token, pos);
+                        break :blk try self.pushMalformed(.expr_unexpected_token, region.start);
                     }
                 },
                 .UpperIdent => blk: {
                     const ident = self.currentIdent();
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
                     if (ident) |id| {
-                        break :blk try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
+                        break :blk try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
                     } else {
-                        break :blk try self.pushMalformed(.expr_unexpected_token, pos);
+                        break :blk try self.pushMalformed(.expr_unexpected_token, region.start);
                     }
                 },
                 .Underscore => blk: {
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
-                    break :blk try self.ast.appendNode(self.gpa, pos, .underscore, .{ .src_bytes_end = pos });
+                    break :blk try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
                 },
                 .TripleDot => blk: {
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
-                    break :blk try self.ast.appendNode(self.gpa, pos, .ellipsis, .{ .src_bytes_end = pos });
+                    break :blk try self.ast.appendNode(self.gpa, region, .ellipsis, .{ .src_bytes_end = region.start });
                 },
                 .Int, .Float, .IntBase => try self.parseNumLiteral(),
                 .String, .MultilineString, .SingleQuote => try self.parseStoredStringExpr(),
@@ -222,38 +234,38 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                 .KwReturn => try self.parseReturn(),
                 .KwCrash => try self.parseCrash(),
                 .OpBang => {
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
                     // For unary, we need to parse with high precedence
                     // Push current state and parse operand
                     try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .OpBang,
-                        .op_pos = pos,
+                        .op_region = region,
                         .min_bp = min_bp,
                     });
                     min_bp = 100; // High precedence for unary
                     continue :parse .parse_primary;
                 },
                 .OpBinaryMinus, .OpUnaryMinus => {
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
                     try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .OpUnaryMinus,
-                        .op_pos = pos,
+                        .op_region = region,
                         .min_bp = min_bp,
                     });
                     min_bp = 100; // High precedence for unary
                     continue :parse .parse_primary;
                 },
                 .DoubleDot => {
-                    const pos = self.currentPosition();
+                    const region = self.currentRegion();
                     self.advance();
                     try self.scratch_op_stack.append(self.gpa, .{
                         .left = null, // null for unary operator
                         .op_tag = .DoubleDot,
-                        .op_pos = pos,
+                        .op_region = region,
                         .min_bp = min_bp,
                     });
                     min_bp = 100; // High precedence for unary
@@ -326,7 +338,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     // It's a function type - build curried arrows
                     const is_effectful = self.peek() == .OpFatArrow;
                     const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
-                    const arrow_pos = self.currentPosition();
+                    const arrow_region = self.currentRegion();
                     self.advance();
 
                     // Parse return type at precedence 0 (allows it to have commas if needed)
@@ -339,7 +351,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     while (i > 0) {
                         i -= 1;
                         const binop_idx = try self.ast.appendBinOp(self.gpa, params[i], current);
-                        current = try self.ast.appendNode(self.gpa, arrow_pos, arrow_tag, .{ .binop = binop_idx });
+                        current = try self.ast.appendNode(self.gpa, arrow_region, arrow_tag, .{ .binop = binop_idx });
                     }
                     return current;
                 } else {
@@ -348,8 +360,13 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     if (items.len == 1) {
                         left = items[0];
                     } else {
+                        // For a tuple created from comma-separated items, the region spans from
+                        // the first item to the last item
+                        const first_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(items[0]))));
+                        const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(items[items.len - 1]))));
+                        const tuple_region = makeRegion(first_region.start, last_region.end);
                         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, items);
-                        left = try self.ast.appendNode(self.gpa, self.currentPosition(), .tuple_literal, .{ .nodes = nodes_idx });
+                        left = try self.ast.appendNode(self.gpa, tuple_region, .tuple_literal, .{ .nodes = nodes_idx });
                     }
                     // Continue checking for more operators on the tuple
                     continue :parse .check_operators;
@@ -369,14 +386,14 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
 
             if (bp.left > min_bp) {
                 // We have an infix operator with sufficient precedence
-                const op_pos = self.currentPosition();
+                const op_region = self.currentRegion();
                 self.advance();
 
                 // Save current state to stack
                 try self.scratch_op_stack.append(self.gpa, .{
                     .left = left,
                     .op_tag = op_tag,
-                    .op_pos = op_pos,
+                    .op_region = op_region,
                     .min_bp = min_bp,
                 });
 
@@ -392,42 +409,59 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     continue :parse .check_operators;
                 },
                 .Dot => {
-                    const dot_pos = self.currentPosition();
+                    const dot_region = self.currentRegion();
+                    const dot_pos = dot_region.start;
                     self.advance();
 
                     if (self.peek() == .LowerIdent) {
                         const ident = self.currentIdent();
+                        const ident_region = self.currentRegion();
                         self.advance();
 
                         // Check for ! suffix for effectful functions/values
                         const is_effectful = self.peek() == .OpBang;
+                        var field_end = ident_region.end;
                         if (is_effectful) {
+                            field_end = self.currentRegion().end;
                             self.advance(); // consume the !
                         }
 
                         if (ident) |id| {
                             const field_tag: Node.Tag = if (is_effectful) .not_lc else .dot_lc;
-                            const field = try self.ast.appendNode(self.gpa, dot_pos, field_tag, .{ .ident = id });
+                            const field_region = makeRegion(dot_region.start, field_end);
+                            const field = try self.ast.appendNode(self.gpa, field_region, field_tag, .{ .ident = id });
                             const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
-                            left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
+                            // For the binop_pipe, use the region from left's start to field's end
+                            const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
+                            const pipe_region = makeRegion(left_region.start, field_region.end);
+                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
                         } else {
                             return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                         }
                     } else if (self.peek() == .UpperIdent) {
                         const ident = self.currentIdent();
+                        const ident_region = self.currentRegion();
                         self.advance();
 
                         if (ident) |id| {
-                            const field = try self.ast.appendNode(self.gpa, dot_pos, .uc, .{ .ident = id });
+                            const field_region = makeRegion(dot_region.start, ident_region.end);
+                            const field = try self.ast.appendNode(self.gpa, field_region, .uc, .{ .ident = id });
                             const binop_idx = try self.ast.appendBinOp(self.gpa, left, field);
-                            left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
+                            // For the binop_pipe, use the region from left's start to field's end
+                            const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
+                            const pipe_region = makeRegion(left_region.start, field_region.end);
+                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
                         } else {
                             return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                         }
                     } else if (self.peek() == .Int or self.peek() == .Float) {
                         const num = try self.parseNumLiteral();
                         const binop_idx = try self.ast.appendBinOp(self.gpa, left, num);
-                        left = try self.ast.appendNode(self.gpa, dot_pos, .binop_pipe, .{ .binop = binop_idx });
+                        // For the binop_pipe, use the region from left's start to num's end
+                        const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
+                        const num_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(num))));
+                        const pipe_region = makeRegion(left_region.start, num_region.end);
+                        left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
                     } else {
                         return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                     }
@@ -466,23 +500,23 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                 const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &operand_slice);
 
                 left = switch (op_info.op_tag) {
-                    .OpBang => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_not, .{ .nodes = nodes_idx }),
-                    .OpUnaryMinus => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_neg, .{ .nodes = nodes_idx }),
-                    .DoubleDot => try self.ast.appendNode(self.gpa, op_info.op_pos, .unary_double_dot, .{ .nodes = nodes_idx }),
+                    .OpBang => try self.ast.appendNode(self.gpa, op_info.op_region, .unary_not, .{ .nodes = nodes_idx }),
+                    .OpUnaryMinus => try self.ast.appendNode(self.gpa, op_info.op_region, .unary_neg, .{ .nodes = nodes_idx }),
+                    .DoubleDot => try self.ast.appendNode(self.gpa, op_info.op_region, .unary_double_dot, .{ .nodes = nodes_idx }),
                     else => {
                         // Unexpected unary operator type
-                        return self.pushMalformed(.expr_unexpected_token, op_info.op_pos);
+                        return self.pushMalformed(.expr_unexpected_token, op_info.op_region.start);
                     },
                 };
             } else {
                 // Binary operator - combine left and right
                 const right = left;
                 const binop_tag = tokenToBinOpTag(op_info.op_tag) orelse {
-                    return self.pushMalformed(.expr_unexpected_token, op_info.op_pos);
+                    return self.pushMalformed(.expr_unexpected_token, op_info.op_region.start);
                 };
 
                 const binop_idx = try self.ast.appendBinOp(self.gpa, op_info.left.?, right);
-                left = try self.ast.appendNode(self.gpa, op_info.op_pos, binop_tag, .{ .binop = binop_idx });
+                left = try self.ast.appendNode(self.gpa, op_info.op_region, binop_tag, .{ .binop = binop_idx });
             }
 
             // Restore min_bp
@@ -498,6 +532,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
 }
 
 fn parseModuleApply(self: *Parser) Error!Node.Idx {
+    const open_paren_region = self.currentRegion();
     const pos = self.currentPosition();
     self.advance(); // consume (
 
@@ -517,6 +552,7 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
     }
 
     // Always continue parsing - never stop on errors
+    var close_paren_region: Region = undefined;
     if (self.peek() != .CloseRound) {
         try self.pushDiagnostic(.expected_expr_apply_close_round, pos, self.currentPosition());
         // Try to recover by looking for the close paren
@@ -525,12 +561,17 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
         }
     }
     if (self.peek() == .CloseRound) {
+        close_paren_region = self.currentRegion();
         self.advance();
+    } else {
+        // Use last position as approximation
+        close_paren_region = makeRegion(self.currentPosition(), self.currentPosition());
     }
 
     const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, pos, .apply_module, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(open_paren_region.start, close_paren_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, .apply_module, .{ .nodes = nodes_idx });
 }
 
 /// helper to advance the parser by one token
@@ -538,10 +579,16 @@ pub fn advance(self: *Parser) void {
     // Save current position before advancing
     if (self.lookahead) |token| {
         self.last_position = token.region.end;
+        self.last_region = token.region;
     }
 
     // Get next token
     self.lookahead = self.token_iter.next(self.gpa) catch null;
+}
+
+/// Get the region of the last consumed token
+fn getLastConsumedRegion(self: *Parser) Region {
+    return self.last_region;
 }
 
 /// look ahead at the next token and return an error if it does not have the expected tag
@@ -654,7 +701,8 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
     }
 
     // Always create a proper malformed node with the correct tag and position
-    return try self.ast.appendNode(self.gpa, actual_start_pos, .malformed, .{ .malformed = tag });
+    const malformed_region = makeRegion(actual_start_pos, end_pos);
+    return try self.ast.appendNode(self.gpa, malformed_region, .malformed, .{ .malformed = tag });
 }
 
 /// parse a `.roc` module
@@ -682,7 +730,11 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
     const statements = self.getScratchNodesSince(scratch_marker);
     if (statements.len > 0) {
         const body_idx = try self.ast.appendNodeSlice(self.gpa, statements);
-        return try self.ast.appendNode(self.gpa, Position{ .offset = 0 }, .block, .{ .nodes = body_idx });
+        // Module body spans from first to last statement
+        const first_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(statements[0]))));
+        const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(statements[statements.len - 1]))));
+        const body_region = makeRegion(first_region.start, last_region.end);
+        return try self.ast.appendNode(self.gpa, body_region, .block, .{ .nodes = body_idx });
     }
     return null; // No statements in file
 }
@@ -742,7 +794,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         }
 
         const field_name = self.currentIdent();
-        const name_pos = self.currentPosition();
+        const name_region = self.currentRegion();
         self.advance();
 
         // Expect colon
@@ -773,25 +825,46 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
                 };
 
                 // Create the provides list node (use block as a container for the exposed items)
-                const provides_node = try self.ast.appendNode(self.gpa, self.currentPosition(), .block, .{ .nodes = provides_idx });
+                // The region for the provides list spans from the current position to the last exposed item
+                const provides_start = self.currentPosition();
+                const provides_region = if (provides_idx != @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(0))) blk: {
+                    // Get the region of the provides list (should have items)
+                    var iter = self.ast.node_slices.nodes(&provides_idx);
+                    var last_item: ?Node.Idx = null;
+                    while (iter.next()) |item| {
+                        last_item = item;
+                    }
+                    if (last_item) |last| {
+                        const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(last))));
+                        break :blk makeRegion(provides_start, last_region.end);
+                    } else {
+                        break :blk makeRegion(provides_start, provides_start);
+                    }
+                } else makeRegion(provides_start, provides_start);
+                const provides_node = try self.ast.appendNode(self.gpa, provides_region, .block, .{ .nodes = provides_idx });
 
                 // Create the platform binop: string_value platform provides_node
                 const platform_binop_idx = try self.ast.appendBinOp(self.gpa, string_value, provides_node);
-                const platform_node = try self.ast.appendNode(self.gpa, field_start, .binop_platform, .{ .binop = platform_binop_idx });
+                const string_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(string_value))));
+                const platform_region = makeRegion(string_region.start, provides_region.end);
+                const platform_node = try self.ast.appendNode(self.gpa, platform_region, .binop_platform, .{ .binop = platform_binop_idx });
 
                 // Create the record field: field_name : platform_node
                 if (field_name) |name| {
-                    const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                    const field_node = try self.ast.appendNode(self.gpa, name_region, .lc, .{ .ident = name });
                     const field_binop_idx = try self.ast.appendBinOp(self.gpa, field_node, platform_node);
-                    const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = field_binop_idx });
+                    const field_region = makeRegion(name_region.start, platform_region.end);
+                    const field = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = field_binop_idx });
                     try self.scratch_nodes.append(self.gpa, field);
                 }
             } else {
                 // Regular package field
                 if (field_name) |name| {
-                    const field_node = try self.ast.appendNode(self.gpa, name_pos, .lc, .{ .ident = name });
+                    const field_node = try self.ast.appendNode(self.gpa, name_region, .lc, .{ .ident = name });
                     const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, string_value);
-                    const field = try self.ast.appendNode(self.gpa, field_start, .binop_colon, .{ .binop = binop_idx });
+                    const string_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(string_value))));
+                    const field_region = makeRegion(name_region.start, string_region.end);
+                    const field = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = binop_idx });
                     try self.scratch_nodes.append(self.gpa, field);
                 }
             }
@@ -1020,7 +1093,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
             }
 
             const field_ident = self.currentIdent();
-            const field_pos = self.currentPosition();
+            const field_region = self.currentRegion();
             self.advance();
 
             self.expect(.OpColon) catch {
@@ -1037,7 +1110,7 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
 
             // Create field node
             if (field_ident) |id| {
-                const field_node = try self.ast.appendNode(self.gpa, field_pos, .lc, .{ .ident = id });
+                const field_node = try self.ast.appendNode(self.gpa, field_region, .lc, .{ .ident = id });
                 try self.scratch_nodes.append(self.gpa, field_node);
                 try self.scratch_nodes.append(self.gpa, value);
             }
@@ -1049,13 +1122,19 @@ fn parsePlatformSpecification(self: *Parser) Error!Node.Idx {
             }
         }
 
-        self.expect(.CloseCurly) catch {
+        var close_brace_region: Region = undefined;
+        if (self.peek() == .CloseCurly) {
+            close_brace_region = self.currentRegion();
+            self.advance();
+        } else {
             try self.pushDiagnostic(.expected_expr_close_curly, start_position, self.currentPosition());
-        };
+            close_brace_region = makeRegion(self.currentPosition(), self.currentPosition());
+        }
 
         const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, start_position, .record_literal, .{ .nodes = nodes_idx });
+        const full_region = makeRegion(start_position, close_brace_region.end);
+        return try self.ast.appendNode(self.gpa, full_region, .record_literal, .{ .nodes = nodes_idx });
     } else {
         // Just parse as expression (e.g., platform "...")
         return try self.parseExpr();
@@ -1074,7 +1153,7 @@ fn parsePackageList(self: *Parser) Error!collections.NodeSlices(AST.Node.Idx).Id
         }
 
         const pkg_ident = self.currentIdent();
-        const pkg_pos = self.currentPosition();
+        const pkg_region = self.currentRegion();
         self.advance();
 
         self.expect(.OpColon) catch {
@@ -1087,7 +1166,7 @@ fn parsePackageList(self: *Parser) Error!collections.NodeSlices(AST.Node.Idx).Id
 
         // Create package entry
         if (pkg_ident) |id| {
-            const pkg_node = try self.ast.appendNode(self.gpa, pkg_pos, .lc, .{ .ident = id });
+            const pkg_node = try self.ast.appendNode(self.gpa, pkg_region, .lc, .{ .ident = id });
             try self.scratch_nodes.append(self.gpa, pkg_node);
             try self.scratch_nodes.append(self.gpa, path);
         }
@@ -1135,27 +1214,29 @@ fn parseExposedItem(self: *Parser) Error!Node.Idx {
     switch (self.peek()) {
         .UpperIdent => {
             const ident = self.currentIdent();
-            const pos = self.currentPosition();
+            const region = self.currentRegion();
             self.advance();
 
             if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .uc, .{ .ident = id });
+                return try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
             } else {
                 return self.pushMalformed(.exposed_item_unexpected_token, start_position);
             }
         },
         .LowerIdent => {
             const ident = self.currentIdent();
-            const pos = self.currentPosition();
+            const region = self.currentRegion();
             self.advance();
 
             // Check for optional ! suffix (for effectful functions like main!)
+            var final_region = region;
             if (self.peek() == .OpBang) {
+                final_region.end = self.currentRegion().end;
                 self.advance(); // consume the !
             }
 
             if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, pos, .lc, .{ .ident = id });
+                return try self.ast.appendNode(self.gpa, final_region, .lc, .{ .ident = id });
             } else {
                 return self.pushMalformed(.exposed_item_unexpected_token, start_position);
             }
@@ -1209,7 +1290,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
                 const is_nominal = self.peek() == .OpColonEqual;
-                const colon_pos = self.currentPosition();
+                const colon_region = self.currentRegion();
                 self.advance(); // consume : or :=
 
                 // Parse the right-hand side
@@ -1222,7 +1303,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
-                return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
+                return try self.ast.appendNode(self.gpa, colon_region, tag, .{ .binop = binop_idx });
             }
 
             // Otherwise, it's just a regular expression/statement
@@ -1245,7 +1326,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
             // Check if this is followed by : or := (making it a type annotation/declaration)
             if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
                 const is_nominal = self.peek() == .OpColonEqual;
-                const colon_pos = self.currentPosition();
+                const colon_region = self.currentRegion();
                 self.advance(); // consume : or :=
 
                 // Parse the right-hand side as a regular expression
@@ -1255,7 +1336,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
-                return try self.ast.appendNode(self.gpa, colon_pos, tag, .{ .binop = binop_idx });
+                return try self.ast.appendNode(self.gpa, colon_region, tag, .{ .binop = binop_idx });
             }
 
             // Otherwise, it's just a regular expression/statement
@@ -1265,7 +1346,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
 }
 
 fn parseExpect(self: *Parser) Error!?Node.Idx {
-    const start_pos = self.currentPosition();
+    const expect_region = self.currentRegion();
     self.advance(); // consume expect
 
     // Parse the condition expression
@@ -1278,8 +1359,10 @@ fn parseExpect(self: *Parser) Error!?Node.Idx {
 
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(scratch_marker));
 
-    // Create the expect node
-    return try self.ast.appendNode(self.gpa, start_pos, .expect, .{ .nodes = nodes_idx });
+    // Create the expect node - region spans from expect keyword to end of condition
+    const condition_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(condition))));
+    const full_region = makeRegion(expect_region.start, condition_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, .expect, .{ .nodes = nodes_idx });
 }
 
 fn parseImport(self: *Parser) Error!?Node.Idx {
@@ -1294,10 +1377,11 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
         const token = self.peek();
         if (token == .LowerIdent or token == .UpperIdent) {
             const ident = self.currentIdent();
+            const ident_region = self.currentRegion();
             if (ident) |id| {
                 // Use the correct node type based on identifier case
                 const node_tag: AST.Node.Tag = if (token == .UpperIdent) .uc else .lc;
-                const node = try self.ast.appendNode(self.gpa, self.currentPosition(), node_tag, .{ .ident = id });
+                const node = try self.ast.appendNode(self.gpa, ident_region, node_tag, .{ .ident = id });
                 try self.scratch_nodes.append(self.gpa, node);
             }
             self.advance();
@@ -1319,9 +1403,10 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
         const alias_token = self.peek();
         if (alias_token == .LowerIdent or alias_token == .UpperIdent) {
             const alias_ident = self.currentIdent();
+            const alias_region = self.currentRegion();
             if (alias_ident) |id| {
                 const alias_tag: AST.Node.Tag = if (alias_token == .UpperIdent) .uc else .lc;
-                const alias_node = try self.ast.appendNode(self.gpa, self.currentPosition(), alias_tag, .{ .ident = id });
+                const alias_node = try self.ast.appendNode(self.gpa, alias_region, alias_tag, .{ .ident = id });
                 try self.scratch_nodes.append(self.gpa, alias_node);
             }
             self.advance();
@@ -1352,8 +1437,10 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
         return null;
     }
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    // Use the new import node type
-    return try self.ast.appendNode(self.gpa, start_pos, .import, .{ .import_nodes = nodes_idx });
+    // Use the new import node type - region spans from import keyword to last node
+    const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(nodes[nodes.len - 1]))));
+    const full_region = makeRegion(start_pos, last_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, .import, .{ .import_nodes = nodes_idx });
 }
 
 /// Parse an expression
@@ -1362,11 +1449,9 @@ pub fn parseExpr(self: *Parser) Error!Node.Idx {
 }
 
 fn parseNumLiteral(self: *Parser) Error!Node.Idx {
-    const pos = self.currentPosition();
+    const region = self.currentRegion();
     const tag = self.peek();
     const extra = self.currentExtra();
-    // Note: We use the start position here. The full region is calculated
-    // later in AST2.region() based on the actual token content in the source.
 
     self.advance();
 
@@ -1377,17 +1462,17 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
             switch (extra) {
                 .num_literal_i32 => |value| {
                     // Small integer that fits in i32
-                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = value });
+                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = value });
                 },
                 .bytes_idx => |idx| {
                     // Big integer stored in ByteSlices
                     // For IntBase, it's stored as base-10 in ByteSlices
                     const ast_tag: Node.Tag = if (tag == .IntBase) .int_literal_big else .num_literal_big;
-                    return try self.ast.appendNode(self.gpa, pos, ast_tag, .{ .num_literal_big = idx });
+                    return try self.ast.appendNode(self.gpa, region, ast_tag, .{ .num_literal_big = idx });
                 },
                 else => {
                     // Shouldn't happen with well-formed tokens
-                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
                 },
             }
         },
@@ -1400,27 +1485,27 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
                         .numerator = small_dec.numerator,
                         .denominator_power_of_ten = small_dec.denominator_power_of_ten,
                     };
-                    return try self.ast.appendNode(self.gpa, pos, .frac_literal_small, .{ .frac_literal_small = ast_small_dec });
+                    return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = ast_small_dec });
                 },
                 .bytes_idx => |idx| {
                     // Big fraction stored in ByteSlices
-                    return try self.ast.appendNode(self.gpa, pos, .frac_literal_big, .{ .frac_literal_big = idx });
+                    return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
                 },
                 else => {
                     // Shouldn't happen with well-formed tokens
-                    return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
                 },
             }
         },
         else => {
             // Not a number literal token
-            return try self.ast.appendNode(self.gpa, pos, .num_literal_i32, .{ .num_literal_i32 = 0 });
+            return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
         },
     }
 }
 
 fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
-    const pos = self.currentPosition();
+    const region = self.currentRegion();
     const extra = self.currentExtra();
 
     self.advance();
@@ -1432,7 +1517,7 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
             // Check if ByteSlices is empty (can happen with certain parsing scenarios)
             if (self.byte_slices.entries.items.items.len == 0) {
                 // ByteSlices is empty - use empty string as fallback
-                return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = [_]u8{0} ** 4 });
+                return try self.ast.appendNode(self.gpa, region, .str_literal_small, .{ .str_literal_small = [_]u8{0} ** 4 });
             }
             const str_content = self.byte_slices.slice(idx);
 
@@ -1441,23 +1526,24 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
                 // Small string that fits inline
                 var buf: [4]u8 = [_]u8{0} ** 4;
                 @memcpy(buf[0..str_content.len], str_content);
-                return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = buf });
+                return try self.ast.appendNode(self.gpa, region, .str_literal_small, .{ .str_literal_small = buf });
             } else {
                 // Store in AST's ByteSlices
                 const ast_idx = try self.ast.byte_slices.append(self.gpa, str_content);
-                return try self.ast.appendNode(self.gpa, pos, .str_literal_big, .{ .str_literal_big = ast_idx });
+                return try self.ast.appendNode(self.gpa, region, .str_literal_big, .{ .str_literal_big = ast_idx });
             }
         },
         else => {
             // Shouldn't happen with well-formed tokens
             const empty_buf: [4]u8 = [_]u8{0} ** 4;
-            return try self.ast.appendNode(self.gpa, pos, .str_literal_small, .{ .str_literal_small = empty_buf });
+            return try self.ast.appendNode(self.gpa, region, .str_literal_small, .{ .str_literal_small = empty_buf });
         },
     }
 }
 
 fn parseStringExpr(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
+    const start_region = self.currentRegion();
 
     self.expect(.StringStart) catch {
         return self.pushMalformed(.expr_unexpected_token, start_pos);
@@ -1506,9 +1592,11 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
         }
     }
 
+    const end_region = self.currentRegion();
     self.expect(.StringEnd) catch {
         return self.pushMalformed(.string_unclosed, start_pos);
     };
+    const string_region = makeRegion(start_region.start, end_region.end);
 
     // Store the actual string content
     const string_bytes = self.scratch_bytes.items[scratch_bytes_start..];
@@ -1532,24 +1620,27 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
             @memcpy(small_bytes[0..total_bytes], string_bytes);
             // If last byte is non-zero, we know it's 4 bytes long
             // Otherwise, count backwards to find the length
-            return try self.ast.appendNode(self.gpa, start_pos, .str_literal_small, .{ .str_literal_small = small_bytes });
+            return try self.ast.appendNode(self.gpa, string_region, .str_literal_small, .{ .str_literal_small = small_bytes });
         }
     }
 
     // For longer strings or those with special characters, store in ByteSlices
     const bytes_idx = try self.ast.appendByteSlice(self.gpa, string_bytes);
-    return try self.ast.appendNode(self.gpa, start_pos, .str_literal_big, .{ .str_literal_big = bytes_idx });
+    return try self.ast.appendNode(self.gpa, string_region, .str_literal_big, .{ .str_literal_big = bytes_idx });
 }
 
 fn parseListLiteral(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
+    const open_bracket_region = self.currentRegion(); // Region of [
     self.advance(); // consume [
 
     if (self.peek() == .CloseSquare) {
+        const close_bracket_region = self.currentRegion(); // Region of ]
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
+        const full_region = makeRegion(open_bracket_region.start, close_bracket_region.end);
+        return try self.ast.appendNode(self.gpa, full_region, .list_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_marker = self.markScratchNodes();
@@ -1571,9 +1662,15 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         }
     }
 
-    self.expect(.CloseSquare) catch {
+    var close_bracket_region: Region = undefined;
+    if (self.peek() == .CloseSquare) {
+        close_bracket_region = self.currentRegion();
+        self.advance();
+    } else {
         try self.pushDiagnostic(.expected_expr_close_square_or_comma, start_pos, self.currentPosition());
-    };
+        // Use the current position as an approximation for error recovery
+        close_bracket_region = makeRegion(self.currentPosition(), self.currentPosition());
+    }
 
     const elems = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = if (elems.len > 0)
@@ -1582,19 +1679,23 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         const empty_slice: []const Node.Idx = &.{};
         break :blk try self.ast.appendNodeSlice(self.gpa, empty_slice);
     };
-    return try self.ast.appendNode(self.gpa, start_pos, .list_literal, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(open_bracket_region.start, close_bracket_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, .list_literal, .{ .nodes = nodes_idx });
 }
 
 fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
+    const open_brace_region = self.currentRegion(); // Region of {
     self.advance(); // consume {
 
     if (self.peek() == .CloseCurly) {
+        const close_brace_region = self.currentRegion(); // Region of }
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+        const full_region = makeRegion(open_brace_region.start, close_brace_region.end);
         // Empty {} defaults to empty record
-        return try self.ast.appendNode(self.gpa, start_pos, .record_literal, .{ .nodes = nodes_idx });
+        return try self.ast.appendNode(self.gpa, full_region, .record_literal, .{ .nodes = nodes_idx });
     }
 
     const scratch_marker = self.markScratchNodes();
@@ -1619,12 +1720,14 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
                 // Create a double_dot_lc node for ..identifier
                 if (ident) |id| {
-                    const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .double_dot_lc, .{ .ident = id });
+                    const dot_region = makeRegion(dot_pos, self.getLastConsumedRegion().end);
+                    const rest_node = try self.ast.appendNode(self.gpa, dot_region, .double_dot_lc, .{ .ident = id });
                     try self.scratch_nodes.append(self.gpa, rest_node);
                 }
             } else {
                 // Just .. without an identifier - create an underscore as placeholder
-                const rest_node = try self.ast.appendNode(self.gpa, dot_pos, .underscore, .{ .src_bytes_end = dot_pos });
+                const dot_region = makeRegion(dot_pos, dot_pos);
+                const rest_node = try self.ast.appendNode(self.gpa, dot_region, .underscore, .{ .src_bytes_end = dot_pos });
                 try self.scratch_nodes.append(self.gpa, rest_node);
             }
 
@@ -1643,7 +1746,6 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
                 // Check if we have a colon for a field definition
                 if (self.peek() == .OpColon) {
-                    const colon_pos = self.currentPosition();
                     self.advance(); // consume :
 
                     // Parse the value with higher precedence to stop at comma
@@ -1652,7 +1754,8 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
                     // Create the field node
                     const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
-                    break :blk try self.ast.appendNode(self.gpa, colon_pos, .binop_colon, .{ .binop = binop_idx });
+                    const colon_region = makeRegion(self.ast.start(lhs), self.ast.getRegion(rhs).end);
+                    break :blk try self.ast.appendNode(self.gpa, colon_region, .binop_colon, .{ .binop = binop_idx });
                 } else {
                     // No colon, just a bare identifier or expression
                     break :blk lhs;
@@ -1669,9 +1772,9 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
                 // If we're in lambda args and have a bare identifier, convert it
                 const final_elem = if (self.is_in_lambda_args and self.ast.tag(elem) == .lc) blk: {
                     // Convert bare identifier to field: identifier
-                    const elem_pos = self.ast.start(elem);
+                    const elem_region = self.ast.getRegion(elem);
                     const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
-                    break :blk try self.ast.appendNode(self.gpa, elem_pos, .binop_colon, .{ .binop = binop_idx });
+                    break :blk try self.ast.appendNode(self.gpa, elem_region, .binop_colon, .{ .binop = binop_idx });
                 } else elem;
 
                 try self.scratch_nodes.append(self.gpa, final_elem);
@@ -1693,6 +1796,7 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
         }
     }
 
+    const close_region = self.currentRegion();
     self.expect(.CloseCurly) catch {
         try self.pushDiagnostic(.expected_expr_close_curly, start_pos, self.currentPosition());
     };
@@ -1701,11 +1805,12 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
 
     const tag: Node.Tag = if (is_record) .record_literal else .block;
-    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(open_brace_region.start, close_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, tag, .{ .nodes = nodes_idx });
 }
 
 fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const open_paren_region = self.currentRegion();
     self.advance(); // consume (
 
     const scratch_marker = self.markScratchNodes();
@@ -1713,10 +1818,12 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
 
     // Check for empty tuple
     if (self.peek() == .CloseRound) {
+        const close_region = self.currentRegion();
         self.advance();
         const empty_slice: []const Node.Idx = &.{};
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
+        const full_region = makeRegion(open_paren_region.start, close_region.end);
+        return try self.ast.appendNode(self.gpa, full_region, .tuple_literal, .{ .nodes = nodes_idx });
     }
 
     // Parse the first expression
@@ -1745,6 +1852,7 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
             }
         }
 
+        const close_region = self.currentRegion();
         self.expect(.CloseRound) catch {
             // Always use current position for error
             const error_pos = self.currentPosition();
@@ -1757,11 +1865,13 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
         if (elems.len == 0) {
             const empty_slice: []const Node.Idx = &.{};
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
-            return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = nodes_idx });
+            const full_region = makeRegion(open_paren_region.start, close_region.end);
+            return try self.ast.appendNode(self.gpa, full_region, .tuple_literal, .{ .nodes = nodes_idx });
         }
 
         const elems_idx = try self.ast.appendNodeSlice(self.gpa, elems);
-        return try self.ast.appendNode(self.gpa, start_pos, .tuple_literal, .{ .nodes = elems_idx });
+        const full_region = makeRegion(open_paren_region.start, close_region.end);
+        return try self.ast.appendNode(self.gpa, full_region, .tuple_literal, .{ .nodes = elems_idx });
     } else {
         self.expect(.CloseRound) catch {
             // Always use current position for error
@@ -1776,6 +1886,7 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
 
 fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     const start_pos = self.ast.start(func);
+    const func_region = self.ast.getRegion(func);
     self.advance(); // consume (
 
     const scratch_marker = self.markScratchNodes();
@@ -1796,6 +1907,7 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
         }
     }
 
+    const close_region = self.currentRegion();
     self.expect(.CloseRound) catch {
         try self.pushDiagnostic(.expected_expr_apply_close_round, start_pos, self.currentPosition());
     };
@@ -1810,11 +1922,13 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     };
 
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, tag, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(func_region.start, close_region.end);
+    return try self.ast.appendNode(self.gpa, full_region, tag, .{ .nodes = nodes_idx });
 }
 
 fn parseIf(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
+    const if_region = self.currentRegion();
     self.advance(); // consume if
 
     const scratch_marker = self.markScratchNodes();
@@ -1841,17 +1955,21 @@ fn parseIf(self: *Parser) Error!Node.Idx {
 
         const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, start_pos, .if_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
+        const else_end = self.ast.getRegion(else_branch).end;
+        const full_region = makeRegion(if_region.start, else_end);
+        return try self.ast.appendNode(self.gpa, full_region, .if_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
     } else {
         const nodes = self.getScratchNodesSince(scratch_marker);
         const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-        return try self.ast.appendNode(self.gpa, start_pos, .if_without_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
+        const then_end = self.ast.getRegion(then_branch).end;
+        const full_region = makeRegion(if_region.start, then_end);
+        return try self.ast.appendNode(self.gpa, full_region, .if_without_else, .{ .if_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
     }
 }
 
 fn parseMatch(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
-    self.advance(); // consume when
+    const match_region = self.currentRegion();
+    self.advance(); // consume match keyword
 
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
@@ -1860,39 +1978,62 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
     const scrutinee = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, scrutinee);
 
-    self.expect(.OpArrow) catch {
-        try self.pushDiagnostic(.expected_open_curly_after_match, start_pos, self.currentPosition());
-    };
+    // No arrow or curly braces after scrutinee in Roc's match syntax
+    // Branches follow on indented lines
 
-    // Parse branches
+    // Parse branches - each branch is pattern => body
+    // In Roc, match branches are indentation-based, not separated by commas or bars
     var branch_count: u32 = 0;
+
+    // We need to parse pattern => body pairs as single expressions
+    // The => operator will bind them together as binop_thick_arrow nodes
+    // IMPORTANT: Due to how expression parsing works, multi-line function applications
+    // may not be fully captured in the body. This is a known limitation that needs
+    // fixing in the expression parser's handling of line continuations.
     while (self.peek() != .EndOfFile) {
-        const pattern = try self.parseExpr();
-        try self.scratch_nodes.append(self.gpa, pattern);
+        // Parse the entire branch (pattern => body) as one expression
+        // This will naturally create a binop_thick_arrow node
+        const branch = try self.parseExpr();
 
-        self.expect(.OpFatArrow) catch {
-            try self.pushDiagnostic(.match_branch_missing_arrow, start_pos, self.currentPosition());
-        };
+        // Check if we actually parsed a branch (should be a thick arrow)
+        // If not, we've gone past the match expression
+        const branch_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(branch)));
+        const branch_node = self.ast.nodes.get(branch_idx);
 
-        const body = try self.parseExpr();
-        try self.scratch_nodes.append(self.gpa, body);
-
-        branch_count += 1;
-
-        // Check if there are more branches
-        if (self.peek() != .OpBar and self.peek() != .Comma) {
+        if (branch_node.tag != .binop_thick_arrow) {
+            // Not a branch - restore position and break
+            // Actually we can't easily restore position, so just break
+            // This means we might have consumed a token that's not part of the match
+            // TODO: Better error recovery here
             break;
         }
-        self.advance();
+
+        try self.scratch_nodes.append(self.gpa, branch);
+        branch_count += 1;
+
+        // Check if we should continue parsing branches
+        const next_token = self.peek();
+        const could_be_pattern = switch (next_token) {
+            .UpperIdent, .LowerIdent, .Underscore, .OpenSquare, .OpenCurly, .OpenRound => true,
+            else => false,
+        };
+
+        if (!could_be_pattern) {
+            break;
+        }
     }
 
     const nodes = self.getScratchNodesSince(scratch_marker);
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .match, .{ .match_branches = @as(u32, @bitCast(@intFromEnum(nodes_idx))) });
+    // The region extends to the end of the last branch body
+    const last_body = nodes[nodes.len - 1];
+    const full_region = makeRegion(match_region.start, self.ast.getRegion(last_body).end);
+    return try self.ast.appendNode(self.gpa, full_region, .match, .{ .nodes = nodes_idx });
 }
 
 fn parseLambda(self: *Parser) Error!Node.Idx {
     const start_pos = self.currentPosition();
+    const start_region = self.currentRegion();
 
     // Make absolutely sure we're at a |
     if (self.peek() != .OpBar) {
@@ -1940,29 +2081,32 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     try self.scratch_nodes.appendSlice(self.gpa, params);
 
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(temp_marker));
-    return try self.ast.appendNode(self.gpa, start_pos, .lambda, .{ .body_then_args = nodes_idx });
+    const full_region = makeRegion(start_region.start, self.ast.getRegion(body).end);
+    return try self.ast.appendNode(self.gpa, full_region, .lambda, .{ .body_then_args = nodes_idx });
 }
 
 fn parseVar(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const var_region = self.currentRegion();
     self.advance(); // consume var
 
     if (self.peek() != .LowerIdent) {
-        return self.pushMalformed(.var_must_have_ident, start_pos);
+        return self.pushMalformed(.var_must_have_ident, var_region.start);
     }
 
+    const ident_region = self.currentRegion();
     const ident = self.currentIdent();
     self.advance();
 
     if (ident) |id| {
-        return try self.ast.appendNode(self.gpa, start_pos, .var_lc, .{ .ident = id });
+        const full_region = makeRegion(var_region.start, ident_region.end);
+        return try self.ast.appendNode(self.gpa, full_region, .var_lc, .{ .ident = id });
     } else {
-        return self.pushMalformed(.var_must_have_ident, start_pos);
+        return self.pushMalformed(.var_must_have_ident, var_region.start);
     }
 }
 
 fn parseFor(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const for_region = self.currentRegion();
     self.advance(); // consume 'for'
 
     const scratch_marker = self.markScratchNodes();
@@ -1974,8 +2118,9 @@ fn parseFor(self: *Parser) Error!Node.Idx {
 
     // Expect 'in'
     if (self.peek() != .KwIn) {
-        try self.pushDiagnostic(.for_expected_in, start_pos, self.currentPosition());
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .for_expected_in });
+        try self.pushDiagnostic(.for_expected_in, for_region.start, self.currentPosition());
+        const error_region = makeRegion(for_region.start, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, error_region, .malformed, .{ .malformed = .for_expected_in });
     }
     self.advance(); // consume 'in'
 
@@ -1991,15 +2136,17 @@ fn parseFor(self: *Parser) Error!Node.Idx {
 
     // A for loop must have exactly pattern, iterable, and body
     if (nodes.len != 3) {
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
+        const error_region = makeRegion(for_region.start, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, error_region, .malformed, .{ .malformed = .statement_unexpected_token });
     }
 
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .for_loop, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(for_region.start, self.ast.getRegion(body).end);
+    return try self.ast.appendNode(self.gpa, full_region, .for_loop, .{ .nodes = nodes_idx });
 }
 
 fn parseWhile(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const while_region = self.currentRegion();
     self.advance(); // consume 'while'
 
     const scratch_marker = self.markScratchNodes();
@@ -2017,15 +2164,17 @@ fn parseWhile(self: *Parser) Error!Node.Idx {
 
     // A while loop must have exactly condition and body
     if (nodes.len != 2) {
-        return try self.ast.appendNode(self.gpa, start_pos, .malformed, .{ .malformed = .statement_unexpected_token });
+        const error_region = makeRegion(while_region.start, self.currentPosition());
+        return try self.ast.appendNode(self.gpa, error_region, .malformed, .{ .malformed = .statement_unexpected_token });
     }
 
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    return try self.ast.appendNode(self.gpa, start_pos, .while_loop, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(while_region.start, self.ast.getRegion(body).end);
+    return try self.ast.appendNode(self.gpa, full_region, .while_loop, .{ .nodes = nodes_idx });
 }
 
 fn parseReturn(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const return_region = self.currentRegion();
     self.advance(); // consume return
 
     // Parse the expression to return
@@ -2033,11 +2182,12 @@ fn parseReturn(self: *Parser) Error!Node.Idx {
     const expr = try self.parseExprWithPrecedence(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
-    return try self.ast.appendNode(self.gpa, start_pos, .ret, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(return_region.start, self.ast.getRegion(expr).end);
+    return try self.ast.appendNode(self.gpa, full_region, .ret, .{ .nodes = nodes_idx });
 }
 
 fn parseCrash(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
+    const crash_region = self.currentRegion();
     self.advance(); // consume crash
 
     // Parse the expression to crash with
@@ -2045,7 +2195,8 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
     const expr = try self.parseExprWithPrecedence(0);
     const expr_slice = [_]Node.Idx{expr};
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &expr_slice);
-    return try self.ast.appendNode(self.gpa, start_pos, .crash, .{ .nodes = nodes_idx });
+    const full_region = makeRegion(crash_region.start, self.ast.getRegion(expr).end);
+    return try self.ast.appendNode(self.gpa, full_region, .crash, .{ .nodes = nodes_idx });
 }
 
 /// Parse a type annotation

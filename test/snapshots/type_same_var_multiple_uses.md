@@ -66,7 +66,6 @@ app
 
 pair : a -> (a, a)
 pair = \x -> (x, x)
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

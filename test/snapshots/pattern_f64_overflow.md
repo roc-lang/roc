@@ -18,18 +18,17 @@ match x {
 KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Float OpFatArrow String Float OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <15 branches>)
+(match
+  (scrutinee     (lc "x")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match x
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:9
-
 **Parse Error**
 at 2:11 to 2:11
 
@@ -44,12 +43,6 @@ at 5:9 to 5:9
 
 **Parse Error**
 at 6:11 to 6:11
-
-**Parse Error**
-at 1:1 to 7:2
-
-**Parse Error**
-at 7:2 to 7:2
 
 # CANONICALIZE
 ~~~clojure

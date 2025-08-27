@@ -14,18 +14,17 @@ match numbers {
 KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleDot CloseSquare OpFatArrow TripleDot CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <5 branches>)
+(match
+  (scrutinee     (lc "numbers")
+))
 ~~~
 # FORMATTED
 ~~~roc
-match numbers { {[..], middle, _} => ] => ... }
+match numbers
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:15
-
 **Parse Error**
 at 2:8 to 2:8
 
@@ -34,12 +33,6 @@ at 2:5 to 2:10
 
 **Parse Error**
 at 1:15 to 2:20
-
-**Parse Error**
-at 1:1 to 2:20
-
-**Parse Error**
-at 2:20 to 2:20
 
 # CANONICALIZE
 ~~~clojure

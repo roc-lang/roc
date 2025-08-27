@@ -28,11 +28,10 @@ KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign Trip
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
-dbg"foo"
+dbg
+"foo"
 
 foo = ...
 ~~~

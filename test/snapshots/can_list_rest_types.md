@@ -15,18 +15,17 @@ match numbers {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow OpenSquare CloseSquare CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <10 branches>)
+(match
+  (scrutinee     (lc "numbers")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match numbers
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:15
-
 **Parse Error**
 at 2:16 to 2:16
 
@@ -41,12 +40,6 @@ at 2:29 to 2:29
 
 **Parse Error**
 at 3:8 to 3:8
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure

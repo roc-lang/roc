@@ -175,17 +175,25 @@ import http.Client as Http
 
 # Test unresolved qualified value
 main = Json.NonExistent | .method
+
+# Test unresolved qualified type in annotation
 parseData : Json.InvalidType -> Str
 parseData = \data -> Json.stringify(data)
 
 # Test unresolved nested qualification
 processRequest : Http.Server | Request -> Http.Server | Response
 processRequest = \req -> Http.Server | .defaultResponse
+
+# Test typo in qualified name
 result = Json.prase("test")
 
 # Test unknown module qualification
 config = Unknown.Module | .config
+
+# Test valid module but invalid member
 client = Http.invalidMethod
+
+# Test deeply nested invalid qualification
 parser = ((Json.Parser | Advanced) | NonExistent) | .create
 ~~~
 # EXPECTED

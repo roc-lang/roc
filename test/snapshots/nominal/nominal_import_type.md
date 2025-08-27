@@ -42,9 +42,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	red,
-]
+module [red]
 
 import Color
 

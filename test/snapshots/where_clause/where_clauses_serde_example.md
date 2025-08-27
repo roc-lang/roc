@@ -75,9 +75,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpenRou
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	deserialize,
-]
+module [deserialize]
 
 deserialize : List U8 -> Result (a, [DecodeErr]) where module(a) | .decode : List U8 -> Result (a, [DecodeErr])
 deserialize = \_ -> ...

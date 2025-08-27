@@ -144,6 +144,7 @@ make_record = \x -> { value : x, tag : "data" }
 
 get_value : {value : a, tag : Str} -> a
 get_value = \r -> r.value
+
 composed : List a -> Str
 composed = \n -> get_value(make_record(n))
 

@@ -149,7 +149,6 @@ nested = ((1, 2), (3, 4))
 mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
 with_lambda = \n -> (n + 1, 42)
-
 empty
 ~~~
 # EXPECTED

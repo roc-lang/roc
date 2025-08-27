@@ -35,11 +35,9 @@ Int LowerIdent Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore 
 ~~~
 # FORMATTED
 ~~~roc
-0
-o0 | 0
+0o0 | 0
 0_0_0
-0
-u8 | 0
+0u8 | 0
 0__
 ~~~
 # EXPECTED

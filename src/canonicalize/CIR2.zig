@@ -428,7 +428,7 @@ pub fn getStmt(self: *const CIR, idx: Stmt.Idx) struct {
 
     return .{
         .tag = tag,
-        .start = node.start,
+        .start = node.region.start,
         .payload = node.payload,
     };
 }
@@ -450,7 +450,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         // This node is not an expression - return a malformed expression view
         return .{
             .tag = .malformed,
-            .start = node.start,
+            .start = node.region.start,
             .payload = node.payload,
         };
     }
@@ -511,7 +511,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
 
     return .{
         .tag = tag,
-        .start = node.start,
+        .start = node.region.start,
         .payload = node.payload,
     };
 }
@@ -542,7 +542,7 @@ pub fn getPatt(self: *const CIR, idx: Patt.Idx) struct {
 
     return .{
         .tag = tag,
-        .start = node.start,
+        .start = node.region.start,
         .payload = node.payload,
         .is_mutable = idx.isMutable(), // Extract mutability from the index
     };
@@ -816,7 +816,6 @@ pub const Expr = struct {
         block_nodes: collections.NodeSlices(Expr.Idx).Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
         body_then_args: collections.NodeSlices(Expr.Idx).Idx, // For lambdas, the Expr.Idx of the body followed by 0+ Expr.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
-        match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
         binop: collections.NodeSlices(Expr.Idx).Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
         ident: Ident.Idx, // For both .uc and .lc tags
 
@@ -922,7 +921,6 @@ pub const Type = struct {
         block_nodes: collections.NodeSlices(Type.Idx).Idx, // Number of nodes in a block (or fields in a record, if it turns out to be a record)
         body_then_args: collections.NodeSlices(Type.Idx).Idx, // For lambdas, the Type.Idx of the body followed by 0+ Type.Idx entries for args.
         if_branches: u32, // Branches before the `else` - each branch begins with a conditional node
-        match_branches: u32, // Total number of branches - each branch begins with an `if` (if there's a guard) or list (if multiple alternatives) or expr (normal pattern)
         binop: collections.NodeSlices(Type.Idx).Idx, // Pass this to NodeSlices.binOp() to get lhs and rhs
         ident: Ident.Idx, // For both .uc and .lc tags
 
@@ -967,11 +965,11 @@ fn canonicalizeLambdaParams(self: *CIR, allocator: Allocator, node_idx: AST2.Nod
     switch (node.tag) {
         .underscore => {
             // Underscore parameter - canonicalize as pattern
-            _ = try self.canonicalizePatt(allocator, node_idx, raw_src, idents);
+            _ = try self.canonicalizePatt(allocator, node_idx);
         },
         .lc, .var_lc => {
             // Identifier parameter - canonicalize as pattern
-            const patt_idx = try self.canonicalizePatt(allocator, node_idx, raw_src, idents);
+            const patt_idx = try self.canonicalizePatt(allocator, node_idx);
             // Register the parameter in scope
             try self.scope_state.addIdent(allocator, node.payload.ident, patt_idx);
             try self.scope_state.recordVarPattern(allocator, patt_idx);
@@ -987,7 +985,7 @@ fn canonicalizeLambdaParams(self: *CIR, allocator: Allocator, node_idx: AST2.Nod
         },
         else => {
             // Other patterns might be supported in the future
-            _ = try self.canonicalizePatt(allocator, node_idx, raw_src, idents);
+            _ = try self.canonicalizePatt(allocator, node_idx);
         },
     }
 }
@@ -1003,7 +1001,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
     }
 
     // Calculate the proper region for this node BEFORE any mutations
-    const node_region = self.ast.region(node_idx, raw_src, idents);
+    const node_region = self.ast.getRegion(node_idx);
 
     switch (node.tag) {
         // Expression nodes - mutate tag in place
@@ -1200,7 +1198,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
                 } else if (n_node.tag == .import) {
                     // Import statement in a block - not allowed, convert to malformed
-                    const n_region = self.ast.region(n, raw_src, idents);
+                    const n_region = self.ast.getRegion(n);
                     try self.pushDiagnostic(allocator, .unsupported_node, n_region);
                     self.mutateToExpr(n, .malformed);
                     try self.ensureTypeVarExists(n);
@@ -1505,8 +1503,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Match expressions
         .match => {
             // Match expressions have a scrutinee followed by pattern-body pairs
-            const match_branches_u32 = node.payload.match_branches;
-            const nodes_idx = @as(collections.NodeSlices(parse.AST2.Node.Idx).Idx, @enumFromInt(match_branches_u32));
+            const nodes_idx = node.payload.nodes;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
             // First node is the scrutinee
@@ -1517,7 +1514,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Remaining nodes are pattern-body pairs
             while (iter.next()) |pattern| {
                 // Canonicalize the pattern
-                _ = try self.canonicalizePatt(allocator, pattern, raw_src, idents);
+                _ = try self.canonicalizePatt(allocator, pattern);
 
                 // Next node is the body for this branch
                 if (iter.next()) |body| {
@@ -1656,7 +1653,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
                 // First node is the pattern
                 if (iter.next()) |pattern_node| {
-                    _ = try self.canonicalizePatt(allocator, pattern_node, raw_src, idents);
+                    _ = try self.canonicalizePatt(allocator, pattern_node);
                 }
 
                 // Second node is the iterable
@@ -1773,7 +1770,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         .binop_thick_arrow => {
             // Pattern match arrow =>
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
-            _ = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizePatt(allocator, ast_binop.lhs);
             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
             self.mutateToExpr(node_idx, .binop_thick_arrow);
@@ -2024,7 +2021,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
     }
 
     // Calculate the proper region for this node BEFORE any mutations
-    const node_region = self.ast.region(node_idx, raw_src, idents);
+    const node_region = self.ast.getRegion(node_idx);
 
     switch (node.tag) {
         // Assignment-like statements
@@ -2039,7 +2036,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .var_lc => {
                     // This is a mutable variable declaration: `var x = expr`
                     // Canonicalize the pattern (lhs) as mutable
-                    const patt_idx = try self.canonicalizePattMutable(allocator, ast_binop.lhs, raw_src, idents);
+                    const patt_idx = try self.canonicalizePattMutable(allocator, ast_binop.lhs);
 
                     // For var_lc nodes, the identifier is in the ident field of the payload
                     // Get the identifier from the var_lc node
@@ -2096,7 +2093,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     } else {
                         // This is an immutable variable declaration: `x = expr`
                         // Canonicalize the pattern (lhs)
-                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
+                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
 
                         // Register this as an immutable variable
                         try self.scope_state.addIdent(allocator, ident, patt_idx);
@@ -2115,7 +2112,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 else => {
                     // Complex pattern on LHS - treat as pattern match assignment
                     // Canonicalize both sides - this mutates the nodes in place
-                    _ = try self.canonicalizePatt(allocator, ast_binop.lhs, raw_src, idents);
+                    _ = try self.canonicalizePatt(allocator, ast_binop.lhs);
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                     // Mutate AST node to assignment statement
@@ -2204,19 +2201,19 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 }
 
 /// Canonicalize an AST node that should be a pattern (immutable)
-pub fn canonicalizePatt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
-    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, false, raw_src, idents);
+pub fn canonicalizePatt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
+    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, false);
 }
 
 /// Canonicalize an AST node that should be a pattern (mutable)
-pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
-    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, true, raw_src, idents);
+pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
+    return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, true);
 }
 
 /// Canonicalize an AST node that should be a pattern with specified mutability
-pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool, raw_src: []const u8, idents: *const Ident.Store) !Patt.Idx {
+pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool) !Patt.Idx {
     // Calculate the proper region for this node BEFORE any mutations
-    const node_region = ast_param.region(node_idx, raw_src, idents);
+    const node_region = ast_param.getRegion(node_idx);
     const node = ast_param.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
 
     switch (node.tag) {
@@ -2742,8 +2739,8 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     const node2_idx = try ast.appendNode(allocator, Position{ .offset = 10 }, .lc, .{ .ident = ident_idx });
 
     // Canonicalize one as immutable, one as mutable
-    const immutable_patt = try cir.canonicalizePatt(allocator, node1_idx, source, &env.idents);
-    const mutable_patt = try cir.canonicalizePattMutable(allocator, node2_idx, source, &env.idents);
+    const immutable_patt = try cir.canonicalizePatt(allocator, node1_idx);
+    const mutable_patt = try cir.canonicalizePattMutable(allocator, node2_idx);
 
     // Verify mutability encoding
     try testing.expect(!immutable_patt.isMutable());

@@ -22,9 +22,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Float ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
+module [foo]
 
 foo = 12.34
 ~~~

@@ -90,7 +90,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
     (lc "is_ok")
     (lambda
       (body
-        (match <57 branches>)
+        (match
+          (scrutinee             (lc "result")
+))
       )
       (args
         (lc "result")
@@ -101,11 +103,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	MyResult,
-	ok,
-	is_ok,
-]
+module [MyResult, ok, is_ok]
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
 
@@ -113,28 +111,16 @@ ok : ok -> MyResult (ok, _)
 ok = \a -> MyResult.Ok(a)
 
 is_ok : MyResult (_ok, _err) -> Bool
-is_ok = \result -> match result {
-    MyResult.Ok(_) => Bool.True
-    MyResult.Err(_) => Bool.False
-}
+is_ok = \result -> match result
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 9:18 to 9:31
-
-**Parse Error**
 at 10:20 to 10:20
 
 **Parse Error**
 at 11:21 to 11:21
-
-**Parse Error**
-at 9:18 to 12:2
-
-**Parse Error**
-at 12:2 to 12:2
 
 # CANONICALIZE
 ~~~clojure

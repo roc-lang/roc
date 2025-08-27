@@ -147,10 +147,31 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
     (lc "handle_result")
     (lambda
       (body
-        (match <74 branches>)
+        (match
+          (scrutinee             (lc "result")
+))
       )
       (args
         (lc "result")
+      )
+    )
+  )
+  (binop_colon
+    (lc "map")
+    (binop_thin_arrow
+      (binop_thin_arrow
+        (lc "a")
+        (lc "b")
+      )
+      (binop_thin_arrow
+        (apply_uc
+          (uc "List")
+          (lc "a")
+        )
+        (apply_uc
+          (uc "List")
+          (lc "b")
+        )
       )
     )
   )
@@ -211,14 +232,15 @@ process = \list -> "processed"
 # Record with underscore
 get_data : {field : _, other : U32} -> U32
 get_data = \record -> record.other
-handle_result : Result (_, Str) -> Str
-handle_result = \result -> match result { ({
-	Ok(_),
-	"success",
-	Err(msg),
-} => msg, }
 
-# Underscore in function arguments) => map : a -> b -> (List(a) -> List(b)) }map = \(_, _) -> []
+# Pattern matching with underscore type annotation
+handle_result : Result (_, Str) -> Str
+handle_result = \result -> match result
+map :
+	(a -> b) -> List a -> List b
+map = \(_, _) -> []
+
+# Named underscore type variables
 transform :
 	(_a -> _b) -> _b
 transform = \(_, b) -> b
@@ -226,9 +248,6 @@ transform = \(_, b) -> b
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 20:5 to 20:18
-
 **Parse Error**
 at 21:15 to 21:15
 
@@ -238,12 +257,10 @@ at 20:18 to 22:18
 **Parse Error**
 at 23:5 to 23:5
 
-**Parse Error**
-at 20:5 to 26:1
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

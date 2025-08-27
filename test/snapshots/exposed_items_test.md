@@ -31,9 +31,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	main,
-]
+module [main]
 
 import pf.Stdout exposing [line, write]
 main = 42

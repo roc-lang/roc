@@ -368,6 +368,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "match_time")
     (malformed malformed:expr_unexpected_token)
   )
+  (lc "ist")
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (num_literal_i32 123)
@@ -781,27 +782,29 @@ pf: "c" platform [
 import pf.Stdout exposing [line, e]
 import Stdot
 import pkg.S exposing [func]
-asfry
+as
+fry
 .*
 ]
 
 import Bae as Gooe
 import Ba
 Map((a, b)) : List a -> (a -> b) -> List b
-MapML((a, b) : List -> ((a -> b) -> List(b)))
+MapML((a, b) : List # Aon -> ((a -> b) -> List(b) #))
 Foo : (Bar, Baz)
-line : (Bar, Baz)Some(a) : {foo : Ok a, bar : g}
+line : (Bar, Baz)
+Some(a) : {foo : Ok a, bar : g}
 Ml(a) : {
-	bar : Som
+	bar : Som # Afld
 }
+
 Soine(a) : {
 	bar : Som
-}
+} #
 Maya
 ) : [] #se
 
 Func(a) : Maybe a -> a -> Maybe a
-
 ane = \num -> if num 2 else 5
 
 add_one : U64 -> U64
@@ -820,7 +823,8 @@ add_one = \num -> {
 	}
 }
 
-match_time = ist
+match_time = [
+ist
 ]
 =>
 123
@@ -861,10 +865,12 @@ main! : List String -> Result ({  }, _)
 main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag, 
 
 # Jusnt!
-..., match_time((...)), some_func(dbg # bug), 42 }crash "Unreachtement
+..., match_time((...)), some_func(dbg # bug), 42 }
+crash "Unreachtement
 tag_with = Ok(number)
 ited = "Hello, ${world}"
-list = [add_one(dbg # Afin list)]e[, # afarg])
+list = [add_one(dbg # Afin list)]
+e[, # afarg])
 456, # ee
 ]
 for n in list {
@@ -875,23 +881,24 @@ for n in list {
 }
 record = { foo : 123, bar : "Hello", baz : tag, qux : Ok world, punned }
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-m_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])bsult = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
+m_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
+bsult = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 stale = some_fn(arg1)
-? | .statod()
-? | .ned()
-? | .recd
-?
+? | .statod()? | .ned()? | .recd?
 Stdoline!"How about ${ #
-Num.toStr(number)
+Num.toStr(number) # on expr
 }
-asa"
+as
+a"
 )
 } # Commenl decl
+
 empty : {}
 empty = {  }
+
 tuple : Value (a, b, c)
 expect {
-	foo = 1
+	foo = 1 # Thio
 	blah = 1
 	blah == foo
 }
@@ -939,9 +946,6 @@ at 51:3 to 51:3
 at 55:3 to 55:3
 
 **Parse Error**
-at 64:2 to 64:10
-
-**Parse Error**
 at 67:3 to 67:3
 
 **Parse Error**
@@ -972,16 +976,10 @@ at 74:3 to 74:9
 at 64:10 to 74:20
 
 **Parse Error**
-at 64:2 to 74:27
-
-**Parse Error**
 at 74:27 to 74:27
 
 **Parse Error**
 at 75:3 to 75:3
-
-**Parse Error**
-at 76:1 to 76:1
 
 **Parse Error**
 at 77:3 to 77:3
@@ -1142,6 +1140,7 @@ at 148:1 to 148:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_star)

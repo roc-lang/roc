@@ -17,18 +17,17 @@ match result {
 KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpPlus Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpBinaryMinus Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpStar Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpSlash Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <28 branches>)
+(match
+  (scrutinee     (lc "result")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match result
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:14
-
 **Parse Error**
 at 2:15 to 2:15
 
@@ -40,12 +39,6 @@ at 4:19 to 4:19
 
 **Parse Error**
 at 5:20 to 5:20
-
-**Parse Error**
-at 1:1 to 6:2
-
-**Parse Error**
-at 6:2 to 6:2
 
 # CANONICALIZE
 ~~~clojure

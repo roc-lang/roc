@@ -44,7 +44,10 @@ app
 {
 	f : platform
 	""
-} | (0, ) || )
+} | (
+	0,
+	) || ,
+)
 ~~~
 # EXPECTED
 NIL

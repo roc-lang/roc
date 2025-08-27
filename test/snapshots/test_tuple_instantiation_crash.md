@@ -75,9 +75,6 @@ app
 swap :
 	(a, b) -> (b, a)
 swap = \(x, y) -> (y, x)
-
-# Call it with two separate arguments instead of a tuple
-# This should trigger instantiation and then crash on error reporting
 main = swap((1, 2))
 ~~~
 # EXPECTED

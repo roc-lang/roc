@@ -284,137 +284,145 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
               )
             )
           )
-          (match <179 branches>)
-          (binop_colon
-            (lc "to_str")
-            (uc "Color")
-          )
-          (malformed malformed:expr_unexpected_token)
-          (uc "Str")
-          (binop_equals
-            (lc "to_str")
-            (lambda
-              (body
-                (match <223 branches>)
-              )
-              (args
-                (lc "color")
-              )
+          (match
+            (scrutinee               (lc "bytes")
+))
+        )
+      )
+      (args
+        (lc "str")
+      )
+    )
+  )
+  (binop_colon
+    (lc "to_str")
+    (binop_thin_arrow
+      (uc "Color")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "to_str")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "color")
+))
+      )
+      (args
+        (lc "color")
+      )
+    )
+  )
+  (expect
+    (binop_double_equals
+      (apply_anon
+        (binop_pipe
+          (apply_lc
+            (lc "rgb")
+            (tuple_literal
+              (num_literal_i32 124)
+              (num_literal_i32 56)
+              (num_literal_i32 245)
             )
           )
-          (binop_double_equals
+          (dot_lc "to_str")
+        )
+      )
+      (str_literal_big "rgb(124, 56, 245)")
+    )
+  )
+  (expect
+    (binop_double_equals
+      (apply_anon
+        (binop_pipe
+          (apply_lc
+            (lc "rgba")
+            (tuple_literal
+              (num_literal_i32 124)
+              (num_literal_i32 56)
+              (num_literal_i32 245)
+              (num_literal_i32 255)
+            )
+          )
+          (dot_lc "to_str")
+        )
+      )
+      (str_literal_big "rgba(124, 56, 245, 1.0)")
+    )
+  )
+  (expect
+    (binop_double_equals
+      (apply_anon
+        (binop_pipe
+          (apply_lc
+            (lc "hex")
+            (str_literal_big "#ff00ff")
+          )
+          (dot_lc "map_ok")
+        )
+        (lc "to_str")
+      )
+      (apply_uc
+        (uc "Ok")
+        (str_literal_big "#ff00ff")
+      )
+    )
+  )
+  (binop_colon
+    (lc "named")
+    (binop_thin_arrow
+      (uc "Str")
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (uc "Color")
+          (list_literal
+            (apply_uc
+              (uc "UnknownColor")
+              (uc "Str")
+            )
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "named")
+    (lambda
+      (body
+        (if_else <284 branches>)
+      )
+      (args
+        (lc "str")
+      )
+    )
+  )
+  (binop_equals
+    (lc "is_named_color")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "colors")
             (apply_anon
               (binop_pipe
-                (apply_lc
-                  (lc "rgb")
-                  (tuple_literal
-                    (num_literal_i32 124)
-                    (num_literal_i32 56)
-                    (num_literal_i32 245)
-                  )
-                )
-                (dot_lc "to_str")
+                (uc "Set")
+                (dot_lc "from_list")
               )
-            )
-            (str_literal_big "rgb(124, 56, 245)")
-          )
-          (expect
-            (binop_double_equals
-              (apply_anon
-                (binop_pipe
-                  (apply_lc
-                    (lc "rgba")
-                    (tuple_literal
-                      (num_literal_i32 124)
-                      (num_literal_i32 56)
-                      (num_literal_i32 245)
-                      (num_literal_i32 255)
-                    )
-                  )
-                  (dot_lc "to_str")
-                )
-              )
-              (str_literal_big "rgba(124, 56, 245, 1.0)")
-            )
-          )
-          (expect
-            (binop_double_equals
-              (apply_anon
-                (binop_pipe
-                  (apply_lc
-                    (lc "hex")
-                    (str_literal_big "#ff00ff")
-                  )
-                  (dot_lc "map_ok")
-                )
-                (lc "to_str")
-              )
-              (apply_uc
-                (uc "Ok")
-                (str_literal_big "#ff00ff")
-              )
-            )
-          )
-          (binop_colon
-            (lc "named")
-            (uc "Str")
-          )
-          (malformed malformed:expr_unexpected_token)
-          (apply_uc
-            (uc "Result")
-            (tuple_literal
-              (uc "Color")
               (list_literal
-                (apply_uc
-                  (uc "UnknownColor")
-                  (uc "Str")
-                )
+                (str_literal_big "AliceBlue")
+                (str_literal_big "AntiqueWhite")
+                (str_literal_small "Aqua")
               )
             )
           )
-          (binop_equals
-            (lc "named")
-            (lambda
-              (body
-                (if_else <279 branches>)
-              )
-              (args
-                (lc "str")
-              )
+          (apply_anon
+            (binop_pipe
+              (lc "colors")
+              (dot_lc "contains")
             )
-          )
-          (binop_equals
-            (lc "is_named_color")
-            (lambda
-              (body
-                (block
-                  (binop_equals
-                    (lc "colors")
-                    (apply_anon
-                      (binop_pipe
-                        (uc "Set")
-                        (dot_lc "from_list")
-                      )
-                      (list_literal
-                        (str_literal_big "AliceBlue")
-                        (str_literal_big "AntiqueWhite")
-                        (str_literal_small "Aqua")
-                      )
-                    )
-                  )
-                  (apply_anon
-                    (binop_pipe
-                      (lc "colors")
-                      (dot_lc "contains")
-                    )
-                    (lc "str")
-                  )
-                )
-              )
-              (args
-                (lc "str")
-              )
-            )
+            (lc "str")
           )
         )
       )
@@ -445,11 +453,13 @@ Color := [
 
 rgb : U8 -> U8 -> U8 -> Color
 rgb = \(r, g, b) -> Color.RGB((r, g, b))
+
 rgba : U8 -> U8 -> U8 -> U8 -> Color
 rgba = \(r, g, b, a) -> {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
+
 hex : Str -> Result (Color, [InvalidHex(Str)])
 hex = \str -> {
 	bytes = str.to_utf8()
@@ -526,50 +536,28 @@ hex = \str -> {
                 and f.is_char_in_hex_range()
 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("
-	match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
+	match bytes
+}
 
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
+to_str : Color -> Str
+to_str = \color -> match color
+expect rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
+expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
+expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
+
+named : Str -> Result (Color, [UnknownColor(Str)])
+named = \str -> if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
+
+is_named_color = \str -> {
+	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
 	
 
-to_str : Color
-	->
-	Str
-	to_str = \color -> match color {
-    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-    Color.Named(inner) => inner
-    Color.Hex(inner) => inner
-}
-	rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
-	expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
-	expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
-	named : Str
-	->
-	Result((Color, [UnknownColor(Str)]))
-	named = \str -> if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
-	is_named_color = \str -> {
-		colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-		colors.contains(str)
-	}
+colors.contains(str)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 32:5 to 32:17
-
 **Parse Error**
 at 33:33 to 33:33
 
@@ -578,18 +566,6 @@ at 42:13 to 42:25
 
 **Parse Error**
 at 44:11 to 44:11
-
-**Parse Error**
-at 32:5 to 46:1
-
-**Parse Error**
-at 46:1 to 46:1
-
-**Parse Error**
-at 48:16 to 48:16
-
-**Parse Error**
-at 49:18 to 49:30
 
 **Parse Error**
 at 50:24 to 50:24
@@ -604,19 +580,7 @@ at 52:24 to 52:24
 at 53:22 to 53:22
 
 **Parse Error**
-at 49:18 to 56:1
-
-**Parse Error**
-at 56:1 to 56:1
-
-**Parse Error**
-at 60:13 to 60:13
-
-**Parse Error**
 at 62:5 to 63:9
-
-**Parse Error**
-at 27:13 to 72:1
 
 # CANONICALIZE
 ~~~clojure
@@ -625,6 +589,14 @@ at 27:13 to 72:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_minus)
+  (Expr.binop_minus)
+  (Expr.binop_minus)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

@@ -101,29 +101,37 @@ value1 = ""
 This
 is
 a
-"string"withjust
+"string"
+with
+just
 one
 line
 
-value2 = ""This
+value2 = ""
+This
 is
 a
-"string"withjust
+"string"
+with
+just
 one
 line
 
-value3 = ""This
+value3 = ""
+This
 is
 a
 string
 ""With
 multiple
 lines
-""${
+""$
+{
 	value1
 }
 
-value4 = ""This
+value4 = ""
+This
 is
 a
 string
@@ -131,7 +139,8 @@ string
 ""With
 multiple
 lines
-""${
+""$
+{
 	value2
 }
 ~~~

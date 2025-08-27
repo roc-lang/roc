@@ -65,9 +65,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	main,
-]
+module [main]
 
 import json.Json exposing [decode, encode]
 main = {

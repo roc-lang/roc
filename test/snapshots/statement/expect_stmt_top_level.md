@@ -37,12 +37,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign UpperIdent Dot Up
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-]
-
-foo = Bool.True
-expect foo != Bool.False
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

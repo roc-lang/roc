@@ -73,6 +73,7 @@ app
 apply :
 	((_a -> _b) -> _a) -> _b
 apply = \(fn, x) -> fn(x)
+
 main! = \_ -> {  }
 ~~~
 # EXPECTED

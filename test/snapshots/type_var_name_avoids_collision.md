@@ -353,17 +353,25 @@ w = 18
 x = 19
 y = 20
 z = 21
+
+# This should get type 'aa -> aa' since a-z are taken
 yetAnotherIdentity = \arg -> arg
+
+# Test that we still avoid collisions even with two-letter names
 aa = 100
 ab = 200
+
+# This should skip 'aa' and 'ab' and use 'ac -> ac'
 finalIdentity = \param -> param
+
 main! = \_ -> {
 	result1 = identity(123)
 	result2 = anotherIdentity("test")
 	result3 = combine((result1, result2))
 	result4 = yetAnotherIdentity(True)
 	result5 = finalIdentity(3.14)
-	a + f
+	# Return something to complete the function
+a + f # Just use some of our variables
 }
 ~~~
 # EXPECTED

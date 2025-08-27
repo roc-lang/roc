@@ -14,26 +14,19 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpFatArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <5 branches>)
+(match
+  (scrutinee     (lc "person")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match person
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:14
-
-**Parse Error**
 at 2:19 to 2:19
-
-**Parse Error**
-at 1:1 to 3:2
-
-**Parse Error**
-at 3:2 to 3:2
 
 # CANONICALIZE
 ~~~clojure

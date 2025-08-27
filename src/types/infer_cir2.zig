@@ -369,14 +369,13 @@ pub fn InferContext(comptime CIR2: type) type {
                     const node_idx = @as(@TypeOf(self.cir.ast.*).Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
                     const ast_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
 
-                    // Check if the original node has match_branches payload
+                    // Check if the original node has nodes payload
                     if (ast_node.tag != .match) {
                         // Node was mutated but payload doesn't match - return fresh type var
                         return try self.store.fresh();
                     }
 
-                    const match_branches_u32 = ast_node.payload.match_branches;
-                    const nodes_idx = @as(collections.NodeSlices(@TypeOf(self.cir.ast.*).Node.Idx).Idx, @enumFromInt(match_branches_u32));
+                    const nodes_idx = ast_node.payload.nodes;
 
                     if (!nodes_idx.isNil()) {
                         var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);

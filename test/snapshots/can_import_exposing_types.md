@@ -127,45 +127,49 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
     (lc "handleRequest")
     (lambda
       (body
-        (binop_thin_arrow
-          (record_literal
-            (binop_equals
-              (lc "result")
-              (apply_anon
-                (binop_pipe
-                  (uc "Json")
-                  (dot_lc "decode")
-                )
-                (binop_pipe
-                  (lc "req")
-                  (dot_lc "body")
-                )
+        (block
+          (binop_equals
+            (lc "result")
+            (apply_anon
+              (binop_pipe
+                (uc "Json")
+                (dot_lc "decode")
+              )
+              (binop_pipe
+                (lc "req")
+                (dot_lc "body")
               )
             )
-            (match <60 branches>)
-            (binop_colon
-              (lc "processData")
-              (uc "Config")
-            )
-            (apply_uc
-              (uc "List")
-              (uc "Value")
-            )
           )
-          (apply_uc
-            (uc "Result")
-            (tuple_literal
-              (apply_uc
-                (uc "List")
-                (uc "Value")
-              )
-              (uc "Error")
-            )
-          )
+          (match
+            (scrutinee               (lc "result")
+))
         )
       )
       (args
         (lc "req")
+      )
+    )
+  )
+  (binop_colon
+    (lc "processData")
+    (binop_thin_arrow
+      (uc "Config")
+      (binop_thin_arrow
+        (apply_uc
+          (uc "List")
+          (uc "Value")
+        )
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (apply_uc
+              (uc "List")
+              (uc "Value")
+            )
+            (uc "Error")
+          )
+        )
       )
     )
   )
@@ -266,10 +270,37 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
     (lc "handleResponse")
     (lambda
       (body
-        (match <168 branches>)
+        (match
+          (scrutinee             (binop_pipe
+              (lc "response")
+              (dot_lc "status")
+            )
+))
       )
       (args
         (lc "response")
+      )
+    )
+  )
+  (binop_colon
+    (lc "combineResults")
+    (binop_thin_arrow
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (uc "Value")
+          (uc "Error")
+        )
+      )
+      (binop_thin_arrow
+        (uc "Status")
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (uc "Response")
+            (uc "Error")
+          )
+        )
       )
     )
   )
@@ -277,7 +308,9 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
     (lc "combineResults")
     (lambda
       (body
-        (match <201 branches>)
+        (match
+          (scrutinee             (lc "jsonResult")
+))
       )
       (args
         (tuple_literal
@@ -301,14 +334,19 @@ parseJson = \input -> Json.parse(input)
 
 # Test mixing exposed types with qualified access
 handleRequest : Request -> Response
-handleRequest = \req -> { result = Json.decode(req.body), match result {
-        Ok(value) => Http.ok(value)
-        Err(error) => Http.badRequest(error)
-    }, 
+handleRequest = \req -> {
+	result = Json.decode(req.body)
+	match result
+}
 
 # Test using exposed types in complex signatures
-processData : Config, List(Value) } -> Result((List(Value), Error))
-processData = \(config, values) -> List.mapTry((values, \v -> (Json.validateWith((config, v)))))ServerConfig :
+processData : Config -> List Value -> Result (List(Value), Error)
+processData = \
+	(config, values),
+ -> List.mapTry(
+	(values, \v -> (Json.validateWith((config, v)))),
+)
+ServerConfig :
 	{
 		jsonConfig : Config,
 		httpStatus : Status,
@@ -316,21 +354,16 @@ processData = \(config, values) -> List.mapTry((values, \v -> (Json.validateWith
 	}
 createClient : Config -> Http.Client
 createClient = \config -> Http.clientWith(config)
+
+# Test nested type usage
 handleResponse : Response -> Str
-handleResponse = \response -> match response.status {
-        Ok(status) => Http.statusToString(status)
-        Err(error) => Error.toString(error)
-    }combineResults = \(jsonResult, httpStatus) -> match jsonResult {
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
-        Err(error) => Err(error)
-    }
+handleResponse = \response -> match response.status
+combineResults : Result (Value, Error) -> Status -> Result (Response, Error)
+combineResults = \(jsonResult, httpStatus) -> match jsonResult
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 15:5 to 15:18
-
 **Parse Error**
 at 16:19 to 16:19
 
@@ -338,22 +371,10 @@ at 16:19 to 16:19
 at 17:20 to 17:20
 
 **Parse Error**
-at 15:5 to 19:1
-
-**Parse Error**
-at 19:1 to 19:1
-
-**Parse Error**
-at 13:23 to 22:35
-
-**Parse Error**
 at 27:5 to 27:5
 
 **Parse Error**
-at 24:9 to 30:1
-
-**Parse Error**
-at 43:5 to 43:27
+at 24:5 to 30:1
 
 **Parse Error**
 at 44:20 to 44:20
@@ -362,22 +383,10 @@ at 44:20 to 44:20
 at 45:20 to 45:20
 
 **Parse Error**
-at 43:5 to 49:1
-
-**Parse Error**
-at 51:5 to 51:22
-
-**Parse Error**
 at 52:19 to 52:19
 
 **Parse Error**
 at 53:20 to 53:20
-
-**Parse Error**
-at 51:5 to 54:6
-
-**Parse Error**
-at 54:6 to 54:6
 
 # CANONICALIZE
 ~~~clojure
@@ -385,6 +394,8 @@ at 54:6 to 54:6
   (Expr.binop_plus)
   (Expr.binop_plus)
   (Expr.binop_plus)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

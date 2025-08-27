@@ -31,7 +31,7 @@ NIL
 at 1:2 to 1:2
 
 **Unsupported Node**
-at 1:2 to 1:12
+at 1:4 to 1:6
 
 # CANONICALIZE
 ~~~clojure

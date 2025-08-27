@@ -15,18 +15,17 @@ match l {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow UpperIdent OpenRound UpperIdent CloseRound OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <12 branches>)
+(match
+  (scrutinee     (lc "l")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match l
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:9
-
 **Parse Error**
 at 2:8 to 2:8
 
@@ -41,12 +40,6 @@ at 3:11 to 3:11
 
 **Parse Error**
 at 3:13 to 3:13
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure

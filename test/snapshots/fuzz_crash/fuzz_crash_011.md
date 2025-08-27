@@ -20,11 +20,7 @@ KwModule UpperIdent CloseSquare UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	P,
-	],
-	F,
-]
+module [P, ], F]
 
 P]
 F

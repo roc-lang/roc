@@ -79,11 +79,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	broken_fn1,
-	broken_fn2,
-	broken_fn3,
-]
+module [broken_fn1, broken_fn2, broken_fn3]
 
 broken_fn1 : a -> b where module(a) | .method -> b
 

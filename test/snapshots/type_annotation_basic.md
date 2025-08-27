@@ -174,12 +174,21 @@ combine : a -> b -> (a, b)
 combine = \(first, second) -> (first, second)
 addOne : U64 -> U64
 addOne = \n -> n + 1
+
 main! = \_ -> {
 	num = identity(42)
 	text = identity("hello")
-	pair = combine((num, text))
-	result = addOne(5)
-	result : result
+	
+
+# Test combine function
+pair = combine((num, text))
+	
+
+# Test concrete function
+result = addOne(5)
+	
+
+result : result
 }
 ~~~
 # EXPECTED

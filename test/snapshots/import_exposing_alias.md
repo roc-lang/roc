@@ -71,14 +71,14 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	main,
-]
+module [main]
 
 import json.Json exposing [decode]
-asfromJson
+as
+fromJson
 encode
-astoJson]
+as
+toJson]
 
 main = {
 	data = { name : "Bob", age : 25 }

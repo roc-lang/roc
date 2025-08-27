@@ -18,18 +18,17 @@ match sequence {
 KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma LowerIdent Comma Int CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma Int CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <24 branches>)
+(match
+  (scrutinee     (lc "sequence")
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match sequence
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:16
-
 **Parse Error**
 at 2:16 to 2:16
 
@@ -44,12 +43,6 @@ at 5:17 to 5:17
 
 **Parse Error**
 at 6:8 to 6:8
-
-**Parse Error**
-at 1:1 to 7:2
-
-**Parse Error**
-at 7:2 to 7:2
 
 # CANONICALIZE
 ~~~clojure

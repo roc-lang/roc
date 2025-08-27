@@ -35,13 +35,7 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpColonEqual OpenSquare Up
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Color,
-]
-
-Color := [Red, Blue]
-
-test = Color.Red
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

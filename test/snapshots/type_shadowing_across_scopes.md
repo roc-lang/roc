@@ -77,10 +77,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Result,
-	processData,
-]
+module [Result, processData]
 
 Result((a, b)) : [Ok(a), Err(b)]
 

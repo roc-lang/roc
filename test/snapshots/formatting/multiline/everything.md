@@ -377,7 +377,9 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
               (malformed malformed:expr_unexpected_token)
             )
           )
-          (match <191 branches>)
+          (match
+            (scrutinee               (lc "x")
+))
         )
       )
       (args
@@ -396,15 +398,23 @@ module []
 
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-asIas1
+as
+Ias1
 I22
-asIas2
+as
+Ias2
 ]
 
 # Where constraint
 A(a) : a where module(a) | .a1 : a -> a -> ) -> (Str, module(a) | .a2) : a -> a -> ) -> Str
 B(b) : b where module(b) | .b1 : b -> b -> ) -> (Str, module(b) | .b2) : b -> b -> ) -> Str
-C((a, b) : (a, b))D((a, b) : C (a, b))E :
+
+C(
+	(a, b) : (a, b),
+)D(
+	(a, b) : C (a, b),
+)
+E :
 	{
 		a : Str,
 		b : Str,
@@ -413,7 +423,10 @@ F : [
 	A,
 	B,
 ]
-g : (e -> e where module(e) | A, module(e) | B)h = \(x, y) -> {
+
+g : (e -> e where module(e) | A, module(e) | B)
+
+h = \(x, y) -> {
 	h1 = {
 		h11 : x,
 		h12 : x,
@@ -423,37 +436,18 @@ g : (e -> e where module(e) | A, module(e) | B)h = \(x, y) -> {
 				h132 : y,
 			},
 	}
-	h2 = h((x, y))
-	h3 = A((x, y))
+	h2 = h(
+		(x, y),
+	)
+	h3 = A(
+		(x, y),
+	)
 	h4 = [
 		x,
 		y,
 	]
 	h5 = (x, y)
-	match x {
-		Z1(
-			(
-				a,
-				b,
-			),
-		) => a
-		Z2(
-			a,
-			b,
-		) => a
-		Z3(
-			{
-				a,
-				b,
-			},
-		) => a
-		Z4(
-			[
-				a,
-				b,
-			],
-		) => a
-	}
+	match x
 }
 ~~~
 # EXPECTED
@@ -541,9 +535,6 @@ at 84:2 to 84:2
 at 86:2 to 86:2
 
 **Parse Error**
-at 86:2 to 86:10
-
-**Parse Error**
 at 91:4 to 91:4
 
 **Parse Error**
@@ -572,15 +563,6 @@ at 108:3 to 108:3
 
 **Parse Error**
 at 103:3 to 109:2
-
-**Parse Error**
-at 86:2 to 110:1
-
-**Parse Error**
-at 110:1 to 110:1
-
-**Parse Error**
-at 60:12 to 110:2
 
 # CANONICALIZE
 ~~~clojure

@@ -44,13 +44,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma UpperI
 ~~~
 # FORMATTED
 ~~~roc
-{
-	_privateField : "leading underscore",
-	field_ : "trailing underscore",
-	PascalCase : "pascal",
-	kebab - case : "kebab",
-	field,
-}
+{ _privateField : "leading underscore", field_ : "trailing underscore", PascalCase : "pascal", kebab - case : "kebab", field }
 ~~~
 # EXPECTED
 NIL

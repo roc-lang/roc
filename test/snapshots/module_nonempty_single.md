@@ -16,10 +16,7 @@ KwModule OpenSquare LowerIdent Comma UpperIdent CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	something,
-	SomeType,
-]
+module [something, SomeType]
 
 ~~~
 # EXPECTED

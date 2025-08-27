@@ -42,9 +42,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	checkNumber,
-]
+module [checkNumber]
 
 checkNumber = \num -> {
 	if num < 0

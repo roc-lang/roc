@@ -16,12 +16,6 @@ const ByteSlices = collections.ByteSlices;
 const Position = base.Region.Position;
 const Ident = base.Ident;
 
-/// Format options for customizing formatter behavior
-pub const FormatOptions = struct {
-    /// Whether to preserve trailing commas
-    preserve_trailing_commas: bool = true,
-};
-
 /// Main formatter struct for AST2
 const Formatter = struct {
     allocator: std.mem.Allocator,
@@ -30,14 +24,13 @@ const Formatter = struct {
     ident_store: *const Ident.Store,
     tokens: std.ArrayList(Token),
     output: std.ArrayList(u8),
-    options: FormatOptions,
 
     // Formatting state - matches original formatter
-    curr_indent: u32 = 0,
+    curr_indent_level: u32 = 0,
     has_newline: bool = true, // Starts true since beginning of file is considered a newline
     last_formatted_pos: usize = 0, // Track position in source for comment preservation
 
-    fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, options: FormatOptions) !Formatter {
+    fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store) !Formatter {
         return Formatter{
             .allocator = allocator,
             .ast = ast,
@@ -45,7 +38,6 @@ const Formatter = struct {
             .ident_store = ident_store,
             .tokens = std.ArrayList(Token).init(allocator),
             .output = std.ArrayList(u8).init(allocator),
-            .options = options,
         };
     }
 
@@ -174,7 +166,7 @@ const Formatter = struct {
                     try self.pushIndent();
                     try self.push('{');
                     try self.ensureNewline();
-                    self.curr_indent += 1;
+                    self.curr_indent_level += 1;
 
                     if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
                         var it = self.ast.node_slices.nodes(&packages_idx);
@@ -182,7 +174,7 @@ const Formatter = struct {
                             const pkg_node = self.getNode(pkg);
 
                             // Flush any comments before this package
-                            _ = try self.flushCommentsBefore(pkg_node.start);
+                            _ = try self.flushCommentsBefore(pkg_node.region.start);
 
                             try self.pushIndent();
 
@@ -201,20 +193,20 @@ const Formatter = struct {
                                     if (rhs_node.tag == .block) {
                                         try self.push('[');
                                         try self.ensureNewline();
-                                        self.curr_indent += 1;
+                                        self.curr_indent_level += 1;
 
                                         const nodes_idx = rhs_node.payload.nodes;
                                         var provides_it = self.ast.node_slices.nodes(&nodes_idx);
                                         while (provides_it.next()) |item| {
                                             const item_node = self.getNode(item);
-                                            _ = try self.flushCommentsBefore(item_node.start);
+                                            _ = try self.flushCommentsBefore(item_node.region.start);
                                             try self.pushIndent();
                                             try self.formatNode(item);
                                             try self.push(',');
                                             try self.ensureNewline();
                                         }
 
-                                        self.curr_indent -= 1;
+                                        self.curr_indent_level -= 1;
                                         try self.pushIndent();
                                         try self.push(']');
                                     } else {
@@ -232,7 +224,7 @@ const Formatter = struct {
                         }
                     }
 
-                    self.curr_indent -= 1;
+                    self.curr_indent_level -= 1;
                     try self.pushIndent();
                     try self.push('}');
                 } else {
@@ -383,25 +375,62 @@ const Formatter = struct {
             return;
         }
 
-        // For now, always format exposed lists as multiline
-        // This matches the original formatter behavior
-        self.curr_indent += 1;
-        try self.ensureNewline();
-
+        // Count items and check for comments to decide on formatting
+        var item_count: usize = 0;
+        var has_comments = false;
         var iter = self.ast.node_slices.nodes(&exposes_idx);
 
+        // First pass: count and check for complexity
         while (iter.next()) |node_idx| {
-            // Check for comments before this item
+            item_count += 1;
             const node = self.getNode(node_idx);
-            _ = try self.flushCommentsBefore(node.start);
 
-            try self.pushIndent();
-            try self.formatNode(node_idx);
-            try self.push(',');
+            // Check if there are comments before this node
+            if (self.last_formatted_pos < node.region.start.offset) {
+                const between = self.source[self.last_formatted_pos..node.region.start.offset];
+                if (std.mem.indexOf(u8, between, "#") != null) {
+                    has_comments = true;
+                }
+            }
+        }
+
+        // Use multiline if: more than 3 items, or has comments
+        const multiline = item_count > 3 or has_comments;
+
+        if (multiline) {
+            self.curr_indent_level += 1;
             try self.ensureNewline();
         }
 
-        self.curr_indent -= 1;
+        // Reset iterator for second pass
+        iter = self.ast.node_slices.nodes(&exposes_idx);
+        var first = true;
+
+        while (iter.next()) |node_idx| {
+            if (multiline) {
+                // Check for comments before this item
+                const node = self.getNode(node_idx);
+                _ = try self.flushCommentsBefore(node.region.start);
+                try self.pushIndent();
+            } else {
+                if (!first) try self.pushAll(", ");
+            }
+
+            try self.formatNode(node_idx);
+
+            if (multiline) {
+                try self.push(',');
+                try self.ensureNewline();
+            }
+
+            first = false;
+        }
+
+        if (multiline) {
+            self.curr_indent_level -= 1;
+            try self.pushIndent();
+        }
+
         try self.push(']');
     }
 
@@ -615,7 +644,7 @@ const Formatter = struct {
             .malformed => |diagnostic| {
                 // For malformed nodes, we preserve the original source text
                 // to avoid losing what the user wrote
-                const start = node.start.offset;
+                const start = node.region.start.offset;
 
                 // Find the end of this malformed node using diagnostic information
                 // The diagnostic gives us hints about what went wrong
@@ -676,7 +705,7 @@ const Formatter = struct {
                 try self.pushAll("[");
 
                 if (multiline) {
-                    self.curr_indent += 1;
+                    self.curr_indent_level += 1;
                 }
 
                 var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
@@ -702,7 +731,7 @@ const Formatter = struct {
                     if (self.hasTrailingComma(rhs)) {
                         try self.push(',');
                     }
-                    self.curr_indent -= 1;
+                    self.curr_indent_level -= 1;
                     try self.ensureNewline();
                     try self.pushIndent();
                 }
@@ -760,7 +789,7 @@ const Formatter = struct {
             if (needs_lhs_parens) try self.push(')');
 
             try self.ensureNewline();
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
             try self.pushIndent();
             try self.push('.');
 
@@ -768,7 +797,7 @@ const Formatter = struct {
             try self.formatNode(rhs);
             if (needs_rhs_parens) try self.push(')');
 
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             return;
         }
 
@@ -798,7 +827,7 @@ const Formatter = struct {
                 equals_pos += 1; // Move past the =
 
                 // Now check for comments between = and RHS
-                const rhs_start = rhs_node.start.offset;
+                const rhs_start = rhs_node.region.start.offset;
                 // ALWAYS check for comments, even if positions seem wrong
                 if (equals_pos < rhs_start) {
                     const between = self.source[equals_pos..rhs_start];
@@ -847,7 +876,7 @@ const Formatter = struct {
             }
 
             if (multiline) {
-                self.curr_indent += 1;
+                self.curr_indent_level += 1;
                 if (!comment_after_equals) {
                     // Only add blank line if there wasn't a comment (which already added newline)
                     try self.ensureBlankLine();
@@ -859,7 +888,7 @@ const Formatter = struct {
                 if (needs_rhs_parens) try self.push('(');
                 try self.formatNode(rhs);
                 if (needs_rhs_parens) try self.push(')');
-                self.curr_indent -= 1;
+                self.curr_indent_level -= 1;
             } else {
                 if (needs_rhs_parens) try self.push('(');
                 try self.formatNode(rhs);
@@ -880,7 +909,7 @@ const Formatter = struct {
             // Check for comments after operator
             const rhs_node = self.getNode(rhs);
             const between_start = self.last_formatted_pos;
-            const rhs_start = rhs_node.start.offset;
+            const rhs_start = rhs_node.region.start.offset;
             if (rhs_start > between_start) {
                 // Flush any comments between operator and RHS
                 try self.flushCommentsBeforeNode(rhs_node);
@@ -928,10 +957,10 @@ const Formatter = struct {
         if (is_complex_type) {
             try self.pushAll(" :");
             try self.ensureNewline();
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
             try self.pushIndent();
             try self.formatTypeExpression(rhs);
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
         } else {
             try self.pushAll(" : ");
             try self.formatTypeExpression(rhs);
@@ -996,7 +1025,7 @@ const Formatter = struct {
         try self.push('{');
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         var it = self.ast.node_slices.nodes(&node.payload.nodes);
@@ -1033,7 +1062,7 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1088,10 +1117,10 @@ const Formatter = struct {
         if (multiline) {
             try self.pushAll(" where");
             try self.ensureNewline();
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
             try self.pushIndent();
             try self.formatWhereConstraints(rhs);
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
         } else {
             try self.pushAll(" where ");
             try self.formatWhereConstraints(rhs);
@@ -1156,7 +1185,7 @@ const Formatter = struct {
         // Extract from source
         try self.push('.');
 
-        const start = node.start.offset + 1; // Skip the dot
+        const start = node.region.start.offset + 1; // Skip the dot
         var end = start;
 
         // Find the number after the dot
@@ -1171,15 +1200,11 @@ const Formatter = struct {
 
     fn formatDotIdent(self: *Formatter, node_idx: Node.Idx) !void {
         // For .foo identifiers, just format as .foo
-        try self.pushAll(".");
         const node = self.getNode(node_idx);
 
-        // Find the identifier text from the source (skip the dot)
-        const start = node.start.offset + 1; // Skip the dot
-        const end = self.findIdentifierEnd(start);
-
-        const ident = self.source[start..end];
-        try self.pushAll(ident);
+        // The node region includes the dot and the identifier
+        const text = self.source[node.region.start.offset..node.region.end.offset];
+        try self.pushAll(text);
     }
 
     fn formatUnaryNot(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1245,7 +1270,7 @@ const Formatter = struct {
             if (idx > 0) {
                 const prev_node_idx = nodes.items[idx - 1];
                 const prev_end = self.findNodeEnd(prev_node_idx);
-                const curr_start = curr_node.start.offset;
+                const curr_start = curr_node.region.start.offset;
 
                 if (prev_end < curr_start) {
                     const between = self.source[prev_end..curr_start];
@@ -1344,7 +1369,7 @@ const Formatter = struct {
         try self.pushAll("[");
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         // List literals store elements in nodes
@@ -1361,7 +1386,7 @@ const Formatter = struct {
                     _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBefore(elem_node.start);
+                _ = try self.flushCommentsBefore(elem_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1385,9 +1410,9 @@ const Formatter = struct {
                 // Check for comment after trailing comma
                 _ = try self.flushInlineComment(self.last_formatted_pos);
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing bracket
-            _ = try self.flushCommentsBeforePosition(self.findClosingBracket(node_idx));
+            _ = try self.flushCommentsBeforePosition(self.getNode(node_idx).region.end.offset);
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1401,8 +1426,8 @@ const Formatter = struct {
         // Special case: single-field record with just identifier and comma e.g. { foo, }
         var field_count: usize = 0;
         var is_single_ident_with_comma = false;
-        var temp_it = self.ast.node_slices.nodes(&node.payload.nodes);
-        while (temp_it.next()) |field| {
+        var field_iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        while (field_iter.next()) |field| {
             field_count += 1;
             if (field_count == 1) {
                 const field_node = self.getNode(field);
@@ -1416,7 +1441,7 @@ const Formatter = struct {
 
         if (multiline) {
             try self.push('{');
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         } else {
             try self.pushAll("{ ");
         }
@@ -1440,7 +1465,7 @@ const Formatter = struct {
                     _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
                 // Flush any comments before this field
-                _ = try self.flushCommentsBefore(field_node.start);
+                _ = try self.flushCommentsBefore(field_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1464,9 +1489,9 @@ const Formatter = struct {
                 // Check for comment after trailing comma
                 _ = try self.flushInlineComment(self.last_formatted_pos);
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing brace
-            _ = try self.flushCommentsBeforePosition(self.findClosingBrace(node_idx));
+            _ = try self.flushCommentsBeforePosition(self.getNode(node_idx).region.end.offset);
             try self.ensureNewline();
             try self.pushIndent();
             try self.pushAll("}");
@@ -1484,7 +1509,7 @@ const Formatter = struct {
         try self.push('(');
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         var iter = self.ast.node_slices.nodes(&node.payload.nodes);
@@ -1510,7 +1535,7 @@ const Formatter = struct {
                     _ = try self.flushInlineComment(self.last_formatted_pos);
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBefore(child_node.start);
+                _ = try self.flushCommentsBefore(child_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1532,7 +1557,7 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1550,7 +1575,7 @@ const Formatter = struct {
 
         while (iter.next()) |stmt_idx| {
             const stmt_node = self.getNode(stmt_idx);
-            const stmt_start = stmt_node.start.offset;
+            const stmt_start = stmt_node.region.start.offset;
 
             if (!first) {
                 // Check source between statements for blank lines
@@ -1585,7 +1610,7 @@ const Formatter = struct {
         const nodes_idx = node.payload.nodes;
 
         try self.push('{');
-        self.curr_indent += 1;
+        self.curr_indent_level += 1;
 
         var iter = self.ast.node_slices.nodes(&nodes_idx);
         var first = true;
@@ -1596,7 +1621,7 @@ const Formatter = struct {
             first = false;
         }
 
-        self.curr_indent -= 1;
+        self.curr_indent_level -= 1;
         try self.ensureNewline();
         try self.pushIndent();
         try self.push('}');
@@ -1665,10 +1690,10 @@ const Formatter = struct {
         if (multiline) {
             // Roc doesn't use 'then', just space before the block
             try self.ensureNewline();
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
             try self.pushIndent();
             try self.formatNode(then_branch.?);
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
 
             if (else_branch) |eb| {
                 try self.ensureNewline();
@@ -1710,9 +1735,8 @@ const Formatter = struct {
 
         try self.pushAll("match ");
 
-        // Match nodes use match_branches to count branches
-        const branch_count = node.payload.match_branches;
-        const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(branch_count));
+        // Match nodes store scrutinee followed by pattern-body pairs in the nodes field
+        const nodes_idx = node.payload.nodes;
         var it = self.ast.node_slices.nodes(&nodes_idx);
 
         // First node is the scrutinee
@@ -1720,100 +1744,72 @@ const Formatter = struct {
             try self.formatNode(scrutinee);
         }
 
-        // Check if the next node is a block (malformed match syntax)
-        var peek_it = it;
-        if (peek_it.next()) |next_idx| {
-            const next_node = self.getNode(next_idx);
-            if (next_node.tag == .block) {
-                // This is the correct match syntax: match expr { branches }
-                // For now, just preserve the source formatting exactly
-                try self.pushAll(" ");
-                const start = next_node.start.offset;
-                const end = self.findNodeEnd(next_idx);
-                if (end > start and end <= self.source.len) {
-                    const block_source = self.source[start..end];
-                    try self.output.appendSlice(block_source);
-                    self.last_formatted_pos = end;
-                }
-                return;
-            }
-        }
+        // Match expressions in Roc use indentation, not curly braces
+        // Format is:
+        // match expr
+        //     pattern1 => body1
+        //     pattern2 => body2
 
-        // This path is for when branches are stored directly (shouldn't happen with correct syntax)
-        try self.pushAll(" {");
-        const multiline = self.nodeWillBeMultiline(node_idx);
-        if (multiline) {
-            try self.ensureNewline();
-            self.curr_indent += 1;
-        } else {
-            try self.pushAll(" ");
-        }
+        try self.ensureNewline();
+        self.curr_indent_level += 1;
 
-        // Format branches (pattern -> expr pairs)
-        var first_branch = true;
-        while (it.next()) |pattern_idx| {
-            if (!first_branch) {
-                if (multiline) {
-                    try self.ensureNewline();
+        // Format branches - each branch is stored as a binop_thick_arrow node
+        // where the lhs is the pattern and rhs is the body
+        while (it.next()) |branch_idx| {
+            const branch_node = self.getNode(branch_idx);
+
+            // Flush any comments before this branch
+            _ = try self.flushCommentsBefore(branch_node.region.start);
+
+            try self.pushIndent();
+
+            // Each branch should be a thick arrow (=>) binop
+            if (branch_node.tag == .binop_thick_arrow) {
+                const binop = self.ast.binOp(branch_idx);
+
+                // Format pattern - handle pattern alternatives (|) specially
+                const pattern_node = self.getNode(binop.lhs);
+                if (pattern_node.tag == .binop_pipe) {
+                    // This is a pattern alternative like Ok(x) | Err(x)
+                    try self.formatPatternWithAlternatives(binop.lhs);
                 } else {
-                    try self.pushAll(", ");
+                    try self.formatPattern(binop.lhs);
                 }
-            }
-            first_branch = false;
 
-            if (multiline) {
-                const pattern_node = self.getNode(pattern_idx);
-                // Flush any comments before this pattern
-                _ = try self.flushCommentsBefore(pattern_node.start);
-                try self.pushIndent();
-            }
+                try self.pushAll(" => ");
 
-            // Format pattern - handle pattern alternatives (|) specially
-            const pattern_node = self.getNode(pattern_idx);
-            if (pattern_node.tag == .binop_pipe) {
-                // This is a pattern alternative like Ok(x) | Err(x)
-                try self.formatPatternWithAlternatives(pattern_idx);
-            } else {
-                try self.formatPattern(pattern_idx);
-            }
+                // Format body
+                const body_node = self.getNode(binop.rhs);
 
-            try self.pushAll(" => ");
-
-            // Format body
-            if (it.next()) |body_idx| {
-                const body_node = self.getNode(body_idx);
-
-                // Complex bodies get their own line
-                const needs_indent = switch (body_node.tag) {
+                // Complex bodies might need their own line and extra indentation
+                const needs_block_indent = switch (body_node.tag) {
                     .block, .if_else, .match, .lambda => true,
                     else => false,
                 };
 
-                if (needs_indent and multiline) {
+                if (needs_block_indent) {
                     try self.ensureNewline();
-                    self.curr_indent += 1;
+                    self.curr_indent_level += 1;
                     try self.pushIndent();
-                    try self.formatNode(body_idx);
-                    self.curr_indent -= 1;
+                    try self.formatNode(binop.rhs);
+                    self.curr_indent_level -= 1;
                 } else {
-                    try self.formatNode(body_idx);
+                    try self.formatNode(binop.rhs);
                 }
 
-                // Check for inline comments
-                if (multiline) {
-                    _ = try self.flushInlineComment(self.last_formatted_pos);
-                }
+                // Check for inline comments after the body
+                _ = try self.flushInlineComment(self.last_formatted_pos);
+            } else {
+                // Shouldn't happen - branches should always be thick arrows
+                // But handle gracefully by formatting the node as-is
+                try self.formatNode(branch_idx);
             }
+
+            // Add newline after each branch (except potentially the last)
+            try self.ensureNewline();
         }
 
-        if (multiline) {
-            self.curr_indent -= 1;
-            try self.ensureNewline();
-            try self.pushIndent();
-            try self.pushAll("}");
-        } else {
-            try self.pushAll(" }");
-        }
+        self.curr_indent_level -= 1;
     }
 
     fn formatPatternWithAlternatives(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1981,7 +1977,7 @@ const Formatter = struct {
         try self.push('{');
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         var it = self.ast.node_slices.nodes(&node.payload.nodes);
@@ -2022,7 +2018,7 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -2076,7 +2072,7 @@ const Formatter = struct {
         const body = it.next();
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         // Format arguments
@@ -2102,7 +2098,7 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -2134,7 +2130,7 @@ const Formatter = struct {
         try self.push('(');
 
         if (multiline) {
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
         }
 
         var first_arg = true;
@@ -2159,7 +2155,7 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -2232,7 +2228,7 @@ const Formatter = struct {
             try self.pushAll(" }");
         } else {
             // Multi-line body
-            self.curr_indent += 1;
+            self.curr_indent_level += 1;
             for (body_nodes.items, 0..) |stmt, idx| {
                 try self.ensureNewline();
                 try self.pushIndent();
@@ -2250,7 +2246,7 @@ const Formatter = struct {
                     }
                 }
             }
-            self.curr_indent -= 1;
+            self.curr_indent_level -= 1;
 
             try self.ensureNewline();
             try self.pushIndent();
@@ -2265,37 +2261,6 @@ const Formatter = struct {
         const ident_idx = node.payload.ident;
         const ident_text = self.ident_store.getText(ident_idx);
         try self.pushAll(ident_text);
-    }
-
-    fn findQualifiedIdentifierEnd(self: *const Formatter, start: usize) usize {
-        var end = start;
-        while (end < self.source.len) {
-            const c = self.source[end];
-            if (std.ascii.isAlphanumeric(c) or c == '_' or c == '!') {
-                end += 1;
-            } else if (c == '.' and end + 1 < self.source.len and
-                (std.ascii.isAlphabetic(self.source[end + 1]) or self.source[end + 1] == '_'))
-            {
-                end += 1; // Include the dot
-            } else {
-                break;
-            }
-        }
-        return end;
-    }
-
-    fn findStringEnd(self: *const Formatter, start: usize) usize {
-        var end = start;
-        if (end < self.source.len and self.source[end] == '"') {
-            end += 1; // Skip opening quote
-            while (end < self.source.len) {
-                if (self.source[end] == '"' and (end == 0 or self.source[end - 1] != '\\')) {
-                    return end + 1;
-                }
-                end += 1;
-            }
-        }
-        return end;
     }
 
     fn findNumberEnd(self: *const Formatter, start: usize) usize {
@@ -2313,7 +2278,7 @@ const Formatter = struct {
 
     fn findIfEnd(self: *const Formatter, node_idx: Node.Idx) usize {
         const node = self.getNode(node_idx);
-        var pos = node.start.offset;
+        var pos = node.region.start.offset;
 
         // Scan for the end of the if expression
         // Look for the last relevant token after "else"
@@ -2396,7 +2361,7 @@ const Formatter = struct {
 
     fn findMatchEnd(self: *const Formatter, node_idx: Node.Idx) usize {
         const node = self.getNode(node_idx);
-        var pos = node.start.offset;
+        var pos = node.region.start.offset;
 
         // Scan for the closing brace of the match expression
         var brace_depth: usize = 0;
@@ -2436,7 +2401,7 @@ const Formatter = struct {
 
     fn findMaxChildEnd(self: *const Formatter, node_idx: Node.Idx) usize {
         const node = self.getNode(node_idx);
-        var max_end: usize = node.start.offset;
+        var max_end: usize = node.region.start.offset;
 
         // Get appropriate iterator based on node type
         switch (node.tag) {
@@ -2521,7 +2486,7 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         // Find the number text from the source
-        const start = node.start.offset;
+        const start = node.region.start.offset;
         var end = start;
 
         // Scan forward to find the end of the number
@@ -2557,7 +2522,7 @@ const Formatter = struct {
 
         // String interpolation is handled by preserving source with expression formatting
         // For now, extract from source and format embedded expressions
-        const start = node.start.offset;
+        const start = node.region.start.offset;
         const end = self.findNodeEnd(node_idx);
 
         if (start >= end or end > self.source.len) {
@@ -2576,7 +2541,7 @@ const Formatter = struct {
             if (is_string_part) {
                 // String parts - extract from source
                 const part = self.getNode(part_idx);
-                const part_start = part.start.offset;
+                const part_start = part.region.start.offset;
                 const part_end = self.findNodeEnd(part_idx);
 
                 // Copy the string content (without quotes)
@@ -2610,7 +2575,7 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         // Find the string in the source - it starts with a quote
-        const start = node.start.offset;
+        const start = node.region.start.offset;
         var end = start + 1; // Skip opening quote
 
         // Find the closing quote, handling escapes
@@ -2636,9 +2601,9 @@ const Formatter = struct {
 
         // Calculate the end position based on the offset
         // We need to count lines and columns from the start
-        var line = node.start.line;
-        var column = node.start.column;
-        var pos = node.start.offset;
+        var line = node.region.start.line;
+        var column = node.region.start.column;
+        var pos = node.region.start.offset;
 
         while (pos < end_offset and pos < self.source.len) {
             if (self.source[pos] == '\n') {
@@ -2651,7 +2616,7 @@ const Formatter = struct {
         }
 
         return .{
-            .start = node.start,
+            .start = node.region.start,
             .end = .{
                 .offset = end_offset,
                 .line = line,
@@ -2683,7 +2648,7 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         // Look for a comma before the closing delimiter
-        const start = node.start.offset;
+        const start = node.region.start.offset;
         const end_estimate = self.findNodeEnd(node_idx);
 
         if (end_estimate <= start or end_estimate > self.source.len) {
@@ -2799,136 +2764,8 @@ const Formatter = struct {
 
     fn findNodeEnd(self: *const Formatter, node_idx: Node.Idx) usize {
         const node = self.getNode(node_idx);
-
-        switch (node.tag) {
-            // Simple identifiers - scan for end of identifier
-            .lc, .uc, .dot_lc, .var_lc, .neg_lc, .not_lc, .double_dot_lc => {
-                return self.findIdentifierEnd(node.start.offset);
-            },
-
-            // Qualified identifiers - scan including dots
-            .uc_dot_ucs, .lc_dot_ucs => {
-                return self.findQualifiedIdentifierEnd(node.start.offset);
-            },
-
-            // String literals - scan for closing quote
-            .str_literal_small => {
-                return self.findStringEnd(node.start.offset);
-            },
-
-            // Number literals - scan for end of number
-            .num_literal_i32, .num_literal_big, .int_literal_i32, .int_literal_big, .frac_literal_small, .frac_literal_big => {
-                return self.findNumberEnd(node.start.offset);
-            },
-
-            // Delimited collections
-            .list_literal => return self.scanForClosingDelimiter(node.start.offset, '[', ']'),
-            .record_literal, .block => return self.scanForClosingDelimiter(node.start.offset, '{', '}'),
-            .tuple_literal => return self.scanForClosingDelimiter(node.start.offset, '(', ')'),
-
-            // All binary operators - return end of RHS
-            .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_platform, .binop_pipe => {
-                const binop = self.ast.node_slices.binOp(node.payload.binop);
-                return self.findNodeEnd(binop.rhs);
-            },
-
-            // Nodes with children - find max end of all children
-            .apply_lc, .apply_uc, .apply_anon, .apply_module, .import, .expect, .crash, .for_loop, .while_loop, .match, .if_else, .if_without_else => {
-                return self.findMaxChildEnd(node_idx);
-            },
-
-            // Lambda - find end of body
-            .lambda => {
-                const lambda = self.ast.lambda(node_idx);
-                return self.findNodeEnd(lambda.body);
-            },
-            .lambda_no_args => {
-                var it = self.ast.node_slices.nodes(&node.payload.nodes);
-                if (it.next()) |body| {
-                    return self.findNodeEnd(body);
-                }
-                return node.start.offset;
-            },
-
-            else => {
-                // For unknown node types, scan forward to find a reasonable end
-                // Look for common delimiters or whitespace that would end most constructs
-                var pos = node.start.offset;
-                while (pos < self.source.len) {
-                    const c = self.source[pos];
-                    // Stop at delimiters, operators, or newlines that likely end this node
-                    if (c == ',' or c == ';' or c == ')' or c == ']' or c == '}' or
-                        c == '\n' or c == '=' or c == '>' or c == '<' or c == '|' or
-                        c == '&' or c == '+' or c == '-' or c == '*' or c == '/')
-                    {
-                        break;
-                    }
-                    pos += 1;
-                }
-                return pos;
-            },
-        }
-    }
-
-    fn scanForClosingDelimiter(self: *const Formatter, start: usize, open_delim: u8, close_delim: u8) usize {
-        if (start >= self.source.len) {
-            return start;
-        }
-
-        // Check if we're starting at the opening delimiter
-        var pos = start;
-        var depth: i32 = 0;
-
-        // If we start at the opening delimiter, count it
-        if (pos < self.source.len and self.source[pos] == open_delim) {
-            depth = 1;
-            pos += 1;
-        } else {
-            // We're starting inside, so we need to find the closing delimiter
-            // that matches our implicit opening
-            depth = 1;
-        }
-
-        var in_string = false;
-        var escape_next = false;
-
-        while (pos < self.source.len) {
-            const c = self.source[pos];
-
-            if (escape_next) {
-                escape_next = false;
-                pos += 1;
-                continue;
-            }
-
-            if (c == '\\' and in_string) {
-                escape_next = true;
-                pos += 1;
-                continue;
-            }
-
-            if (c == '"') {
-                in_string = !in_string;
-                pos += 1;
-                continue;
-            }
-
-            if (!in_string) {
-                if (c == open_delim) {
-                    depth += 1;
-                } else if (c == close_delim) {
-                    depth -= 1;
-                    if (depth == 0) {
-                        return pos + 1; // Include the closing delimiter
-                    }
-                }
-            }
-
-            pos += 1;
-        }
-
-        // If we couldn't find the closing delimiter, return end of source
-        return self.source.len;
+        // Now that we store the full region for each node, we can simply return the end offset
+        return node.region.end.offset;
     }
 
     /// Flush comments and blank lines before a position
@@ -2944,7 +2781,7 @@ const Formatter = struct {
     fn findMalformedEndSmart(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
         // The best way to find where a malformed node ends is to look at the next node in the AST
         const node = self.getNode(node_idx);
-        const start = node.start.offset;
+        const start = node.region.start.offset;
 
         // Try to find the next sibling node in the AST by checking all nodes
         // and finding the one with the smallest start position that's after this node
@@ -2959,7 +2796,7 @@ const Formatter = struct {
             if (idx == node_idx) continue; // Skip self
 
             const other_node = self.getNode(idx);
-            const other_start = other_node.start.offset;
+            const other_start = other_node.region.start.offset;
 
             // Is this node after ours and before our current best candidate?
             if (other_start > start) {
@@ -3071,7 +2908,7 @@ const Formatter = struct {
 
     fn findMalformedEndHeuristic(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
         const node = self.getNode(node_idx);
-        const start = node.start.offset;
+        const start = node.region.start.offset;
         var pos = start;
         var depth: i32 = 0;
         var in_string = false;
@@ -3173,18 +3010,6 @@ const Formatter = struct {
         return result;
     }
 
-    fn findClosingBracket(self: *const Formatter, node_idx: Node.Idx) usize {
-        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '[', ']');
-    }
-
-    fn findClosingBrace(self: *const Formatter, node_idx: Node.Idx) usize {
-        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '{', '}');
-    }
-
-    fn findClosingParen(self: *const Formatter, node_idx: Node.Idx) usize {
-        return self.scanForClosingDelimiter(self.getNode(node_idx).start.offset, '(', ')');
-    }
-
     fn flushCommentsBeforePosition(self: *Formatter, position: usize) !bool {
         if (position <= self.last_formatted_pos or position > self.source.len) {
             return false;
@@ -3210,7 +3035,7 @@ const Formatter = struct {
     }
 
     fn flushCommentsBeforeNode(self: *Formatter, node: Node) !void {
-        const node_start = node.start.offset;
+        const node_start = node.region.start.offset;
 
         // Don't flush if we're already at or past this position
         if (self.last_formatted_pos >= node_start) {
@@ -3423,32 +3248,27 @@ const Formatter = struct {
     }
 
     fn pushIndent(self: *Formatter) !void {
-        if (self.curr_indent == 0) {
+        if (self.curr_indent_level == 0) {
             return;
         }
         // Use TABS for indentation, not spaces!
         // Batch the indentation to avoid multiple allocations
         const tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
-        const indent_level = @min(self.curr_indent, tabs.len);
+        const indent_level = @min(self.curr_indent_level, tabs.len);
         try self.pushAll(tabs[0..indent_level]);
 
         // Handle very deep indentation (unlikely but possible)
-        if (self.curr_indent > tabs.len) {
-            for (tabs.len..self.curr_indent) |_| {
+        if (self.curr_indent_level > tabs.len) {
+            for (tabs.len..self.curr_indent_level) |_| {
                 try self.push('\t');
             }
         }
     }
 };
 
-/// Formats AST2 with source code using the default options
+/// Formats AST2 with source code
 pub fn formatAst(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, root_node: ?Node.Idx) ![]u8 {
-    return formatAstWithOptions(allocator, ast, source, ident_store, root_node, .{});
-}
-
-/// Formats AST2 with custom options
-pub fn formatAstWithOptions(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, root_node: ?Node.Idx, options: FormatOptions) ![]u8 {
-    var formatter = try Formatter.init(allocator, ast, source, ident_store, options);
+    var formatter = try Formatter.init(allocator, ast, source, ident_store);
     defer formatter.deinit();
 
     try formatter.format(root_node);

@@ -28,13 +28,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	MyNumber,
-	MyString,
-]
-
-MyNumber : U64
-MyString : Str
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

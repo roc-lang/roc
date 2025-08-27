@@ -67,10 +67,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	addTwo,
-	addTwoF64,
-]
+module [addTwo, addTwoF64]
 
 addTwo : I64 -> I64
 addTwo = \x -> x + 2

@@ -53,9 +53,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	blue,
-]
+module [blue]
 
 import styles.Color as CC
 

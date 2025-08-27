@@ -53,7 +53,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
             (uc "Color")
             (uc "RGB")
           )
-          (match <33 branches>)
+          (match
+            (scrutinee               (lc "color")
+))
         )
       )
       (args
@@ -65,10 +67,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	tus,
-	r,
-]
+module [tus, r]
 
 LocalStatus : lue => Loc = [Pending, Complete]
 
@@ -77,18 +76,12 @@ olor = \color -> {
 	import Color.RGB
 	
 
-match color { RGB => LocalStatus.Pending
-Green => LocalStatus-Complete
-  B.Blue => LocalStatus.Pending
-    }
+match color
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 8:5 to 8:17
-
 **Parse Error**
 at 8:23 to 8:23
 
@@ -97,15 +90,6 @@ at 9:7 to 9:7
 
 **Parse Error**
 at 10:10 to 10:10
-
-**Parse Error**
-at 8:5 to 12:1
-
-**Parse Error**
-at 12:1 to 12:1
-
-**Parse Error**
-at 6:16 to 12:2
 
 # CANONICALIZE
 ~~~clojure

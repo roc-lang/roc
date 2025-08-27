@@ -55,10 +55,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	add_one,
-	my_number,
-]
+module [add_one, my_number]
 
 add_one : U64 -> U64
 add_one = \x -> x + 1

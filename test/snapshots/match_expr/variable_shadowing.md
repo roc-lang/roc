@@ -15,29 +15,25 @@ match (value, other) {
 KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseRound OpFatArrow LowerIdent OpPlus LowerIdent OpenRound UpperIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent OpStar Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <19 branches>)
+(match
+  (scrutinee     (tuple_literal
+      (lc "value")
+      (lc "other")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match (value, other)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:22
-
-**Parse Error**
 at 2:18 to 2:18
 
 **Parse Error**
 at 3:15 to 3:15
-
-**Parse Error**
-at 1:1 to 4:2
-
-**Parse Error**
-at 4:2 to 4:2
 
 # CANONICALIZE
 ~~~clojure
