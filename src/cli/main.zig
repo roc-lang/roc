@@ -1182,16 +1182,16 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
 
             // Filter out known register names and segment prefixes that might be misidentified
             const known_registers = [_][]const u8{
-                "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
-                "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-                "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
-                "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
-                "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
-                "cs", "ds", "es", "fs", "gs", "ss",
-                "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
-                "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
-                "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
-                "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
+                "rax",   "rbx",   "rcx",   "rdx",   "rsi",   "rdi",   "rbp",  "rsp",
+                "r8",    "r9",    "r10",   "r11",   "r12",   "r13",   "r14",  "r15",
+                "eax",   "ebx",   "ecx",   "edx",   "esi",   "edi",   "ebp",  "esp",
+                "ax",    "bx",    "cx",    "dx",    "si",    "di",    "bp",   "sp",
+                "al",    "ah",    "bl",    "bh",    "cl",    "ch",    "dl",   "dh",
+                "cs",    "ds",    "es",    "fs",    "gs",    "ss",    "xmm0", "xmm1",
+                "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",  "xmm8", "xmm9",
+                "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "ymm0", "ymm1",
+                "ymm2",  "ymm3",  "ymm4",  "ymm5",  "ymm6",  "ymm7",  "ymm8", "ymm9",
+                "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
             };
 
             for (known_registers) |reg| {
@@ -1261,7 +1261,6 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
         std.log.warn("Failed to disassemble with objdump; skipping instruction list.", .{});
     }
     // --- end objdump-only section ---
-
 
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
@@ -2362,20 +2361,20 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             // For cross-compilation, use pre-built vendored stubs from the platform targets folder
             const target_name = switch (target) {
                 .x64glibc => "x64glibc",
-                .arm64glibc => "arm64glibc", 
+                .arm64glibc => "arm64glibc",
                 else => {
                     std.log.err("Cross-compilation target {} not supported for glibc", .{target});
                     std.process.exit(1);
                 },
             };
-            
+
             // Check if vendored stubs exist in the platform targets folder
             const stub_dir = try std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}", .{target_name});
             defer gpa.free(stub_dir);
-            
+
             const stub_so_path = try std.fmt.allocPrint(gpa, "{s}/libc.so.6", .{stub_dir});
             defer gpa.free(stub_so_path);
-            
+
             // Verify the vendored stub exists
             std.fs.cwd().access(stub_so_path, .{}) catch |err| {
                 std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});

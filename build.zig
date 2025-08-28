@@ -919,7 +919,6 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 /// contains thousands of glibc symbols across different versions and architectures
 /// that could provide more complete stub coverage for complex applications.
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
-    std.log.info("Generating glibc stub with symbols for target: {s}", .{target_name});
 
     // Generate assembly stub with comprehensive symbols using the new build module
     var assembly_buf = std.ArrayList(u8).init(b.allocator);
