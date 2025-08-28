@@ -299,5 +299,5 @@ jobs:
       - name: print directory tree on test failure
         if: failure()
         run: |
-          realpath basic-cli-platform/tests/test-cmd
-          ./basic-cli-platform/tests/test-cmd
+          realpath basic-cli-platform/tests/cmd-test
+          ./basic-cli-platform/tests/cmd-test
