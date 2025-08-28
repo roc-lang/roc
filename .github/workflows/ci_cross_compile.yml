@@ -48,13 +48,13 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
-          ./zig-out/bin/roc build --target=${{ matrix.target }} test/int/app.roc --output int_app_${{ matrix.target }}_${{ matrix.host }}
+          ./zig-out/bin/roc build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
 
       - name: Cross-compile int platform (Windows)
         if: runner.os == 'Windows'
         run: |
           echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
-          zig-out\bin\roc.exe build --target=${{ matrix.target }} test/int/app.roc --output int_app_${{ matrix.target }}_${{ matrix.host }}
+          zig-out\bin\roc.exe build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
 
       - name: Upload cross-compiled executables
         uses: actions/upload-artifact@v4 # ratchet:actions/upload-artifact@v4
