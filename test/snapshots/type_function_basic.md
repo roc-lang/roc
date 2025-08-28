@@ -65,15 +65,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 apply :
 	((_a -> _b) -> _a) -> _b
 apply = \(fn, x) -> fn(x)
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

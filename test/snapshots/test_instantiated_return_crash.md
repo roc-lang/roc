@@ -23,10 +23,11 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 (block
   (binop_colon
     (lc "identity")
-    (lc "a")
+    (binop_thin_arrow
+      (lc "a")
+      (lc "a")
+    )
   )
-  (malformed malformed:expr_unexpected_token)
-  (lc "a")
   (binop_equals
     (lc "identity")
     (lambda
@@ -72,29 +73,21 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~
 # FORMATTED
 ~~~roc
-identity : a
-->
-a
+identity : a -> a
 identity = \x -> x
-
 needs_string :
 	(Str -> Str) -> Str
 needs_string = \f -> f(["hello"])
-
 needs_string(identity)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:18 to 2:18
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)

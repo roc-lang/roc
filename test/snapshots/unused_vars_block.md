@@ -78,30 +78,20 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 main! = \_ -> {
-	unused_var = 42
-	
+		# Regular unused variable - should warn
+unused_var = 42
+	used_var = 100
+	another_unused = "hello"
+	 # Comment 1
+_ignored = # Comment 2
+999 # Comment 3
 
-# Regular used variable - should be fine
-used_var = 100
-	
-
-# Another unused variable - should warn
-another_unused = "hello"
-	
-
-# Underscore variable that is unused - should be fine
-_ignored # Comment 1 =  # Comment 2
-	999 # Comment 3
-	
-
-# Use only the used_var
-result = used_var + 10
+		# Use only the used_var
+	result = used_var + 10
 	result : result
 }
 ~~~

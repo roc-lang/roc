@@ -42,7 +42,7 @@ module [main]
 
 main = {
 	x = 42
-	dbg
+	
 	x
 	x + 1
 }

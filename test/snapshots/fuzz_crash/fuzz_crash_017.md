@@ -26,7 +26,8 @@ LowerIdent OpAssign String LowerIdent OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+me = "luc"
+foo = 
 ~~~
 # EXPECTED
 NIL

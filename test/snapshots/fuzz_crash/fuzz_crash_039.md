@@ -19,9 +19,8 @@ KwModule OpenSquare CloseCurly OpenRound MalformedSingleQuoteUnclosed CloseRound
 ~~~
 # FORMATTED
 ~~~roc
-module [}(]
+module []
 
-'
 ~~~
 # EXPECTED
 NIL

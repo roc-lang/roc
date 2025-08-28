@@ -158,29 +158,19 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 single_use : List elem -> Str
 single_use = \x -> "hello"
-
-# Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
 ending_underscore : List elem_ -> elem_
 ending_underscore = \list -> "default"
-
-# Test 3: COMBINATION - single-use ending in underscore (both errors)
 combo_single : List bad_ -> Str
 combo_single = \x -> "combo"
-
-# Test 4: VALID CASES - these should not generate warnings
 valid_single : List _elem -> Str
 valid_single = \x -> "valid"
-
 valid_multi : elem -> List elem
 valid_multi = \x -> [x]
-
 main = \x -> "done"
 ~~~
 # EXPECTED

@@ -34,7 +34,11 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+BadType := _
+foo : BadType
+foo = 42
 ~~~
 # EXPECTED
 NIL

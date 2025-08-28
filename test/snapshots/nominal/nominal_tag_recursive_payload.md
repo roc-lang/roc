@@ -55,7 +55,6 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 module [ConsList, empty]
 
 ConsList(a) := [Nil, Node(ConsList(a))]
-
 empty : ConsList _a
 empty = ConsList.Nil
 ~~~

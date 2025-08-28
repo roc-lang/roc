@@ -130,9 +130,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 swap :
@@ -140,16 +138,11 @@ swap :
 swap = \pair -> {
 	(x, y) = pair((y, x))
 }
-
-# Multiple uses that would conflict if 'a' and 'b' weren't instantiated
 main! = \_ -> {
-	result1 = swap((42, "hello"))
-	# Second use: swap (Bool, List Int)
-# This would fail if 'a' and 'b' from the first call were reused
-result2 = swap((Bool.true, [1, 2, 3]))
-	# Third use: swap (Str, Str) 
-# This shows even when both types are the same, we still need fresh vars
-result3 = swap(("foo", "bar"))
+		# First use: swap (Int, Str)
+result1 = swap((42, "hello"))
+	result2 = swap((Bool.true, [1, 2, 3]))
+	result3 = swap(("foo", "bar"))
 	{  }
 }
 ~~~

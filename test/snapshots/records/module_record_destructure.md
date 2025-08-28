@@ -89,9 +89,7 @@ extract_age = \person -> {
 	{
 		age : age
 	} = person
-	
-
-(({
+	(({
 		a : 0
 	} | .a) + age) - ({
 		a : 0

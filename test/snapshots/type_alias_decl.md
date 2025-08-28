@@ -212,40 +212,25 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 UserId : U64
-
-# Generic type alias
 Result((ok, err)) : [Ok(ok), Err(err)]
-
-# Record type alias
 Person : {name : Str, age : U64}
 MapFn((a, b)) : a -> b
-
-# Complex nested type alias
 ApiResponse(data) : Result (data, Str)
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
-
-# Type declaration with records and generics
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
 main! = \_ -> {
-	userId : UserId
+		# Use the types to validate they work
+userId : UserId
 	userId = 123
-	
-
-person : Person
+	person : Person
 	person = { name : "Alice", age : 30 }
-	
-
-color : Color
+	color : Color
 	color = Red
-	
-
-userId : userId
+	userId : userId
 }
 ~~~
 # EXPECTED

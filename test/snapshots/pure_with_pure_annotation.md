@@ -99,18 +99,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 add : I32 -> I32 -> I32
 add = \(x, y) -> { x : x, y : y } | .x
-
-# Another pure function that calls a pure function
 double : I32 -> I32
 double = \x -> add((x, x))
-
 main! = add((1, 2))
 ~~~
 # EXPECTED

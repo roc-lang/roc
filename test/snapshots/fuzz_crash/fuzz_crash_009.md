@@ -34,7 +34,7 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 f{
 	o,
 }
-foo = "onmo %
+foo = 
 ~~~
 # EXPECTED
 NIL

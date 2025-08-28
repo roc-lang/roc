@@ -38,7 +38,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
   (binop_equals
     (lc "x")
     (tuple_literal
-      (str_literal_small "")
+      (str_literal_small "a")
       (malformed malformed:expr_unexpected_token)
     )
   )
@@ -74,9 +74,9 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
     (uc "K")
   )
   (malformed malformed:expr_unexpected_token)
-  (str_literal_small "")
+  (str_literal_small "\")
   (malformed malformed:expr_unexpected_token)
-  (str_literal_small "")
+  (str_literal_small "'")
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
@@ -117,21 +117,9 @@ y = 'u
 
 # Test backslash before EOF
 '\)
-©
-'
-'ð
-Ÿ
-š
-€
-'
-'\u'
-'\u
-)
-'
-'\u((')'\u()()'
-'\u((1F680)F680)
-'
-'\u((K)'
+()()
+(1F680)F680
+(K)
 '\\',
     '\'',
     '',
@@ -153,16 +141,8 @@ y = 'u
 
 # Test backslash before EOF
 '\
-''
-'l
-ong'
-'\'
-)
-
-y = 'u
-
-# Test backslash before EOF
-'\
+ong
+y = 
 ~~~
 # EXPECTED
 NIL

@@ -40,9 +40,7 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString UpperIdent OpenRoun
 # FORMATTED
 ~~~roc
 Fli / main.roc
-" }
-
-Pair((a, b + : (()))
+Pair((a, b + ()))
 ~~~
 # EXPECTED
 NIL

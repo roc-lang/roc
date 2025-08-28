@@ -174,9 +174,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
@@ -185,8 +183,6 @@ deepNested : Maybe Result (List(Dict((Str, a))), _b) -> a
 deepNested = \_ -> {
 	crash "not implemented"
 }
-
-# Test type alias with complex nesting
 ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))
 main! = \_ -> processComplex(Ok([Some(42), None]))
 ~~~

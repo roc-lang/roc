@@ -771,10 +771,23 @@ pub fn parseHeader(self: *Parser) Error!void {
 }
 
 fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
-    // Parse app { pf: "..." platform [main!], package1: "...", ... }
+    // Parse app [exports] { pf: platform "...", package1: "...", ... }
+
+    // First, check for optional exports list
+    var exports_idx: collections.NodeSlices(AST.Node.Idx).Idx = collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+    if (self.peek() == .OpenSquare) {
+        self.advance(); // consume [
+        exports_idx = try self.parseExposedList(.CloseSquare);
+        self.expect(.CloseSquare) catch {
+            try self.pushDiagnostic(.header_expected_close_square, start_pos, self.currentPosition());
+        };
+    }
+
+    // Now parse the packages record
     self.expect(.OpenCurly) catch {
         try self.pushDiagnostic(.expected_package_platform_open_curly, start_pos, self.currentPosition());
         return AST.Header{ .app = .{
+            .exposes = exports_idx,
             .packages = @enumFromInt(0),
             .region = start_pos,
         } };
@@ -803,12 +816,45 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
             break;
         };
 
-        // Parse the value part
-        if (self.peek() == .String) {
-            // This is a package or platform string
+        // Parse the value part - handle both "platform <string>" and regular strings
+        if (self.peek() == .KwPlatform) {
+            // This is a platform field: pf: platform "path"
+            self.advance(); // consume 'platform' keyword
+
+            // Now expect a string for the platform path
+            if (self.peek() != .String and self.peek() != .MultilineString) {
+                try self.pushDiagnostic(.expected_package_or_platform_string, field_start, self.currentPosition());
+                break;
+            }
+
             const string_value = try self.parseExpr();
 
-            // Check if followed by 'platform' keyword
+            // For app headers with platform, we need to create a platform node
+            // The exports list was already parsed at the beginning
+            if (field_name) |name| {
+                const field_node = try self.ast.appendNode(self.gpa, name_region, .lc, .{ .ident = name });
+
+                // Create an empty block node for the provides (already handled in exports)
+                const empty_slice: []const Node.Idx = &.{};
+                const empty_nodes_idx = try self.ast.appendNodeSlice(self.gpa, empty_slice);
+                const empty_block = try self.ast.appendNode(self.gpa, makeRegion(self.currentPosition(), self.currentPosition()), .block, .{ .nodes = empty_nodes_idx });
+
+                // Create the platform binop: string_value platform empty_block
+                const platform_binop_idx = try self.ast.appendBinOp(self.gpa, string_value, empty_block);
+                const string_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(string_value))));
+                const platform_node = try self.ast.appendNode(self.gpa, string_region, .binop_platform, .{ .binop = platform_binop_idx });
+
+                // Create the field: name : platform_node
+                const field_binop_idx = try self.ast.appendBinOp(self.gpa, field_node, platform_node);
+                const field_region = makeRegion(name_region.start, string_region.end);
+                const field = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = field_binop_idx });
+                try self.scratch_nodes.append(self.gpa, field);
+            }
+        } else if (self.peek() == .String) {
+            // This is a regular package string or old-style platform
+            const string_value = try self.parseExpr();
+
+            // Check if followed by 'platform' keyword (old style)
             if (self.peek() == .KwPlatform) {
                 self.advance(); // consume 'platform' keyword
 
@@ -894,6 +940,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
     return AST.Header{ .app = .{
+        .exposes = exports_idx,
         .packages = packages_idx,
         .region = start_pos,
     } };
@@ -1295,10 +1342,28 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
 
                 // Parse the right-hand side
                 // If we're in a potential record, use higher precedence to stop at commas
-                const rhs = if (in_potential_record)
+                var rhs = if (in_potential_record)
                     try self.parseExprWithPrecedence(10) // Stop at commas (precedence 4)
                 else
                     try self.parseExpr(); // Normal parsing
+
+                // Check if this is an effectful type annotation with => or ->
+                const arrow_token = self.peek();
+                if (arrow_token == .OpArrow or arrow_token == .OpFatArrow) {
+                    self.advance(); // consume the arrow
+
+                    // Parse the return type
+                    const return_type = if (in_potential_record)
+                        try self.parseExprWithPrecedence(10) // Stop at commas
+                    else
+                        try self.parseExpr();
+
+                    // Create arrow node for function type
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
+                    const arrow_region = makeRegion(self.ast.start(rhs), self.ast.getRegion(return_type).end);
+                    rhs = try self.ast.appendNode(self.gpa, arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
+                }
 
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
@@ -1329,9 +1394,25 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 const colon_region = self.currentRegion();
                 self.advance(); // consume : or :=
 
-                // Parse the right-hand side as a regular expression
-                // The expression parser will handle comma-before-arrow uniformly
-                const rhs = try self.parseExpr();
+                // Parse the right-hand side as a type expression
+                // For type annotations, we need to handle arrows specially
+                var rhs = try self.parseExprWithPrecedence(0);
+
+                // Check for arrow operators (thin -> or thick =>) after the type
+                // This handles effectful function types like {} => Result(...)
+                const arrow_token = self.peek();
+                if (arrow_token == .OpArrow or arrow_token == .OpFatArrow) {
+                    self.advance(); // consume the arrow
+
+                    // Parse the return type
+                    const return_type = try self.parseExpr();
+
+                    // Create the arrow node
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
+                    const full_arrow_region = makeRegion(self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(rhs)))).start, self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(return_type)))).end);
+                    rhs = try self.ast.appendNode(self.gpa, full_arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
+                }
 
                 // Create type annotation/declaration node
                 const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
@@ -1372,33 +1453,41 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
-    // Parse module path (e.g., pf.Stdout)
-    while (true) {
-        const token = self.peek();
-        if (token == .LowerIdent or token == .UpperIdent) {
-            const ident = self.currentIdent();
-            const ident_region = self.currentRegion();
-            if (ident) |id| {
-                // Use the correct node type based on identifier case
-                const node_tag: AST.Node.Tag = if (token == .UpperIdent) .uc else .lc;
-                const node = try self.ast.appendNode(self.gpa, ident_region, node_tag, .{ .ident = id });
-                try self.scratch_nodes.append(self.gpa, node);
-            }
-            self.advance();
-
-            if (self.peek() == .Dot or self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+    // Parse either a string import or module path
+    const token = self.peek();
+    if (token == .String or token == .MultilineString or token == .SingleQuote) {
+        // String import like "users.json"
+        const string_node = try self.parseStoredStringExpr();
+        try self.scratch_nodes.append(self.gpa, string_node);
+    } else {
+        // Parse module path (e.g., pf.Stdout)
+        while (true) {
+            const tok = self.peek();
+            if (tok == .LowerIdent or tok == .UpperIdent) {
+                const ident = self.currentIdent();
+                const ident_region = self.currentRegion();
+                if (ident) |id| {
+                    // Use the correct node type based on identifier case
+                    const node_tag: AST.Node.Tag = if (tok == .UpperIdent) .uc else .lc;
+                    const node = try self.ast.appendNode(self.gpa, ident_region, node_tag, .{ .ident = id });
+                    try self.scratch_nodes.append(self.gpa, node);
+                }
                 self.advance();
+
+                if (self.peek() == .Dot or self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+                    self.advance();
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
-        } else {
-            break;
         }
     }
 
-    // Parse optional as clause
+    // Parse optional "as alias : Type" clause
     if (self.peek() == .KwAs) {
-        self.advance();
+        self.advance(); // consume 'as'
 
         const alias_token = self.peek();
         if (alias_token == .LowerIdent or alias_token == .UpperIdent) {
@@ -1406,10 +1495,27 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
             const alias_region = self.currentRegion();
             if (alias_ident) |id| {
                 const alias_tag: AST.Node.Tag = if (alias_token == .UpperIdent) .uc else .lc;
-                const alias_node = try self.ast.appendNode(self.gpa, alias_region, alias_tag, .{ .ident = id });
+                var alias_node = try self.ast.appendNode(self.gpa, alias_region, alias_tag, .{ .ident = id });
+                self.advance();
+
+                // Check for optional type annotation (: Type)
+                if (self.peek() == .OpColon) {
+                    self.advance(); // consume :
+
+                    // Parse the type expression
+                    const type_expr = try self.parseExprWithPrecedence(10); // High precedence to stop at commas
+
+                    // Create binop_colon node for "alias : Type"
+                    const binop_idx = try self.ast.appendBinOp(self.gpa, alias_node, type_expr);
+                    const full_region = makeRegion(alias_region.start, self.last_region.end);
+                    alias_node = try self.ast.appendNode(self.gpa, full_region, .binop_colon, .{ .binop = binop_idx });
+                }
+
+                // Now create the binop_as node
+                // The LHS is all the import path nodes, the RHS is the alias (possibly with type)
+                // For simplicity, we'll add the alias node to scratch_nodes
                 try self.scratch_nodes.append(self.gpa, alias_node);
             }
-            self.advance();
         }
     }
 
@@ -1507,8 +1613,44 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
 fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
     const region = self.currentRegion();
     const extra = self.currentExtra();
+    const current_token = self.currentToken();
+    const tag = if (current_token) |token| token.tag else .EndOfFile;
 
     self.advance();
+
+    // Handle SingleQuote tokens specially - extract character from source
+    if (tag == .SingleQuote) {
+        // SingleQuote tokens are of the form 'x' where x is a single character
+        // The region spans the entire token including quotes
+        const source_slice = self.token_iter.cursor.buf[region.start.offset..region.end.offset];
+
+        // Extract the character between the quotes
+        // Format is 'x' where x could be an escaped character like '\n'
+        var buf: [4]u8 = [_]u8{0} ** 4;
+
+        if (source_slice.len >= 3 and source_slice[0] == '\'' and source_slice[source_slice.len - 1] == '\'') {
+            const char_content = source_slice[1 .. source_slice.len - 1];
+
+            if (char_content.len == 1) {
+                // Simple character like 'a'
+                buf[0] = char_content[0];
+            } else if (char_content.len == 2 and char_content[0] == '\\') {
+                // Escaped character like '\n'
+                buf[0] = switch (char_content[1]) {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '"' => '"',
+                    else => char_content[1], // Unknown escape, use literal
+                };
+            }
+            // Else it's malformed, leave as empty
+        }
+
+        return try self.ast.appendNode(self.gpa, region, .str_literal_small, .{ .str_literal_small = buf });
+    }
 
     // The string content is stored in ByteSlices with escapes already resolved
     switch (extra) {

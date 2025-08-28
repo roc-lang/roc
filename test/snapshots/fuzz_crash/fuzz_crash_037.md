@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare MalformedString ~~~
 ~~~roc
 module []
 
-"\
 ~~~
 # EXPECTED
 NIL

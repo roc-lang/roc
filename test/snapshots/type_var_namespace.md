@@ -90,25 +90,18 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 process : List elem -> elem
 process = \list -> {
-	elem = 42
-	
-
-# type variable 'elem' still refers to the function annotation's type parameter
-result : elem
+		# value identifier named 'elem' is allowed - different namespace from type variable
+elem = 42
+	result : elem
 	List.first(list)
-	Result | .withDefault(elem)
-	
-
-result
+	 | .withDefault(elem)
+	result
 }
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

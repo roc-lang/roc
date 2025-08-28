@@ -627,35 +627,23 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 num = 42
 frac = 4.2
 str = "hello"
 bool = True
-
-# Polymorphic empty collections
 empty_list = []
 empty_record = {  }
-
-# Using empty list in multiple contexts
 int_list = [1, 2, 3]
 str_list = ["a", "b", "c"]
 bool_list = [True, False]
-
-# Nested empty lists
 nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
-
-# Polymorphic record with empty list
 poly_record = { items : empty_list, count : 0 }
 use_poly_record1 = { items : [1, 2, 3], count : 0 }
 use_poly_record2 = { items : ["x", "y", "z"], count : 0 }
-
-# Complex nested structure with multiple polymorphic uses
 base_config = {
 	data : empty_list,
 	metadata :
@@ -665,8 +653,6 @@ base_config = {
 			description : str,
 		},
 }
-
-# Different instantiations of base_config
 config1 = {
 	data : [1, 2, 3, 4, 5],
 	metadata :
@@ -677,16 +663,19 @@ config1 = {
 		},
 	name : "integers",
 }
-
-config2 = { data : ["apple", "banana", "cherry"], metadata : {version : num, ratio : frac, description : str}, name : "fruits" } # Test comment 9
+config2 = { # Test comment 1
+data : ["apple", "banana", "cherry"], # Test comment 2
+metadata : { # Test comment 3
+version : num, # Test comment 4
+ratio : frac, # Test comment 5
+description : str}, # Test comment 7
+name : "fruits" } # Test comment 9
 
 # Polymorphic function-like structures
 make_container = \val -> { value : val, wrapper : [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
-
-# Deeply nested polymorphism
 deep = {
 	level1 :
 		{
@@ -705,14 +694,10 @@ deep = {
 		{ data : [1, 2, 3], tag : "more" },
 	],
 }
-
-# Polymorphic values used in computations
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
 compute4 = { base : num, derived : [num, num + 1, num + 2] }
-
-# Mixed polymorphic structures
 mixed = {
 	numbers : {value : num, list : [num, num], float : frac},
 	strings : {value : str, list : [str, str]},
@@ -731,9 +716,9 @@ mixed = {
 			list_from_num : [num, num, num],
 		},
 }
-
 main = \_ -> {
-	container1.value + 10
+		# Just type-check everything
+container1.value + 10
 }
 ~~~
 # EXPECTED

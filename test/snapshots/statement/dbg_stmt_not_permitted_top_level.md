@@ -30,9 +30,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign Trip
 ~~~roc
 module [foo]
 
-dbg
 "foo"
-
 foo = ...
 ~~~
 # EXPECTED

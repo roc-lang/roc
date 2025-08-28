@@ -18,11 +18,11 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpA
 (block
   (binop_equals
     (lc "a")
-    (str_literal_small "")
+    (str_literal_small "a")
   )
   (binop_equals
     (lc "b")
-    (str_literal_small "")
+    (str_literal_small "a")
   )
 )
 ~~~

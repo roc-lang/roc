@@ -211,23 +211,13 @@ module [
 MyU64 : U64
 MyString : Str
 MyBool : Bool
-
-# Simple user-defined type
 Person : {name : Str, age : U64}
 Result((ok, err)) : [Ok(ok), Err(err)]
-
-# Forward reference - Tree references Node before Node is defined
 Tree(a) : [Branch(Node(a)), Leaf(a)]
-
-# Node definition comes after Tree
 Node(a) : {value : a, children : List Tree a}
 MyResult : Result (Str, U64)
 Person : U64
-
-# Using an undeclared type (should error)
 BadType : SomeUndeclaredType
-
-# Using built-in types with parameters
 MyList : List Str
 MyDict : Dict (Str, U64)
 Complex : {person : Person, result : Result (Bool, Str), tree : Tree U64}

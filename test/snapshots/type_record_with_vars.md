@@ -65,14 +65,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 getField : {field : a, other : _b} -> a
 getField = \record -> record.field
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

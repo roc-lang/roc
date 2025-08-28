@@ -74,12 +74,9 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 module [main]
 
 import json.Json exposing [decode]
-as
 fromJson
 encode
-as
-toJson]
-
+toJson
 main = {
 	data = { name : "Bob", age : 25 }
 	encoded = toJson(data)

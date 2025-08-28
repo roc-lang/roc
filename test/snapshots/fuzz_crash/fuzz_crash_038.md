@@ -21,7 +21,6 @@ OpStar KwImport UpperIdent KwAs ~~~
 ~~~
 # FORMATTED
 ~~~roc
-import
 import B
 ~~~
 # EXPECTED

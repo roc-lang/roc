@@ -55,7 +55,13 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [Color, blue]
+
+Color := [Red, Green, Blue]
+blue : Color
+blue = Color.Blue
+yellow : Color
+yellow = Color.Yellow
 ~~~
 # EXPECTED
 NIL

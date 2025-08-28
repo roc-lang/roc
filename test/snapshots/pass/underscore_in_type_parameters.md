@@ -88,19 +88,11 @@ KwModule OpenSquare CloseSquare UpperIdent OpenRound Underscore CloseRound OpCol
 module []
 
 MyType(_) : Str
-
-# Type with underscore and regular parameter
 MyType2((_, b)) : b
-
-# Type with parameters where underscore comes second
 MyType3((a, _)) : a
-
-# More complex type with underscore parameter
 ComplexType((_, b)) : {
 	field : b
 }
-
-# Type with multiple underscores
 MultiType((_, _, c)) : c
 ~~~
 # EXPECTED

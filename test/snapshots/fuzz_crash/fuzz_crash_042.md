@@ -37,7 +37,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~roc
 module []
 
-import u.R}
+import u.R
 g : r -> R.a | E
 ~~~
 # EXPECTED

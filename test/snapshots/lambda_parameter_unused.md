@@ -171,26 +171,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 add : U64 -> U64
 add = \unused -> 42
-
-# Lambda with underscore parameter that is used - should warn
 multiply : U64 -> U64
 multiply = \_factor -> _factor * 2
-
-# Lambda with unused underscore parameter - should be fine
 process : U64 -> U64
 process = \_input -> 100
-
-# Lambda with used parameter - should be fine
 double : U64 -> U64
 double = \value -> value * 2
-
 main! = \_ -> {
 	result1 = add(5)
 	result2 = multiply(3)

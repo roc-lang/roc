@@ -119,7 +119,14 @@ module []
 
 multi_arg_fn : a -> b -> a -> c -> a -> d -> a -> e -> (a, b, c, d, e)
 multi_arg_fn = \(x1, x2, x3, x4, x5, x6, x7, x8) -> (x1, x2, x4, x6, x8)
-result = multi_arg_fn((42, "hello", "world", 1.5, 3.14, [1, 2], True, "done"))
+result = multi_arg_fn((42, # x1: U64 (type 'a')
+"hello", # x2: Str (type 'b') - correct
+"world", # x3: Str (should be 'a' = U64) - MISMATCH  
+1.5, # x4: F64 (type 'c') - correct
+3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
+[1, 2], # x6: List I64 (type 'd') - correct
+True, # x7: Bool (should be 'a' = U64) - MISMATCH
+"done"))
 ~~~
 # EXPECTED
 NIL

@@ -32,7 +32,10 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent LowerIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+import json.Json
+main = Json.utf8
 ~~~
 # EXPECTED
 NIL

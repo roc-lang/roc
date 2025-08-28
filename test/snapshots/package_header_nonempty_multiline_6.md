@@ -25,12 +25,13 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 # FORMATTED
 ~~~roc
 package [
-	# Comment after keyword
-	# Comment after exposes open
+# Comment after exposes open
 	something,
-	# Comment after exposed item
+# Comment after exposed item
 	SomeType,
-] packages {somePkg, (("../main.roc", other) : "../../other/main.roc")}
+] packages { # Comment after packages open
+somePkg, (("../main.roc", # Comment after package
+other) : "../../other/main.roc")}
 
 ~~~
 # EXPECTED

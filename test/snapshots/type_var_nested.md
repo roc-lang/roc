@@ -217,32 +217,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "platform.roc" platform [
-		main,
-	],
+	pf: "platform.roc" platform [main],
 }
 
 map_result : Result (a, e) -> (a -> b) -> Result (b, e)
 map_result = \(result, transform) -> {
 	match result
 }
-
-# Simple identity function with type variable
 identity : a -> a
 identity = \x -> x
-
-# Nested type variables in records
 make_pair : a -> b -> {first : a, second : b}
 make_pair = \(x, y) -> { first : x, second : y }
-
-# Function that works with lists of any type
 list_length : List _a -> U64
 list_length = \_lst -> 42
-
-# Nested Result types
 wrap_in_result : a -> Result (Result((a, Str)), Str)
 wrap_in_result = \value -> Ok(Ok(value))
-
 main = \_ -> "done"
 ~~~
 # EXPECTED

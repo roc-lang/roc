@@ -65,16 +65,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 import pf.Stdout
 import json.Json
-
 main! = \_ -> {
-	result = Json.utf8("Hello from external module!")
+		# This should create an external declaration for json.Json.utf8
+result = Json.utf8("Hello from external module!")
 	Stdout.line!(result)
 }
 ~~~

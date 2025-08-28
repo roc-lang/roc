@@ -20,10 +20,10 @@ KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module # Comment after module keyword [
-	# Comment After exposes open
+module [
+# Comment After exposes open
 	something,
-	# Comment after exposed item
+# Comment after exposed item
 	SomeType,
 ]
 

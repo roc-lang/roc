@@ -65,14 +65,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 get_name : {name : Str, age : U64} -> Str
 get_name = \person -> person.name
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

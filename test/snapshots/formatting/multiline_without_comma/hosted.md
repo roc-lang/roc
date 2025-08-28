@@ -44,7 +44,6 @@ KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare LowerI
 hosted [a!, b!]
 
 [a!, b!]
-
 a! : Str => Str
 b! : Str => Str
 ~~~

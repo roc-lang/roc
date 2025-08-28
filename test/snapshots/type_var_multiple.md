@@ -77,9 +77,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 swap :
@@ -87,7 +85,6 @@ swap :
 swap = \pair -> {
 	(first, second) = pair((second, first))
 }
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

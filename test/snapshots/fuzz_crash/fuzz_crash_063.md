@@ -22,9 +22,9 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [}]
+module []
 
-0} | .a
+0 | .a
 ~~~
 # EXPECTED
 NIL

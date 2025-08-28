@@ -23,7 +23,7 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [)]
+module []
 
 { _ }0
 ~~~

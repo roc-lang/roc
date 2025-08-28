@@ -79,14 +79,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 processDict : Dict (Str, U64) -> List Str
 processDict = \_dict -> []
-
 main! = \_ -> processDict(Dict.empty() | .insert(("one", 1)))
 ~~~
 # EXPECTED

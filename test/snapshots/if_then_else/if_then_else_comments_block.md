@@ -22,7 +22,8 @@ KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-if bool
+if # Comment after if
+bool
 	{
 		1
 	}

@@ -20,7 +20,8 @@ KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse UpperIdent ~~~
 ~~~roc
 if bool
 	{
-		A # Comment after expr
+		 # Comment after then open
+A # Comment after expr
 	}
 else B
 ~~~

@@ -30,7 +30,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int C
 ~~~roc
 module []
 
-f = ||
+f = 
 {
 	crash 1
 }

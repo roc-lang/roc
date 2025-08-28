@@ -24,11 +24,7 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-[
-	1,
-	2,	# Foo
-	3,
-]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

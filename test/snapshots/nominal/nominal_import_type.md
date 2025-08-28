@@ -45,7 +45,6 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 module [red]
 
 import Color
-
 red : Color.RGB
 red = Color.RGB | Red
 ~~~

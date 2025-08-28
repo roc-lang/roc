@@ -18,10 +18,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		a1,
-		a2,
-	],
+	pf: "../basic-cli/main.roc" platform [a1, a2],
 	a: "a",
 }
 

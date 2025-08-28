@@ -656,6 +656,7 @@ pub const Diagnostic = struct {
 // Module header structures
 pub const Header = union(enum) {
     app: struct {
+        exposes: collections.NodeSlices(Node.Idx).Idx, // List of exposed items (exports)
         packages: collections.NodeSlices(Node.Idx).Idx, // List of package nodes including platform
         region: Position, // Start position
     },

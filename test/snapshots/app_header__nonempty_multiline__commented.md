@@ -22,16 +22,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
+app # Comment after keyword
 {
-	# Comment after keyword
-	# Comment after packages open
-	pf: "../main.roc" platform [
-		# Comment after provides open
-		main,
-	],
-	# Comment after exposed item
-	# Comment after platform
+# Comment after packages open
+	pf: "../main.roc" platform [ # Comment after provides open
+main],
+# Comment after platform
 	other: ("../../other/main.roc"),
 }
 

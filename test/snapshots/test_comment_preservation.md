@@ -44,17 +44,17 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpA
 module [
 	# First comment
 	foo,
-	# inline comment after foo
+# inline comment after foo
 	bar,
 ]
 
-foo = 42 # inline comment after value
+foo = # Comment in function body
+42 # inline comment after value
 
-# Comment between functions
-bar =  # comment after equals
-	100
+	# Comment between functions
 
-# Trailing comment at end of file
+bar = # comment after equals
+100
 ~~~
 # EXPECTED
 NIL

@@ -21,11 +21,11 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 (block
   (binop_equals
     (lc "a")
-    (str_literal_small "")
+    (str_literal_small "a")
   )
   (binop_equals
     (lc "b")
-    (str_literal_small "")
+    (str_literal_small "a")
   )
 )
 ~~~

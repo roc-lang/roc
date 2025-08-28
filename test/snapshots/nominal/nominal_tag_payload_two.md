@@ -106,10 +106,8 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
 module [MyResult, ok, is_ok]
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
-
 ok : ok -> MyResult (ok, _)
 ok = \a -> MyResult.Ok(a)
-
 is_ok : MyResult (_ok, _err) -> Bool
 is_ok = \result -> match result
 ~~~

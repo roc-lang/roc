@@ -93,9 +93,13 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma
 ~~~roc
 module [Hash]
 
-Hash((a, hasher)) : ((a where module(a) | .hash : hasher) # After where -> hasher, module(hasher) | Hasher)
-
-Decode(a) : a where module(a) | .decode(List(U8) -> () -> a))
+# After header
+Hash((a, hasher)) : # After method
+((a where module(a) | .hash : hasher) -> # After arrow
+hasher, module(hasher) | Hasher)
+Decode(a) : a where module(a) | .decode( # After method args open
+List(U8) -> ( # After method arg
+ -> a))
 ~~~
 # EXPECTED
 NIL

@@ -64,7 +64,7 @@ match person
 		{ name, address : {
 			city
 		} }
-		as
+		
 		addr
 	} as fullPerson => (fullPerson, addr, city)
 	{

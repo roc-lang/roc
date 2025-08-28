@@ -70,7 +70,6 @@ redeclareTest = \_ -> {
 	x_ = 15 # Reassign - should work without warning
 	x_ : x_
 }
-
 result = redeclareTest({  })
 ~~~
 # EXPECTED

@@ -37,18 +37,16 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang Op
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" # Ce requires (n! : List Str => {  }) exposes  [
-	# Ce
-	# rd
-	.
-		] # Cse
-	packages # Cd
-		{ # pen,
-] packages {pkg, 77}
+platform # Cd
+"foo" # Ce
+ requires (n! : List Str => {  }) exposes  [
+	,
+] packages { # pen
+pkg, 77}
 
-} #
-provides # Cd
-[	# pen
+#
+# Cd
+[ # pen
 	ar,
 ]
 ~~~

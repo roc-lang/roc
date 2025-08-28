@@ -64,7 +64,6 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
 module [handleResult]
 
 import MyResultModule
-
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = \result -> {
 	match result

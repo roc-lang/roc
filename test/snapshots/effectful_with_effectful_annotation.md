@@ -62,17 +62,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 import pf.Stdout
-
-# Function with effectful annotation using fat arrow
 print_msg! : Str => {  }
 print_msg! = \msg -> Stdout.line!(msg)
-
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED

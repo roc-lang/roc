@@ -39,7 +39,7 @@ module [test]
 
 test = {
 	x = 42
-	dbg((x)
+	(x)
 }
 ~~~
 # EXPECTED

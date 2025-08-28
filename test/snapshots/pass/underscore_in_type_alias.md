@@ -87,13 +87,10 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColon
 module []
 
 MyType : _
-
 OtherType := _
-
 ComplexType := List _
 RecordType := {field : _, other : U32}
 FunctionType := _ -> _
-
 TupleType := (_, U32, _)
 TagType := [Some(_), None]
 ~~~

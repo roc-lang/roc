@@ -31,9 +31,7 @@ module [foo]
 
 foo = if 1
 	A
-else 
-
-{
+else {
 	"hello"
 }
 ~~~

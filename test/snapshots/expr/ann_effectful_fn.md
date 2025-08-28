@@ -6,7 +6,7 @@ type=expr
 # SOURCE
 ~~~roc
 {
-    launchTheNukes : {} => Result Bool LaunchNukeErr
+    launchTheNukes : {} => Result(Bool, LaunchNukeErr)
     launchTheNukes = |{}| ...
 
     launchTheNukes({})
@@ -14,18 +14,23 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIdent UpperIdent LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
   (binop_colon
     (lc "launchTheNukes")
-    (record_literal)
+    (binop_thick_arrow
+      (record_literal)
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (uc "Bool")
+          (uc "LaunchNukeErr")
+        )
+      )
+    )
   )
-  (malformed malformed:expr_unexpected_token)
-  (uc "Result")
-  (uc "Bool")
-  (uc "LaunchNukeErr")
   (binop_equals
     (lc "launchTheNukes")
     (lambda
@@ -45,29 +50,18 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-launchTheNukes : {}
-=>
-Result
-Bool
-LaunchNukeErr
+launchTheNukes : {  } => Result((Bool, LaunchNukeErr))
 launchTheNukes = \{  } -> ...
-
 launchTheNukes({  })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:25 to 2:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.str_literal_small)
-  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.binop_thick_arrow)
 )

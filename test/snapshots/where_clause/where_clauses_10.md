@@ -56,7 +56,9 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSq
 module [decode]
 
 import Decode exposing [Decode]
-decodeThings : List List U8 -> List a where module(a) | Decode
+# After member name
+decodeThings : # After anno
+List List U8 -> List a where module(a) | Decode
 ~~~
 # EXPECTED
 NIL

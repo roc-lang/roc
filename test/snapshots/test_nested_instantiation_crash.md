@@ -134,20 +134,18 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
+
+# TODO: if you do this whole thing as an expr block, with `composed` at
+# the end instead of `answer =`, it triggers a parser bug!
 
 make_record : a -> {value : a, tag : Str}
 make_record = \x -> { value : x, tag : "data" }
-
 get_value : {value : a, tag : Str} -> a
 get_value = \r -> r.value
-
 composed : List a -> Str
 composed = \n -> get_value(make_record(n))
-
 answer = composed([42])
 ~~~
 # EXPECTED

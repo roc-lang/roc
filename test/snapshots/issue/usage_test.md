@@ -40,7 +40,12 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+UnusedType := _
+UsedType := _
+value : UsedType
+value = 42
 ~~~
 # EXPECTED
 NIL

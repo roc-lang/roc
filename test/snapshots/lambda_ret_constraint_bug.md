@@ -73,14 +73,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "platform/main.roc" platform [
-		main,
-	],
+	pf: "platform/main.roc" platform [main],
 }
 
 helper : I64 -> I64
 helper = \n -> n * 2
-
 main : I64 -> I64 -> I64
 main = \(_, _) -> helper(5)
 ~~~

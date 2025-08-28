@@ -129,14 +129,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 process : [Some(Str), None] -> Str
 process = \maybe -> "result"
-
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = \result -> match result
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool

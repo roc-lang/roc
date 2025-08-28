@@ -46,8 +46,8 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
 ~~~
 # FORMATTED
 ~~~roc
-modu : ; : : : : : : : : : : : : : :
-le[%]
+modu :  :  :  :  :  :  :  : 
+le[]
 ~~~
 # EXPECTED
 NIL

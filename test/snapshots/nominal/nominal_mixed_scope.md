@@ -68,13 +68,10 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
 module [LocalStatus, processColor]
 
 LocalStatus := [Pending, Complete]
-
 processColor : _ -> LocalStatus
 processColor = \color -> {
 	import Color.RGB
-	
-
-match color
+	match color
 }
 ~~~
 # EXPECTED

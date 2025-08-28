@@ -71,8 +71,6 @@ module [addTwo, addTwoF64]
 
 addTwo : I64 -> I64
 addTwo = \x -> x + 2
-
-# Should successfully constrain literal 2.0 to F64
 addTwoF64 : F64 -> F64
 addTwoF64 = \x -> x + 2.0
 ~~~

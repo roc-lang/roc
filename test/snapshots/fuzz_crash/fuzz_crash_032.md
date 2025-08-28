@@ -70,13 +70,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
 module [tus, r]
 
 LocalStatus : lue => Loc = [Pending, Complete]
-
 olor : _ -> tus
 olor = \color -> {
 	import Color.RGB
-	
-
-match color
+	match color
 }
 ~~~
 # EXPECTED

@@ -71,14 +71,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 processNested : List Result (Str, Err) -> List Str
 processNested = \_list -> ["one", "two"]
-
 main! = \_ -> processNested([])
 ~~~
 # EXPECTED

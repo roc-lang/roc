@@ -26,8 +26,8 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Int ~~~
 ~~~roc
 module []
 
-bar =  # comment
-	100
+bar = # comment
+100
 ~~~
 # EXPECTED
 NIL

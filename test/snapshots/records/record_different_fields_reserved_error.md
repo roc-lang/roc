@@ -25,7 +25,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~
 # FORMATTED
 ~~~roc
-if : (((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false)
+if  (((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false)
 ~~~
 # EXPECTED
 NIL

@@ -37,12 +37,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
         (block
           (binop_colon
             (lc "inner")
-            (lc "a")
-          )
-          (malformed malformed:expr_unexpected_token)
-          (binop_colon
-            (lc "a")
-            (lc "a")
+            (binop_thin_arrow
+              (lc "a")
+              (lc "a")
+            )
           )
           (binop_equals
             (lc "inner")
@@ -83,30 +81,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 outer : a -> a
 outer = \x -> {
-	inner : a
-	->
-	a # Shadows outer 'a' : a
+	inner : a -> a # Shadows outer 'a'
 	inner = \y -> y
-	
-
-inner(x)
+	inner(x)
 }
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:15 to 5:15
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

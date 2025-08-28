@@ -153,31 +153,18 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 Status : [Loading, Complete, Failed]
-
-# Tag union with mixed argument types
 Result : [Success(Str), Error(Str), Warning((Str, I32))]
-
-# Nested tag unions
 Response : [Ok(Result), NetworkError, ParseError]
-
-# Multiple tag unions using similar tag names
 UserState : [Active(Str), Inactive, Suspended(Str)]
 ConnectionState : [Active, Disconnected, Connecting(Str)]
-
-# Function using tag unions
 processResult : Result -> Str
 processResult = \_result -> "processed"
-
-# Function with nested tag union
 handleResponse : Response -> Str
 handleResponse = \_response -> "handled"
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

@@ -39,7 +39,6 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
 ~~~roc
 apple : [Apple, IsFruit(Bool)]
 apple = Apple
-
 apple
 ~~~
 # EXPECTED

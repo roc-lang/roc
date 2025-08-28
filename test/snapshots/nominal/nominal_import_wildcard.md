@@ -59,14 +59,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwI
 module [red, green, blue]
 
 import Color
-*
-
 red : Color
 red = Red
-
 blue : Color
 blue = Blue
-
 green : Color
 green = Green
 ~~~

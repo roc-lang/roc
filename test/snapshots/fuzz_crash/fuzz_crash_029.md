@@ -49,18 +49,18 @@ KwPlatform String KwRequires OpenCurly LowerIdent OpBang OpColon UpperIdent Open
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" # Ce requires {(n! : List Str => {  })} exposes #rd
-		[ #
-		] # Cse
-	packages # Cd
-		vides # Cd exposes  []
+platform # Cd
+"foo" # Ce
+ requires {( # d
+n! : List Str => {  })} #Ce
+ exposes  []
 
-:
 "..l"
 mmen
-} # Cose
-provides # Cd
-[Ok(world), n # pen]ar
+# Cose
+# Cd
+[Ok(world), n # pen
+]ar
 ~~~
 # EXPECTED
 NIL

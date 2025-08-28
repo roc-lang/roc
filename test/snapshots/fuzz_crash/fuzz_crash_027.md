@@ -769,110 +769,101 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-# Thnt!
 app
 {
-	# Thnt!
-	# Thnt!
-pf: "c" platform [
-		main,
-	],
+	pf: "c" platform [main],
 }
 
 import pf.Stdout exposing [line, e]
 import Stdot
-import pkg.S exposing [func]
-as
-fry
-.*
-]
+# Cose
 
+import pkg.S exposing [func]
+fry
+.
 import Bae as Gooe
 import Ba
 Map((a, b)) : List a -> (a -> b) -> List b
-MapML((a, b) : List # Aon -> ((a -> b) -> List(b) #))
+MapML( # Ag
+(a, b) : # Aon
+List -> ((a -> b) -> # row
+List(b) #
+
+))
 Foo : (Bar, Baz)
-line : (Bar, Baz)
+line : # Cpen
+(Bar, #
+Baz)
+# Co
 Some(a) : {foo : Ok a, bar : g}
 Ml(a) : {
-	bar : Som # Afld
+	 # d
+bar : Som # Afld
 }
-
 Soine(a) : {
-	bar : Som
+	 #d
+bar : Som
 } #
 Maya
-) : [] #se
+ : [] #se
 
 Func(a) : Maybe a -> a -> Maybe a
 ane = \num -> if num 2 else 5
-
 add_one : U64 -> U64
 add_one = \num -> {
 	other = 1
 	if num
 		{
-			dbg # bug
-() #r()
+			() #r
 			0
 		}
 	else {
-		dbg
+		
 		123
 		other : other
 	}
 }
-
-match_time = [
+match_time = 
 ist
-]
-=>
 123
 3.14
-=>
 314
 3.14 | 6.28
-=>
 314((1, 2, 3))
-=>
 123(((1, 2) | 5, 3))
-=>
 123
 { foo : 1, bar : 2, ..rest }
-=>
-12-->
+12-
 add(34)
-{ foo : 1, bar : 2, _ }
-=>
+{ #
+foo : #ue
+1, # Aftd field
+bar : 2, _ }
 12
 { foo : 1, bar : 2 } | 7
-}
-=>
 12
 {
 	foo : 1,
 }
-=>
 12
 Ok(123)
-=>
 121000
-}
-
-expect blah == 1 # Commnt
+expect # Commeneyword
+blah == 1 # Commnt
 
 main! : List String -> Result ({  }, _)
-main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag, 
-
-# Jusnt!
-..., match_time((...)), some_func(dbg # bug), 42 }
-crash "Unreachtement
+main! = \_ -> { # Yeah Ie
+world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comd
+tag, ..., match_time((...)), some_func(), # bug
+42 }
+crash 
 tag_with = Ok(number)
 ited = "Hello, ${world}"
-list = [add_one(dbg # Afin list)]
-e[, # afarg])
-456, # ee
-]
+list = [add_one()]
+# Afin list
+e[] # afarg
+456
+# ee
 for n in list {
 	{
 		line!("Adding ${n} to ${number}")
@@ -884,18 +875,14 @@ tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 m_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
 bsult = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 stale = some_fn(arg1)
-? | .statod()? | .ned()? | .recd?
-Stdoline!"How about ${ #
+ | .statod() | .ned() | .recd
+Stdoline!
 Num.toStr(number) # on expr
-}
-as
-a"
-)
-} # Commenl decl
+a
+# Commenl decl
 
 empty : {}
 empty = {  }
-
 tuple : Value (a, b, c)
 expect {
 	foo = 1 # Thio

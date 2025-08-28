@@ -48,14 +48,8 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon U
 module [Foo, Bar]
 
 Foo : U64
-
-# Try to redeclare the same type (should error)
 Foo : Str
-
-# Declare another type that uses an undeclared type
 Bar : SomeUndeclaredType
-
-# Declare a type that properly uses a declared type
 Baz : Foo
 ~~~
 # EXPECTED

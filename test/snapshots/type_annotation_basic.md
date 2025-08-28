@@ -161,34 +161,22 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 identity : a -> a
 identity = \x -> x
-
-# Test function with multiple type parameters
 combine : a -> b -> (a, b)
 combine = \(first, second) -> (first, second)
 addOne : U64 -> U64
 addOne = \n -> n + 1
-
 main! = \_ -> {
-	num = identity(42)
+		# Test identity with different types
+num = identity(42)
 	text = identity("hello")
-	
-
-# Test combine function
-pair = combine((num, text))
-	
-
-# Test concrete function
-result = addOne(5)
-	
-
-result : result
+	pair = combine((num, text))
+	result = addOne(5)
+	result : result
 }
 ~~~
 # EXPECTED

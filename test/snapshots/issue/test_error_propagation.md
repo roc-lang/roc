@@ -40,7 +40,12 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+BadBase := _
+GoodAlias := BadBase
+value : GoodAlias
+value = "test"
 ~~~
 # EXPECTED
 NIL

@@ -29,10 +29,8 @@ LowerIdent OpenSquare CloseSquare LowerIdent LowerIdent OpAssign MalformedSingle
 ~~~roc
 mule
 []
-
-#el
 vavar
-t = '
+t = 
 ~~~
 # EXPECTED
 NIL

@@ -506,69 +506,66 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-# Thnt!
 app
 {
-	# Thnt!
-	# Thnt!
-pf: "c" platform [
-		main,
-	],
+	pf: "c" platform [main],
 }
 
 import pf.Stdout exposing [line]
-import Stdot.Cust
+import Stdot. #tem
+Cust
 import Bae as Gooe
 import Ba
 Map((a, b)) : Lis -> ab -> List b
+# Ag
 MapML(,
-) : List -> ab -> List b
+) : # Aon
+List -> ab -> # row
+List b
+#z)
+
 line : () # Co
 Som : {foo : O, bar : g}
 Ml(a) : {}
 Soine(a) : {}
+#
 Maybe(a) : [Somne]
-
 Mayine(a) : [] #)
 
 ane = \num -> if num 2 else 5
-
 one : U6
 add = \num -> {
 	1
 	if num
 		{
-			dbg # bug
-			s : s
+			
+			 # bug
+s : s
 			exp0 : exp0
 		}
 	else {
-		dbg
+		
 		123
 		r : r
 	}
 }
-
-me = nt
-
+me = # Cord
 main! : Listlt ({  }, _)
 ma = \_ -> {
 	e : e
 	w = "d"
 	var er = 123
 	expect blaue
-	return tag
-	
-
-#
-...
+	return #d
+tag
+	...
 	me((...))
 	crash ke
 	"Unr!" #)
 	i = "H, ${d}"
 	t = [one((
 		er,
-		456,		# two
+		456, # two
 		9,
 	))]
 	for n in list {
@@ -584,21 +581,18 @@ ma = \_ -> {
 	)
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
-	? | .od()
-	? | .ned()
-	? | .recd
-	?
+	 | .od()
+	 | .ned()
+	 | .recd
+	
 	Stdo
-	!"Ho${ #
+	!
 	r(nu) # xpr
 }
-"
-)
-} # Cocl
+# Cocl
 
 y : {}
 e = {  }
-
 t : V (a, c)
 expect {
 	foo == 1

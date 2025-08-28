@@ -85,13 +85,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 import pf.Stdout
-
 printName : { name : Str, age : U64 } => Str
 printName = \person -> {
 	Stdout.line!(person.name)

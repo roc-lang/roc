@@ -59,7 +59,6 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColon OpenSquare UpperId
 module [kind]
 
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
-
 kind : Color -> Str
 kind = \color -> match color
 ~~~

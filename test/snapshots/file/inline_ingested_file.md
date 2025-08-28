@@ -18,11 +18,12 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpCol
 # PARSE
 ~~~clojure
 (block
-  (str_literal_big "users.json")
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
-    (lc "data")
-    (uc "Str")
+  (import
+    (str_literal_big "users.json")
+    (binop_colon
+      (lc "data")
+      (uc "Str")
+    )
   )
   (import
     (uc "Json")
@@ -43,25 +44,18 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpCol
 ~~~roc
 module [foo]
 
-"users.json"
-as
-data : Str
+import "users.json" as data : Str
 import Json
-
 foo = Json.parse(data)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:21 to 3:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_lte)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_plus)
   (Expr.binop_plus)
   (Expr.malformed)
 )

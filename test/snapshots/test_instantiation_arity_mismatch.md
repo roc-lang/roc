@@ -20,16 +20,15 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 (block
   (binop_colon
     (lc "identity")
-    (tuple_literal
-      (lc "a")
-      (lc "b")
-    )
-  )
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-    (tuple_literal
-      (lc "a")
-      (lc "b")
+    (binop_thin_arrow
+      (tuple_literal
+        (lc "a")
+        (lc "b")
+      )
+      (tuple_literal
+        (lc "a")
+        (lc "b")
+      )
     )
   )
   (binop_equals
@@ -54,23 +53,19 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-identity : (a, b)
--> (((a, b))
+identity :
+	(a, b) -> (a, b)
 identity = \pair -> pair
-
 identity((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:23 to 2:23
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon)
   (Expr.malformed)
   (Expr.binop_thick_arrow)
 )

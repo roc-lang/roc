@@ -82,8 +82,6 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 module [broken_fn1, broken_fn2, broken_fn3]
 
 broken_fn1 : a -> b where module(a) | .method -> b
-
-# Empty where clause
 broken_fn2 : a -> b where broken_fn3 : a -> b where module(c) | .method : c -> d
 ~~~
 # EXPECTED

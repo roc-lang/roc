@@ -62,17 +62,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 import pf.Stdout
-
-# This should be a type error: pure annotation but effectful body
 bad_function : Str -> {}
 bad_function = \msg -> Stdout.line!(msg)
-
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED

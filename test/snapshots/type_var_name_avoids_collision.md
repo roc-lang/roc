@@ -310,27 +310,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 a = 42
-
-# This should get type 'b -> b' since 'a' is taken
 identity = \x -> x
-
-# Use more names to test the sequence
 b = "hello"
 c = 3.14
 d = True
 e = False
-
-# This should get type 'f -> f' since a,b,c,d,e are taken
 anotherIdentity = \y -> y
-
-# Test with a function that has multiple type variables
-# Should get types like 'f, g -> (f, g)' or similar
 combine = \(first, second) -> (first, second)
 f = 1
 g = 2
@@ -353,25 +342,18 @@ w = 18
 x = 19
 y = 20
 z = 21
-
-# This should get type 'aa -> aa' since a-z are taken
 yetAnotherIdentity = \arg -> arg
-
-# Test that we still avoid collisions even with two-letter names
 aa = 100
 ab = 200
-
-# This should skip 'aa' and 'ab' and use 'ac -> ac'
 finalIdentity = \param -> param
-
 main! = \_ -> {
-	result1 = identity(123)
+		# Use some of our functions to avoid unused warnings
+result1 = identity(123)
 	result2 = anotherIdentity("test")
 	result3 = combine((result1, result2))
 	result4 = yetAnotherIdentity(True)
 	result5 = finalIdentity(3.14)
-	# Return something to complete the function
-a + f # Just use some of our variables
+	a + f # Just use some of our variables
 }
 ~~~
 # EXPECTED

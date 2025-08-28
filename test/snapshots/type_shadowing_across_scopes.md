@@ -80,11 +80,8 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound
 module [Result, processData]
 
 Result((a, b)) : [Ok(a), Err(b)]
-
 processData : Str -> Str
 processData = \data -> "processed"
-
-# In a nested module scope, redeclare Result
 InnerModule : {
 	Result : [Success, Failure]
 }

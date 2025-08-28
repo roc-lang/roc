@@ -135,22 +135,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 a = 1
 b = 2
 c = 3
-
-# This identity function should get type 'd -> d' since a, b, c are taken
 identity = \x -> x
-
-# This function should get type 'e -> e' since d is now also taken
 identity2 = \y -> y
-
-# This function with two parameters should get types 'f, g -> (f, g)'
 pair = \(first, second) -> (first, second)
 main! = \_ -> {
 	result1 = identity(42)

@@ -63,7 +63,16 @@ KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent Op
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+BadBase := _
+BadDerived := BadBase
+value : BadDerived
+value = "test"
+GoodBase := Str
+GoodDerived := GoodBase
+goodValue : GoodDerived
+goodValue = "test"
 ~~~
 # EXPECTED
 NIL

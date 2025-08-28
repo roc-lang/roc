@@ -139,10 +139,8 @@ Map((a, b)) : List a -> (a -> b) -> List b
 Foo : (Bar, Baz)
 Some(a) : {foo : Ok a, bar : Something}
 Maybe(a) : [Some(a), None]
-
 SomeFunc(a) : Maybe a -> a -> Maybe a
 MyType : U64
-
 MyType2 : Module.Thingy
 ~~~
 # EXPECTED

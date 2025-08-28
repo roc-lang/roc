@@ -83,7 +83,6 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpenRound
 module [Hash, Decode]
 
 Hash((a, hasher)) : ((a where module(a) | .hash : hasher) -> hasher, module(hasher) | Hasher)
-
 Decode(a) : a where module(a) | .decode : List U8 -> a
 ~~~
 # EXPECTED

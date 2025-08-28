@@ -23,32 +23,41 @@ const Formatter = struct {
     source: []const u8,
     ident_store: *const Ident.Store,
     tokens: std.ArrayList(Token),
+    token_regions: std.ArrayList(base.Region), // Region for each token
     output: std.ArrayList(u8),
 
     // Formatting state - matches original formatter
     curr_indent_level: u32 = 0,
     has_newline: bool = true, // Starts true since beginning of file is considered a newline
-    last_formatted_pos: usize = 0, // Track position in source for comment preservation
+    last_formatted_pos: usize = 0, // Current position in source being formatted
+    last_comment_end: usize = 0, // Track last comment position to avoid duplicates
 
     fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store) !Formatter {
-        return Formatter{
+        var formatter = Formatter{
             .allocator = allocator,
             .ast = ast,
             .source = source,
             .ident_store = ident_store,
             .tokens = std.ArrayList(Token).init(allocator),
+            .token_regions = std.ArrayList(base.Region).init(allocator),
             .output = std.ArrayList(u8).init(allocator),
+            .last_formatted_pos = 0,
+            .last_comment_end = 0,
         };
+
+        // Tokenize once at the beginning
+        try formatter.tokenizeSource();
+
+        return formatter;
     }
 
     fn deinit(self: *Formatter) void {
         self.tokens.deinit();
+        self.token_regions.deinit();
         self.output.deinit();
     }
 
     fn format(self: *Formatter, root_node: ?Node.Idx) !void {
-        // First, collect all tokens for comment preservation
-        try self.collectTokens();
 
         // Format the header if present
         if (self.ast.header) |header| {
@@ -68,14 +77,14 @@ const Formatter = struct {
             }
         }
 
-        // Flush any trailing comments
-        if (self.tokens.items.len > 0) {
-            _ = try self.flushCommentsToEnd();
+        // Flush any trailing comments using token-based approach
+        if (self.token_regions.items.len > 0) {
+            _ = try self.flushTrailingComments();
         }
     }
 
     /// Helper to get a node from an index - eliminates massive boilerplate
-    fn getNode(self: *const Formatter, idx: Node.Idx) Node {
+    inline fn getNode(self: *const Formatter, idx: Node.Idx) Node {
         // Node.Idx is i32, SafeMultiList.Idx expects u32
         const idx_val = @intFromEnum(idx);
         const u32_idx = @as(u32, @intCast(idx_val));
@@ -83,15 +92,7 @@ const Formatter = struct {
         return self.ast.nodes.get(multi_list_idx);
     }
 
-    fn collectTokens(self: *Formatter) !void {
-        // Only collect tokens if there are comments in the source
-        // This optimization avoids tokenizing the entire file when not needed
-        const has_comments = std.mem.indexOf(u8, self.source, "#") != null;
-        if (!has_comments) {
-            // No comments, no need to tokenize
-            return;
-        }
-
+    fn tokenizeSource(self: *Formatter) !void {
         var env = try CommonEnv.init(self.allocator, self.source);
         defer env.deinit(self.allocator);
 
@@ -102,30 +103,56 @@ const Formatter = struct {
         var iter = try tokenize_iter.TokenIterator.init(&env, self.allocator, self.source, &messages, &byte_slices);
         while (try iter.next(self.allocator)) |token| {
             try self.tokens.append(token);
+
+            // Store the region for this token
+            try self.token_regions.append(token.region);
         }
+    }
+
+    /// Find the token index that contains or is after the given position
+    fn findTokenAtPosition(self: *const Formatter, pos: Position) ?usize {
+        for (self.token_regions.items, 0..) |region, i| {
+            if (region.start.offset >= pos.offset) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    /// Find the token index that is before the given position
+    fn findTokenBeforePosition(self: *const Formatter, pos: Position) ?usize {
+        var result: ?usize = null;
+        for (self.token_regions.items, 0..) |region, i| {
+            if (region.end.offset <= pos.offset) {
+                result = i;
+            } else {
+                break;
+            }
+        }
+        return result;
     }
 
     fn formatHeader(self: *Formatter, header: AST2.Header) !void {
         switch (header) {
             .module => |m| {
-                _ = try self.flushCommentsBefore(m.region);
+                _ = try self.flushCommentsBeforeToken(m.region);
                 try self.pushAll("module");
 
-                // Update position to after "module" keyword
-                // Find where we are in the source
-                if (std.mem.indexOf(u8, self.source[self.last_formatted_pos..], "module")) |module_offset| {
-                    self.last_formatted_pos += module_offset + 6; // "module" is 6 chars
-                }
-
                 // Check for inline comment after module keyword
-                try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(m.region);
 
                 // Format the exposed list
                 try self.formatExposedList(m.exposes);
             },
             .app => |a| {
-                _ = try self.flushCommentsBefore(a.region);
+                _ = try self.flushCommentsBeforeToken(a.region);
                 try self.pushAll("app");
+
+                // Format exports list if present
+                if (a.exposes != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    try self.pushAll(" ");
+                    try self.formatExposedList(a.exposes);
+                }
 
                 // Check if we need multiline formatting
                 const packages_idx = a.packages;
@@ -162,6 +189,17 @@ const Formatter = struct {
 
                 if (needs_multiline) {
                     // Multiline format with proper comment preservation
+
+                    // Check for comments after "app" keyword
+                    // The comment would be between the "app" token and the opening brace token
+                    // Since we don't have the exact position of the brace, check after current position
+                    const app_end_pos = Position{ .offset = @intCast(a.region.offset + 3) }; // "app" is 3 chars
+                    const comment_after_app = try self.flushCommentsAfterToken(app_end_pos);
+
+                    if (comment_after_app) {
+                        // If there was a comment, it's already on its own line
+                    }
+
                     try self.ensureNewline();
                     try self.pushIndent();
                     try self.push('{');
@@ -174,7 +212,7 @@ const Formatter = struct {
                             const pkg_node = self.getNode(pkg);
 
                             // Flush any comments before this package
-                            _ = try self.flushCommentsBefore(pkg_node.region.start);
+                            _ = try self.flushCommentsBeforeToken(pkg_node.region.start);
 
                             try self.pushIndent();
 
@@ -186,32 +224,12 @@ const Formatter = struct {
                                 const value_node = self.getNode(binop.rhs);
                                 if (value_node.tag == .binop_platform) {
                                     const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
-                                    try self.formatNode(platform_binop.lhs);
+                                    // Format: "path" platform [exports]
+                                    try self.formatNode(platform_binop.lhs); // The path string
                                     try self.pushAll(" platform ");
 
-                                    const rhs_node = self.getNode(platform_binop.rhs);
-                                    if (rhs_node.tag == .block) {
-                                        try self.push('[');
-                                        try self.ensureNewline();
-                                        self.curr_indent_level += 1;
-
-                                        const nodes_idx = rhs_node.payload.nodes;
-                                        var provides_it = self.ast.node_slices.nodes(&nodes_idx);
-                                        while (provides_it.next()) |item| {
-                                            const item_node = self.getNode(item);
-                                            _ = try self.flushCommentsBefore(item_node.region.start);
-                                            try self.pushIndent();
-                                            try self.formatNode(item);
-                                            try self.push(',');
-                                            try self.ensureNewline();
-                                        }
-
-                                        self.curr_indent_level -= 1;
-                                        try self.pushIndent();
-                                        try self.push(']');
-                                    } else {
-                                        try self.formatNode(platform_binop.rhs);
-                                    }
+                                    // Platform exports should always format as list
+                                    try self.formatPlatformExports(platform_binop.rhs);
                                 } else {
                                     try self.formatNode(binop.rhs);
                                 }
@@ -244,23 +262,12 @@ const Formatter = struct {
                                 const value_node = self.getNode(binop.rhs);
                                 if (value_node.tag == .binop_platform) {
                                     const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
-                                    try self.formatNode(platform_binop.lhs);
+                                    // Format: "path" platform [exports]
+                                    try self.formatNode(platform_binop.lhs); // The path string
                                     try self.pushAll(" platform ");
-                                    const rhs_node = self.getNode(platform_binop.rhs);
-                                    if (rhs_node.tag == .block) {
-                                        try self.push('[');
-                                        const nodes_idx = rhs_node.payload.nodes;
-                                        var provides_it = self.ast.node_slices.nodes(&nodes_idx);
-                                        var provides_first = true;
-                                        while (provides_it.next()) |item| {
-                                            if (!provides_first) try self.pushAll(", ");
-                                            provides_first = false;
-                                            try self.formatNode(item);
-                                        }
-                                        try self.push(']');
-                                    } else {
-                                        try self.formatNode(platform_binop.rhs);
-                                    }
+
+                                    // Platform exports should always format as list
+                                    try self.formatPlatformExports(platform_binop.rhs);
                                 } else {
                                     try self.formatNode(binop.rhs);
                                 }
@@ -273,8 +280,11 @@ const Formatter = struct {
                 }
             },
             .package => |p| {
-                _ = try self.flushCommentsBefore(p.region);
+                _ = try self.flushCommentsBeforeToken(p.region);
                 try self.pushAll("package");
+
+                // Check for comment after package keyword
+                _ = try self.flushCommentsAfterToken(p.region);
 
                 // Format exposes
                 try self.formatExposedList(p.exposes);
@@ -295,8 +305,11 @@ const Formatter = struct {
                 }
             },
             .platform => |p| {
-                _ = try self.flushCommentsBefore(p.region);
+                _ = try self.flushCommentsBeforeToken(p.region);
                 try self.pushAll("platform");
+
+                // Check for comment after platform keyword
+                _ = try self.flushCommentsAfterToken(p.region);
 
                 // Format name
                 try self.pushAll(" ");
@@ -344,21 +357,21 @@ const Formatter = struct {
                 }
             },
             .hosted => |h| {
-                _ = try self.flushCommentsBefore(h.region);
+                _ = try self.flushCommentsBeforeToken(h.region);
                 try self.pushAll("hosted");
 
                 // Format exposes
                 try self.formatExposedList(h.exposes);
             },
             .interface => |i| {
-                _ = try self.flushCommentsBefore(i.region);
+                _ = try self.flushCommentsBeforeToken(i.region);
                 try self.pushAll("interface");
 
                 // Format exposes
                 try self.formatExposedList(i.exposes);
             },
             .malformed => |m| {
-                _ = try self.flushCommentsBefore(m.region);
+                _ = try self.flushCommentsBeforeToken(m.region);
                 // Malformed headers just get flushed as-is
             },
         }
@@ -386,11 +399,8 @@ const Formatter = struct {
             const node = self.getNode(node_idx);
 
             // Check if there are comments before this node
-            if (self.last_formatted_pos < node.region.start.offset) {
-                const between = self.source[self.last_formatted_pos..node.region.start.offset];
-                if (std.mem.indexOf(u8, between, "#") != null) {
-                    has_comments = true;
-                }
+            if (self.hasCommentBetween(self.last_formatted_pos, node.region.start.offset)) {
+                has_comments = true;
             }
         }
 
@@ -410,7 +420,7 @@ const Formatter = struct {
             if (multiline) {
                 // Check for comments before this item
                 const node = self.getNode(node_idx);
-                _ = try self.flushCommentsBefore(node.region.start);
+                _ = try self.flushCommentsBeforeToken(node.region.start);
                 try self.pushIndent();
             } else {
                 if (!first) try self.pushAll(", ");
@@ -434,53 +444,11 @@ const Formatter = struct {
         try self.push(']');
     }
 
-    fn flushInlineComment(self: *Formatter, start_pos: usize) !void {
-        // Check if there's an inline comment on the same line after this position
-        if (start_pos >= self.source.len) {
-            return;
-        }
-
-        // Scan forward from this position, looking for a comment on the same line
-        var pos = start_pos;
-        var found_newline = false;
-
-        while (pos < self.source.len) {
-            const c = self.source[pos];
-
-            if (c == '\n') {
-                // Reached end of line without finding a comment
-                found_newline = true;
-                break;
-            } else if (c == '#') {
-                // Found an inline comment!
-                try self.pushAll(" ");
-                try self.push('#');
-                pos += 1;
-
-                // Output the rest of the comment
-                while (pos < self.source.len and self.source[pos] != '\n') {
-                    try self.push(self.source[pos]);
-                    pos += 1;
-                }
-
-                // Update our position to after the comment
-                self.last_formatted_pos = pos;
-                break;
-            } else if (c == ' ' or c == '\t') {
-                // Skip whitespace
-                pos += 1;
-            } else {
-                // Hit non-whitespace, non-comment - stop looking
-                break;
-            }
-        }
-    }
-
     fn formatNode(self: *Formatter, node_idx: Node.Idx) anyerror!void {
         const node = self.getNode(node_idx);
 
         // Flush any comments before this node
-        try self.flushCommentsBeforeNode(node);
+        _ = try self.flushCommentsBeforeToken(node.region.start);
 
         switch (node.tag) {
             // Binary operations
@@ -641,40 +609,26 @@ const Formatter = struct {
             },
 
             // Malformed nodes - preserve source bytes with diagnostic-aware recovery
-            .malformed => |diagnostic| {
+            .malformed => |_| {
                 // For malformed nodes, we preserve the original source text
-                // to avoid losing what the user wrote
                 const start = node.region.start.offset;
-
-                // Find the end of this malformed node using diagnostic information
-                // The diagnostic gives us hints about what went wrong
-                const end = self.findMalformedEndSmart(node_idx, diagnostic);
+                const end = node.region.end.offset;
 
                 if (start < end and end <= self.source.len) {
-                    // Get the source text for this malformed node
-                    var source_text = self.source[start..end];
-
-                    // Apply diagnostic-aware trimming
-                    source_text = self.trimMalformedTextSmart(source_text, diagnostic);
-
-                    // Output the preserved source
+                    const source_text = self.source[start..end];
                     if (source_text.len > 0) {
                         try self.pushAll(source_text);
                     }
-
-                    // Update our position
-                    if (end > self.last_formatted_pos) {
-                        self.last_formatted_pos = end;
-                    }
+                    self.last_formatted_pos = end;
                 }
             },
         }
 
         // Update position to past this node
-        const node_end = self.findNodeEnd(node_idx);
+        const node_end = node.region.end.offset;
         if (node_end > self.last_formatted_pos) {
             // Check for inline comments after this node
-            try self.flushInlineComment(node_end);
+            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(node.region.end.offset) });
 
             // If no inline comment was found, update position
             if (self.last_formatted_pos < node_end) {
@@ -808,71 +762,19 @@ const Formatter = struct {
             try self.formatNode(lhs);
             if (needs_lhs_parens) try self.push(')');
 
-            // Check for comments between LHS and equals
-            const lhs_end = self.findNodeEnd(lhs);
-            try self.flushInlineComment(lhs_end);
+            // Check for comments between LHS and equals using token-based approach
+            const lhs_node = self.getNode(lhs);
+            const has_comment_after_lhs = try self.flushCommentsAfterToken(lhs_node.region.end);
 
             try self.pushAll(" = ");
 
-            // Check for comments after equals before RHS
+            // Check for comments after equals before RHS using token-based approach
             const rhs_node = self.getNode(rhs);
-            var comment_after_equals = false;
+            const comment_after_equals = try self.flushCommentsBeforeToken(rhs_node.region.start);
 
-            // Find the equals sign in the source
-            var equals_pos = lhs_end;
-            while (equals_pos < self.source.len and self.source[equals_pos] != '=') {
-                equals_pos += 1;
-            }
-            if (equals_pos < self.source.len) {
-                equals_pos += 1; // Move past the =
-
-                // Now check for comments between = and RHS
-                const rhs_start = rhs_node.region.start.offset;
-                // ALWAYS check for comments, even if positions seem wrong
-                if (equals_pos < rhs_start) {
-                    const between = self.source[equals_pos..rhs_start];
-                    var i: usize = 0;
-
-                    // Skip initial whitespace
-                    while (i < between.len and (between[i] == ' ' or between[i] == '\t')) {
-                        i += 1;
-                    }
-
-                    if (i < between.len and between[i] == '#') {
-                        // Found inline comment after equals
-                        try self.pushAll(" #");
-                        i += 1;
-
-                        // Output the rest of the comment
-                        while (i < between.len and between[i] != '\n') {
-                            try self.push(between[i]);
-                            i += 1;
-                        }
-
-                        // Always move to new line after inline comment
-                        try self.ensureNewline();
-
-                        // IMMEDIATELY output indentation for the RHS
-                        // Since we have a comment, RHS should be indented
-                        try self.push('\t');
-
-                        // Update position to after the comment and any following whitespace
-                        // This prevents the comment from being processed again
-                        var pos = equals_pos + i;
-                        if (pos < self.source.len and self.source[pos] == '\n') {
-                            pos += 1;
-                            // Skip any leading whitespace on the next line
-                            while (pos < self.source.len and (self.source[pos] == ' ' or self.source[pos] == '\t')) {
-                                pos += 1;
-                            }
-                        }
-                        self.last_formatted_pos = pos;
-
-                        // Force multiline since we have a comment
-                        multiline = true;
-                        comment_after_equals = true;
-                    }
-                }
+            if (has_comment_after_lhs or comment_after_equals) {
+                // Force multiline if we found any comments
+                multiline = true;
             }
 
             if (multiline) {
@@ -900,20 +802,15 @@ const Formatter = struct {
             try self.formatNode(lhs);
             if (needs_lhs_parens) try self.push(')');
 
-            // Check for comments before operator
-            const lhs_end = self.findNodeEnd(lhs);
-            try self.flushInlineComment(lhs_end);
+            // Check for comments before operator using token-based approach
+            const lhs_node = self.getNode(lhs);
+            _ = try self.flushCommentsAfterToken(lhs_node.region.end);
 
             try self.pushAll(op_str);
 
-            // Check for comments after operator
+            // Check for comments after operator using token-based approach
             const rhs_node = self.getNode(rhs);
-            const between_start = self.last_formatted_pos;
-            const rhs_start = rhs_node.region.start.offset;
-            if (rhs_start > between_start) {
-                // Flush any comments between operator and RHS
-                try self.flushCommentsBeforeNode(rhs_node);
-            }
+            _ = try self.flushCommentsBeforeToken(rhs_node.region.start);
 
             if (needs_rhs_parens) try self.push('(');
             try self.formatNode(rhs);
@@ -1233,13 +1130,10 @@ const Formatter = struct {
 
         try self.pushAll("import ");
 
-        // The parser creates import nodes in this exact order:
-        // 1. Module path components (series of lc/uc nodes, potentially with dots)
-        // 2. Optional alias (single uc/lc node after encountering "as" keyword)
-        // 3. Optional exposed items (nodes after encountering "exposing" keyword)
-
-        // The parser tracks the position where it sees "as" and "exposing" keywords,
-        // so we can detect the structure by looking at the source between nodes
+        // The parser now creates a more structured import:
+        // 1. String literal or module path components
+        // 2. Optional alias node (might be binop_colon if it has a type annotation)
+        // 3. Optional exposed items
 
         var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
         var nodes = std.ArrayList(Node.Idx).init(self.allocator);
@@ -1251,8 +1145,7 @@ const Formatter = struct {
 
         if (nodes.items.len == 0) return;
 
-        // To determine the structure properly, we need to check the source text
-        // between nodes for the "as" and "exposing" keywords
+        // Parse the import structure
         var path_components = std.ArrayList(Node.Idx).init(self.allocator);
         defer path_components.deinit();
         var alias_node: ?Node.Idx = null;
@@ -1266,10 +1159,19 @@ const Formatter = struct {
         for (nodes.items, 0..) |node_idx_item, idx| {
             const curr_node = self.getNode(node_idx_item);
 
+            // Check if this is an alias node (binop_colon means it has type annotation)
+            if (curr_node.tag == .binop_colon) {
+                // This is "alias : Type" - it's the alias node
+                alias_node = node_idx_item;
+                state = .after_as;
+                continue;
+            }
+
             // Check source between previous node and current node for keywords
             if (idx > 0) {
                 const prev_node_idx = nodes.items[idx - 1];
-                const prev_end = self.findNodeEnd(prev_node_idx);
+                const prev_node = self.getNode(prev_node_idx);
+                const prev_end = prev_node.region.end.offset;
                 const curr_start = curr_node.region.start.offset;
 
                 if (prev_end < curr_start) {
@@ -1288,7 +1190,15 @@ const Formatter = struct {
 
             // Place node in appropriate category based on state
             switch (state) {
-                .path => try path_components.append(node_idx_item),
+                .path => {
+                    // String imports are single nodes
+                    if (curr_node.tag == .str_literal_small or curr_node.tag == .str_literal_big) {
+                        try path_components.append(node_idx_item);
+                        // After a string import, next might be alias
+                        continue;
+                    }
+                    try path_components.append(node_idx_item);
+                },
                 .after_as => {
                     if (alias_node == null) {
                         alias_node = node_idx_item;
@@ -1360,6 +1270,61 @@ const Formatter = struct {
         }
     }
 
+    fn formatPlatformExports(self: *Formatter, node_idx: Node.Idx) !void {
+        // Platform exports are parsed as record_literal but should format as list
+        const node = self.getNode(node_idx);
+
+        // Check if this list should be multiline
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.pushAll("[");
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        // Get elements from record node
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        var first_elem = true;
+        while (it.next()) |elem| {
+            const elem_node = self.getNode(elem);
+
+            if (multiline) {
+                if (!first_elem) {
+                    try self.push(',');
+                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                }
+                _ = try self.flushCommentsBeforeToken(elem_node.region.start);
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_elem) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_elem = false;
+            try self.formatNode(elem);
+
+            if (multiline) {
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+            }
+        }
+
+        if (multiline) {
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+            }
+            self.curr_indent_level -= 1;
+            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.pushAll("]");
+    }
+
     fn formatList(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
@@ -1383,10 +1348,10 @@ const Formatter = struct {
                 if (!first_elem) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushInlineComment(self.last_formatted_pos);
+                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBefore(elem_node.region.start);
+                _ = try self.flushCommentsBeforeToken(elem_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1399,7 +1364,7 @@ const Formatter = struct {
 
             // After formatting the element, check for inline comments
             if (multiline) {
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             }
         }
 
@@ -1408,11 +1373,11 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
                 // Check for comment after trailing comma
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             }
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing bracket
-            _ = try self.flushCommentsBeforePosition(self.getNode(node_idx).region.end.offset);
+            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1462,10 +1427,10 @@ const Formatter = struct {
                 if (!first_field) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushInlineComment(self.last_formatted_pos);
+                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
                 }
                 // Flush any comments before this field
-                _ = try self.flushCommentsBefore(field_node.region.start);
+                _ = try self.flushCommentsBeforeToken(field_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1478,7 +1443,7 @@ const Formatter = struct {
 
             // After formatting the field, check for inline comments
             if (multiline) {
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             }
         }
 
@@ -1487,11 +1452,11 @@ const Formatter = struct {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
                 // Check for comment after trailing comma
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             }
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing brace
-            _ = try self.flushCommentsBeforePosition(self.getNode(node_idx).region.end.offset);
+            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
             try self.ensureNewline();
             try self.pushIndent();
             try self.pushAll("}");
@@ -1532,10 +1497,10 @@ const Formatter = struct {
                 if (!first) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushInlineComment(self.last_formatted_pos);
+                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBefore(child_node.region.start);
+                _ = try self.flushCommentsBeforeToken(child_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1547,7 +1512,7 @@ const Formatter = struct {
 
             // After formatting the element, check for inline comments
             if (multiline) {
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             }
             first = false;
         }
@@ -1600,7 +1565,11 @@ const Formatter = struct {
             }
 
             try self.formatNode(stmt_idx);
-            prev_stmt_end = self.findNodeEnd(stmt_idx);
+
+            // Check for trailing comment on the same line as this statement
+            _ = try self.flushCommentsAfterToken(stmt_node.region.end);
+
+            prev_stmt_end = stmt_node.region.end.offset;
             first = false;
         }
     }
@@ -1759,7 +1728,7 @@ const Formatter = struct {
             const branch_node = self.getNode(branch_idx);
 
             // Flush any comments before this branch
-            _ = try self.flushCommentsBefore(branch_node.region.start);
+            _ = try self.flushCommentsBeforeToken(branch_node.region.start);
 
             try self.pushIndent();
 
@@ -1798,7 +1767,7 @@ const Formatter = struct {
                 }
 
                 // Check for inline comments after the body
-                _ = try self.flushInlineComment(self.last_formatted_pos);
+                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             } else {
                 // Shouldn't happen - branches should always be thick arrows
                 // But handle gracefully by formatting the node as-is
@@ -2408,27 +2377,27 @@ const Formatter = struct {
             .import => {
                 var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
                 while (it.next()) |child| {
-                    const child_end = self.findNodeEnd(child);
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
                     if (child_end > max_end) {
                         max_end = child_end;
                     }
                 }
             },
             .match => {
-                // Match nodes store branch count, not nodes
-                // We need to scan the source to find the end
-                return self.findMatchEnd(node_idx);
+                // Match nodes have complete regions now
+                return node.region.end.offset;
             },
             .if_else, .if_without_else => {
-                // If expressions store branch count in if_branches
-                // Scan for the end of the if expression
-                return self.findIfEnd(node_idx);
+                // If expressions have complete regions now
+                return node.region.end.offset;
             },
             .lambda => {
                 // Lambda uses body_then_args
                 var it = self.ast.node_slices.nodes(&node.payload.body_then_args);
                 while (it.next()) |child| {
-                    const child_end = self.findNodeEnd(child);
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
                     if (child_end > max_end) {
                         max_end = child_end;
                     }
@@ -2437,14 +2406,17 @@ const Formatter = struct {
             .binop_colon, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_lt, .binop_gt, .binop_lte, .binop_gte, .binop_double_equals, .binop_not_equals, .binop_and, .binop_or, .binop_pipe, .binop_dot, .binop_colon_equals, .binop_as, .binop_where, .binop_thick_arrow, .binop_thin_arrow, .binop_platform => {
                 // Binary operators use binop payload
                 const binop = self.ast.node_slices.binOp(node.payload.binop);
-                const lhs_end = self.findNodeEnd(binop.lhs);
-                const rhs_end = self.findNodeEnd(binop.rhs);
+                const lhs_node = self.getNode(binop.lhs);
+                const rhs_node = self.getNode(binop.rhs);
+                const lhs_end = lhs_node.region.end.offset;
+                const rhs_end = rhs_node.region.end.offset;
                 return @max(lhs_end, rhs_end);
             },
             else => {
                 var it = self.ast.node_slices.nodes(&node.payload.nodes);
                 while (it.next()) |child| {
-                    const child_end = self.findNodeEnd(child);
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
                     if (child_end > max_end) {
                         max_end = child_end;
                     }
@@ -2523,7 +2495,7 @@ const Formatter = struct {
         // String interpolation is handled by preserving source with expression formatting
         // For now, extract from source and format embedded expressions
         const start = node.region.start.offset;
-        const end = self.findNodeEnd(node_idx);
+        const end = node.region.end.offset;
 
         if (start >= end or end > self.source.len) {
             try self.pushAll("\"\"");
@@ -2542,7 +2514,8 @@ const Formatter = struct {
                 // String parts - extract from source
                 const part = self.getNode(part_idx);
                 const part_start = part.region.start.offset;
-                const part_end = self.findNodeEnd(part_idx);
+                const part_node = self.getNode(part_idx);
+                const part_end = part_node.region.end.offset;
 
                 // Copy the string content (without quotes)
                 if (part_start < part_end and part_end <= self.source.len) {
@@ -2597,7 +2570,7 @@ const Formatter = struct {
 
     fn nodeRegion(self: *const Formatter, node_idx: Node.Idx) base.Region {
         const node = self.getNode(node_idx);
-        const end_offset = self.findNodeEnd(node_idx);
+        const end_offset = node.region.end.offset;
 
         // Calculate the end position based on the offset
         // We need to count lines and columns from the start
@@ -2649,7 +2622,7 @@ const Formatter = struct {
 
         // Look for a comma before the closing delimiter
         const start = node.region.start.offset;
-        const end_estimate = self.findNodeEnd(node_idx);
+        const end_estimate = node.region.end.offset;
 
         if (end_estimate <= start or end_estimate > self.source.len) {
             return false;
@@ -2760,12 +2733,6 @@ const Formatter = struct {
             }
         }
         return false;
-    }
-
-    fn findNodeEnd(self: *const Formatter, node_idx: Node.Idx) usize {
-        const node = self.getNode(node_idx);
-        // Now that we store the full region for each node, we can simply return the end offset
-        return node.region.end.offset;
     }
 
     /// Flush comments and blank lines before a position
@@ -3010,159 +2977,6 @@ const Formatter = struct {
         return result;
     }
 
-    fn flushCommentsBeforePosition(self: *Formatter, position: usize) !bool {
-        if (position <= self.last_formatted_pos or position > self.source.len) {
-            return false;
-        }
-
-        const between = self.source[self.last_formatted_pos..position];
-        return self.flushComments(between);
-    }
-
-    fn flushCommentsBefore(self: *Formatter, pos: Position) !bool {
-        // If we haven't collected tokens, can't flush comments
-        if (self.tokens.items.len == 0) {
-            return false;
-        }
-
-        // Find the range of source text to check for comments
-        const start_offset = self.last_formatted_pos;
-        const end_offset = pos.offset;
-        if (end_offset <= start_offset) return false;
-
-        const between_text = self.source[start_offset..end_offset];
-        return self.flushComments(between_text);
-    }
-
-    fn flushCommentsBeforeNode(self: *Formatter, node: Node) !void {
-        const node_start = node.region.start.offset;
-
-        // Don't flush if we're already at or past this position
-        if (self.last_formatted_pos >= node_start) {
-            return;
-        }
-
-        // Get the source between last position and this node
-        const between = self.source[self.last_formatted_pos..node_start];
-
-        // Scan for comments and preserve them
-        var i: usize = 0;
-        while (i < between.len) {
-            const c = between[i];
-
-            if (c == '#') {
-                // Found a comment - check if it's a doc comment (##)
-                const is_doc_comment = (i + 1 < between.len and between[i + 1] == '#');
-
-                // Output the comment marker(s)
-                try self.push('#');
-                i += 1;
-
-                if (is_doc_comment) {
-                    try self.push('#');
-                    i += 1;
-                }
-
-                // Output the rest of the line
-                while (i < between.len and between[i] != '\n') {
-                    try self.push(between[i]);
-                    i += 1;
-                }
-
-                // Doc comments should be preserved with proper spacing
-                if (i < between.len and between[i] == '\n') {
-                    try self.ensureNewline();
-                    i += 1;
-
-                    // For doc comments, preserve blank line after if present
-                    if (is_doc_comment and i < between.len and between[i] == '\n') {
-                        try self.ensureBlankLine();
-                    }
-                }
-            } else if (c == '\n') {
-                // Preserve blank lines
-                if (i + 1 < between.len and between[i + 1] == '\n') {
-                    try self.ensureBlankLine();
-                    // Skip all consecutive newlines
-                    while (i < between.len and between[i] == '\n') {
-                        i += 1;
-                    }
-                } else {
-                    i += 1;
-                }
-            } else if (c == ' ' or c == '\t' or c == '\r') {
-                // Skip whitespace
-                i += 1;
-            } else {
-                // Non-whitespace, non-comment - stop
-                break;
-            }
-        }
-
-        // Update position to the start of the node
-        self.last_formatted_pos = node_start;
-    }
-
-    fn flushCommentsToEnd(self: *Formatter) !bool {
-        // Flush any remaining comments at the end of the file
-        if (self.last_formatted_pos < self.source.len) {
-            const remaining = self.source[self.last_formatted_pos..];
-
-            // Scan for comments, preserving blank lines
-            var i: usize = 0;
-            var found_comment = false;
-            var newline_count: u32 = 0;
-
-            while (i < remaining.len) {
-                const c = remaining[i];
-
-                if (c == '#') {
-                    // Output appropriate newlines before the comment
-                    if (newline_count == 0) {
-                        // No newlines before comment - it's on the same line as previous content
-                        // This shouldn't happen for trailing comments
-                    } else if (newline_count == 1) {
-                        // One newline - comment is on the next line
-                        try self.ensureNewline();
-                    } else {
-                        // Two or more newlines - preserve blank line
-                        try self.ensureNewline();
-                        try self.newline(); // Force a second newline for the blank line
-                    }
-
-                    found_comment = true;
-                    // Output the comment
-                    try self.push('#');
-                    i += 1;
-
-                    while (i < remaining.len and remaining[i] != '\n') {
-                        try self.push(remaining[i]);
-                        i += 1;
-                    }
-
-                    if (i < remaining.len and remaining[i] == '\n') {
-                        try self.ensureNewline();
-                        i += 1;
-                    }
-
-                    // Reset newline count after comment
-                    newline_count = 0;
-                } else if (c == '\n') {
-                    newline_count += 1;
-                    i += 1;
-                } else if (c == ' ' or c == '\t' or c == '\r') {
-                    i += 1;
-                } else {
-                    // Non-whitespace, non-comment - shouldn't happen at end
-                    break;
-                }
-            }
-
-            return found_comment;
-        }
-        return false;
-    }
-
     /// Flush comments and blank lines, preserving formatting
     /// Returns true if there was at least one newline
     fn flushComments(self: *Formatter, between_text: []const u8) !bool {
@@ -3263,6 +3077,146 @@ const Formatter = struct {
                 try self.push('\t');
             }
         }
+    }
+
+    /// Flush comments before a given position using token positions
+    fn flushCommentsBeforeToken(self: *Formatter, pos: Position) !bool {
+        // Find the token at or after this position
+        const token_idx = self.findTokenAtPosition(pos) orelse return false;
+        if (token_idx == 0) return false;
+
+        // Get the region between previous token and this position
+        const prev_token_end = self.token_regions.items[token_idx - 1].end.offset;
+        const end_offset = pos.offset;
+
+        if (end_offset <= prev_token_end) return false;
+
+        return self.flushCommentsInRange(self.source[prev_token_end..end_offset]);
+    }
+
+    /// Flush comments after a given position using token positions
+    fn flushCommentsAfterToken(self: *Formatter, pos: Position) !bool {
+        // Find the token before this position
+        const token_idx = self.findTokenBeforePosition(pos) orelse return false;
+        if (token_idx >= self.token_regions.items.len - 1) return false;
+
+        // Get the region between this position and next token
+        const start_offset = pos.offset;
+        const next_token_start = self.token_regions.items[token_idx + 1].start.offset;
+
+        if (next_token_start <= start_offset) return false;
+
+        return self.flushCommentsInRange(self.source[start_offset..next_token_start]);
+    }
+
+    /// Core comment flushing logic for a range of text
+    fn flushCommentsInRange(self: *Formatter, text: []const u8) !bool {
+        // Calculate absolute offset of this text in source
+        const text_start = @intFromPtr(text.ptr) - @intFromPtr(self.source.ptr);
+
+        // Skip if we've already processed this region
+        if (text_start < self.last_comment_end) {
+            // Find where we need to start from
+            const skip_bytes = self.last_comment_end - text_start;
+            if (skip_bytes >= text.len) return false;
+            return self.flushCommentsInRangeInternal(text[skip_bytes..]);
+        }
+
+        return self.flushCommentsInRangeInternal(text);
+    }
+
+    fn flushCommentsInRangeInternal(self: *Formatter, text: []const u8) !bool {
+        var found_comment = false;
+        var newline_count: usize = 0;
+        var i: usize = 0;
+
+        while (i < text.len) {
+            if (text[i] == '#') {
+                // If we've seen 2+ newlines (blank line) before this comment,
+                // it's a standalone comment for the next statement - don't attach it
+                if (newline_count >= 2 and !found_comment) {
+                    // This is a standalone comment, leave it for the next statement
+                    break;
+                }
+
+                // Found a comment to attach
+                const comment_start = i + 1; // Skip the #
+                var comment_end = comment_start;
+                while (comment_end < text.len and text[comment_end] != '\n' and text[comment_end] != '\r') {
+                    comment_end += 1;
+                }
+
+                // Output appropriate spacing before comment
+                if (found_comment or newline_count > 0) {
+                    try self.pushIndent();
+                } else if (!self.has_newline) {
+                    // Check if we already have a trailing space
+                    const output_len = self.output.items.len;
+                    const has_trailing_space = output_len > 0 and self.output.items[output_len - 1] == ' ';
+                    if (!has_trailing_space) {
+                        try self.pushAll(" ");
+                    }
+                }
+
+                // Output the comment
+                try self.push('#');
+                if (comment_end > comment_start) {
+                    try self.output.appendSlice(text[comment_start..comment_end]);
+                }
+
+                // Move to after the comment
+                i = comment_end;
+
+                // Handle newline after comment
+                if (i < text.len and (text[i] == '\n' or text[i] == '\r')) {
+                    try self.ensureNewline();
+                    if (text[i] == '\r') i += 1;
+                    if (i < text.len and text[i] == '\n') i += 1;
+                    newline_count = 1;
+                } else {
+                    i += 1;
+                }
+
+                // Update position to track we've processed this comment
+                const text_start = @intFromPtr(text.ptr) - @intFromPtr(self.source.ptr);
+                self.last_comment_end = text_start + i;
+
+                found_comment = true;
+            } else if (text[i] == '\n') {
+                newline_count += 1;
+                // Preserve blank lines
+                if (newline_count > 1 and found_comment) {
+                    try self.ensureBlankLine();
+                }
+                i += 1;
+            } else if (text[i] == '\r') {
+                i += 1;
+            } else if (text[i] == ' ' or text[i] == '\t') {
+                i += 1;
+            } else {
+                // Non-whitespace, non-comment - stop scanning
+                break;
+            }
+        }
+
+        return found_comment or newline_count > 0;
+    }
+
+    /// Flush trailing comments at end of file using token positions
+    fn hasCommentBetween(self: *Formatter, start: usize, end: usize) bool {
+        if (start >= end or end > self.source.len) return false;
+        const text = self.source[start..end];
+        return std.mem.indexOf(u8, text, "#") != null;
+    }
+
+    fn flushTrailingComments(self: *Formatter) !bool {
+        if (self.token_regions.items.len == 0) return false;
+
+        const last_token_end = self.token_regions.items[self.token_regions.items.len - 1].end.offset;
+        if (last_token_end >= self.source.len) return false;
+
+        const remaining = self.source[last_token_end..];
+        return self.flushCommentsInRange(remaining);
     }
 };
 

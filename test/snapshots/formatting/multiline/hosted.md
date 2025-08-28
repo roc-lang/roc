@@ -47,7 +47,6 @@ hosted [a!, b!]
 	a!,
 	b!,
 ]
-
 a! : Str => Str
 b! : Str => Str
 ~~~

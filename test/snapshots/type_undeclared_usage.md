@@ -60,12 +60,10 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon U
 module [MyType, processValue]
 
 MyType : UnknownType
-
 processValue : UndeclaredResult -> Str
 processValue = \value -> {
 	"processed"
 }
-
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED

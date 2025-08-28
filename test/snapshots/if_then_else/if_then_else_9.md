@@ -28,10 +28,12 @@ if bool
 	}
 else if 10
 	{
-		A
+		 # Comment after else open
+A
 	}
 else {
-	3
+	 # Comment after else open
+3
 }
 ~~~
 # EXPECTED

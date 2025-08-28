@@ -34,8 +34,6 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 module [message, greet]
 
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
-
-# Test other Unicode characters
 greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"
 ~~~
 # EXPECTED

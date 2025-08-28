@@ -13,14 +13,6 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 # PARSE
 ~~~clojure
 (block
-  (list_literal)
-  (block
-    (binop_colon
-      (lc "f")
-      (malformed malformed:expr_unexpected_token)
-    )
-    (str_literal_small "")
-  )
   (import
     (lc "f")
   )
@@ -31,33 +23,19 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~roc
 app
 {
-	f,
-	platform,
+	f: "" platform [],
 }
 
-[]{
-	f : platform
-	""
-}import f
+import f
 S
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Expected Open Curly Brace**
-at 1:1 to 1:4
-
-**Parse Error**
-at 1:9 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_or)
-  (Expr.block
-    (Expr.malformed)
-    (Expr.binop_not_equals)
-  )
   (Expr.binop_plus)
   (Expr.str_literal_small)
 )

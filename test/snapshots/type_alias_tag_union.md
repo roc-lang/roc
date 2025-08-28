@@ -147,27 +147,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 MyResult((ok, err)) : [Good(ok), Bad(err)]
-
-# Using the type alias
 process : MyResult (Str, I32) -> Str
 process = \_result -> "processed"
-
-# Another type alias with a single parameter
 Option(a) : [Some(a), None]
-
-# Using it with different types
 getString : Option Str -> Str
 getString = \_opt -> "default"
-
 getNumber : Option I32 -> I32
 getNumber = \_opt -> 0
-
 main! = \_ -> {  }
 ~~~
 # EXPECTED

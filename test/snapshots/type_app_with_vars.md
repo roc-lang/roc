@@ -83,14 +83,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 mapList : List a -> (a -> b) -> List b
 mapList = \(list, fn) -> list.map(fn)
-
 main! = \_ -> mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED

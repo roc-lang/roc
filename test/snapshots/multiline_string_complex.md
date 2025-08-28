@@ -102,21 +102,17 @@ This
 is
 a
 "string"
-with
 just
 one
 line
-
 value2 = ""
 This
 is
 a
 "string"
-with
 just
 one
 line
-
 value3 = ""
 This
 is
@@ -125,21 +121,19 @@ string
 ""With
 multiple
 lines
-""$
+""
 {
 	value1
 }
-
 value4 = ""
 This
 is
 a
-string
-# A comment in between
+string# A comment in between
 ""With
 multiple
 lines
-""$
+""
 {
 	value2
 }

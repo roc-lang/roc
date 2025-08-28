@@ -172,35 +172,25 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 my_empty_list = []
-
-# Empty list used in different contexts
 int_list = [1, 2, 3]
 str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
-
-# Append empty list (polymorphic use)
-all_int_list = int_list + +
+all_int_list = int_list + 
 my_empty_list
-all_str_list = str_list + +
+all_str_list = str_list + 
 my_empty_list
-all_float_list = float_list + +
+all_float_list = float_list + 
 my_empty_list
-
-# Function returning empty list
 get_empty = \_ -> []
-
-# Used at different types
 empty_int_list = get_empty(42)
 empty_str_list = get_empty("test")
-
 main = \_ -> {
-	len1 = List.len(all_int_list)
+		# Type inference should work correctly
+len1 = List.len(all_int_list)
 	len2 = List.len(all_str_list)
 	len3 = List.len(all_float_list)
 	(len1 + len2) + len3

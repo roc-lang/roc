@@ -72,16 +72,11 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
 ~~~roc
 app {  }
 
-platform
 [main!]
-}
-
 UserId : U64
-
 ser : UserId -> Str
-getUser = \id -> if id > 1 !)
+getUser = \id -> if id > 1 !
 "big"
-else
 "l" - ain! = \_ -> getUser(900)
 ~~~
 # EXPECTED

@@ -135,12 +135,11 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
 ~~~
 # FORMATTED
 ~~~roc
+# define these to avoid runtime errors
 add_one = \_ -> {  }
 x = 10
 y = 20
 z = 30
-
-# example tuples
 empty = ()
 single = 42
 pair = (1, 2)

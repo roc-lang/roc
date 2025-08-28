@@ -294,24 +294,17 @@ import json.Json
 import utils.Result exposing [Result]
 processRequest : Request -> Response
 processRequest = \req -> Http.defaultResponse
-
 parseJson : Str -> Json.Value
 parseJson = \input -> Json.parse(input)
-
 handleApi : Http.Request -> Result (Http.Response, Json.Error)
 handleApi = \request -> {
 	result = Json.decode(request.body)
 	match result
 }
-
 config : Json.Config
 config = Json.defaultConfig
-
-# Test nested type qualification
 advancedParser : Json.Parser | Config -> Str -> Result (Json.Value, Json.Parser | Error)
 advancedParser = \(parserConfig, input) -> Json.Parser | .parseWith((parserConfig, input))
-
-# Test function with multiple type parameters
 combineResults : Result (a, err) -> Result (b, err) -> Result ((a, b), err)
 combineResults = \(result1, result2) -> match result1
 ~~~

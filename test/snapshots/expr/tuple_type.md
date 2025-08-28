@@ -20,16 +20,15 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 (block
   (binop_colon
     (lc "f")
-    (tuple_literal
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-    (tuple_literal
-      (uc "Str")
-      (uc "Str")
+    (binop_thin_arrow
+      (tuple_literal
+        (uc "Str")
+        (uc "Str")
+      )
+      (tuple_literal
+        (uc "Str")
+        (uc "Str")
+      )
     )
   )
   (binop_equals
@@ -54,23 +53,19 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-f : (Str, Str)
--> (((Str, Str))
+f :
+	(Str, Str) -> (Str, Str)
 f = \x -> x
-
 f((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:20 to 2:20
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon)
   (Expr.malformed)
   (Expr.binop_thick_arrow)
 )

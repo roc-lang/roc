@@ -116,15 +116,11 @@ module [
 ]
 
 Maybe(a) := [Some(a), None]
-
 some1 : a -> Maybe a
 some1 = \a -> Maybe.Some(a)
-
 none1 : Maybe _a
 none1 = Maybe.None
-
 some2 = \a -> Maybe.Some(a)
-
 none2 = Maybe.None
 ~~~
 # EXPECTED

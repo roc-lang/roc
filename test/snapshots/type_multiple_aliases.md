@@ -153,9 +153,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 UserId : U64
@@ -164,10 +162,8 @@ UserAge : U8
 User : {id : UserId, name : UserName, age : UserAge}
 create_user : UserId -> UserName -> UserAge -> User
 create_user = \(id, name, age) -> { id : id, name : name, age : age }
-
 get_user_name : User -> UserName
 get_user_name = \user -> user.name
-
 main! = \_ -> {
 	user = create_user((123, "Alice", 25))
 	get_user_name(user)

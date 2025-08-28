@@ -932,126 +932,137 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-# This is a module comment!
 app
 {
-	# This is a module comment!
-	# This is a module comment!
-pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 import pf.Stdout exposing [line, write]
-import pf # Comment after qualifier.StdoutMultiline # Comment after ident exposing [line, write]
+import # Comment after import keyword
+pf # Comment after qualifier
+.StdoutMultiline # Comment after ident
+ exposing [ # Comment after exposing open
+line, # Comment after exposed item
+write]
+# Comment after exposing close
+
 import pkg.Something exposing [func]
-as
 function
 Type
-as
 ValueCategory
-.*
-]
-
+.
 import BadName as GoodName
 import BadNameMultiline.GoodNameMultiline
-
 Map((a, b)) : List a -> (a -> b) -> List b
 MapML(
-	(a, b) : List (a -> ),
-		( -> (a -> b) -> List (b)),
+	 # And after the last arg
+(a, b) : # And after the colon
+List ( # Inside Tag args
+a -> # After tag arg
+ -> (a -> b) -> # After arrow
+List # Inside tag args
+(b)),
 )
-Foo : (Bar, Baz)
-FooMultiline : (Bar, Baz)
-Some(a) : {foo : Ok a, bar : Something}
-SomeMl(a) : {foo : Ok a, bar : Something}
-SomeMultiline(a) : {foo # After field name : Ok a, bar : Something}
-Maybe(a) : [Some(a), None]
+# And after the type decl
 
-MaybeMultiline(a) : [Some(a), None] # Comment after tag union close
+Foo : (Bar, Baz)
+FooMultiline : # Comment after pattern tuple open
+(Bar, # Comment after pattern tuple item
+Baz)
+# Comment after pattern tuple close
+
+Some(a) : {foo : Ok a, bar : Something}
+SomeMl(a) : { # After record open
+foo : Ok a, # After field
+bar : Something}
+SomeMultiline(a) : { # Comment after pattern record open
+foo # After field name
+ : # Before field anno
+Ok a, # Comment after pattern record field
+bar : Something}
+# Comment after pattern record close
+
+Maybe(a) : [Some(a), None]
+MaybeMultiline(a) : [ # Comment after tag union open
+Some(a), # Comment after tag union member
+None] # Comment after tag union close
 
 SomeFunc(a) : Maybe a -> a -> Maybe a
 add_one_oneline = \num -> if num 2 else 5
-
 add_one : U64 -> U64
 add_one = \num -> {
 	other = 1
 	if num
 		{
-			dbg # After debug
-			some_func() # After debug expr
+			
+			 # After debug
+some_func() # After debug expr
 			0
 		}
 	else {
-		dbg
+		
 		123
 		other : other
 	}
 }
-
-match_time = [
+match_time = 
 1
 2 | 5
 3
-..as # Before alias
-rest, # After last pattern in list
-]
-=>
+.. # After DoubleDot
+# Before alias
+rest
+# After last pattern in list
 123
 3.14
-=>
 314
 3.14 | 6.28
-=>
 314((1, 2, 3))
-=>
 123(((1, 2) | 5, 3))
-=>
 123
 { foo : 1, bar : 2, ..rest }
-=>
-12-->
+12-
 add(34)
-{ foo : 1, bar : 2, ..rest }
-=>
+{ # After pattern record field name
+foo : # Before pattern record field value
+1, # After pattern record field
+bar : 2, ..rest }
 12
 { foo : 1, bar : 2 } | 7
-}
-=>
 12
 { foo : 1, bar : 2 } | 7
-, # After last record field
-}
-=>
+# After last record field
 12
 Ok(123)
-=>
 123
 Ok(Some(dude))
-=>
 dude
 TwoArgs(("hello", Some("world")))
-=>
 1000
-}
-
-expect blah == 1 # Comment after expect statement
+expect # Comment after expect keyword
+blah == 1 # Comment after expect statement
 
 main! : List String -> Result ({  }, _)
-main! = \_ -> { world = "World", var number = 123, expect blah == 1, tag = Blue, return tag # Comment after return statement, 
+main! = \_ -> { # Yeah I can leave a comment here
+world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comment after return keyword
+tag # Comment after return statement
 
 # Just a random comment!
-..., match_time((...)), some_func(dbg # After debug), 42 } # Comment after crash keyword
+
+, ..., match_time((...)), some_func(), # After debug
+42 } # Comment after crash keyword
 crash "Unreachable!" # Comment after crash statement
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
-list = [add_one(dbg # After dbg in list)]
-number, # after dbg expr as arg
-)
-, # Comment one
-456, # Comment two
-789, # Comment three
-]
+list = [add_one()]
+# After dbg in list
+number
+# after dbg expr as arg
+# Comment one
+456
+# Comment two
+789
+# Comment three
 for n in list {
 	{
 		Stdout.line!("Adding ${n} to ${number}")
@@ -1060,25 +1071,19 @@ for n in list {
 }
 record = { foo : 123, bar : "Hello" }
 az : ((tag, qux) : Ok world, punned)
-}
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
-? | .static_dispatch_method()? | .next_static_dispatch_method()? | .record_field?
-Stdout.line!(interpolated)?
-Stdout.line!("How about ${ # Comment after string interpolation open)Num.toStr(number) # Comment after string interpolation expr
-}
-as
+ | .static_dispatch_method() | .next_static_dispatch_method() | .record_field
+Stdout.line!(interpolated)
+Stdout.line!()Num.toStr(number) # Comment after string interpolation expr
 a
-string?
-"
-)
-} # Comment after top-level decl
+string
+# Comment after top-level decl
 
 empty : {}
 empty = {  }
-
 tuple : Value (a, b, c)
 expect {
 	foo = 1 # This should work too

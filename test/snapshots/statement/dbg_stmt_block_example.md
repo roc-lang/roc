@@ -51,12 +51,9 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 module [foo]
 
 foo = \num -> {
-	dbg
+		# statement - prints out the value of num convertert to a string
 	num.to_str()
-	
-
-# expression - prints out the value of num and then returns it
-dbg((num)
+	(num)
 }
 ~~~
 # EXPECTED

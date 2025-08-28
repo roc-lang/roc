@@ -68,14 +68,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app
 {
-	pf: "../basic-cli/main.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/main.roc" platform [main],
 }
 
 processList : List Str -> U64
 processList = \list -> list.len()
-
 main! = \_ -> processList(["one", "two", "three"])
 ~~~
 # EXPECTED

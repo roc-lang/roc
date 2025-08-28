@@ -71,8 +71,6 @@ module [string_function, wrong_type_function]
 
 string_function : Str -> Str
 string_function = \x -> x + 42
-
-# Annotation says function returns I64, but implementation returns Frac(_prec)
 wrong_type_function : I64 -> I64
 wrong_type_function = \x -> x * 3.14
 ~~~

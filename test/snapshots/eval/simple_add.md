@@ -78,7 +78,6 @@ module [addU8]
 
 addU8 : U8 -> U8 -> U8
 addU8 = \(a, b) -> a + b
-
 expect addU8((1, 2)) == 3
 expect addU8((0, 10)) == 10
 ~~~

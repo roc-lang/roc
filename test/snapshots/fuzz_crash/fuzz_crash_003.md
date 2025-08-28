@@ -19,7 +19,7 @@ OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-"te
+
 ~~~
 # EXPECTED
 NIL

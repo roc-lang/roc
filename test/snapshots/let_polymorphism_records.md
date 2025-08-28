@@ -225,9 +225,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app
 {
-	pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 num = 42
@@ -235,38 +233,26 @@ frac = 4.2
 str = "hello"
 my_empty_list = []
 my_nonempty_list = [num, frac]
-
-# Record with polymorphic field
 make_container = \value -> { data : value, count : 1 }
-
-# Used with different types
 int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
-
-# Polymorphic record update
 update_data = \(container, new_value) -> {
 	container : container
-	&
+	
 	data : new_value
 }
-
-# Used with different record types
 updated_int = update_data((int_container, 100))
 updated_str = update_data((str_container, "world"))
-
-# Function returning polymorphic record
 identity_record = \x -> {
 	value : x
 }
-
-# Used at different types
 int_record = identity_record(42)
 str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
-
 main = \_ -> {
-	int_container.count + str_container.count
+		# Access polymorphic fields
+int_container.count + str_container.count
 }
 ~~~
 # EXPECTED

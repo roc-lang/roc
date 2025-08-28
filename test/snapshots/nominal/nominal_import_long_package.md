@@ -42,9 +42,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 module [red]
 
 import design.Styles.Color exposing [Encoder]
-as
-CE]
-
+CE
 red : CE
 red = ... # not implemented
 ~~~

@@ -398,17 +398,11 @@ module []
 
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-as
 Ias1
 I22
-as
 Ias2
-]
-
-# Where constraint
-A(a) : a where module(a) | .a1 : a -> a -> ) -> (Str, module(a) | .a2) : a -> a -> ) -> Str
-B(b) : b where module(b) | .b1 : b -> b -> ) -> (Str, module(b) | .b2) : b -> b -> ) -> Str
-
+A(a) : a where module(a) | .a1 : a -> a ->  -> (Str, module(a) | .a2) : a -> a ->  -> Str
+B(b) : b where module(b) | .b1 : b -> b ->  -> (Str, module(b) | .b2) : b -> b ->  -> Str
 C(
 	(a, b) : (a, b),
 )D(
@@ -423,9 +417,7 @@ F : [
 	A,
 	B,
 ]
-
 g : (e -> e where module(e) | A, module(e) | B)
-
 h = \(x, y) -> {
 	h1 = {
 		h11 : x,

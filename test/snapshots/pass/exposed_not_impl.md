@@ -48,7 +48,6 @@ module [
 ]
 
 foo = 42
-
 MyType : [A, B, C]
 ~~~
 # EXPECTED

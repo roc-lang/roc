@@ -55,25 +55,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-# Hello world!
-# Multiline comments?
 app
 {
-	# Hello world!
-	# Multiline comments?
-	# Hello world!
-# Multiline comments?
-pf: "../basic-cli/platform.roc" platform [
-		main,
-	],
+	pf: "../basic-cli/platform.roc" platform [main],
 }
 
 import pf.Stdout
-
 main! = \_ -> {
-	world = "World"
-	# Hello
-Stdout.line!("Hello, world!")
+	world = "World"	# Hello
+	Stdout.line!("Hello, world!")
 }
 ~~~
 # EXPECTED

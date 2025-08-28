@@ -60,8 +60,8 @@ module []
 import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = \p -> "Got a person"
-
-main = expectsPerson("not a person")
+main = # This will cause a type mismatch
+expectsPerson("not a person")
 ~~~
 # EXPECTED
 NIL

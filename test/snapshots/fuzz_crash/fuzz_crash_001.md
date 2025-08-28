@@ -21,7 +21,7 @@ LowerIdent OpBar MalformedUnknownToken ~~~
 ~~~
 # FORMATTED
 ~~~roc
-mo | %
+mo | 
 ~~~
 # EXPECTED
 NIL

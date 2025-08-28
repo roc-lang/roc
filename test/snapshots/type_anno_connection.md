@@ -59,7 +59,6 @@ module [add_one, my_number]
 
 add_one : U64 -> U64
 add_one = \x -> x + 1
-
 my_number : U64
 my_number = add_one(42)
 ~~~

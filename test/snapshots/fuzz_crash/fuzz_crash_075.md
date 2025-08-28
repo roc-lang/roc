@@ -18,7 +18,7 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
 ~~~roc
 package [] packages {d, {
 	{
-		d : ||
+		d : 
 		{
 			0
 		}

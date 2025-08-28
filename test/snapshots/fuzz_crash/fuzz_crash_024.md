@@ -38,16 +38,12 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 ~~~
 # FORMATTED
 ~~~roc
-module [module ]]
+module []
 
 {
-	pf : platform
-	".-/main._]where # A
-
-#el
-	var t = ]
-
-#el
+	pf : 
+	
+	var t = 
 	var t = 0
 }
 ~~~

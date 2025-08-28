@@ -249,32 +249,32 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
                     (binop_and
                       (binop_gte
                         (lc "b")
-                        (str_literal_small "")
+                        (str_literal_small "0")
                       )
                       (binop_lte
                         (lc "b")
-                        (str_literal_small "")
+                        (str_literal_small "9")
                       )
                     )
                     (binop_and
                       (binop_gte
                         (lc "b")
-                        (str_literal_small "")
+                        (str_literal_small "a")
                       )
                       (binop_lte
                         (lc "b")
-                        (str_literal_small "")
+                        (str_literal_small "f")
                       )
                     )
                   )
                   (binop_and
                     (binop_gte
                       (lc "b")
-                      (str_literal_small "")
+                      (str_literal_small "A")
                     )
                     (binop_lte
                       (lc "b")
-                      (str_literal_small "")
+                      (str_literal_small "F")
                     )
                   )
                 )
@@ -450,16 +450,13 @@ Color := [
 	Named(Str),
 	Hex(Str),
 ]
-
 rgb : U8 -> U8 -> U8 -> Color
 rgb = \(r, g, b) -> Color.RGB((r, g, b))
-
 rgba : U8 -> U8 -> U8 -> U8 -> Color
 rgba = \(r, g, b, a) -> {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
-
 hex : Str -> Result (Color, [InvalidHex(Str)])
 hex = \str -> {
 	bytes = str.to_utf8()
@@ -538,21 +535,16 @@ hex = \str -> {
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("
 	match bytes
 }
-
 to_str : Color -> Str
 to_str = \color -> match color
 expect rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
-
 named : Str -> Result (Color, [UnknownColor(Str)])
 named = \str -> if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
-
 is_named_color = \str -> {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-	
-
-colors.contains(str)
+	colors.contains(str)
 }
 ~~~
 # EXPECTED

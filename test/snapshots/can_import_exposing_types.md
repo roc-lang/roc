@@ -331,15 +331,11 @@ import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
 parseJson : Str -> Result (Value, Error)
 parseJson = \input -> Json.parse(input)
-
-# Test mixing exposed types with qualified access
 handleRequest : Request -> Response
 handleRequest = \req -> {
 	result = Json.decode(req.body)
 	match result
 }
-
-# Test using exposed types in complex signatures
 processData : Config -> List Value -> Result (List(Value), Error)
 processData = \
 	(config, values),
@@ -354,8 +350,6 @@ ServerConfig :
 	}
 createClient : Config -> Http.Client
 createClient = \config -> Http.clientWith(config)
-
-# Test nested type usage
 handleResponse : Response -> Str
 handleResponse = \response -> match response.status
 combineResults : Result (Value, Error) -> Status -> Result (Response, Error)

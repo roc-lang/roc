@@ -29,7 +29,10 @@ Int OpPlus Int OpStar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-1 # One + 2 # Two * 3
+# One
+1 + # Two
+2 * # Times
+3
 ~~~
 # EXPECTED
 NIL

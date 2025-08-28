@@ -33,7 +33,10 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+import json.Json as MyJson
+main = MyJson.decode
 ~~~
 # EXPECTED
 NIL
