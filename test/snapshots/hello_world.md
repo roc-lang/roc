@@ -18,8 +18,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
   )
   (binop_equals
     (not_lc "main")
@@ -42,23 +44,28 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 import pf.Stdout
-main! = \_ -> Stdout.line!("Hello, world!")
+main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 5:13 to 5:19
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED

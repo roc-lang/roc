@@ -77,7 +77,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent Comma U
 module [addU8]
 
 addU8 : U8 -> U8 -> U8
-addU8 = \(a, b) -> a + b
+addU8 = |a, b| a + b
 expect addU8((1, 2)) == 3
 expect addU8((0, 10)) == 10
 ~~~
@@ -87,17 +87,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_minus)
-  (Expr.binop_minus)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

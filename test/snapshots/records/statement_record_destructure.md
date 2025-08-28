@@ -36,7 +36,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.record_literal
+      (Expr.lookup "name")
+      (Expr.lookup "age")
+      (Expr.lookup "email")
+    )
+    (Expr.lookup "person")
+  )
 )
 ~~~
 # SOLVED

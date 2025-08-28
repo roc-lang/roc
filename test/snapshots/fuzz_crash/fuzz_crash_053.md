@@ -47,17 +47,13 @@ at 1:14 to 1:14
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_double_slash)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

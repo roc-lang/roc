@@ -27,8 +27,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
   )
   (binop_equals
     (lc "multiply")
@@ -95,29 +97,46 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 import pf.Stdout
-multiply = \(x, y) -> x * y
-print_number! = \n -> Stdout.line!(n)
-process! = \x -> print_number!(multiply((x, 2)))
+multiply = |x, y| x * y
+print_number! = |n| Stdout.line!(n)
+process! = |x| print_number!(multiply((x, 2)))
 main! = process!(42)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 6:13 to 6:17
+
+**Unsupported Node**
+at 9:21 to 9:27
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "multiply")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -126,4 +145,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+multiply : _a
 ~~~

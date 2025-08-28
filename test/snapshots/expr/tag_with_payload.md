@@ -27,11 +27,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thin_arrow)
+(Expr.binop_colon)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thin_arrow :type "_a")
+(expr :tag binop_colon :type "_a")
 ~~~
 # TYPES
 ~~~roc

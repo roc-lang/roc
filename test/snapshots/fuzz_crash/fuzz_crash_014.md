@@ -11,46 +11,44 @@ type=file
 ~~~
 # TOKENS
 ~~~text
-Int LowerIdent Dot Int Int LowerIdent Int LowerIdent ~~~
+MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIdent ~~~
 # PARSE
 ~~~clojure
 (block
-  (num_literal_i32 0)
   (binop_pipe
-    (lc "b")
+    (malformed malformed:expr_unexpected_token)
     (num_literal_i32 0)
   )
-  (num_literal_i32 0)
-  (lc "bu22")
+  (malformed malformed:expr_unexpected_token)
+  (lc "u22")
   (num_literal_i32 0)
   (lc "u22")
 )
 ~~~
 # FORMATTED
 ~~~roc
-0b.0b | 0
-0bbu22
+ | 0
+u22
 0u22
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 1:1 to 1:1
+
+**Parse Error**
+at 2:1 to 2:1
+
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.binop_star)
-  (Expr.str_literal_big)
-  (Expr.binop_star)
-  (Expr.str_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

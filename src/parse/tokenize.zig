@@ -2212,8 +2212,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNoSpaceDotUnicodeIdent,
             .MalformedUnknownToken,
             .MalformedNamedUnderscoreUnicode,
-            .MalformedOpaqueNameUnicode,
-            .MalformedOpaqueNameWithoutName,
+            .MalformedNominalNameUnicode,
+            // .MalformedOpaqueNameUnicode, // TODO: This tag doesn't exist in the enum
+            .MalformedNominalNameWithoutName,
             .MalformedSingleQuoteEmpty,
             .MalformedSingleQuoteTooLong,
             .MalformedSingleQuoteUnclosed,
@@ -2247,6 +2248,11 @@ test "tokenizer" {
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
     try testTokenization(gpa, "var", &[_]Token.Tag{.KwVar});
     try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });
+    // Test hex numbers
+    try testTokenization(gpa, "0x42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0X42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0b101", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0o77", &[_]Token.Tag{.Int});
     try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{ .StringStart, .StringPart, .StringEnd });
     try testTokenization(gpa, "\"a${b}c\"", &[_]Token.Tag{
         .StringStart,

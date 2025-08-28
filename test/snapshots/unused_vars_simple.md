@@ -134,16 +134,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
-unused_regular = \x -> 42
-used_underscore = \_value -> _value
-unused_underscore = \_ignored -> 100
-used_regular = \number -> number + 1
-main! = \_ -> {
+unused_regular = |x| 42
+used_underscore = |_value| _value
+unused_underscore = |_ignored| 100
+used_regular = |number| number + 1
+main! = |_| {
 	a = unused_regular(5)
 	b = used_underscore(10)
 	c = unused_underscore(15)
@@ -158,11 +155,26 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "unused_regular")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "used_underscore")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "unused_underscore")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "used_regular")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -171,4 +183,8 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+unused_regular : _e
+used_underscore : _e
+unused_underscore : _e
+used_regular : _e
 ~~~

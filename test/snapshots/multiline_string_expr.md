@@ -25,13 +25,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_not_equals)
+(Expr.str_literal_small)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_not_equals :type "[True, False]_others")
+(expr :tag str_literal_small :type "Str")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+Str
 ~~~

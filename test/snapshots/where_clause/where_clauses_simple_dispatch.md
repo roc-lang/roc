@@ -60,7 +60,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 module [stringify]
 
 stringify : a -> Str where module(a) | .to_str : a -> Str
-stringify = \value -> value.to_str()
+stringify = |value| value.to_str()
 ~~~
 # EXPECTED
 NIL
@@ -68,15 +68,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

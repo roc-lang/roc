@@ -123,15 +123,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.binop_double_slash)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_e")
+(expr :tag record_access :type "_e")
 ~~~
 # TYPES
 ~~~roc
+_e
 ~~~

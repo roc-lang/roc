@@ -117,10 +117,10 @@ module [
 
 Maybe(a) := [Some(a), None]
 some1 : a -> Maybe a
-some1 = \a -> Maybe.Some(a)
+some1 = |a| Maybe.Some(a)
 none1 : Maybe _a
 none1 = Maybe.None
-some2 = \a -> Maybe.Some(a)
+some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
@@ -129,20 +129,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

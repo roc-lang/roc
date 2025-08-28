@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.unary_double_dot)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag unary_double_dot :type "_a")
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-_a
+Error
 ~~~

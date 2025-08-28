@@ -44,7 +44,10 @@ at 3:7 to 3:12
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.if_else)
+  )
 )
 ~~~
 # SOLVED
@@ -53,4 +56,5 @@ at 3:7 to 3:12
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

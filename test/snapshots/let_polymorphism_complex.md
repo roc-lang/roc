@@ -625,10 +625,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 num = 42
 frac = 4.2
@@ -663,16 +660,23 @@ config1 = {
 		},
 	name : "integers",
 }
-config2 = { # Test comment 1
+config2 = {
+	 # Test comment 1
 data : ["apple", "banana", "cherry"], # Test comment 2
-metadata : { # Test comment 3
-version : num, # Test comment 4
-ratio : frac, # Test comment 5
-description : str}, # Test comment 7
-name : "fruits" } # Test comment 9
+	metadata :
+		{
+			 # Test comment 3
+version : num,
+			 # Test comment 4
+ratio : frac,
+			 # Test comment 5
+description : str
+		}, # Test comment 7
+	name : "fruits",
+} # Test comment 9
 
 # Polymorphic function-like structures
-make_container = \val -> { value : val, wrapper : [val] }
+make_container = |val| { value : val, wrapper : [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
@@ -716,7 +720,7 @@ mixed = {
 			list_from_num : [num, num, num],
 		},
 }
-main = \_ -> {
+main = |_| {
 		# Just type-check everything
 container1.value + 10
 }
@@ -728,34 +732,347 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "num")
+    (Expr.num_literal_i32 42)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "frac")
+    (Expr.frac_literal_small 4.2)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "str")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "bool")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "empty_list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "empty_record")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "int_list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "str_list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "bool_list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "nested_empty")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "mixed_nested")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "poly_record")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "items")
+        (Expr.lookup "empty_list")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "count")
+        (Expr.num_literal_i32 0)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "use_poly_record1")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "items")
+        (Expr.list_literal)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "count")
+        (Expr.num_literal_i32 0)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "use_poly_record2")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "items")
+        (Expr.list_literal)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "count")
+        (Expr.num_literal_i32 0)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "base_config")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "data")
+        (Expr.lookup "empty_list")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "metadata")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "version")
+            (Expr.lookup "num")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "ratio")
+            (Expr.lookup "frac")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "description")
+            (Expr.lookup "str")
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "config1")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "data")
+        (Expr.list_literal)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "metadata")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "version")
+            (Expr.lookup "num")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "ratio")
+            (Expr.lookup "frac")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "description")
+            (Expr.lookup "str")
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "config2")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "data")
+        (Expr.list_literal)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "metadata")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "version")
+            (Expr.lookup "num")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "ratio")
+            (Expr.lookup "frac")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "description")
+            (Expr.lookup "str")
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "make_container")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "container1")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "container2")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "container3")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "deep")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "level1")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "level2")
+            (Expr.record_literal
+              (Expr.binop_colon
+                (Expr.lookup "level3")
+                (Expr.record_literal
+                  (Expr.binop_colon
+                    (Expr.lookup "data")
+                    (Expr.lookup "empty_list")
+                  )
+                  (Expr.binop_colon
+                    (Expr.lookup "value")
+                    (Expr.lookup "num")
+                  )
+                )
+              )
+              (Expr.binop_colon
+                (Expr.lookup "items")
+                (Expr.list_literal)
+              )
+            )
+          )
+          (Expr.binop_colon
+            (Expr.lookup "collection")
+            (Expr.lookup "empty_list")
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "results")
+        (Expr.list_literal)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "compute1")
+    (Expr.binop_plus
+      (Expr.lookup "num")
+      (Expr.num_literal_i32 10)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "compute2")
+    (Expr.binop_star
+      (Expr.lookup "num")
+      (Expr.num_literal_i32 2)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "compute3")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "compute4")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "base")
+        (Expr.lookup "num")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "derived")
+        (Expr.list_literal)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "mixed")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "numbers")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "value")
+            (Expr.lookup "num")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "list")
+            (Expr.list_literal)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "float")
+            (Expr.lookup "frac")
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "strings")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "value")
+            (Expr.lookup "str")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "list")
+            (Expr.list_literal)
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "empty_lists")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "raw")
+            (Expr.lookup "empty_list")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "in_list")
+            (Expr.list_literal)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "in_record")
+            (Expr.record_literal
+              (Expr.binop_colon
+                (Expr.lookup "data")
+                (Expr.lookup "empty_list")
+              )
+            )
+          )
+        )
+      )
+      (Expr.binop_colon
+        (Expr.lookup "computations")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "from_num")
+            (Expr.binop_star
+              (Expr.lookup "num")
+              (Expr.num_literal_i32 100)
+            )
+          )
+          (Expr.binop_colon
+            (Expr.lookup "from_frac")
+            (Expr.binop_star
+              (Expr.lookup "frac")
+              (Expr.frac_literal_small 10)
+            )
+          )
+          (Expr.binop_colon
+            (Expr.lookup "list_from_num")
+            (Expr.list_literal)
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -764,4 +1081,32 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+num : Num(_size)
+frac : F64
+str : Str
+bool : []_others
+empty_list : List(_elem)
+empty_record : {}
+int_list : List(_elem)
+str_list : List(_elem)
+bool_list : List(_elem)
+nested_empty : List(_elem)
+mixed_nested : List(_elem)
+poly_record : {}
+use_poly_record1 : {}
+use_poly_record2 : {}
+base_config : {}
+config1 : {}
+config2 : {}
+make_container : _a
+container1 : _a
+container2 : _a
+container3 : _a
+deep : {}
+compute1 : Num(_size)
+compute2 : Num(_size)
+compute3 : List(_elem)
+compute4 : {}
+mixed : {}
+main : _a
 ~~~

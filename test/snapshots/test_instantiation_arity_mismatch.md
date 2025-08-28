@@ -55,7 +55,7 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~roc
 identity :
 	(a, b) -> (a, b)
-identity = \pair -> pair
+identity = |pair| pair
 identity((1, 2))
 ~~~
 # EXPECTED
@@ -65,9 +65,24 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED

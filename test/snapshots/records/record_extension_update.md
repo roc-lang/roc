@@ -28,13 +28,15 @@ at 1:1 to 1:13
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.record_literal
+  (Expr.lookup "person")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

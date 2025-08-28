@@ -15,8 +15,10 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~clojure
 (block
   (import
-    (uc "B")
-    (uc "G")
+    (binop_as
+      (uc "B")
+      (uc "G")
+    )
   )
   (if_else <6 branches>)
   (num_literal_i32 0)
@@ -24,12 +26,9 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	f: "" platform [],
-}
+app { f: "" platform [] }
 
-import B.G
+import B as G
 if 0 {  } else 
 0
 ~~~
@@ -44,16 +43,13 @@ at 2:13 to 2:13
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.match)
-  (Expr.binop_star)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

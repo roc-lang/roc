@@ -20,8 +20,12 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSq
 ~~~clojure
 (block
   (import
-    (uc "Decode")
-    (uc "Decode")
+    (binop_exposing
+      (uc "Decode")
+      (list_literal
+        (uc "Decode")
+      )
+    )
   )
   (binop_colon
     (lc "decodeThings")
@@ -67,16 +71,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

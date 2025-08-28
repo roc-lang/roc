@@ -210,10 +210,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 UserId : U64
 Result((ok, err)) : [Ok(ok), Err(err)]
@@ -222,7 +219,7 @@ MapFn((a, b)) : a -> b
 ApiResponse(data) : Result (data, Str)
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
-main! = \_ -> {
+main! = |_| {
 		# Use the types to validate they work
 userId : UserId
 	userId = 123
@@ -240,14 +237,68 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "contents")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "metadata")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "size")
+            (Expr.apply_tag)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "created")
+            (Expr.apply_tag)
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED

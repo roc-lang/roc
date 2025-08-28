@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_star)
+(Expr.binop_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_star :type "Num(_a)")
+(expr :tag binop_slash :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc

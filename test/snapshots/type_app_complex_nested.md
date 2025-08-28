@@ -172,19 +172,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
-processComplex = \result -> match result
+processComplex = |result| match result
 deepNested : Maybe Result (List(Dict((Str, a))), _b) -> a
-deepNested = \_ -> {
+deepNested = |_| {
 	crash "not implemented"
 }
 ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))
-main! = \_ -> processComplex(Ok([Some(42), None]))
+main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 NIL
@@ -195,15 +192,42 @@ at 7:23 to 7:23
 **Parse Error**
 at 8:16 to 8:16
 
+**Unsupported Node**
+at 14:2 to 14:25
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "processComplex")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processComplex")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "deepNested")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "deepNested")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -212,4 +236,6 @@ at 8:16 to 8:16
 ~~~
 # TYPES
 ~~~roc
+processComplex : _c
+deepNested : _c
 ~~~

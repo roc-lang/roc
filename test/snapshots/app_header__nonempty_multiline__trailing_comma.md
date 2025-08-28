@@ -20,7 +20,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 app
 {
 	pf: "../main.roc" platform [main],
-	somePkg: ("../main.roc"),
+	somePkg: (
+		"../main.roc",
+	),
 }
 
 ~~~
@@ -43,5 +45,5 @@ at 1:1 to 2:66
 ~~~
 # TYPES
 ~~~roc
-main : Str
+main : _a
 ~~~

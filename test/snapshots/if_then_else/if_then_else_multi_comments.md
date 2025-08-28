@@ -40,11 +40,11 @@ at 1:1 to 3:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+(expr :tag if_else :type "_a")
 ~~~
 # TYPES
 ~~~roc

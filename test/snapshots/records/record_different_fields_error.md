@@ -54,13 +54,34 @@ at 1:1 to 6:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "_privateField")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "field_")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.binop_minus
+      (Expr.lookup "kebab")
+      (Expr.lookup "case")
+    )
+    (Expr.str_literal_big)
+  )
+  (Expr.lookup "field")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

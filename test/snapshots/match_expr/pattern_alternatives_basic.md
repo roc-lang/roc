@@ -60,7 +60,7 @@ module [kind]
 
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 kind : Color -> Str
-kind = \color -> match color
+kind = |color| match color
 ~~~
 # EXPECTED
 NIL
@@ -70,16 +70,13 @@ at 8:30 to 8:30
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

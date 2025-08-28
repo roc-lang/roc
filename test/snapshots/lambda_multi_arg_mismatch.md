@@ -118,15 +118,17 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent C
 module []
 
 multi_arg_fn : a -> b -> a -> c -> a -> d -> a -> e -> (a, b, c, d, e)
-multi_arg_fn = \(x1, x2, x3, x4, x5, x6, x7, x8) -> (x1, x2, x4, x6, x8)
-result = multi_arg_fn((42, # x1: U64 (type 'a')
-"hello", # x2: Str (type 'b') - correct
-"world", # x3: Str (should be 'a' = U64) - MISMATCH  
-1.5, # x4: F64 (type 'c') - correct
-3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
-[1, 2], # x6: List I64 (type 'd') - correct
-True, # x7: Bool (should be 'a' = U64) - MISMATCH
-"done"))
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| (x1, x2, x4, x6, x8)
+result = multi_arg_fn((
+	42, # x1: U64 (type 'a')
+	"hello", # x2: Str (type 'b') - correct
+	"world", # x3: Str (should be 'a' = U64) - MISMATCH  
+	1.5, # x4: F64 (type 'c') - correct
+	3.14, # x5: F64 (should be 'a' = U64) - MISMATCH
+	[1, 2], # x6: List I64 (type 'd') - correct
+	True, # x7: Bool (should be 'a' = U64) - MISMATCH
+	"done",
+))
 ~~~
 # EXPECTED
 NIL
@@ -140,9 +142,48 @@ at 10:10 to 19:2
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "multi_arg_fn")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.binop_thin_arrow
+            (Expr.lookup "c")
+            (Expr.binop_thin_arrow
+              (Expr.lookup "a")
+              (Expr.binop_thin_arrow
+                (Expr.lookup "d")
+                (Expr.binop_thin_arrow
+                  (Expr.lookup "a")
+                  (Expr.binop_thin_arrow
+                    (Expr.lookup "e")
+                    (Expr.tuple_literal
+                      (Expr.lookup "a")
+                      (Expr.lookup "b")
+                      (Expr.lookup "c")
+                      (Expr.lookup "d")
+                      (Expr.lookup "e")
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "multi_arg_fn")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "result")
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -151,4 +192,6 @@ at 10:10 to 19:2
 ~~~
 # TYPES
 ~~~roc
+multi_arg_fn : _f
+result : _f
 ~~~

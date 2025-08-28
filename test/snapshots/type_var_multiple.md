@@ -75,17 +75,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 swap :
 	(a, b) -> (b, a)
-swap = \pair -> {
+swap = |pair| {
 	(first, second) = pair((second, first))
 }
-main! = \_ -> {  }
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -94,9 +91,27 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "swap")
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "b")
+        (Expr.lookup "a")
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "swap")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -105,4 +120,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+swap : _c
 ~~~

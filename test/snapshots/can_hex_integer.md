@@ -11,23 +11,19 @@ x = 0xFF
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign Int LowerIdent ~~~
+KwModule OpenSquare CloseSquare LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
 (block
   (binop_equals
     (lc "x")
-    (num_literal_i32 0)
+    (num_literal_big big:<idx:0>)
   )
-  (lc "xFF")
 )
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x = 0xFF
-xFF
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -36,8 +32,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.str_literal_big)
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.num_literal_big)
+  )
 )
 ~~~
 # SOLVED
@@ -46,4 +44,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
 ~~~

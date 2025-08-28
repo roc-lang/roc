@@ -64,7 +64,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar Underscore OpBar OpenC
 ~~~roc
 module []
 
-redeclareTest = \_ -> {
+redeclareTest = |_| {
 	var x_ = 5
 	var x_ = 10 # Redeclare var - should warn but proceed
 	x_ = 15 # Reassign - should work without warning
@@ -79,8 +79,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "redeclareTest")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "result")
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -89,4 +95,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+redeclareTest : _a
+result : _a
 ~~~

@@ -451,16 +451,16 @@ Color := [
 	Hex(Str),
 ]
 rgb : U8 -> U8 -> U8 -> Color
-rgb = \(r, g, b) -> Color.RGB((r, g, b))
+rgb = |r, g, b| Color.RGB((r, g, b))
 rgba : U8 -> U8 -> U8 -> U8 -> Color
-rgba = \(r, g, b, a) -> {
+rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
 hex : Str -> Result (Color, [InvalidHex(Str)])
-hex = \str -> {
+hex = |str| {
 	bytes = str.to_utf8()
-	is_char_in_hex_range = \b -> (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
     match bytes {
         ['#', a, b, c, d, e, f] => {
@@ -536,13 +536,13 @@ hex = \str -> {
 	match bytes
 }
 to_str : Color -> Str
-to_str = \color -> match color
+to_str = |color| match color
 expect rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
 named : Str -> Result (Color, [UnknownColor(Str)])
-named = \str -> if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
-is_named_color = \str -> {
+named = |str| if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
+is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
 	colors.contains(str)
 }
@@ -576,27 +576,11 @@ at 62:5 to 63:9
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_minus)
-  (Expr.binop_minus)
-  (Expr.binop_minus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_h")
+(expr :tag record_access :type "_h")
 ~~~
 # TYPES
 ~~~roc

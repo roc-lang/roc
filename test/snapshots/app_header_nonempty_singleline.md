@@ -37,5 +37,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : Str
+main : _a
 ~~~

@@ -159,18 +159,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 identity : a -> a
-identity = \x -> x
+identity = |x| x
 combine : a -> b -> (a, b)
-combine = \(first, second) -> (first, second)
+combine = |first, second| (first, second)
 addOne : U64 -> U64
-addOne = \n -> n + 1
-main! = \_ -> {
+addOne = |n| n + 1
+main! = |_| {
 		# Test identity with different types
 num = identity(42)
 	text = identity("hello")
@@ -186,13 +183,49 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "combine")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.tuple_literal
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "combine")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "addOne")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "addOne")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -201,4 +234,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+identity : _c
+combine : _c
+addOne : _c
 ~~~

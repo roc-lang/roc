@@ -215,24 +215,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "platform.roc" platform [main],
-}
+app { pf: "platform.roc" platform [main] }
 
 map_result : Result (a, e) -> (a -> b) -> Result (b, e)
-map_result = \(result, transform) -> {
+map_result = |result, transform| {
 	match result
 }
 identity : a -> a
-identity = \x -> x
+identity = |x| x
 make_pair : a -> b -> {first : a, second : b}
-make_pair = \(x, y) -> { first : x, second : y }
+make_pair = |x, y| { first : x, second : y }
 list_length : List _a -> U64
-list_length = \_lst -> 42
+list_length = |_lst| 42
 wrap_in_result : a -> Result (Result((a, Str)), Str)
-wrap_in_result = \value -> Ok(Ok(value))
-main = \_ -> "done"
+wrap_in_result = |value| Ok(Ok(value))
+main = |_| "done"
 ~~~
 # EXPECTED
 NIL
@@ -243,20 +240,92 @@ at 7:19 to 7:19
 **Parse Error**
 at 8:20 to 8:20
 
+**Unsupported Node**
+at 5:15 to 5:32
+
+**Unsupported Node**
+at 18:14 to 18:18
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "map_result")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "map_result")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "make_pair")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "first")
+            (Expr.lookup "a")
+          )
+          (Expr.binop_colon
+            (Expr.lookup "second")
+            (Expr.lookup "b")
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "make_pair")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "list_length")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "list_length")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "wrap_in_result")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "wrap_in_result")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -265,4 +334,10 @@ at 8:20 to 8:20
 ~~~
 # TYPES
 ~~~roc
+map_result : _c
+identity : _c
+make_pair : _c
+list_length : _c
+wrap_in_result : _c
+main : _c
 ~~~

@@ -51,7 +51,7 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRoun
 # FORMATTED
 ~~~roc
 launchTheNukes : {  } => Result((Bool, LaunchNukeErr))
-launchTheNukes = \{  } -> ...
+launchTheNukes = |{  }| ...
 launchTheNukes({  })
 ~~~
 # EXPECTED
@@ -60,16 +60,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+_a
 ~~~

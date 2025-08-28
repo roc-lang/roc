@@ -133,18 +133,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 a = 1
 b = 2
 c = 3
-identity = \x -> x
-identity2 = \y -> y
-pair = \(first, second) -> (first, second)
-main! = \_ -> {
+identity = |x| x
+identity2 = |y| y
+pair = |first, second| (first, second)
+main! = |_| {
 	result1 = identity(42)
 	result2 = identity2("hello")
 	result3 = pair((result1, result2))
@@ -154,17 +151,40 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 15:9 to 15:22
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "a")
+    (Expr.num_literal_i32 1)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "b")
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "c")
+    (Expr.num_literal_i32 3)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity2")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "pair")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -173,4 +193,10 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+a : Num(_size)
+b : Num(_size)
+c : Num(_size)
+identity : _d
+identity2 : _d
+pair : _d
 ~~~

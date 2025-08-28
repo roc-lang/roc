@@ -14,8 +14,10 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~clojure
 (block
   (import
-    (lc "u")
-    (uc "R")
+    (binop_pipe
+      (lc "u")
+      (uc "R")
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (binop_colon
@@ -48,16 +50,13 @@ at 1:19 to 1:19
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

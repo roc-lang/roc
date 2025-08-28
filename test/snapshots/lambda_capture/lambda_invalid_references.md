@@ -33,7 +33,7 @@ OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-\x -> \y -> x + z
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -41,11 +41,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.record_accessor)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag record_accessor :type "_a")
 ~~~
 # TYPES
 ~~~roc

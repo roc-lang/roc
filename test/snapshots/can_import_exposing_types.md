@@ -67,24 +67,44 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
-    (uc "Value")
-    (uc "Error")
-    (uc "Config")
+    (binop_exposing
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (list_literal
+        (uc "Value")
+        (uc "Error")
+        (uc "Config")
+      )
+    )
   )
   (import
-    (lc "http")
-    (uc "Client")
-    (uc "Http")
-    (uc "Request")
-    (uc "Response")
-    (uc "Status")
+    (binop_exposing
+      (binop_as
+        (binop_pipe
+          (lc "http")
+          (uc "Client")
+        )
+        (uc "Http")
+      )
+      (list_literal
+        (uc "Request")
+        (uc "Response")
+        (uc "Status")
+      )
+    )
   )
   (import
-    (lc "utils")
-    (uc "Result")
-    (uc "Result")
+    (binop_exposing
+      (binop_pipe
+        (lc "utils")
+        (uc "Result")
+      )
+      (list_literal
+        (uc "Result")
+      )
+    )
   )
   (binop_colon
     (lc "parseJson")
@@ -330,17 +350,23 @@ import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
 parseJson : Str -> Result (Value, Error)
-parseJson = \input -> Json.parse(input)
+parseJson = |input| Json.parse(input)
 handleRequest : Request -> Response
-handleRequest = \req -> {
+handleRequest = |req| {
 	result = Json.decode(req.body)
 	match result
 }
 processData : Config -> List Value -> Result (List(Value), Error)
-processData = \
-	(config, values),
- -> List.mapTry(
-	(values, \v -> (Json.validateWith((config, v)))),
+processData = |
+	config,
+	values,
+| List.mapTry(
+	(
+		values,
+		|v| (
+			Json.validateWith((config, v)),
+		),
+	),
 )
 ServerConfig :
 	{
@@ -349,11 +375,11 @@ ServerConfig :
 		defaultResponse : Response,
 	}
 createClient : Config -> Http.Client
-createClient = \config -> Http.clientWith(config)
+createClient = |config| Http.clientWith(config)
 handleResponse : Response -> Str
-handleResponse = \response -> match response.status
+handleResponse = |response| match response.status
 combineResults : Result (Value, Error) -> Status -> Result (Response, Error)
-combineResults = \(jsonResult, httpStatus) -> match jsonResult
+combineResults = |jsonResult, httpStatus| match jsonResult
 ~~~
 # EXPECTED
 NIL
@@ -384,29 +410,13 @@ at 53:20 to 53:20
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

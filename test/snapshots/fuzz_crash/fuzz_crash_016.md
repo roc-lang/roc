@@ -31,14 +31,13 @@ at 1:3 to 1:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.frac_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

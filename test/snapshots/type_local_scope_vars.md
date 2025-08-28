@@ -79,18 +79,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 outer : a -> a
-outer = \x -> {
+outer = |x| {
 	inner : b -> b
-	inner = \y -> y
+	inner = |y| y
 	inner(x)
 }
-main! = \_ -> {  }
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -99,9 +96,21 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "outer")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "outer")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -110,4 +119,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+outer : _c
 ~~~

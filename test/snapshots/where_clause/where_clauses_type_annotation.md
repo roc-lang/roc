@@ -60,7 +60,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 module [convert]
 
 convert : a -> b where module(a) | .to_b : a -> b
-convert = \a -> a.to_b()
+convert = |a| a.to_b()
 ~~~
 # EXPECTED
 NIL
@@ -68,15 +68,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

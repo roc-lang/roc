@@ -65,26 +65,43 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 swap :
 	(a, b) -> (b, a)
-swap = \(x, y) -> (y, x)
+swap = |x, y| (y, x)
 main = swap((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 5:10 to 5:14
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "swap")
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "b")
+        (Expr.lookup "a")
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "swap")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -93,4 +110,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+swap : _c
+main : _c
 ~~~

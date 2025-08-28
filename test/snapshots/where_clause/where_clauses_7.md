@@ -112,15 +112,13 @@ at 14:9 to 16:9
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

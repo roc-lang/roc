@@ -36,8 +36,11 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.str_literal_small)
+  (Expr.binop_colon
+    (Expr.lookup "nums")
+    (Expr.apply_tag)
+  )
+  (Expr.apply_tag)
 )
 ~~~
 # SOLVED

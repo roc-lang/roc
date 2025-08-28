@@ -23,9 +23,15 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
-    (lc "decode")
+    (binop_exposing
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (list_literal
+        (lc "decode")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (lc "fromJson")
@@ -99,18 +105,47 @@ at 3:55 to 3:55
 **Parse Error**
 at 3:64 to 3:64
 
+**Unsupported Node**
+at 3:1 to 3:34
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.str_literal_big)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.lookup "fromJson")
+  (Expr.malformed)
+  (Expr.lookup "encode")
+  (Expr.malformed)
+  (Expr.lookup "toJson")
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.block
+      (Expr.binop_equals
+        (Expr.lookup "data")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "name")
+            (Expr.str_literal_small)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "age")
+            (Expr.num_literal_i32 25)
+          )
+        )
+      )
+      (Expr.binop_equals
+        (Expr.lookup "encoded")
+        (Expr.apply_ident)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "decoded")
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "decoded")
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -119,4 +154,5 @@ at 3:64 to 3:64
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

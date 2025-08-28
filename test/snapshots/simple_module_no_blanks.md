@@ -17,8 +17,10 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
   )
   (binop_equals
     (not_lc "hello")
@@ -47,13 +49,24 @@ world = "World"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 2:1 to 2:17
+
+**Unsupported Node**
+at 3:10 to 3:16
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "world")
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED
@@ -62,4 +75,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+world : Str
 ~~~

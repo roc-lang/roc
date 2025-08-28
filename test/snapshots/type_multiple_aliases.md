@@ -151,20 +151,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 UserId : U64
 UserName : Str
 UserAge : U8
 User : {id : UserId, name : UserName, age : UserAge}
 create_user : UserId -> UserName -> UserAge -> User
-create_user = \(id, name, age) -> { id : id, name : name, age : age }
+create_user = |id, name, age| { id : id, name : name, age : age }
 get_user_name : User -> UserName
-get_user_name = \user -> user.name
-main! = \_ -> {
+get_user_name = |user| user.name
+main! = |_| {
 	user = create_user((123, "Alice", 25))
 	get_user_name(user)
 }
@@ -172,19 +169,73 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 9:16 to 9:29
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "id")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "create_user")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.binop_thin_arrow
+          (Expr.apply_tag)
+          (Expr.apply_tag)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "create_user")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "get_user_name")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "get_user_name")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -193,4 +244,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+create_user : _a
+get_user_name : _a
 ~~~

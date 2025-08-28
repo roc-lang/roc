@@ -19,7 +19,8 @@ KwApp OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String KwPlat
 ~~~roc
 app
 {
-	somePkg: ("../main.roc", pf) : "../main.roc" platform [main],
+	somePkg: "../main.roc",
+	pf: "../main.roc" platform [main],
 }
 
 ~~~
@@ -37,5 +38,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : Str
+main : _a
 ~~~

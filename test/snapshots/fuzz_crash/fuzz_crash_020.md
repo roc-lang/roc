@@ -134,17 +134,29 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
-    (lc "line")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (lc "line")
+      )
+    )
   )
   (import
-    (uc "Stdot")
-    (uc "Cust")
+    (binop_exposing
+      (uc "Stdot")
+      (list_literal
+        (uc "Cust")
+      )
+    )
   )
   (import
-    (uc "Bae")
-    (uc "Gooe")
+    (binop_as
+      (uc "Bae")
+      (uc "Gooe")
+    )
   )
   (import
     (uc "Ba")
@@ -236,7 +248,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "ane")
     (lambda
       (body
-        (if_else <57 branches>)
+        (if_else <58 branches>)
       )
       (args
         (lc "num")
@@ -253,7 +265,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (body
         (block
           (num_literal_i32 1)
-          (if_else <78 branches>)
+          (if_else <79 branches>)
         )
       )
       (args
@@ -506,14 +518,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "c" platform [main],
-}
+app { pf: "c" platform [main] }
 
 import pf.Stdout exposing [line]
-import Stdot. #tem
-Cust
+import Stdot exposing [ #tem
+Cust]
 import Bae as Gooe
 import Ba
 Map((a, b)) : Lis -> ab -> List b
@@ -532,9 +541,9 @@ Soine(a) : {}
 Maybe(a) : [Somne]
 Mayine(a) : [] #)
 
-ane = \num -> if num 2 else 5
+ane = |num| if num 2 else 5
 one : U6
-add = \Rum -> {
+add = |Rum| {
 	1
 	if num
 		{
@@ -551,7 +560,7 @@ s : s
 }
 me = # Cord
 main! : Listlt ({  }, _)
-ma = \_ -> {
+ma = |_| {
 	e : e
 	w = "d"
 	var er = 123
@@ -563,11 +572,8 @@ tag
 	crash ke
 	"Unr!" #)
 	i = "H, ${d}"
-	t = [one((
-		er,
-		456, # two
-		9,
-	))]
+	t = [one((er, 456, # two
+9))]
 	for n in list {
 		{
 			line!("Ag ${n} to ${er}")
@@ -577,7 +583,14 @@ tag
 	rd = { foo : 123, bar : "H", baz : tag, qux : Ok world, ned : ned }
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 	m(
-		(123, "World", ag1, O, (ne, tuple), [1, 2, 3]),
+		(
+			123,
+			"World",
+			ag1,
+			O,
+			(ne, tuple),
+			[1, 2, 3],
+		),
 	)
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
@@ -694,38 +707,13 @@ at 111:1 to 111:1
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_minus)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
+(expr :tag record_access :type "_d")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

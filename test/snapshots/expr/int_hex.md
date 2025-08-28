@@ -9,10 +9,10 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-Int LowerIdent ~~~
+Int ~~~
 # PARSE
 ~~~clojure
-(num_literal_i32 0)
+(num_literal_big big:<idx:0>)
 ~~~
 # FORMATTED
 ~~~roc
@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_star)
+(Expr.binop_gte)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_star :type "Num(_size)")
+(expr :tag binop_gte :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+[True, False]_others
 ~~~

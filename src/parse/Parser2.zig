@@ -827,7 +827,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
                 break;
             }
 
-            const string_value = try self.parseExpr();
+            const string_value = try self.parseStoredStringExpr();
 
             // For app headers with platform, we need to create a platform node
             // The exports list was already parsed at the beginning
@@ -852,7 +852,8 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
             }
         } else if (self.peek() == .String) {
             // This is a regular package string or old-style platform
-            const string_value = try self.parseExpr();
+            // Parse just the string literal, not a full expression
+            const string_value = try self.parseStoredStringExpr();
 
             // Check if followed by 'platform' keyword (old style)
             if (self.peek() == .KwPlatform) {
@@ -1450,17 +1451,18 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     const start_pos = self.currentPosition();
     self.advance(); // consume import
 
-    const scratch_marker = self.markScratchNodes();
-    defer self.restoreScratchNodes(scratch_marker);
+    // Parse the module path first
+    var module_path: Node.Idx = undefined;
 
-    // Parse either a string import or module path
     const token = self.peek();
     if (token == .String or token == .MultilineString or token == .SingleQuote) {
         // String import like "users.json"
-        const string_node = try self.parseStoredStringExpr();
-        try self.scratch_nodes.append(self.gpa, string_node);
+        module_path = try self.parseStoredStringExpr();
     } else {
         // Parse module path (e.g., pf.Stdout)
+        // Build the path using binop_pipe for qualified identifiers
+        var path: ?Node.Idx = null;
+
         while (true) {
             const tok = self.peek();
             if (tok == .LowerIdent or tok == .UpperIdent) {
@@ -1470,7 +1472,16 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
                     // Use the correct node type based on identifier case
                     const node_tag: AST.Node.Tag = if (tok == .UpperIdent) .uc else .lc;
                     const node = try self.ast.appendNode(self.gpa, ident_region, node_tag, .{ .ident = id });
-                    try self.scratch_nodes.append(self.gpa, node);
+
+                    if (path) |existing_path| {
+                        // Chain this identifier to the existing path using binop_pipe
+                        const binop_idx = try self.ast.appendBinOp(self.gpa, existing_path, node);
+                        const combined_region = makeRegion(self.ast.getRegion(existing_path).start, ident_region.end);
+                        path = try self.ast.appendNode(self.gpa, combined_region, .binop_pipe, .{ .binop = binop_idx });
+                    } else {
+                        // First identifier in the path
+                        path = node;
+                    }
                 }
                 self.advance();
 
@@ -1483,9 +1494,17 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
                 break;
             }
         }
+
+        if (path) |p| {
+            module_path = p;
+        } else {
+            return null; // No path
+        }
     }
 
-    // Parse optional "as alias : Type" clause
+    var result = module_path;
+
+    // Parse optional "as alias" clause
     if (self.peek() == .KwAs) {
         self.advance(); // consume 'as'
 
@@ -1511,10 +1530,10 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
                     alias_node = try self.ast.appendNode(self.gpa, full_region, .binop_colon, .{ .binop = binop_idx });
                 }
 
-                // Now create the binop_as node
-                // The LHS is all the import path nodes, the RHS is the alias (possibly with type)
-                // For simplicity, we'll add the alias node to scratch_nodes
-                try self.scratch_nodes.append(self.gpa, alias_node);
+                // Create binop_as node
+                const as_binop_idx = try self.ast.appendBinOp(self.gpa, result, alias_node);
+                const as_region = makeRegion(start_pos, self.last_region.end);
+                result = try self.ast.appendNode(self.gpa, as_region, .binop_as, .{ .binop = as_binop_idx });
             }
         }
     }
@@ -1523,6 +1542,9 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
     if (self.peek() == .KwExposing) {
         self.advance();
         self.expect(.OpenSquare) catch {};
+
+        const scratch_marker = self.markScratchNodes();
+        defer self.restoreScratchNodes(scratch_marker);
 
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             const exposed = try self.parseExposedItem();
@@ -1536,17 +1558,35 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
         }
 
         self.expect(.CloseSquare) catch {};
+
+        // Create a list node for the exposed items
+        const exposed_nodes = self.getScratchNodesSince(scratch_marker);
+        var exposing_list: Node.Idx = undefined;
+        if (exposed_nodes.len > 0) {
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, exposed_nodes);
+            const list_region = makeRegion(start_pos, self.last_region.end);
+            // Use list_literal for the exposed items list
+            exposing_list = try self.ast.appendNode(self.gpa, list_region, .list_literal, .{ .nodes = nodes_idx });
+        } else {
+            // Empty exposing list
+            const list_region = makeRegion(start_pos, self.last_region.end);
+            const empty_idx = collections.NodeSlices(Node.Idx).Idx.NIL;
+            exposing_list = try self.ast.appendNode(self.gpa, list_region, .list_literal, .{ .nodes = empty_idx });
+        }
+
+        // Create binop_exposing node
+        const exposing_binop_idx = try self.ast.appendBinOp(self.gpa, result, exposing_list);
+        const exposing_region = makeRegion(start_pos, self.last_region.end);
+        result = try self.ast.appendNode(self.gpa, exposing_region, .binop_exposing, .{ .binop = exposing_binop_idx });
     }
 
-    const nodes = self.getScratchNodesSince(scratch_marker);
-    if (nodes.len == 0) {
-        return null;
-    }
-    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
-    // Use the new import node type - region spans from import keyword to last node
-    const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(nodes[nodes.len - 1]))));
-    const full_region = makeRegion(start_pos, last_region.end);
-    return try self.ast.appendNode(self.gpa, full_region, .import, .{ .import_nodes = nodes_idx });
+    // Wrap the result in an import node
+    const import_region = makeRegion(start_pos, self.last_region.end);
+    const scratch_marker = self.markScratchNodes();
+    defer self.restoreScratchNodes(scratch_marker);
+    try self.scratch_nodes.append(self.gpa, result);
+    const nodes_idx = try self.ast.appendNodeSlice(self.gpa, self.getScratchNodesSince(scratch_marker));
+    return try self.ast.appendNode(self.gpa, import_region, .import, .{ .import_nodes = nodes_idx });
 }
 
 /// Parse an expression

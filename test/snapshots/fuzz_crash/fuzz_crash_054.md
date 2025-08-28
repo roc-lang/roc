@@ -15,8 +15,12 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~clojure
 (block
   (import
-    (uc "S")
-    (lc "c")
+    (binop_exposing
+      (uc "S")
+      (list_literal
+        (lc "c")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (lc "f")
@@ -25,10 +29,7 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	f: "" platform [],
-}
+app { f: "" platform [] }
 
 import S exposing [c]
 f
@@ -44,17 +45,13 @@ at 2:2 to 2:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

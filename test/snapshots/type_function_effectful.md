@@ -63,25 +63,39 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 runEffect! : (_a => _b) -> _a => _b
-runEffect! = \(fn!, x) -> fn!(x)
-main! = \_ -> {  }
+runEffect! = |fn!, x| fn!(x)
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:25 to 3:27
+
+**Unsupported Node**
+at 4:15 to 4:21
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.lookup "_b")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED

@@ -63,14 +63,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 get_name : {name : Str, age : U64} -> Str
-get_name = \person -> person.name
-main! = \_ -> {  }
+get_name = |person| person.name
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -79,9 +76,30 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "get_name")
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "name")
+          (Expr.apply_tag)
+        )
+        (Expr.binop_colon
+          (Expr.lookup "age")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "get_name")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -90,4 +108,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+get_name : _a
 ~~~

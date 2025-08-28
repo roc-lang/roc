@@ -114,12 +114,12 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenC
 ~~~roc
 module []
 
-processItems = \items -> {
+processItems = |items| {
 	var count_ = 0
 	var total_ = 0
 	count_ = count_ + 1
 	total_ = total_ + 10
-	nestedFunc = \_ -> {
+	nestedFunc = |_| {
 		count_ = count_ + 5 # Should cause error - different function
 		total_ = total_ * 2 # Should cause error - different function
 		count_ : count_
@@ -135,7 +135,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "processItems")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -144,4 +147,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+processItems : _a
 ~~~

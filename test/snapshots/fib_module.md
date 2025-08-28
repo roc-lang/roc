@@ -30,9 +30,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-module [fib]
-
-fib = \n -> if n <= 1 n else fib(n - 1) + fib(n - 2)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -43,7 +41,10 @@ at 3:11 to 3:21
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "fib")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -52,4 +53,5 @@ at 3:11 to 3:21
 ~~~
 # TYPES
 ~~~roc
+fib : _a
 ~~~

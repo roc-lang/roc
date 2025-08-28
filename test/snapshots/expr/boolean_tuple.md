@@ -27,11 +27,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_question)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_question :type "_a")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc

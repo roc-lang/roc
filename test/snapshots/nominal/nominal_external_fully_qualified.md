@@ -65,7 +65,7 @@ module [handleResult]
 
 import MyResultModule
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
-handleResult = \result -> {
+handleResult = |result| {
 	match result
 }
 ~~~
@@ -80,16 +80,13 @@ at 9:47 to 9:47
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -35,7 +35,7 @@ OpenRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-\(x, y) -> x * y((1, 2))
+|x, y| x * y((1, 2))
 ~~~
 # EXPECTED
 NIL
@@ -43,11 +43,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag binop_equals :type "_a")
 ~~~
 # TYPES
 ~~~roc

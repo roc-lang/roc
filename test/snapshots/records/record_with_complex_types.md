@@ -165,9 +165,9 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 		tags : ["developer", "senior", "fullstack"],
 		permissions : [Read, Write, Admin],
 	},
-	callback : \
+	callback : |
 		x,
-	 -> (
+	| (
 		(x + 1, nested) :
 			{
 				items : [Some("first"), None, Some("third")],
@@ -187,13 +187,47 @@ at 1:1 to 15:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "scores")
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "status")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "preferences")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "theme")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "notifications")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "metadata")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "callback")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

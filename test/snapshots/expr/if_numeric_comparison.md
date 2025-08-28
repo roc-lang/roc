@@ -26,13 +26,13 @@ at 1:1 to 1:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+(expr :tag unary_neg :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc
-_a
+Num(_a)
 ~~~

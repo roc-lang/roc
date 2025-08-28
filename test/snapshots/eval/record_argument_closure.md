@@ -47,7 +47,7 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-\{ x : x, y : y } -> x * y({ x : 10, y : 20 })
+|{ x : x, y : y }| x * y({ x : 10, y : 20 })
 ~~~
 # EXPECTED
 NIL
@@ -55,11 +55,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag binop_equals :type "_a")
 ~~~
 # TYPES
 ~~~roc

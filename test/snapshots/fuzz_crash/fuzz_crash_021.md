@@ -59,16 +59,13 @@ at 3:1 to 3:15
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thin_arrow)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -2284,6 +2284,11 @@ test "tokenizer" {
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
     try testTokenization(gpa, "var", &[_]Token.Tag{.KwVar});
     try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });
+    // Test hex/binary/octal numbers
+    try testTokenization(gpa, "0x42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0X42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0b101", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "0o77", &[_]Token.Tag{.Int});
     try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{ .StringStart, .StringPart, .StringEnd });
     try testTokenization(gpa, "\"a${b}c\"", &[_]Token.Tag{
         .StringStart,
@@ -3091,8 +3096,118 @@ pub const TokenIterator = struct {
     }
 
     fn tokenizeNumber(self: *TokenIterator, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
-        // Simple number tokenization - just consume digits
-        // TODO: Handle hex, octal, binary, underscores, etc.
+        // Start position is at the first digit, move past it
+        self.cursor.pos = @intCast(start_pos + 1);
+
+        // Check for hex, octal, binary prefixes
+        if (self.cursor.buf[start_pos] == '0' and self.cursor.pos < self.cursor.buf.len) {
+            const next_char = self.cursor.buf[self.cursor.pos];
+            if (next_char == 'x' or next_char == 'X') {
+                // Hex number
+                self.cursor.pos += 1;
+                // Consume hex digits
+                var has_digits = false;
+                while (self.cursor.pos < self.cursor.buf.len) {
+                    const c = self.cursor.buf[self.cursor.pos];
+                    if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == '_') {
+                        if (c != '_') has_digits = true;
+                        self.cursor.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if (!has_digits) {
+                    // No digits after 0x - malformed
+                    return Token{
+                        .tag = .MalformedNumberNoDigits,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                // Store in ByteSlices for now
+                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
+                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                return Token{
+                    .tag = .Int,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            } else if (next_char == 'b' or next_char == 'B') {
+                // Binary number
+                self.cursor.pos += 1;
+                var has_digits = false;
+                while (self.cursor.pos < self.cursor.buf.len) {
+                    const c = self.cursor.buf[self.cursor.pos];
+                    if (c == '0' or c == '1' or c == '_') {
+                        if (c != '_') has_digits = true;
+                        self.cursor.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if (!has_digits) {
+                    return Token{
+                        .tag = .MalformedNumberNoDigits,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
+                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                return Token{
+                    .tag = .Int,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            } else if (next_char == 'o' or next_char == 'O') {
+                // Octal number
+                self.cursor.pos += 1;
+                var has_digits = false;
+                while (self.cursor.pos < self.cursor.buf.len) {
+                    const c = self.cursor.buf[self.cursor.pos];
+                    if ((c >= '0' and c <= '7') or c == '_') {
+                        if (c != '_') has_digits = true;
+                        self.cursor.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if (!has_digits) {
+                    return Token{
+                        .tag = .MalformedNumberNoDigits,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                            .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
+                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                return Token{
+                    .tag = .Int,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start_pos) },
+                        .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
+                    },
+                    .extra = .{ .bytes_idx = bytes_idx },
+                };
+            }
+        }
+
+        // Regular decimal number parsing
         var has_decimal = false;
         var has_exponent = false;
 

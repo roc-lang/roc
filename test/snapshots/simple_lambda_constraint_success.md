@@ -70,9 +70,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 module [addTwo, addTwoF64]
 
 addTwo : I64 -> I64
-addTwo = \x -> x + 2
+addTwo = |x| x + 2
 addTwoF64 : F64 -> F64
-addTwoF64 = \x -> x + 2.0
+addTwoF64 = |x| x + 2.0
 ~~~
 # EXPECTED
 NIL
@@ -81,10 +81,28 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "addTwo")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "addTwo")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "addTwoF64")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "addTwoF64")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -93,4 +111,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+addTwo : _a
+addTwoF64 : _a
 ~~~

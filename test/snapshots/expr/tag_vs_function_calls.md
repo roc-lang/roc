@@ -117,7 +117,9 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 	noneTag : None,
 	okTag : Ok "hello",
 	errTag : Err "oops",
-	addOne : \x -> ((((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)]),
+	addOne : |x| (
+		(((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)],
+	),
 }
 ~~~
 # EXPECTED
@@ -131,11 +133,11 @@ at 1:1 to 10:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.binop_thick_arrow)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag binop_thick_arrow :type "_a")
 ~~~
 # TYPES
 ~~~roc

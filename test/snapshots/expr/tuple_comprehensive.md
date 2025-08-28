@@ -136,7 +136,7 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
 # FORMATTED
 ~~~roc
 # define these to avoid runtime errors
-add_one = \_ -> {  }
+add_one = |_| {  }
 x = 10
 y = 20
 z = 30
@@ -147,7 +147,7 @@ triple = (1, "hello", True)
 nested = ((1, 2), (3, 4))
 mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
-with_lambda = \n -> (n + 1, 42)
+with_lambda = |n| (n + 1, 42)
 empty
 ~~~
 # EXPECTED
@@ -156,26 +156,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+_a
 ~~~

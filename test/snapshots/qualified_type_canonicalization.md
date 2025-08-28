@@ -68,20 +68,30 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (import
-    (uc "Basics")
-    (uc "Result")
+    (binop_pipe
+      (uc "Basics")
+      (uc "Result")
+    )
   )
   (import
     (uc "Color")
   )
   (import
-    (uc "ModuleA")
-    (uc "ModuleB")
-    (uc "TypeC")
+    (binop_exposing
+      (binop_pipe
+        (uc "ModuleA")
+        (uc "ModuleB")
+      )
+      (list_literal
+        (uc "TypeC")
+      )
+    )
   )
   (import
-    (uc "ExternalModule")
-    (uc "ExtMod")
+    (binop_as
+      (uc "ExternalModule")
+      (uc "ExtMod")
+    )
   )
   (binop_colon
     (lc "simpleQualified")
@@ -294,11 +304,11 @@ multiLevelQualified = TypeC.new
 resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
 getColor : {} -> Color.RGB
-getColor = \_ -> Color.RGB({ r : 0, g : 255, b : 0 })
+getColor = |_| Color.RGB({ r : 0, g : 255, b : 0 })
 processColor : Color.RGB -> Str
-processColor = \color -> "Color processed"
+processColor = |color| "Color processed"
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
-transform = \result -> match result
+transform = |result| match result
 ~~~
 # EXPECTED
 NIL
@@ -329,39 +339,13 @@ at 43:25 to 43:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

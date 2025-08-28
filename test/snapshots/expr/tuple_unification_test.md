@@ -33,13 +33,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_or)
+(Expr.binop_double_question)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_or :type "[True, False]_others")
+(expr :tag binop_double_question :type "_a")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+_a
 ~~~

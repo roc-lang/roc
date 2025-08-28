@@ -75,7 +75,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent Comma L
 module [process]
 
 process : a -> b -> ((c where module(a) | .convert : a) -> c, module(b) | .transform) : b -> c
-process = \(_, _) -> ...
+process = |_, _| ...
 ~~~
 # EXPECTED
 NIL
@@ -83,15 +83,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
+(expr :tag record_access :type "_d")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

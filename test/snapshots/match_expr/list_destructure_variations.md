@@ -77,11 +77,11 @@ at 7:27 to 7:27
 
 # CANONICALIZE
 ~~~clojure
-(Expr.dot_num)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag dot_num :type "_a")
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -69,11 +69,11 @@ at 1:1 to 3:12
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.binop_thick_arrow)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag binop_thick_arrow :type "_a")
 ~~~
 # TYPES
 ~~~roc

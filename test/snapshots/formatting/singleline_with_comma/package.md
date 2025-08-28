@@ -34,7 +34,12 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare
 ~~~
 # FORMATTED
 ~~~roc
-package [a, b] packages {a, (("a", b) : "b")}
+package [a, b] packages {a, (
+	(
+		"a",
+		b,
+	) : "b",
+)}
 
 a! : Str => Str
 b! : Str => Str
@@ -50,15 +55,13 @@ at 1:1 to 3:1
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

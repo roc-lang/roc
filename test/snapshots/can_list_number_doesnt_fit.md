@@ -28,13 +28,13 @@ at 1:1 to 1:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_or)
+(Expr.list_literal)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_or :type "[True, False]_others")
+(expr :tag list_literal :type "List(_elem)")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+List(_elem)
 ~~~

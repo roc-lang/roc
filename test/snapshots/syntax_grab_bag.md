@@ -220,21 +220,39 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
-    (lc "line")
-    (lc "write")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (lc "line")
+        (lc "write")
+      )
+    )
   )
   (import
-    (lc "pf")
-    (uc "StdoutMultiline")
-    (lc "line")
-    (lc "write")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "StdoutMultiline")
+      )
+      (list_literal
+        (lc "line")
+        (lc "write")
+      )
+    )
   )
   (import
-    (lc "pkg")
-    (uc "Something")
-    (lc "func")
+    (binop_exposing
+      (binop_pipe
+        (lc "pkg")
+        (uc "Something")
+      )
+      (list_literal
+        (lc "func")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (lc "function")
@@ -246,12 +264,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (malformed malformed:expr_dot_suffix_not_allowed)
   (malformed malformed:expr_unexpected_token)
   (import
-    (uc "BadName")
-    (uc "GoodName")
+    (binop_as
+      (uc "BadName")
+      (uc "GoodName")
+    )
   )
   (import
-    (uc "BadNameMultiline")
-    (uc "GoodNameMultiline")
+    (binop_as
+      (uc "BadNameMultiline")
+      (uc "GoodNameMultiline")
+    )
   )
   (binop_colon
     (apply_uc
@@ -431,7 +453,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "add_one_oneline")
     (lambda
       (body
-        (if_else <129 branches>)
+        (if_else <134 branches>)
       )
       (args
         (lc "num")
@@ -454,7 +476,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
             (lc "other")
             (num_literal_i32 1)
           )
-          (if_else <150 branches>)
+          (if_else <155 branches>)
         )
       )
       (args
@@ -926,10 +948,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 import pf.Stdout exposing [line, write]
 import # Comment after import keyword
@@ -937,8 +956,7 @@ pf # Comment after qualifier
 .StdoutMultiline # Comment after ident
  exposing [ # Comment after exposing open
 line, # Comment after exposed item
-write]
-# Comment after exposing close
+write] # Comment after exposing close
 
 import pkg.Something exposing [func]
 function
@@ -946,16 +964,21 @@ Type
 ValueCategory
 .
 import BadName as GoodName
-import BadNameMultiline.GoodNameMultiline
+import BadNameMultiline as GoodNameMultiline
 Map((a, b)) : List a -> (a -> b) -> List b
 MapML(
 	 # And after the last arg
-(a, b) : # And after the colon
+(
+		a,
+		b,
+	) : # And after the colon
 List ( # Inside Tag args
 a -> # After tag arg
  -> (a -> b) -> # After arrow
 List # Inside tag args
-(b)),
+(
+		b,
+	)),
 )
 # And after the type decl
 
@@ -982,9 +1005,9 @@ Some(a), # Comment after tag union member
 None] # Comment after tag union close
 
 SomeFunc(a) : Maybe a -> a -> Maybe a
-add_one_oneline = \num -> if num 2 else 5
+add_one_oneline = |num| if num 2 else 5
 add_one : U64 -> U64
-add_one = \num -> {
+add_one = |num| {
 	other = 1
 	if num
 		{
@@ -1037,7 +1060,7 @@ expect # Comment after expect keyword
 blah == 1 # Comment after expect statement
 
 main! : List String -> Result ({  }, _)
-main! = \_ -> { # Yeah I can leave a comment here
+main! = |_| { # Yeah I can leave a comment here
 world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comment after return keyword
 tag # Comment after return statement
 
@@ -1065,7 +1088,14 @@ for n in list {
 }
 record = { foo : 123, bar : "Hello", baz : tag, qux : Ok world, punned }
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
+multiline_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world),
+		(nested, tuple),
+		[1, 2, 3],
+	)
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
  | .static_dispatch_method() | .next_static_dispatch_method() | .record_field
@@ -1342,128 +1372,428 @@ at 195:2 to 195:2
 **Parse Error**
 at 196:1 to 196:1
 
+**Unsupported Node**
+at 4:1 to 4:42
+
+**Unsupported Node**
+at 6:1 to 12:4
+
+**Unsupported Node**
+at 14:1 to 14:36
+
+**Unsupported Node**
+at 16:1 to 16:27
+
+**Unsupported Node**
+at 17:1 to 20:20
+
+**Unsupported Node**
+at 118:3 to 118:7
+
+**Unsupported Node**
+at 120:4 to 120:8
+
+**Unsupported Node**
+at 130:3 to 130:21
+
+**Unsupported Node**
+at 131:3 to 133:12
+
+**Pattern in Expression Context**
+at 143:36 to 143:37
+
+**Unsupported Node**
+at 149:2 to 150:6
+
+**Unsupported Node**
+at 162:2 to 163:17
+
+**Unsupported Node**
+at 175:3 to 175:9
+
+**Unsupported Node**
+at 189:39 to 189:39
+
+**Unsupported Node**
+at 189:65 to 189:65
+
+**Unsupported Node**
+at 189:96 to 189:96
+
+**Unsupported Node**
+at 190:2 to 190:8
+
+**Unsupported Node**
+at 191:2 to 191:8
+
+**Unsupported Node**
+at 193:4 to 193:7
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.str_literal_small)
   (Expr.malformed)
+  (Expr.lookup "function")
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add_one_oneline")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add_one")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "match_time")
+    (Expr.malformed)
+  )
+  (Expr.num_literal_i32 1)
+  (Expr.malformed)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.num_literal_i32 3)
+  (Expr.malformed)
+  (Expr.unary_double_dot)
+  (Expr.lookup "rest")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.num_literal_i32 314)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.lookup "rest")
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.lookup "rest")
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.lookup "dude")
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 1000)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "tag_with_payload")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "interpolated")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "list")
+    (Expr.list_literal)
+  )
+  (Expr.lookup "number")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 456)
+  (Expr.malformed)
+  (Expr.num_literal_i32 789)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.malformed)
+    (Expr.lookup "list")
+    (Expr.block
+      (Expr.apply_ident)
+      (Expr.binop_equals
+        (Expr.lookup "number")
+        (Expr.binop_plus
+          (Expr.lookup "number")
+          (Expr.lookup "n")
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "record")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.num_literal_i32 123)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "baz")
+        (Expr.lookup "tag")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "qux")
+        (Expr.apply_tag)
+      )
+      (Expr.lookup "punned")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "multiline_tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag1")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "bin_op_result")
+    (Expr.binop_or
+      (Expr.binop_or
+        (Expr.binop_gt
+          (Expr.binop_double_question
+            (Expr.apply_tag)
+            (Expr.num_literal_i32 12)
+          )
+          (Expr.binop_star
+            (Expr.num_literal_i32 5)
+            (Expr.num_literal_i32 5)
+          )
+        )
+        (Expr.binop_and
+          (Expr.binop_lt
+            (Expr.binop_plus
+              (Expr.num_literal_i32 13)
+              (Expr.num_literal_i32 2)
+            )
+            (Expr.num_literal_i32 5)
+          )
+          (Expr.binop_gte
+            (Expr.binop_minus
+              (Expr.num_literal_i32 10)
+              (Expr.num_literal_i32 1)
+            )
+            (Expr.num_literal_i32 16)
+          )
+        )
+      )
+      (Expr.binop_lte
+        (Expr.num_literal_i32 12)
+        (Expr.binop_slash
+          (Expr.num_literal_i32 3)
+          (Expr.num_literal_i32 5)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "static_dispatch_style")
+    (Expr.apply_ident)
+  )
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "a")
+  (Expr.lookup "string")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "tuple")
+    (Expr.apply_tag)
+  )
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_double_equals)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_double_slash)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
-  (Expr.binop_double_slash)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_minus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.binop_colon)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_minus)
 )
 ~~~
 # SOLVED
@@ -1472,4 +1802,16 @@ at 196:1 to 196:1
 ~~~
 # TYPES
 ~~~roc
+add_one_oneline : _d
+add_one : _d
+match_time : Error
+tag_with_payload : []_others
+interpolated : Str
+list : List(_elem)
+record : {}
+tuple : _d
+multiline_tuple : _d
+bin_op_result : [True, False]_others
+static_dispatch_style : _d
+empty : {}
 ~~~

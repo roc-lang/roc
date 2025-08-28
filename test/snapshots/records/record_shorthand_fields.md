@@ -29,13 +29,18 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.record_literal
+  (Expr.lookup "name")
+  (Expr.lookup "age")
+  (Expr.lookup "email")
+  (Expr.lookup "active")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

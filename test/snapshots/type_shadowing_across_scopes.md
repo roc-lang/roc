@@ -81,7 +81,7 @@ module [Result, processData]
 
 Result((a, b)) : [Ok(a), Err(b)]
 processData : Str -> Str
-processData = \data -> "processed"
+processData = |data| "processed"
 InnerModule : {
 	Result : [Success, Failure]
 }
@@ -93,10 +93,30 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "processData")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processData")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.apply_tag)
+        (Expr.list_literal)
+      )
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -105,4 +125,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+processData : _c
 ~~~

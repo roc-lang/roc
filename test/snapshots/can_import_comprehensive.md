@@ -48,20 +48,34 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
   )
   (import
-    (lc "http")
-    (uc "Client")
-    (uc "Http")
-    (lc "get")
-    (lc "post")
+    (binop_exposing
+      (binop_as
+        (binop_pipe
+          (lc "http")
+          (uc "Client")
+        )
+        (uc "Http")
+      )
+      (list_literal
+        (lc "get")
+        (lc "post")
+      )
+    )
   )
   (import
-    (lc "utils")
-    (uc "String")
-    (uc "Str")
+    (binop_as
+      (binop_pipe
+        (lc "utils")
+        (uc "String")
+      )
+      (uc "Str")
+    )
   )
   (binop_equals
     (lc "main")
@@ -148,7 +162,16 @@ main = {
 	result2 = Http.post
 	result3 = get
 	result4 = post
-	combined = Str.concat((client, parser, helper, result1, result2, result3, result4, combined))
+	combined = Str.concat((
+		client,
+		parser,
+		helper,
+		result1,
+		result2,
+		result3,
+		result4,
+		combined,
+	))
 }
 ~~~
 # EXPECTED
@@ -160,13 +183,76 @@ at 34:5 to 34:5
 **Parse Error**
 at 23:16 to 35:1
 
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 4:1 to 4:48
+
+**Unsupported Node**
+at 5:1 to 5:27
+
+**Unsupported Node**
+at 8:14 to 8:18
+
+**Unsupported Node**
+at 9:14 to 9:18
+
+**Unsupported Node**
+at 10:14 to 10:17
+
+**Unsupported Node**
+at 13:15 to 13:19
+
+**Unsupported Node**
+at 16:15 to 16:19
+
+**Unsupported Node**
+at 23:16 to 23:19
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.block
+      (Expr.binop_equals
+        (Expr.lookup "client")
+        (Expr.lambda)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "parser")
+        (Expr.lambda)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "helper")
+        (Expr.lambda)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "result1")
+        (Expr.lambda)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "result2")
+        (Expr.lambda)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "result3")
+        (Expr.lookup "get")
+      )
+      (Expr.binop_equals
+        (Expr.lookup "result4")
+        (Expr.lookup "post")
+      )
+      (Expr.binop_equals
+        (Expr.lookup "combined")
+        (Expr.apply_ident)
+      )
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -175,4 +261,5 @@ at 23:16 to 35:1
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

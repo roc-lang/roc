@@ -220,21 +220,39 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
-    (lc "line")
-    (lc "write")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (lc "line")
+        (lc "write")
+      )
+    )
   )
   (import
-    (lc "pf")
-    (uc "StdoutMultiline")
-    (lc "line")
-    (lc "write")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "StdoutMultiline")
+      )
+      (list_literal
+        (lc "line")
+        (lc "write")
+      )
+    )
   )
   (import
-    (lc "pkg")
-    (uc "Something")
-    (lc "func")
+    (binop_exposing
+      (binop_pipe
+        (lc "pkg")
+        (uc "Something")
+      )
+      (list_literal
+        (lc "func")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (lc "function")
@@ -246,12 +264,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   (malformed malformed:expr_dot_suffix_not_allowed)
   (malformed malformed:expr_unexpected_token)
   (import
-    (uc "BadName")
-    (uc "GoodName")
+    (binop_as
+      (uc "BadName")
+      (uc "GoodName")
+    )
   )
   (import
-    (uc "BadNameMultiline")
-    (uc "GoodNameMultiline")
+    (binop_as
+      (uc "BadNameMultiline")
+      (uc "GoodNameMultiline")
+    )
   )
   (binop_colon
     (apply_uc
@@ -431,7 +453,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "add_one_oneline")
     (lambda
       (body
-        (if_else <129 branches>)
+        (if_else <134 branches>)
       )
       (args
         (lc "num")
@@ -454,7 +476,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
             (lc "other")
             (num_literal_i32 1)
           )
-          (if_else <150 branches>)
+          (if_else <155 branches>)
         )
       )
       (args
@@ -932,10 +954,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 import pf.Stdout exposing [line, write]
 import # Comment after import keyword
@@ -943,8 +962,7 @@ pf # Comment after qualifier
 .StdoutMultiline # Comment after ident
  exposing [ # Comment after exposing open
 line, # Comment after exposed item
-write]
-# Comment after exposing close
+write] # Comment after exposing close
 
 import pkg.Something exposing [func]
 function
@@ -952,16 +970,21 @@ Type
 ValueCategory
 .
 import BadName as GoodName
-import BadNameMultiline.GoodNameMultiline
+import BadNameMultiline as GoodNameMultiline
 Map((a, b)) : List a -> (a -> b) -> List b
 MapML(
 	 # And after the last arg
-(a, b) : # And after the colon
+(
+		a,
+		b,
+	) : # And after the colon
 List ( # Inside Tag args
 a -> # After tag arg
  -> (a -> b) -> # After arrow
 List # Inside tag args
-(b)),
+(
+		b,
+	)),
 )
 # And after the type decl
 
@@ -988,9 +1011,9 @@ Some(a), # Comment after tag union member
 None] # Comment after tag union close
 
 SomeFunc(a) : Maybe a -> a -> Maybe a
-add_one_oneline = \num -> if num 2 else 5
+add_one_oneline = |num| if num 2 else 5
 add_one : U64 -> U64
-add_one = \num -> {
+add_one = |num| {
 	other = 1
 	if num
 		{
@@ -1043,7 +1066,7 @@ expect # Comment after expect keyword
 blah == 1 # Comment after expect statement
 
 main! : List String -> Result ({  }, _)
-main! = \_ -> { # Yeah I can leave a comment here
+main! = |_| { # Yeah I can leave a comment here
 world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comment after return keyword
 tag # Comment after return statement
 
@@ -1072,7 +1095,14 @@ for n in list {
 record = { foo : 123, bar : "Hello" }
 az : ((tag, qux) : Ok world, punned)
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-multiline_tuple = (123, "World", tag1, Ok(world), (nested, tuple), [1, 2, 3])
+multiline_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world),
+		(nested, tuple),
+		[1, 2, 3],
+	)
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
  | .static_dispatch_method() | .next_static_dispatch_method() | .record_field
@@ -1360,134 +1390,13 @@ at 196:1 to 196:1
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_double_equals)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_double_slash)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
-  (Expr.binop_double_slash)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_minus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.binop_star)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.binop_colon)
-  (Expr.frac_literal_big)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.binop_colon)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_minus)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
+(expr :tag record_access :type "_d")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

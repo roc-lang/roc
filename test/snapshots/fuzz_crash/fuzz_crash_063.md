@@ -40,15 +40,13 @@ at 1:10 to 1:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -102,7 +102,7 @@ x = 42
 name = "Alice"
 pi = 3.14159
 isActive = Bool.true
-add = \(a, b) -> a + b
+add = |a, b| a + b
 pair = (1, "hello")
 record = { age : 30, city : "NYC" }
 list = [1, 2, 3]
@@ -114,22 +114,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+_c
 ~~~

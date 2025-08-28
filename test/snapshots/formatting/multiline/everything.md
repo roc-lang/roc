@@ -123,13 +123,21 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~clojure
 (block
   (import
-    (uc "I1")
-    (uc "I11")
-    (uc "I12")
+    (binop_exposing
+      (uc "I1")
+      (list_literal
+        (uc "I11")
+        (uc "I12")
+      )
+    )
   )
   (import
-    (uc "I2")
-    (uc "I21")
+    (binop_exposing
+      (uc "I2")
+      (list_literal
+        (uc "I21")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (uc "Ias1")
@@ -396,7 +404,10 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-import I1 exposing [I11, I12]
+import I1 exposing [
+	I11,
+	I12,
+]
 import I2 exposing [I21]
 Ias1
 I22
@@ -404,9 +415,21 @@ Ias2
 A(a) : a where module(a) | .a1 : a -> a ->  -> (Str, module(a) | .a2) : a -> a ->  -> Str
 B(b) : b where module(b) | .b1 : b -> b ->  -> (Str, module(b) | .b2) : b -> b ->  -> Str
 C(
-	(a, b) : (a, b),
+	(
+		a,
+		b,
+	) : (
+		a,
+		b,
+	),
 )D(
-	(a, b) : C (a, b),
+	(
+		a,
+		b,
+	) : C (
+		a,
+		b,
+	),
 )
 E :
 	{
@@ -418,7 +441,7 @@ F : [
 	B,
 ]
 g : (e -> e where module(e) | A, module(e) | B)
-h = \(x, y) -> {
+h = |x, y| {
 	h1 = {
 		h11 : x,
 		h12 : x,
@@ -429,16 +452,25 @@ h = \(x, y) -> {
 			},
 	}
 	h2 = h(
-		(x, y),
+		(
+			x,
+			y,
+		),
 	)
 	h3 = A(
-		(x, y),
+		(
+			x,
+			y,
+		),
 	)
 	h4 = [
 		x,
 		y,
 	]
-	h5 = (x, y)
+	h5 = (
+			x,
+			y,
+		)
 	match x
 }
 ~~~
@@ -556,27 +588,150 @@ at 108:3 to 108:3
 **Parse Error**
 at 103:3 to 109:2
 
+**Unsupported Node**
+at 4:1 to 7:2
+
+**Unsupported Node**
+at 8:1 to 9:5
+
+**Unsupported Node**
+at 16:9 to 16:12
+
+**Unsupported Node**
+at 20:9 to 20:12
+
+**Unsupported Node**
+at 26:9 to 26:12
+
+**Unsupported Node**
+at 30:9 to 30:12
+
+**Unsupported Node**
+at 58:24 to 58:27
+
+**Unsupported Node**
+at 58:37 to 58:40
+
+**Unsupported Node**
+at 60:6 to 60:10
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_thin_arrow)
-  (Expr.binop_thin_arrow)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_colon
+      (Expr.lookup "a")
+      (Expr.binop_colon
+        (Expr.lambda)
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.binop_thin_arrow
+            (Expr.lookup "a")
+            (Expr.binop_thin_arrow
+              (Expr.malformed)
+              (Expr.binop_colon
+                (Expr.tuple_literal
+                  (Expr.apply_tag)
+                  (Expr.lambda)
+                )
+                (Expr.binop_thin_arrow
+                  (Expr.lookup "a")
+                  (Expr.binop_thin_arrow
+                    (Expr.lookup "a")
+                    (Expr.binop_thin_arrow
+                      (Expr.malformed)
+                      (Expr.apply_tag)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_colon
+      (Expr.lookup "b")
+      (Expr.binop_colon
+        (Expr.lambda)
+        (Expr.binop_thin_arrow
+          (Expr.lookup "b")
+          (Expr.binop_thin_arrow
+            (Expr.lookup "b")
+            (Expr.binop_thin_arrow
+              (Expr.malformed)
+              (Expr.binop_colon
+                (Expr.tuple_literal
+                  (Expr.apply_tag)
+                  (Expr.lambda)
+                )
+                (Expr.binop_thin_arrow
+                  (Expr.lookup "b")
+                  (Expr.binop_thin_arrow
+                    (Expr.lookup "b")
+                    (Expr.binop_thin_arrow
+                      (Expr.malformed)
+                      (Expr.apply_tag)
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "b")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.tuple_literal
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "e")
+          (Expr.lookup "e")
+        )
+        (Expr.lambda)
+      )
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "h")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -585,4 +740,5 @@ at 103:3 to 109:2
 ~~~
 # TYPES
 ~~~roc
+h : _c
 ~~~

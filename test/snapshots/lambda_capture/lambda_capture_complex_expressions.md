@@ -30,7 +30,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar KwIf LowerIdent OpGreate
 ~~~
 # FORMATTED
 ~~~roc
-\outer -> \inner -> if outer > 0(outer + inner) 
+|outer| |inner| if outer > 0(outer + inner) 
 ~~~
 # EXPECTED
 NIL
@@ -46,11 +46,11 @@ at 1:52 to 1:52
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.record_accessor)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag record_accessor :type "_a")
 ~~~
 # TYPES
 ~~~roc

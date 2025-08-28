@@ -74,10 +74,10 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 # FORMATTED
 ~~~roc
 identity : a -> a
-identity = \x -> x
+identity = |x| x
 needs_string :
 	(Str -> Str) -> Str
-needs_string = \f -> f(["hello"])
+needs_string = |f| f(["hello"])
 needs_string(identity)
 ~~~
 # EXPECTED
@@ -87,11 +87,32 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "needs_string")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "needs_string")
+    (Expr.lambda)
+  )
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED

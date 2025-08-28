@@ -60,15 +60,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 UserId : U64
 getUser : UserId -> Str
-getUser = \id -> if id > 10 "big" else "small"
-main! = \_ -> getUser(100)
+getUser = |id| if id > 10 "big" else "small"
+main! = |_| getUser(100)
 ~~~
 # EXPECTED
 NIL
@@ -79,10 +76,25 @@ at 6:16 to 6:29
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "getUser")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getUser")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -91,4 +103,5 @@ at 6:16 to 6:29
 ~~~
 # TYPES
 ~~~roc
+getUser : _a
 ~~~

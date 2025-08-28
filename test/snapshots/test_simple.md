@@ -36,7 +36,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "bar")
+    (Expr.num_literal_i32 100)
+  )
 )
 ~~~
 # SOLVED
@@ -45,4 +48,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+bar : Num(_size)
 ~~~

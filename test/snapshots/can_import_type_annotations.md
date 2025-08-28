@@ -52,20 +52,36 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
 ~~~clojure
 (block
   (import
-    (lc "http")
-    (uc "Client")
-    (uc "Http")
-    (uc "Request")
-    (uc "Response")
+    (binop_exposing
+      (binop_as
+        (binop_pipe
+          (lc "http")
+          (uc "Client")
+        )
+        (uc "Http")
+      )
+      (list_literal
+        (uc "Request")
+        (uc "Response")
+      )
+    )
   )
   (import
-    (lc "json")
-    (uc "Json")
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
   )
   (import
-    (lc "utils")
-    (uc "Result")
-    (uc "Result")
+    (binop_exposing
+      (binop_pipe
+        (lc "utils")
+        (uc "Result")
+      )
+      (list_literal
+        (uc "Result")
+      )
+    )
   )
   (binop_colon
     (lc "processRequest")
@@ -293,20 +309,20 @@ import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
 processRequest : Request -> Response
-processRequest = \req -> Http.defaultResponse
+processRequest = |req| Http.defaultResponse
 parseJson : Str -> Json.Value
-parseJson = \input -> Json.parse(input)
+parseJson = |input| Json.parse(input)
 handleApi : Http.Request -> Result (Http.Response, Json.Error)
-handleApi = \request -> {
+handleApi = |request| {
 	result = Json.decode(request.body)
 	match result
 }
 config : Json.Config
 config = Json.defaultConfig
 advancedParser : Json.Parser | Config -> Str -> Result (Json.Value, Json.Parser | Error)
-advancedParser = \(parserConfig, input) -> Json.Parser | .parseWith((parserConfig, input))
+advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
 combineResults : Result (a, err) -> Result (b, err) -> Result ((a, b), err)
-combineResults = \(result1, result2) -> match result1
+combineResults = |result1, result2| match result1
 ~~~
 # EXPECTED
 NIL
@@ -331,28 +347,13 @@ at 38:18 to 38:18
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -36,9 +36,9 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
 ~~~
 # FORMATTED
 ~~~roc
-\{
+|{
 	x : x
-} -> x({
+}| x({
 	x : -10
 })
 ~~~
@@ -48,11 +48,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag binop_equals :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -16,9 +16,7 @@ pub const formatExpr = fmt.formatExpr;
 pub const moduleFmtsStable = fmt.moduleFmtsStable;
 
 // New formatter exports for AST2
-pub const FormatOptions = fmt2.FormatOptions;
 pub const formatAst2 = fmt2.formatAst;
-pub const formatAst2WithOptions = fmt2.formatAstWithOptions;
 
 test "fmt tests" {
     std.testing.refAllDecls(@This());

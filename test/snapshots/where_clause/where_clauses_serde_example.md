@@ -78,7 +78,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpenRou
 module [deserialize]
 
 deserialize : List U8 -> Result (a, [DecodeErr]) where module(a) | .decode : List U8 -> Result (a, [DecodeErr])
-deserialize = \_ -> ...
+deserialize = |_| ...
 ~~~
 # EXPECTED
 NIL
@@ -86,15 +86,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

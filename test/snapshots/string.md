@@ -48,7 +48,16 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma Strin
 ~~~roc
 module []
 
-x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")
+x = (
+		"one",
+		"two",
+		"\u",
+		"\u)",
+		"\u(",
+		"\u()",
+		"\u(K)",
+		"\u(1F680)",
+	)
 ~~~
 # EXPECTED
 NIL
@@ -65,7 +74,20 @@ at 15:1 to 15:1
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_big)
+      (Expr.malformed)
+    )
+  )
   (Expr.malformed)
 )
 ~~~
@@ -75,4 +97,5 @@ at 15:1 to 15:1
 ~~~
 # TYPES
 ~~~roc
+x : _a
 ~~~

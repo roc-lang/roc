@@ -40,13 +40,19 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport Lowe
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
   )
   (import
-    (lc "http")
-    (uc "Client")
-    (uc "Http")
+    (binop_as
+      (binop_pipe
+        (lc "http")
+        (uc "Client")
+      )
+      (uc "Http")
+    )
   )
   (binop_equals
     (lc "main")
@@ -174,9 +180,9 @@ import json.Json
 import http.Client as Http
 main = Json.NonExistent | .method
 parseData : Json.InvalidType -> Str
-parseData = \data -> Json.stringify(data)
+parseData = |data| Json.stringify(data)
 processRequest : Http.Server | Request -> Http.Server | Response
-processRequest = \req -> Http.Server | .defaultResponse
+processRequest = |req| Http.Server | .defaultResponse
 result = Json.prase("test")
 config = Unknown.Module | .config
 client = Http.invalidMethod
@@ -188,24 +194,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

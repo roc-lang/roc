@@ -22,10 +22,7 @@ KwApp OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenCurly
 ~~~
 # FORMATTED
 ~~~roc
-app  [a1, a2]
-{
-	pf: ("../basic-cli/main.roc", a) : "a" platform [],
-}
+app  [a1, a2] { pf: ("../basic-cli/main.roc", a) : "a" platform [] }
 
 ~~~
 # EXPECTED

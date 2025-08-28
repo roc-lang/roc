@@ -55,7 +55,7 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~roc
 f :
 	(Str, Str) -> (Str, Str)
-f = \x -> x
+f = |x| x
 f((1, 2))
 ~~~
 # EXPECTED
@@ -64,16 +64,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+_a
 ~~~

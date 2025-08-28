@@ -107,9 +107,9 @@ module [MyResult, ok, is_ok]
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
 ok : ok -> MyResult (ok, _)
-ok = \a -> MyResult.Ok(a)
+ok = |a| MyResult.Ok(a)
 is_ok : MyResult (_ok, _err) -> Bool
-is_ok = \result -> match result
+is_ok = |result| match result
 ~~~
 # EXPECTED
 NIL
@@ -122,18 +122,13 @@ at 11:21 to 11:21
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

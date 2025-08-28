@@ -35,13 +35,19 @@ at 1:1 to 1:20
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

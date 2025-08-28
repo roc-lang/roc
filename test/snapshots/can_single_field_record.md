@@ -29,14 +29,18 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 1)
+  )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
+{}
 ~~~

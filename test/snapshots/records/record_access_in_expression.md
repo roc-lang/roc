@@ -30,7 +30,10 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus)
+(Expr.binop_plus
+  (Expr.lambda)
+  (Expr.num_literal_i32 5)
+)
 ~~~
 # SOLVED
 ~~~clojure

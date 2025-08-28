@@ -12,13 +12,12 @@ type=file
 ~~~
 # TOKENS
 ~~~text
-Int LowerIdent Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
+Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 # PARSE
 ~~~clojure
 (block
-  (num_literal_i32 0)
   (binop_pipe
-    (lc "o0")
+    (num_literal_big big:<idx:0>)
     (num_literal_i32 0)
   )
   (num_literal_i32 0)
@@ -35,7 +34,7 @@ Int LowerIdent Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore 
 ~~~
 # FORMATTED
 ~~~roc
-0o0 | 0
+0o0.0 | 0
 0_0_0
 0u8 | 0
 0__
@@ -46,22 +45,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.binop_star)
-  (Expr.lambda)
-  (Expr.binop_star)
-  (Expr.binop_star)
-  (Expr.frac_literal_big)
-  (Expr.binop_star)
-  (Expr.lambda)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -68,18 +68,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 identity : a -> a
-identity = \x -> {
+identity = |x| {
 	thing : a # refers to the type var introduced in function type annotation
 	thing = x # refers to the value from the function parameter
 	thing : thing
 }
-main! = \_ -> {  }
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -88,9 +85,21 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -99,4 +108,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+identity : _b
 ~~~

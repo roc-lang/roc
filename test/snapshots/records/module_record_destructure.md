@@ -85,7 +85,7 @@ module [extract_age]
 extract_age : {
 	age : U64
 } -> U64
-extract_age = \person -> {
+extract_age = |person| {
 	{
 		age : age
 	} = person
@@ -99,12 +99,31 @@ extract_age = \person -> {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 7:2 to 7:10
+
+**Unsupported Node**
+at 7:21 to 7:29
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "extract_age")
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "age")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "extract_age")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -113,4 +132,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+extract_age : _b
 ~~~

@@ -35,7 +35,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "topLevelVar_")
+    (Expr.num_literal_i32 0)
+  )
 )
 ~~~
 # SOLVED
@@ -44,4 +47,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+topLevelVar_ : Num(_size)
 ~~~

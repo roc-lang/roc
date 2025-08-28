@@ -39,7 +39,7 @@ LowerIdent OpAssign OpBar OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-formatUser = \{ name : name, age : age, email : email } -> "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
+formatUser = |{ name : name, age : age, email : email }| "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
 ~~~
 # EXPECTED
 NIL

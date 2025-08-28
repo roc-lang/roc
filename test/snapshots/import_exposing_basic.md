@@ -23,10 +23,16 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
-    (lc "decode")
-    (lc "encode")
+    (binop_exposing
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (list_literal
+        (lc "decode")
+        (lc "encode")
+      )
+    )
   )
   (binop_equals
     (lc "main")
@@ -78,12 +84,40 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:43
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.block
+      (Expr.binop_equals
+        (Expr.lookup "data")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "name")
+            (Expr.str_literal_big)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "age")
+            (Expr.num_literal_i32 30)
+          )
+        )
+      )
+      (Expr.binop_equals
+        (Expr.lookup "encoded")
+        (Expr.apply_ident)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "decoded")
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "decoded")
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -92,4 +126,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

@@ -197,36 +197,87 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 Pair((a, b)) : (a, b)
 swap_pair : Pair (a, b) -> Pair (b, a)
-swap_pair = \(x, y) -> (y, x)
+swap_pair = |x, y| (y, x)
 map_pair : Pair (a, b) -> (a -> c) -> (b -> d) -> Pair (c, d)
-map_pair = \((x, y), f, g) -> (f(x), g(y))
+map_pair = |(x, y), f, g| (f(x), g(y))
 main = {
 		# This creates Pair(Num, Num)
 p1 = swap_pair((1, 2))
-	p2 = map_pair((3, 4, \x -> x + 1, \y -> y * 2))
+	p2 = map_pair((3, 4, |x| x + 1, |y| y * 2))
 	p2
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 8:15 to 8:19
+
+**Unsupported Node**
+at 12:14 to 12:25
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "swap_pair")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "swap_pair")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "map_pair")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "c")
+        )
+        (Expr.binop_thin_arrow
+          (Expr.binop_thin_arrow
+            (Expr.lookup "b")
+            (Expr.lookup "d")
+          )
+          (Expr.apply_tag)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "map_pair")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.block
+      (Expr.binop_equals
+        (Expr.lookup "p1")
+        (Expr.apply_ident)
+      )
+      (Expr.binop_equals
+        (Expr.lookup "p2")
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "p2")
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -235,4 +286,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+swap_pair : _e
+map_pair : _e
+main : _e
 ~~~

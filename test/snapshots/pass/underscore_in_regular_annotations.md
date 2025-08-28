@@ -220,21 +220,21 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
 module []
 
 main : _ -> _
-main = \x -> x
+main = |x| x
 identity : a -> a
-identity = \x -> x
+identity = |x| x
 process : List _ -> Str
-process = \list -> "processed"
+process = |list| "processed"
 get_data : {field : _, other : U32} -> U32
-get_data = \record -> record.other
+get_data = |record| record.other
 handle_result : Result (_, Str) -> Str
-handle_result = \result -> match result
+handle_result = |result| match result
 map :
 	(a -> b) -> List a -> List b
-map = \(_, _) -> []
+map = |_, _| []
 transform :
 	(_a -> _b) -> _b
-transform = \(_, b) -> b
+transform = |_, b| b
 ~~~
 # EXPECTED
 NIL
@@ -250,27 +250,13 @@ at 23:5 to 23:5
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

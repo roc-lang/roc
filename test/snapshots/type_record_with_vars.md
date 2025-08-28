@@ -63,14 +63,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 getField : {field : a, other : _b} -> a
-getField = \record -> record.field
-main! = \_ -> {  }
+getField = |record| record.field
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -79,9 +76,30 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "getField")
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "field")
+          (Expr.lookup "a")
+        )
+        (Expr.binop_colon
+          (Expr.lookup "other")
+          (Expr.lookup "_b")
+        )
+      )
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getField")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -90,4 +108,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+getField : _b
 ~~~

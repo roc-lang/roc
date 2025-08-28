@@ -51,7 +51,7 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
 # FORMATTED
 ~~~roc
 list = [1, 2, 3]
-fn = \x -> x + 1
+fn = |x| x + 1
 list.map(fn)
 ~~~
 # EXPECTED
@@ -61,9 +61,15 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_colon)
+  (Expr.binop_equals
+    (Expr.lookup "list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "fn")
+    (Expr.lambda)
+  )
+  (Expr.apply_ident)
 )
 ~~~
 # SOLVED

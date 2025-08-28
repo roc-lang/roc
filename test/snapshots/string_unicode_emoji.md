@@ -43,8 +43,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "message")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "greet")
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED
@@ -53,4 +59,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+message : Str
+greet : Str
 ~~~

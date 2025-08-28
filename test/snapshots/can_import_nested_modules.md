@@ -39,21 +39,39 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIden
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Parser")
-    (uc "Config")
+    (binop_pipe
+      (binop_pipe
+        (lc "json")
+        (uc "Parser")
+      )
+      (uc "Config")
+    )
   )
   (import
-    (lc "http")
-    (uc "Client")
-    (uc "Auth")
-    (uc "HttpAuth")
+    (binop_as
+      (binop_pipe
+        (binop_pipe
+          (lc "http")
+          (uc "Client")
+        )
+        (uc "Auth")
+      )
+      (uc "HttpAuth")
+    )
   )
   (import
-    (lc "utils")
-    (uc "String")
-    (uc "Format")
-    (lc "padLeft")
+    (binop_exposing
+      (binop_pipe
+        (binop_pipe
+          (lc "utils")
+          (uc "String")
+        )
+        (uc "Format")
+      )
+      (list_literal
+        (lc "padLeft")
+      )
+    )
   )
   (binop_colon
     (lc "parseConfig")
@@ -247,19 +265,19 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIden
 ~~~roc
 module []
 
-import json.Parser.Config
-import http.Client.Auth as HttpAuth
-import utils.String.Format exposing [padLeft]
+import json.Parser | Config
+import http.Client | Auth as HttpAuth
+import utils.String | Format exposing [padLeft]
 parseConfig : Config.Settings -> Str
-parseConfig = \settings -> Config.toString(settings)
+parseConfig = |settings| Config.toString(settings)
 authenticate : Str -> Str -> HttpAuth.Token
-authenticate = \(user, pass) -> HttpAuth.login((user, pass))
+authenticate = |user, pass| HttpAuth.login((user, pass))
 processData : Config.Parser | Advanced -> Str -> Result (Str, Config.Parser | Error)
-processData = \(advancedConfig, input) -> (Config.Parser | Advanced) | .parseWith((advancedConfig, input))
+processData = |advancedConfig, input| (Config.Parser | Advanced) | .parseWith((advancedConfig, input))
 formatOutput : Str -> Str
-formatOutput = \text -> padLeft((text, Config.defaultPadding))
+formatOutput = |text| padLeft((text, Config.defaultPadding))
 validateAuth : HttpAuth.Credentials -> Result (HttpAuth.Token, HttpAuth.Error)
-validateAuth = \creds -> HttpAuth.validate(creds)
+validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
 NIL
@@ -267,26 +285,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -23,8 +23,12 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~clojure
 (block
   (import
-    (uc "Data")
-    (uc "Person")
+    (binop_exposing
+      (uc "Data")
+      (list_literal
+        (uc "Person")
+      )
+    )
   )
   (binop_colon
     (lc "expectsPerson")
@@ -59,21 +63,35 @@ module []
 
 import Data exposing [Person]
 expectsPerson : Person -> Str
-expectsPerson = \p -> "Got a person"
+expectsPerson = |p| "Got a person"
 main = # This will cause a type mismatch
 expectsPerson("not a person")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:30
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "expectsPerson")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "expectsPerson")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -82,4 +100,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+expectsPerson : _a
+main : _a
 ~~~

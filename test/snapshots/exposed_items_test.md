@@ -18,10 +18,16 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
-    (lc "line")
-    (lc "write")
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (lc "line")
+        (lc "write")
+      )
+    )
   )
   (binop_equals
     (lc "main")
@@ -39,12 +45,17 @@ main = 42
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:42
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.num_literal_i32 42)
+  )
 )
 ~~~
 # SOLVED
@@ -53,4 +64,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+main : Num(_size)
 ~~~

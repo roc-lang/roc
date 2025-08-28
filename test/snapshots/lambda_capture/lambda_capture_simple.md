@@ -29,7 +29,7 @@ OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int CloseRound OpenRound Int 
 ~~~
 # FORMATTED
 ~~~roc
-\x -> x + 1(5)
+|x| x + 1(5)
 ~~~
 # EXPECTED
 NIL
@@ -37,11 +37,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag binop_equals :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -69,14 +69,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 processNested : List Result (Str, Err) -> List Str
-processNested = \_list -> ["one", "two"]
-main! = \_ -> processNested([])
+processNested = |_list| ["one", "two"]
+main! = |_| processNested([])
 ~~~
 # EXPECTED
 NIL
@@ -85,9 +82,21 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "processNested")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processNested")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -96,4 +105,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+processNested : _a
 ~~~

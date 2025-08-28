@@ -62,7 +62,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenC
 ~~~roc
 module []
 
-testFunc = \input -> {
+testFunc = |input| {
 	sum = input # Regular identifier
 	var sum_ = input * 2 # Var with underscore - should not conflict
 
@@ -77,7 +77,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "testFunc")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -86,4 +89,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+testFunc : _a
 ~~~

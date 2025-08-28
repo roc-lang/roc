@@ -58,17 +58,8 @@ pub const StmtTag = enum(u8) {
 };
 
 /// Calculate the starting offset for expression tags
-const EXPR_TAG_START = blk: {
-    // Get the maximum value from StmtTag enum
-    var max: u8 = 0;
-    for (std.meta.fields(StmtTag)) |field| {
-        if (field.value > max) {
-            max = @intCast(field.value);
-        }
-    }
-    // Expression tags start after the highest statement tag
-    break :blk max + 1;
-};
+/// We start at 100 to avoid collision with AST2.Node.Tag values (which go up to ~68)
+const EXPR_TAG_START = 100;
 
 /// CIR Expression tags - start after statement tags
 pub const ExprTag = enum(u8) {
@@ -123,17 +114,8 @@ pub const ExprTag = enum(u8) {
 };
 
 /// Calculate the starting offset for pattern tags
-const PATT_TAG_START = blk: {
-    // Get the maximum value from ExprTag enum
-    var max: u8 = 0;
-    for (std.meta.fields(ExprTag)) |field| {
-        if (field.value > max) {
-            max = @intCast(field.value);
-        }
-    }
-    // Pattern tags start after the highest expression tag
-    break :blk max + 1;
-};
+/// We start at 150 (EXPR_TAG_START=100 + ~48 ExprTag values + buffer)
+const PATT_TAG_START = 150;
 
 /// CIR Pattern tags - start after expression tags
 pub const PattTag = enum(u8) {
@@ -355,7 +337,8 @@ pub fn getNodeTagPtr(self: *CIR, idx: AST2.Node.Idx) *AST2.Node.Tag {
 
 /// Get an immutable node
 pub fn getNode(self: *const CIR, idx: AST2.Node.Idx) AST2.Node {
-    return self.ast.*.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const node = self.ast.*.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    return node;
 }
 
 /// Mutate a node's tag in place to a CIR statement tag
@@ -973,6 +956,18 @@ fn canonicalizeLambdaParams(self: *CIR, allocator: Allocator, node_idx: AST2.Nod
             // Register the parameter in scope
             try self.scope_state.addIdent(allocator, node.payload.ident, patt_idx);
             try self.scope_state.recordVarPattern(allocator, patt_idx);
+        },
+        .tuple_literal => {
+            // Multiple parameters passed as a tuple: |a, b| -> parsed as tuple_literal(a, b)
+            // Iterate through each element and canonicalize as a parameter
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |param_node| {
+                    try self.canonicalizeLambdaParams(allocator, param_node, raw_src, idents);
+                }
+            }
+            // Don't mutate the tuple_literal node itself - it's just a container for params
         },
         .binop_pipe => {
             // Multiple parameters: |a| b | rest
@@ -2583,7 +2578,7 @@ test "CIR2 error: expression in statement context" {
     defer byte_slices.entries.deinit(allocator);
 
     // Create a number literal node (expression)
-    const node_idx = try ast_ptr.appendNode(allocator, Position{ .offset = 0 }, .num_literal_i32, .{ .num_literal_i32 = 42 });
+    const node_idx = try ast_ptr.appendNode(allocator, Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 2 } }, .num_literal_i32, .{ .num_literal_i32 = 42 });
 
     // Create a TypeStore for testing
     var types_store = try TypeStore.initCapacity(allocator, 100, 10);
@@ -2632,7 +2627,7 @@ test "CIR2 demonstrates in-place tag mutation" {
 
     // Create an identifier node
     const ident_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
-    const node_idx = try ast_ptr.appendNode(allocator, Position{ .offset = 0 }, .lc, .{ .ident = ident_idx });
+    const node_idx = try ast_ptr.appendNode(allocator, Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 3 } }, .lc, .{ .ident = ident_idx });
 
     // Verify initial AST tag
     const initial_node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
@@ -2734,9 +2729,9 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     // Create two identifier nodes
     const ident_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 };
 
-    const node1_idx = try ast.appendNode(allocator, Position{ .offset = 0 }, .lc, .{ .ident = ident_idx });
+    const node1_idx = try ast.appendNode(allocator, Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 3 } }, .lc, .{ .ident = ident_idx });
 
-    const node2_idx = try ast.appendNode(allocator, Position{ .offset = 10 }, .lc, .{ .ident = ident_idx });
+    const node2_idx = try ast.appendNode(allocator, Region{ .start = Position{ .offset = 10 }, .end = Position{ .offset = 13 } }, .lc, .{ .ident = ident_idx });
 
     // Canonicalize one as immutable, one as mutable
     const immutable_patt = try cir.canonicalizePatt(allocator, node1_idx);

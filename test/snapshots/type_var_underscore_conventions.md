@@ -156,22 +156,19 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 single_use : List elem -> Str
-single_use = \x -> "hello"
+single_use = |x| "hello"
 ending_underscore : List elem_ -> elem_
-ending_underscore = \list -> "default"
+ending_underscore = |list| "default"
 combo_single : List bad_ -> Str
-combo_single = \x -> "combo"
+combo_single = |x| "combo"
 valid_single : List _elem -> Str
-valid_single = \x -> "valid"
+valid_single = |x| "valid"
 valid_multi : elem -> List elem
-valid_multi = \x -> [x]
-main = \x -> "done"
+valid_multi = |x| [x]
+main = |x| "done"
 ~~~
 # EXPECTED
 NIL
@@ -180,17 +177,65 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "single_use")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "single_use")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "ending_underscore")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.lookup "elem_")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ending_underscore")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "combo_single")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "combo_single")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "valid_single")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "valid_single")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "valid_multi")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "elem")
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "valid_multi")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -199,4 +244,10 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+single_use : _a
+ending_underscore : _a
+combo_single : _a
+valid_single : _a
+valid_multi : _a
+main : _a
 ~~~

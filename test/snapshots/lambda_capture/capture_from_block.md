@@ -44,7 +44,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 # FORMATTED
 ~~~roc
 a = 10
-b = \_ -> a * 2(5)
+b = |_| a * 2(5)
 b
 ~~~
 # EXPECTED
@@ -53,16 +53,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+_c
 ~~~

@@ -23,12 +23,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~clojure
 (block
   (import
-    (lc "pf")
-    (uc "Stdout")
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
   )
   (import
-    (lc "json")
-    (uc "Json")
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
   )
   (binop_equals
     (not_lc "main")
@@ -63,14 +67,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 import pf.Stdout
 import json.Json
-main! = \_ -> {
+main! = |_| {
 		# This should create an external declaration for json.Json.utf8
 result = Json.utf8("Hello from external module!")
 	Stdout.line!(result)
@@ -79,13 +80,27 @@ result = Json.utf8("Hello from external module!")
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 4:1 to 4:17
+
+**Unsupported Node**
+at 8:14 to 8:18
+
+**Unsupported Node**
+at 9:5 to 9:11
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED

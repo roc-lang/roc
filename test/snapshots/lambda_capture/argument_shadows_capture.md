@@ -37,7 +37,7 @@ OpenCurly LowerIdent OpAssign Int OpenRound OpBar LowerIdent OpBar LowerIdent Cl
 ~~~
 # FORMATTED
 ~~~roc
-x = 5(\x -> x)(10) # Should not capture outer `x` -- this should give a shadowing warning
+x = 5(|x| x)(10) # Should not capture outer `x` -- this should give a shadowing warning
 ~~~
 # EXPECTED
 NIL
@@ -45,14 +45,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+_a
 ~~~

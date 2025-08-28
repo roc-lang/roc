@@ -25,7 +25,9 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~
 # FORMATTED
 ~~~roc
-if  (((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false)
+if  (
+	((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false,
+)
 ~~~
 # EXPECTED
 NIL
@@ -54,10 +56,16 @@ at 8:1 to 8:1
 **Parse Error**
 at 1:1 to 8:2
 
+**Unsupported Node**
+at 6:10 to 6:14
+
+**Unsupported Node**
+at 7:9 to 7:13
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.unary_neg)
+  (Expr.if_else)
 )
 ~~~
 # SOLVED

@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_equals)
+(Expr.binop_not_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_equals :type "[True, False]_others")
+(expr :tag binop_not_equals :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

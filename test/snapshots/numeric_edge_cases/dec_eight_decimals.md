@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_lt)
+(Expr.binop_lte)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_lt :type "[True, False]_others")
+(expr :tag binop_lte :type "[True, False]_others")
 ~~~
 # TYPES
 ~~~roc

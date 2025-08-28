@@ -32,19 +32,21 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-\{ name : name, age : age } -> "Hello ${name}, you are ${age.to_str()} years old"
+|{ name : name, age : age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:2 to 1:15
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc

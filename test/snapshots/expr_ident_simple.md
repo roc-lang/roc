@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.str_literal_big)
+(Expr.lookup "foo")
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_literal_big :type "Str")
+(expr :tag lookup :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Str
+_a
 ~~~

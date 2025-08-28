@@ -19,10 +19,18 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 ~~~clojure
 (block
   (import
-    (lc "design")
-    (uc "Styles")
-    (uc "Color")
-    (uc "Encoder")
+    (binop_exposing
+      (binop_pipe
+        (binop_pipe
+          (lc "design")
+          (uc "Styles")
+        )
+        (uc "Color")
+      )
+      (list_literal
+        (uc "Encoder")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (uc "CE")
@@ -41,7 +49,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 ~~~roc
 module [red]
 
-import design.Styles.Color exposing [Encoder]
+import design.Styles | Color exposing [Encoder]
 CE
 red : CE
 red = ... # not implemented
@@ -57,19 +65,13 @@ at 3:51 to 3:51
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

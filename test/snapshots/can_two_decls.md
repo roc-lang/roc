@@ -31,10 +31,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 a = 5
 b = a + 1
@@ -46,8 +43,17 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "a")
+    (Expr.num_literal_i32 5)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "b")
+    (Expr.binop_plus
+      (Expr.lookup "a")
+      (Expr.num_literal_i32 1)
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -56,4 +62,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+a : Num(_size)
+b : Num(_size)
 ~~~

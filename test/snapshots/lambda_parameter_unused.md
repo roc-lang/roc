@@ -169,20 +169,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 add : U64 -> U64
-add = \unused -> 42
+add = |unused| 42
 multiply : U64 -> U64
-multiply = \_factor -> _factor * 2
+multiply = |_factor| _factor * 2
 process : U64 -> U64
-process = \_input -> 100
+process = |_input| 100
 double : U64 -> U64
-double = \value -> value * 2
-main! = \_ -> {
+double = |value| value * 2
+main! = |_| {
 	result1 = add(5)
 	result2 = multiply(3)
 	result3 = process(7)
@@ -197,15 +194,54 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "add")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "multiply")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "multiply")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "double")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "double")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -214,4 +250,8 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+add : _a
+multiply : _a
+process : _a
+double : _a
 ~~~

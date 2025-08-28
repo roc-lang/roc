@@ -22,7 +22,7 @@ OpBar OpBar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-\ -> 1
+|| 1
 ~~~
 # EXPECTED
 NIL
@@ -30,14 +30,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.record_access)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -25,10 +25,7 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	f: "" platform [],
-}
+app { f: "" platform [] }
 
 {
 	o : 0
@@ -46,17 +43,13 @@ at 1:20 to 2:5
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.block
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

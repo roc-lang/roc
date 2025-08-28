@@ -65,7 +65,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 module [foo]
 
 foo : U64 -> Result (Str, [TooBig])
-foo = \num -> {
+foo = |num| {
 	str = if num > 10
 		{
 			return Err(TooBig)
@@ -84,15 +84,13 @@ at 5:11 to 5:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

@@ -156,51 +156,63 @@ at 16:5 to 16:5
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
+  (Expr.binop_equals
+    (Expr.lookup "value1")
+    (Expr.str_literal_small)
+  )
+  (Expr.apply_tag)
+  (Expr.lookup "is")
+  (Expr.lookup "a")
   (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
-  (Expr.str_literal_small)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
-  (Expr.malformed)
-  (Expr.block
+  (Expr.lookup "just")
+  (Expr.lookup "one")
+  (Expr.lookup "line")
+  (Expr.binop_equals
+    (Expr.lookup "value2")
     (Expr.str_literal_big)
   )
+  (Expr.apply_tag)
+  (Expr.lookup "is")
+  (Expr.lookup "a")
+  (Expr.str_literal_big)
   (Expr.malformed)
-  (Expr.str_literal_small)
+  (Expr.lookup "just")
+  (Expr.lookup "one")
+  (Expr.lookup "line")
+  (Expr.binop_equals
+    (Expr.lookup "value3")
+    (Expr.str_literal_big)
+  )
+  (Expr.apply_tag)
+  (Expr.lookup "is")
+  (Expr.lookup "a")
+  (Expr.lookup "string")
   (Expr.str_literal_big)
+  (Expr.apply_tag)
+  (Expr.lookup "multiple")
+  (Expr.lookup "lines")
   (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
-  (Expr.str_literal_small)
-  (Expr.str_literal_big)
-  (Expr.str_literal_big)
-  (Expr.binop_lte)
   (Expr.malformed)
   (Expr.block
+    (Expr.lookup "value1")
+  )
+  (Expr.binop_equals
+    (Expr.lookup "value4")
     (Expr.str_literal_big)
+  )
+  (Expr.apply_tag)
+  (Expr.lookup "is")
+  (Expr.lookup "a")
+  (Expr.lookup "string")
+  (Expr.str_literal_big)
+  (Expr.apply_tag)
+  (Expr.lookup "multiple")
+  (Expr.lookup "lines")
+  (Expr.str_literal_big)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.lookup "value2")
   )
 )
 ~~~
@@ -210,4 +222,8 @@ at 16:5 to 16:5
 ~~~
 # TYPES
 ~~~roc
+value1 : Str
+value2 : Str
+value3 : Str
+value4 : Str
 ~~~

@@ -51,8 +51,8 @@ OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-\base -> {
-	simple = \x -> (base + x) + 1
+|base| {
+	simple = |x| (base + x) + 1
 	simple(1)
 }(1)
 ~~~
@@ -62,11 +62,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag binop_equals :type "_a")
 ~~~
 # TYPES
 ~~~roc

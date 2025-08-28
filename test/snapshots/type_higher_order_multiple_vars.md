@@ -79,26 +79,49 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 compose :
 	((_b -> _c) -> _a -> _b) -> _a -> _c
-compose = \(f, g) -> \x -> f(g(x))
-main! = \_ -> {  }
+compose = |f, g| |x| f(g(x))
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 4:12 to 4:16
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "compose")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "_b")
+          (Expr.lookup "_c")
+        )
+        (Expr.binop_thin_arrow
+          (Expr.lookup "_a")
+          (Expr.lookup "_b")
+        )
+      )
+      (Expr.binop_thin_arrow
+        (Expr.lookup "_a")
+        (Expr.lookup "_c")
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "compose")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -107,4 +130,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+compose : _a
 ~~~

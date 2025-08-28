@@ -80,7 +80,7 @@ module []
 
 x = 5
 y = 10
-outerFunc = \_ -> {
+outerFunc = |_| {
 	x = 20 # Should shadow top-level x
 	innerResult = {
 				# Block scope
@@ -97,9 +97,18 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 5)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "y")
+    (Expr.num_literal_i32 10)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "outerFunc")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -108,4 +117,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+y : Num(_size)
+outerFunc : _a
 ~~~

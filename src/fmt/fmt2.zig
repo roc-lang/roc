@@ -148,7 +148,7 @@ const Formatter = struct {
                 _ = try self.flushCommentsBeforeToken(a.region);
                 try self.pushAll("app");
 
-                // Format exports list if present
+                // Format exports list BEFORE packages
                 if (a.exposes != collections.NodeSlices(Node.Idx).Idx.NIL) {
                     try self.pushAll(" ");
                     try self.formatExposedList(a.exposes);
@@ -159,32 +159,16 @@ const Formatter = struct {
                 var needs_multiline = false;
 
                 if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
-                    // Use multiline if:
-                    // 1. We have multiple packages
-                    // 2. Any package has a platform clause (complex structure)
-                    // 3. There are comments in the header region
-
+                    // Use multiline only if we have multiple packages
+                    // Single package with platform clause should stay on one line
                     var package_count: usize = 0;
-                    var has_platform_clause = false;
 
                     var check_it = self.ast.node_slices.nodes(&packages_idx);
-                    while (check_it.next()) |pkg| {
+                    while (check_it.next()) |_| {
                         package_count += 1;
-                        const pkg_node = self.getNode(pkg);
-                        if (pkg_node.tag == .binop_colon) {
-                            const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
-                            const value_node = self.getNode(binop.rhs);
-                            if (value_node.tag == .binop_platform) {
-                                has_platform_clause = true;
-                            }
-                        }
                     }
 
-                    // Check for comments by examining if tokens were collected
-                    // (tokens are only collected when comments are present)
-                    const has_comments = self.tokens.items.len > 0;
-
-                    needs_multiline = package_count > 1 or has_platform_clause or has_comments;
+                    needs_multiline = package_count > 1;
                 }
 
                 if (needs_multiline) {
@@ -257,6 +241,7 @@ const Formatter = struct {
                             const pkg_node = self.getNode(pkg);
                             if (pkg_node.tag == .binop_colon) {
                                 const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
+
                                 try self.formatNode(binop.lhs);
                                 try self.pushAll(": ");
                                 const value_node = self.getNode(binop.rhs);
@@ -473,9 +458,25 @@ const Formatter = struct {
             .binop_and => try self.formatBinOp(node_idx, " && "),
             .binop_or => try self.formatBinOp(node_idx, " || "),
             .binop_as => try self.formatBinOp(node_idx, " as "),
+            .binop_exposing => try self.formatBinOp(node_idx, " exposing "),
             .binop_where => try self.formatWhereClause(node_idx),
             .binop_platform => try self.formatBinOp(node_idx, " platform "),
-            .binop_pipe => try self.formatBinOp(node_idx, " | "),
+            .binop_pipe => {
+                // Check if this is a module field access pattern
+                const node = self.getNode(node_idx);
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                const lhs_node = self.getNode(binop.lhs);
+                const rhs_node = self.getNode(binop.rhs);
+
+                // If LHS is apply_module and RHS is dot_lc, format as module field access
+                if (lhs_node.tag == .apply_module and rhs_node.tag == .dot_lc) {
+                    try self.formatNode(binop.lhs);
+                    try self.formatNode(binop.rhs);
+                } else {
+                    // Regular pipe for pattern alternatives
+                    try self.formatBinOp(node_idx, " | ");
+                }
+            },
 
             // Identifiers
             .uc => try self.formatIdent(node_idx),
@@ -502,7 +503,7 @@ const Formatter = struct {
                 try self.formatIdent(node_idx);
             },
             .ellipsis => try self.pushAll("..."),
-            .import => try self.formatImportStatement(node_idx),
+            .import => try self.formatImport(node_idx),
             .expect => try self.formatExpectStatement(node_idx),
 
             // Literals - format from source to preserve underscores
@@ -681,10 +682,8 @@ const Formatter = struct {
                 }
 
                 if (multiline) {
-                    // Preserve trailing comma if it exists
-                    if (self.hasTrailingComma(rhs)) {
-                        try self.push(',');
-                    }
+                    // Always add trailing comma in multiline mode
+                    try self.push(',');
                     self.curr_indent_level -= 1;
                     try self.ensureNewline();
                     try self.pushIndent();
@@ -972,13 +971,47 @@ const Formatter = struct {
 
         // Type applications store the constructor and arguments
         var it = self.ast.node_slices.nodes(&node.payload.nodes);
-        var first = true;
+
+        // First is the type constructor
+        if (it.next()) |constructor| {
+            try self.formatNode(constructor);
+        }
+
+        // Check if there's exactly one argument and it's a tuple_literal
+        // If so, format the tuple's contents directly with parens
+        var args_slice = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = args_slice.next(); // Skip constructor
+        const first_arg_opt = args_slice.next();
+        const has_more = args_slice.next() != null;
+
+        if (first_arg_opt) |first_arg| {
+            if (!has_more) {
+                // Only one argument - check if it's a tuple
+                const arg_node = self.getNode(first_arg);
+                if (arg_node.tag == .tuple_literal) {
+                    // Format tuple contents directly with single parens
+                    try self.push('(');
+                    var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                    var first_tuple_elem = true;
+                    while (tuple_it.next()) |elem| {
+                        if (!first_tuple_elem) {
+                            try self.pushAll(", ");
+                        }
+                        first_tuple_elem = false;
+                        try self.formatTypeExpression(elem);
+                    }
+                    try self.push(')');
+                    return;
+                }
+            }
+        }
+
+        // Normal case: space-separated type arguments
+        it = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = it.next(); // Skip constructor again
 
         while (it.next()) |elem| {
-            if (!first) {
-                try self.push(' ');
-            }
-            first = false;
+            try self.push(' ');
 
             // Check if argument needs parentheses (e.g., function types as arguments)
             const elem_node = self.getNode(elem);
@@ -1125,124 +1158,70 @@ const Formatter = struct {
         }
     }
 
-    fn formatImportStatement(self: *Formatter, node_idx: Node.Idx) !void {
+    fn formatImport(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
+
+        // New import structure: the import node contains a single child
+        // which is either:
+        // - A simple path node (e.g., pf.Task)
+        // - A binop_as node (e.g., pf.Task as Task)
+        // - A binop_exposing node (e.g., pf.Task exposing [Task, await])
 
         try self.pushAll("import ");
 
-        // The parser now creates a more structured import:
-        // 1. String literal or module path components
-        // 2. Optional alias node (might be binop_colon if it has a type annotation)
-        // 3. Optional exposed items
-
+        // Get the single child node - imports use import_nodes field
         var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
-        var nodes = std.ArrayList(Node.Idx).init(self.allocator);
-        defer nodes.deinit();
+        if (it.next()) |child_idx| {
+            const child = self.getNode(child_idx);
 
-        while (it.next()) |item| {
-            try nodes.append(item);
-        }
-
-        if (nodes.items.len == 0) return;
-
-        // Parse the import structure
-        var path_components = std.ArrayList(Node.Idx).init(self.allocator);
-        defer path_components.deinit();
-        var alias_node: ?Node.Idx = null;
-        var exposing_items = std.ArrayList(Node.Idx).init(self.allocator);
-        defer exposing_items.deinit();
-
-        // State machine for parsing import structure
-        const State = enum { path, after_as, after_exposing };
-        var state: State = .path;
-
-        for (nodes.items, 0..) |node_idx_item, idx| {
-            const curr_node = self.getNode(node_idx_item);
-
-            // Check if this is an alias node (binop_colon means it has type annotation)
-            if (curr_node.tag == .binop_colon) {
-                // This is "alias : Type" - it's the alias node
-                alias_node = node_idx_item;
-                state = .after_as;
-                continue;
-            }
-
-            // Check source between previous node and current node for keywords
-            if (idx > 0) {
-                const prev_node_idx = nodes.items[idx - 1];
-                const prev_node = self.getNode(prev_node_idx);
-                const prev_end = prev_node.region.end.offset;
-                const curr_start = curr_node.region.start.offset;
-
-                if (prev_end < curr_start) {
-                    const between = self.source[prev_end..curr_start];
-
-                    // Look for "as" keyword
-                    if (std.mem.indexOf(u8, between, " as ") != null) {
-                        state = .after_as;
-                    }
-                    // Look for "exposing" keyword
-                    else if (std.mem.indexOf(u8, between, " exposing") != null) {
-                        state = .after_exposing;
-                    }
-                }
-            }
-
-            // Place node in appropriate category based on state
-            switch (state) {
-                .path => {
-                    // String imports are single nodes
-                    if (curr_node.tag == .str_literal_small or curr_node.tag == .str_literal_big) {
-                        try path_components.append(node_idx_item);
-                        // After a string import, next might be alias
-                        continue;
-                    }
-                    try path_components.append(node_idx_item);
+            switch (child.tag) {
+                .binop_as => try self.formatImportWithAs(child_idx),
+                .binop_exposing => try self.formatImportWithExposing(child_idx),
+                else => {
+                    // Simple path import
+                    try self.formatNode(child_idx);
                 },
-                .after_as => {
-                    if (alias_node == null) {
-                        alias_node = node_idx_item;
-                        // After alias, check if we have exposing
-                        state = .path; // Reset to look for exposing
-                    } else {
-                        // This shouldn't happen but handle it
-                        try exposing_items.append(node_idx_item);
-                    }
-                },
-                .after_exposing => try exposing_items.append(node_idx_item),
             }
         }
+    }
+
+    fn formatImportWithAs(self: *Formatter, node_idx: Node.Idx) !void {
+        // binop_as node: lhs is the path (or binop_exposing), rhs is the alias
+        const binop = self.ast.binOp(node_idx);
+
+        // Check if lhs is binop_exposing (import path exposing [...] as alias)
+        const lhs_node = self.getNode(binop.lhs);
+        if (lhs_node.tag == .binop_exposing) {
+            // Format: path exposing [...] as alias
+            try self.formatImportWithExposing(binop.lhs);
+        } else {
+            // Format: path as alias
+            try self.formatNode(binop.lhs);
+        }
+
+        try self.pushAll(" as ");
+        try self.formatNode(binop.rhs);
+    }
+
+    fn formatImportWithExposing(self: *Formatter, node_idx: Node.Idx) !void {
+        // binop_exposing node: lhs is the path, rhs is the exposing list
+        const binop = self.ast.binOp(node_idx);
 
         // Format the module path
-        for (path_components.items, 0..) |path_node, idx| {
-            if (idx > 0) {
-                const curr = self.getNode(path_node);
-                // Only add dot if not a string literal (they include their own dot)
-                if (curr.tag != .str_literal_small and curr.tag != .str_literal_big) {
-                    try self.push('.');
-                }
-            }
-            try self.formatNode(path_node);
-        }
+        try self.formatNode(binop.lhs);
 
-        // Format alias if present
-        if (alias_node) |alias| {
-            try self.pushAll(" as ");
-            try self.formatNode(alias);
-        }
+        try self.pushAll(" exposing ");
 
-        // Format exposing clause if present
-        if (exposing_items.items.len > 0) {
-            try self.pushAll(" exposing [");
-
-            for (exposing_items.items, 0..) |exposed, idx| {
-                if (idx > 0) {
-                    try self.pushAll(", ");
-                }
-                try self.formatNode(exposed);
-            }
-
-            try self.push(']');
+        // The rhs should be a list of exposed items
+        const rhs_node = self.getNode(binop.rhs);
+        if (rhs_node.tag == .list_literal) {
+            // Format as list
+            try self.formatNode(binop.rhs);
+        } else {
+            // Single exposed item or other structure
+            try self.pushAll("[");
+            try self.formatNode(binop.rhs);
+            try self.pushAll("]");
         }
     }
 
@@ -1369,12 +1348,10 @@ const Formatter = struct {
         }
 
         if (multiline) {
-            // Preserve trailing comma if it exists
-            if (self.hasTrailingComma(node_idx)) {
-                try self.push(',');
-                // Check for comment after trailing comma
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
-            }
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            // Check for comment after trailing comma
+            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing bracket
             _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
@@ -1448,12 +1425,10 @@ const Formatter = struct {
         }
 
         if (multiline) {
-            // Preserve trailing comma if it exists
-            if (self.hasTrailingComma(node_idx)) {
-                try self.push(',');
-                // Check for comment after trailing comma
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
-            }
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            // Check for comment after trailing comma
+            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing brace
             _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
@@ -1471,7 +1446,37 @@ const Formatter = struct {
         // Check if this tuple should be multiline
         const multiline = self.collectionIsMultiline(node_idx);
 
-        try self.push('(');
+        // Check if this tuple contains a where clause type - if so, don't add parens
+        const nodes_idx = node.payload.nodes;
+        var has_where_type = false;
+        if (!nodes_idx.isNil()) {
+            var check_it = self.ast.node_slices.nodes(&nodes_idx);
+            while (check_it.next()) |child| {
+                const child_node = self.getNode(child);
+                // Check for type with where clause
+                if (child_node.tag == .binop_thin_arrow) {
+                    const arrow_binop = self.ast.node_slices.binOp(child_node.payload.binop);
+                    const lhs_node = self.getNode(arrow_binop.lhs);
+                    if (lhs_node.tag == .binop_where) {
+                        has_where_type = true;
+                        break;
+                    }
+                }
+                // Also check for binop_pipe which indicates module constraints
+                if (child_node.tag == .binop_pipe) {
+                    const pipe_binop = self.ast.node_slices.binOp(child_node.payload.binop);
+                    const pipe_lhs = self.getNode(pipe_binop.lhs);
+                    if (pipe_lhs.tag == .apply_module) {
+                        has_where_type = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!has_where_type) {
+            try self.push('(');
+        }
 
         if (multiline) {
             self.curr_indent_level += 1;
@@ -1518,16 +1523,16 @@ const Formatter = struct {
         }
 
         if (multiline) {
-            // Preserve trailing comma if it exists
-            if (self.hasTrailingComma(node_idx)) {
-                try self.push(',');
-            }
+            // Always add trailing comma in multiline mode
+            try self.push(',');
             self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
 
-        try self.push(')');
+        if (!has_where_type) {
+            try self.push(')');
+        }
     }
 
     fn formatBlockContents(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1885,10 +1890,40 @@ const Formatter = struct {
             try self.formatNode(constructor);
         }
 
-        // Check if there are arguments
-        var has_args = false;
+        // Check if there's exactly one argument and it's a tuple_literal
+        // If so, format the tuple's contents directly without double parens
+        var args_slice = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = args_slice.next(); // Skip constructor
+        const first_arg_opt = args_slice.next();
+        const has_more = args_slice.next() != null;
 
-        // Collect arguments
+        if (first_arg_opt) |first_arg| {
+            if (!has_more) {
+                // Only one argument - check if it's a tuple
+                const arg_node = self.getNode(first_arg);
+                if (arg_node.tag == .tuple_literal) {
+                    // Format tuple contents directly with single parens
+                    try self.push('(');
+                    var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                    var first_tuple_elem = true;
+                    while (tuple_it.next()) |elem| {
+                        if (!first_tuple_elem) {
+                            try self.pushAll(", ");
+                        }
+                        first_tuple_elem = false;
+                        try self.formatPattern(elem);
+                    }
+                    try self.push(')');
+                    return;
+                }
+            }
+        }
+
+        // Normal case: format arguments with parentheses
+        it = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = it.next(); // Skip constructor again
+
+        var has_args = false;
         var first_arg = true;
         while (it.next()) |arg| {
             if (first_arg) {
@@ -2032,7 +2067,7 @@ const Formatter = struct {
         // Check if lambda args should be multiline based on trailing comma
         const multiline = self.hasTrailingComma(node_idx);
 
-        try self.pushAll("\\");
+        try self.pushAll("|");
 
         // Lambda nodes use body_then_args which stores body first, then args
         var it = self.ast.node_slices.nodes(&node.payload.body_then_args);
@@ -2047,6 +2082,35 @@ const Formatter = struct {
         // Format arguments
         var first_arg = true;
         while (it.next()) |arg| {
+            const arg_node = self.getNode(arg);
+
+            // Special case: if the argument is a tuple_literal in a lambda,
+            // format its elements as individual parameters without parentheses
+            if (arg_node.tag == .tuple_literal and first_arg) {
+                // This is the first (and likely only) argument and it's a tuple
+                // Format its elements as individual lambda parameters
+                var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                var first_param = true;
+                while (tuple_it.next()) |param| {
+                    if (multiline) {
+                        if (!first_param) {
+                            try self.push(',');
+                        }
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    } else {
+                        if (!first_param) {
+                            try self.pushAll(", ");
+                        }
+                    }
+                    first_param = false;
+                    try self.formatNode(param);
+                }
+                first_arg = false;
+                continue;
+            }
+
+            // Normal case: single parameter
             if (multiline) {
                 if (!first_arg) {
                     try self.push(',');
@@ -2063,16 +2127,14 @@ const Formatter = struct {
         }
 
         if (multiline) {
-            // Preserve trailing comma if it exists
-            if (self.hasTrailingComma(node_idx)) {
-                try self.push(',');
-            }
+            // Always add trailing comma in multiline mode
+            try self.push(',');
             self.curr_indent_level -= 1;
             try self.ensureNewline();
             try self.pushIndent();
         }
 
-        try self.pushAll(" -> ");
+        try self.pushAll("| ");
 
         // Format body
         if (body) |body_node| {
@@ -2092,7 +2154,16 @@ const Formatter = struct {
 
         // First node is the function
         if (iter.next()) |func| {
+            const func_node = self.getNode(func);
+            // Lambdas need parentheses when applied
+            const needs_parens = func_node.tag == .lambda;
+            if (needs_parens) {
+                try self.push('(');
+            }
             try self.formatNode(func);
+            if (needs_parens) {
+                try self.push(')');
+            }
         }
 
         // Format arguments in parentheses
@@ -2462,19 +2533,35 @@ const Formatter = struct {
         var end = start;
 
         // Scan forward to find the end of the number
-        // Numbers can contain digits, underscores, dots (for fractions), and hex letters
+        // Numbers can contain digits, underscores, dots (for fractions), hex/binary/octal letters
         while (end < self.source.len) {
             const c = self.source[end];
-            if (std.ascii.isHex(c) or c == '_' or c == '.' or c == 'x' or c == 'e' or c == 'E' or c == '+' or c == '-') {
+            // Include hex digits, binary/octal/hex prefixes, underscores, decimal points, and scientific notation
+            if (std.ascii.isHex(c) or c == '_' or c == '.' or
+                c == 'x' or c == 'X' or // Hex prefix
+                c == 'b' or c == 'B' or // Binary prefix
+                c == 'o' or c == 'O' or // Octal prefix
+                c == 'e' or c == 'E' or // Scientific notation
+                c == '+' or c == '-')
+            { // Exponent sign
                 end += 1;
             } else {
                 break;
             }
         }
 
-        // Now format it, collapsing multiple underscores
+        // Now format it, collapsing multiple underscores and fixing uppercase base prefixes
         var i = start;
         var last_was_underscore = false;
+        var is_at_base_prefix = false;
+
+        // Check if this is a number with a base prefix (0x, 0X, 0b, 0B, 0o, 0O)
+        if (end - start > 2 and self.source[start] == '0') {
+            const second_char = self.source[start + 1];
+            is_at_base_prefix = (second_char == 'X' or second_char == 'B' or second_char == 'O' or
+                second_char == 'x' or second_char == 'b' or second_char == 'o');
+        }
+
         while (i < end) : (i += 1) {
             const c = self.source[i];
             if (c == '_') {
@@ -2483,7 +2570,22 @@ const Formatter = struct {
                     last_was_underscore = true;
                 }
             } else {
-                try self.push(c);
+                // Convert uppercase base prefixes to lowercase
+                if (is_at_base_prefix and i == start + 1) {
+                    // This is the base prefix character
+                    if (c == 'X') {
+                        try self.push('x');
+                    } else if (c == 'B') {
+                        try self.push('b');
+                    } else if (c == 'O') {
+                        try self.push('o');
+                    } else {
+                        try self.push(c);
+                    }
+                    is_at_base_prefix = false; // Only convert the prefix, not hex digits
+                } else {
+                    try self.push(c);
+                }
                 last_was_underscore = false;
             }
         }
@@ -2612,9 +2714,29 @@ const Formatter = struct {
     }
 
     fn collectionIsMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
-        // Collections are multiline ONLY if they have a trailing comma
+        // Collections are multiline if:
+        // 1. They have a trailing comma, OR
+        // 2. They contain inline comments
         // We DO NOT enforce line lengths in this formatter by design
-        return self.hasTrailingComma(node_idx);
+
+        // First check for trailing comma
+        if (self.hasTrailingComma(node_idx)) {
+            return true;
+        }
+
+        // Check if the collection contains any comments
+        const node = self.getNode(node_idx);
+        if (node.region.start.offset < node.region.end.offset and
+            node.region.end.offset <= self.source.len)
+        {
+            const collection_text = self.source[node.region.start.offset..node.region.end.offset];
+            // If there's a comment inside the collection, use multiline formatting
+            if (std.mem.indexOf(u8, collection_text, "#") != null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     fn hasTrailingComma(self: *const Formatter, node_idx: Node.Idx) bool {
@@ -2625,12 +2747,56 @@ const Formatter = struct {
         const end_estimate = node.region.end.offset;
 
         if (end_estimate <= start or end_estimate > self.source.len) {
+            // For tuples, if the region is incomplete, try to find the closing paren
+            if (node.tag == .tuple_literal and start < self.source.len) {
+                // Scan forward from the end of the known region to find the closing paren
+                var scan_pos = if (end_estimate <= self.source.len) end_estimate else start;
+                var depth: i32 = 0;
+
+                while (scan_pos < self.source.len) {
+                    const c = self.source[scan_pos];
+                    if (c == '(') {
+                        depth += 1;
+                    } else if (c == ')') {
+                        if (depth == 0) {
+                            // Found the closing paren
+                            // Now check backward for a comma
+                            var i = scan_pos;
+                            while (i > start) {
+                                i -= 1;
+                                const prev_c = self.source[i];
+                                if (prev_c == ',') {
+                                    return true;
+                                } else if (prev_c != ' ' and prev_c != '\t' and prev_c != '\n' and prev_c != '\r') {
+                                    // Found non-whitespace that's not a comma
+                                    return false;
+                                }
+                            }
+                            return false;
+                        }
+                        depth -= 1;
+                    }
+                    scan_pos += 1;
+                }
+            }
             return false;
         }
 
         // Single backward scan to find both delimiter and comma
         var i = end_estimate;
         var found_delimiter = false;
+
+        // For tuples, if we haven't found a closing paren at the end, look forward a bit
+        if (node.tag == .tuple_literal and i < self.source.len and self.source[i - 1] != ')') {
+            // Scan forward to find the real end
+            while (i < self.source.len and i < end_estimate + 10) {
+                if (self.source[i] == ')') {
+                    i += 1; // Include the paren
+                    break;
+                }
+                i += 1;
+            }
+        }
 
         while (i > start) {
             i -= 1;
@@ -2716,6 +2882,7 @@ const Formatter = struct {
             .binop_thin_arrow => .{ .left = 2, .right = 3 },
             .binop_thick_arrow => .{ .left = 1, .right = 2 },
             .binop_as => .{ .left = 3, .right = 4 },
+            .binop_exposing => .{ .left = 3, .right = 4 },
             .binop_where => .{ .left = 1, .right = 2 },
             .binop_platform => .{ .left = 3, .right = 4 },
             else => .{ .left = 0, .right = 0 },

@@ -63,15 +63,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 apply :
 	((_a -> _b) -> _a) -> _b
-apply = \(fn, x) -> fn(x)
-main! = \_ -> {  }
+apply = |fn, x| fn(x)
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -80,9 +77,27 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "apply")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "_a")
+          (Expr.lookup "_b")
+        )
+        (Expr.lookup "_a")
+      )
+      (Expr.lookup "_b")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "apply")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -91,4 +106,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+apply : _a
 ~~~

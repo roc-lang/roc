@@ -37,7 +37,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -46,4 +49,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

@@ -16,8 +16,10 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent OpenSquare Lo
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
   )
   (list_literal
     (lc "foo")
@@ -38,15 +40,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_or)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

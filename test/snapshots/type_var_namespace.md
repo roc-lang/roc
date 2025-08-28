@@ -88,13 +88,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 process : List elem -> elem
-process = \list -> {
+process = |list| {
 		# value identifier named 'elem' is allowed - different namespace from type variable
 elem = 42
 	result : elem
@@ -102,7 +99,7 @@ elem = 42
 	 | .withDefault(elem)
 	result
 }
-main! = \_ -> {  }
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -113,12 +110,30 @@ at 11:32 to 11:32
 **Parse Error**
 at 11:34 to 11:34
 
+**Unsupported Node**
+at 11:14 to 11:18
+
+**Unsupported Node**
+at 11:34 to 11:34
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.lookup "elem")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -127,4 +142,5 @@ at 11:34 to 11:34
 ~~~
 # TYPES
 ~~~roc
+process : _a
 ~~~

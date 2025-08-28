@@ -58,7 +58,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 module [foo]
 
 foo : Bool -> Bool
-foo = \a -> {
+foo = |a| {
 	expect a == Bool.True
 	a : a
 }
@@ -69,15 +69,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
+(expr :tag record_access :type "_b")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

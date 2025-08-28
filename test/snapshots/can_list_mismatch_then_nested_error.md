@@ -31,13 +31,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_or)
+(Expr.list_literal)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_or :type "[True, False]_others")
+(expr :tag list_literal :type "List(_a)")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+List(_a)
 ~~~

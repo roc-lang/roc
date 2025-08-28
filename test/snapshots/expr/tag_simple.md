@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.str_literal_small)
+(Expr.str_literal_big)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_literal_small :type "Str")
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
 ~~~roc

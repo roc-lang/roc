@@ -132,22 +132,19 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 testEllipsis : U64 -> U64
-testEllipsis = \_ -> ...
+testEllipsis = |_| ...
 testCrash : U64 -> U64
-testCrash = \_ -> {
+testCrash = |_| {
 	crash "This is a crash message"
 }
 testCrashSimple : U64 -> U64
-testCrashSimple = \_ -> {
+testCrashSimple = |_| {
 	crash "oops"
 }
-main! = \_ -> {
+main! = |_| {
 	result1 = testEllipsis(42)
 	result2 = testCrash(42)
 	result3 = testCrashSimple(42)
@@ -157,17 +154,52 @@ main! = \_ -> {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 10:2 to 10:33
+
+**Unsupported Node**
+at 16:2 to 16:14
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "testEllipsis")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "testEllipsis")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "testCrash")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "testCrash")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "testCrashSimple")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "testCrashSimple")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -176,4 +208,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+testEllipsis : _a
+testCrash : _a
+testCrashSimple : _a
 ~~~

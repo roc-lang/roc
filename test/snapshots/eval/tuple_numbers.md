@@ -9,7 +9,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenRound Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int Comma Float Comma Int Underscore Int Comma Int Underscore Int Underscore Int Comma Float Comma OpUnaryMinus Float Comma Float Comma Float Comma OpUnaryMinus Float CloseRound ~~~
+OpenRound Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comma Int Underscore Int Comma Int Underscore Int Underscore Int Comma Float Comma OpUnaryMinus Float Comma Float Comma Float Comma OpUnaryMinus Float CloseRound ~~~
 # PARSE
 ~~~clojure
 (num_literal_i32 1)
@@ -26,11 +26,11 @@ at 1:3 to 1:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_star)
+(Expr.binop_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_star :type "Num(_size)")
+(expr :tag binop_slash :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc

@@ -26,13 +26,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.str_literal_big)
+(Expr.str_interpolation)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_literal_big :type "Str")
+(expr :tag str_interpolation :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Str
+_a
 ~~~

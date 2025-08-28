@@ -21,30 +21,58 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenRound Int UpperIdent Comma Int LowerIdent Comma Int UpperIdent Comma Int LowerIdent Comma Int UpperIdent Comma Int LowerIdent Comma Float Comma Float Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma CloseRound ~~~
+OpenRound Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comma Float Comma Int Comma Int Comma Int Comma CloseRound ~~~
 # PARSE
 ~~~clojure
-(num_literal_i32 0)
+(tuple_literal
+  (num_literal_big big:<idx:0>)
+  (num_literal_big big:<idx:5>)
+  (num_literal_big big:<idx:10>)
+  (num_literal_big big:<idx:15>)
+  (num_literal_big big:<idx:20>)
+  (num_literal_big big:<idx:25>)
+  (frac_literal_big big:<idx:30>)
+  (frac_literal_big big:<idx:37>)
+  (num_literal_big big:<idx:44>)
+  (num_literal_big big:<idx:55>)
+  (num_literal_big big:<idx:66>)
+  (malformed malformed:expr_unexpected_token)
+)
 ~~~
 # FORMATTED
 ~~~roc
-0
+(
+	0x42,
+	0x42,
+	0b01,
+	0b01,
+	0o42,
+	0o42,
+	0.1e42,
+	0.1E42,
+	0xDEADBEEF,
+	0xdeadbeef,
+	0xDeAdBeEf,
+)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:6 to 2:6
+at 13:1 to 13:1
+
+**Parse Error**
+at 13:2 to 13:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_star)
+(Expr.binop_double_slash)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_star :type "Num(_size)")
+(expr :tag binop_double_slash :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+_a
 ~~~

@@ -54,11 +54,11 @@ at 8:8 to 8:8
 
 # CANONICALIZE
 ~~~clojure
-(Expr.dot_num)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag dot_num :type "_e")
+(expr :tag match :type "_e")
 ~~~
 # TYPES
 ~~~roc

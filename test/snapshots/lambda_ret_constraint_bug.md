@@ -71,27 +71,47 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "platform/main.roc" platform [main],
-}
+app { pf: "platform/main.roc" platform [main] }
 
 helper : I64 -> I64
-helper = \n -> n * 2
+helper = |n| n * 2
 main : I64 -> I64 -> I64
-main = \(_, _) -> helper(5)
+main = |_, _| helper(5)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 7:9 to 7:13
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "helper")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "helper")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "main")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -100,4 +120,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+helper : _a
+main : _a
 ~~~

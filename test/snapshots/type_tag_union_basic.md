@@ -127,18 +127,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 process : [Some(Str), None] -> Str
-process = \maybe -> "result"
+process = |maybe| "result"
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
-is_ok_ret_unqualified_bool = \result -> match result
+is_ok_ret_unqualified_bool = |result| match result
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
-is_ok_ret_bool = \result -> match result
-main! = \_ -> {  }
+is_ok_ret_bool = |result| match result
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -158,13 +155,43 @@ at 15:12 to 15:12
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.list_literal)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "is_ok_ret_unqualified_bool")
+    (Expr.binop_thin_arrow
+      (Expr.list_literal)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "is_ok_ret_unqualified_bool")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "is_ok_ret_bool")
+    (Expr.binop_thin_arrow
+      (Expr.list_literal)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "is_ok_ret_bool")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -173,4 +200,7 @@ at 15:12 to 15:12
 ~~~
 # TYPES
 ~~~roc
+process : _a
+is_ok_ret_unqualified_bool : _a
+is_ok_ret_bool : _a
 ~~~

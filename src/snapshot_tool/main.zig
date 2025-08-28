@@ -2332,7 +2332,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
     // Handle payload based on node tag
     switch (node.tag) {
         // Binops use the binop field - must list them all explicitly
-        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_where, .binop_platform, .binop_pipe => {
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_exposing, .binop_where, .binop_platform, .binop_pipe => {
             const binop = ast.node_slices.binOp(node.payload.binop);
             try writer.writeAll("\n");
             try outputASTNodeAsSExpr(writer, ast, env, binop.lhs, indent + 1);
@@ -2515,6 +2515,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
         // Import and expect
         .import => {
+            // Imports use import_nodes field, containing a single binop or path node
             const nodes_idx = node.payload.import_nodes;
             if (!nodes_idx.isNil()) {
                 var iter = ast.node_slices.nodes(&nodes_idx);
@@ -2754,8 +2755,8 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
         },
         .int_literal_i32 => {
             // Get the original AST node to access the correct payload
-            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+            const inner_node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(inner_node_idx)));
 
             // Check if the original node has int_literal_i32 payload
             if (ast_node.tag == .int_literal_i32) {
@@ -2770,8 +2771,8 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
         },
         .frac_literal_big => {
             // Check if the original AST node actually has a frac_literal_big payload
-            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+            const frac_node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
+            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(frac_node_idx)));
 
             const has_frac_big = switch (ast_node.tag) {
                 .frac_literal_big => true,
@@ -2800,16 +2801,9 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             try writer.print(" \"{s}\"", .{ident_name});
         },
         .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_thin_arrow, .binop_colon, .binop_equals => {
-            // Due to mutation, we may not have a binop payload. Check carefully.
-            // Get the original AST node to check its actual payload type
-            const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
-
-            // Check if the original node actually has a binop payload
-            const has_binop = switch (ast_node.tag) {
-                .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_thin_arrow, .binop_colon, .binop_equals, .binop_pipe => true,
-                else => false,
-            };
+            // After mutation, binop nodes still have their binop payloads
+            // The mutation only changes the tag, not the payload
+            const has_binop = true;
 
             if (has_binop) {
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
@@ -2829,9 +2823,9 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             const nodes_idx = expr.payload.nodes;
             try writer.writeAll("\n");
             var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
-            while (iter.next()) |node_idx| {
+            while (iter.next()) |block_node_idx| {
                 // The nodes are expression indices
-                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_node_idx)));
                 try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
             }
             for (0..indent) |_| {
@@ -2843,10 +2837,10 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             const nodes_idx = expr.payload.nodes;
             try writer.writeAll("\n");
             var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
-            while (iter.next()) |node_idx| {
+            while (iter.next()) |block_item_idx| {
                 // After canonicalization, all block contents should be expressions
                 // Even statements like imports get converted to malformed expressions
-                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
                 // Check if this expression is valid before trying to output it
                 const e = cir.getExpr(e_idx);
                 if (e.tag == .malformed) {

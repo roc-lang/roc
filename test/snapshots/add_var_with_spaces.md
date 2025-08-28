@@ -37,7 +37,13 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "add2")
+    (Expr.binop_plus
+      (Expr.lookup "x")
+      (Expr.num_literal_i32 2)
+    )
+  )
 )
 ~~~
 # SOLVED
@@ -46,4 +52,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+add2 : Num(_size)
 ~~~

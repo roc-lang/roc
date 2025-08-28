@@ -81,14 +81,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 mapList : List a -> (a -> b) -> List b
-mapList = \(list, fn) -> list.map(fn)
-main! = \_ -> mapList([1, 2, 3, 4, 5])
+mapList = |list, fn| list.map(fn)
+main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED
 NIL
@@ -97,9 +94,27 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "mapList")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "mapList")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -108,4 +123,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+mapList : _c
 ~~~

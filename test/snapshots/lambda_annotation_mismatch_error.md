@@ -70,9 +70,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon U
 module [string_function, wrong_type_function]
 
 string_function : Str -> Str
-string_function = \x -> x + 42
+string_function = |x| x + 42
 wrong_type_function : I64 -> I64
-wrong_type_function = \x -> x * 3.14
+wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
 NIL
@@ -81,10 +81,28 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "string_function")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "string_function")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "wrong_type_function")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "wrong_type_function")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -93,4 +111,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+string_function : _a
+wrong_type_function : _a
 ~~~

@@ -96,16 +96,52 @@ tag_tuple : Value (_a, _b, _c)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 4:21 to 4:22
+
+**Pattern in Expression Context**
+at 7:36 to 7:37
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "foo")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "bar")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "baz")
+    (Expr.tuple_literal
+      (Expr.lookup "_a")
+      (Expr.lookup "_b")
+      (Expr.lookup "_c")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "tag_tuple")
+    (Expr.apply_tag)
+  )
 )
 ~~~
 # SOLVED

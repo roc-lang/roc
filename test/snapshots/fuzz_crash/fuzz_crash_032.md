@@ -50,8 +50,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
       (body
         (block
           (import
-            (uc "Color")
-            (uc "RGB")
+            (binop_pipe
+              (uc "Color")
+              (uc "RGB")
+            )
           )
           (match
             (scrutinee               (lc "color")
@@ -71,7 +73,7 @@ module [tus, r]
 
 LocalStatus : lue => Loc = [Pending, Complete]
 olor : _ -> tus
-olor = \color -> {
+olor = |color| {
 	import Color.RGB
 	match color
 }
@@ -90,16 +92,13 @@ at 10:10 to 10:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

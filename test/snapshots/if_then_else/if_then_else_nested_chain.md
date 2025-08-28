@@ -44,7 +44,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent 
 ~~~roc
 module [checkNumber]
 
-checkNumber = \num -> {
+checkNumber = |num| {
 	if num < 0
 		{
 			"negative"
@@ -77,7 +77,10 @@ at 8:9 to 8:22
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "checkNumber")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -86,4 +89,5 @@ at 8:9 to 8:22
 ~~~
 # TYPES
 ~~~roc
+checkNumber : _a
 ~~~

@@ -127,23 +127,13 @@ at 17:3 to 17:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.binop_not_equals)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_or)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

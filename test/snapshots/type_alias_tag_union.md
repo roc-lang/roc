@@ -145,20 +145,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/main.roc" platform [main],
-}
+app { pf: "../basic-cli/main.roc" platform [main] }
 
 MyResult((ok, err)) : [Good(ok), Bad(err)]
 process : MyResult (Str, I32) -> Str
-process = \_result -> "processed"
+process = |_result| "processed"
 Option(a) : [Some(a), None]
 getString : Option Str -> Str
-getString = \_opt -> "default"
+getString = |_opt| "default"
 getNumber : Option I32 -> I32
-getNumber = \_opt -> 0
-main! = \_ -> {  }
+getNumber = |_opt| 0
+main! = |_| {  }
 ~~~
 # EXPECTED
 NIL
@@ -167,15 +164,51 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "getString")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getString")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "getNumber")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getNumber")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -184,4 +217,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+process : _b
+getString : _b
+getNumber : _b
 ~~~

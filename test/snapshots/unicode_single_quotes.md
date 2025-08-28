@@ -258,6 +258,13 @@ at 23:1 to 23:1
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.malformed)
+    )
+  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -270,29 +277,31 @@ at 23:1 to 23:1
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.binop_colon)
-  (Expr.binop_colon)
+  (Expr.apply_ident)
+  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
   (Expr.str_literal_small)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon)
   (Expr.malformed)
-  (Expr.binop_not_equals)
   (Expr.malformed)
-  (Expr.binop_not_equals)
+  (Expr.lookup "ong")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "y")
+    (Expr.malformed)
+  )
   (Expr.malformed)
 )
 ~~~
@@ -302,4 +311,6 @@ at 23:1 to 23:1
 ~~~
 # TYPES
 ~~~roc
+x : _a
+y : Error
 ~~~

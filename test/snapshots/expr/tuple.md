@@ -28,11 +28,15 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_question)
+(Expr.tuple_literal
+  (Expr.num_literal_i32 1)
+  (Expr.str_literal_big)
+  (Expr.apply_tag)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_question :type "_a")
+(expr :tag tuple_literal :type "_a")
 ~~~
 # TYPES
 ~~~roc

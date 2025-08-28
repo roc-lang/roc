@@ -30,8 +30,12 @@ package [
 # Comment after exposed item
 	SomeType,
 ] packages { # Comment after packages open
-somePkg, (("../main.roc", # Comment after package
-other) : "../../other/main.roc")}
+somePkg, (
+	(
+		"../main.roc", # Comment after package
+		other,
+	) : "../../other/main.roc",
+)}
 
 ~~~
 # EXPECTED

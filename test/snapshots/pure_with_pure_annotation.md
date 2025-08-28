@@ -97,29 +97,55 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../basic-cli/platform.roc" platform [main],
-}
+app { pf: "../basic-cli/platform.roc" platform [main] }
 
 add : I32 -> I32 -> I32
-add = \(x, y) -> { x : x, y : y } | .x
+add = |x, y| { x : x, y : y } | .x
 double : I32 -> I32
-double = \x -> add((x, x))
+double = |x| add((x, x))
 main! = add((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 5:14 to 5:28
+
+**Unsupported Node**
+at 5:8 to 5:12
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "add")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "double")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "double")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED
@@ -128,4 +154,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+add : _a
+double : _a
 ~~~

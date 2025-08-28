@@ -53,7 +53,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 # FORMATTED
 ~~~roc
 x = 5
-y = \_ -> {
+y = |_| {
 	x = 10
 	x : x
 }({  }) # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
@@ -65,16 +65,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag record_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
+_a
 ~~~

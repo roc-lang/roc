@@ -358,6 +358,7 @@ pub const Node = struct {
         binop_and, //              and
         binop_or, //               or
         binop_as, //               as
+        binop_exposing, //         exposing (for imports)
         binop_where, //            where (for type constraints)
         binop_platform, //         platform (for app headers)
         binop_pipe, //             | for pattern alternatives (maybe we should replace this with `or`, not sure)
@@ -438,6 +439,7 @@ pub const Node = struct {
                 .binop_and,
                 .binop_or,
                 .binop_as,
+                .binop_exposing,
                 .binop_where,
                 .binop_platform,
                 .binop_pipe,

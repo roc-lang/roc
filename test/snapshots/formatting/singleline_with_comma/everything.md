@@ -44,13 +44,21 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~clojure
 (block
   (import
-    (uc "I1")
-    (uc "I11")
-    (uc "I12")
+    (binop_exposing
+      (uc "I1")
+      (list_literal
+        (uc "I11")
+        (uc "I12")
+      )
+    )
   )
   (import
-    (uc "I2")
-    (uc "I21")
+    (binop_exposing
+      (uc "I2")
+      (list_literal
+        (uc "I21")
+      )
+    )
   )
   (malformed malformed:expr_unexpected_token)
   (uc "Ias1")
@@ -244,19 +252,40 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
 ~~~roc
 module []
 
-import I1 exposing [I11, I12]
+import I1 exposing [
+	I11,
+	I12,
+]
 import I2 exposing [I21]
 Ias1
 I22
 Ias2
-A(a) : a where module(a) | .a1 : a -> a ->  -> (Str, module(a) | .a2) : a -> a ->  -> (Str, B(b)) : b where module(b) | .b1 : b -> b ->  -> (Str, module(b) | .b2) : b -> b ->  -> (
+A(a) : a where module(a) | .a1 : a -> a ->  -> (
+	Str,
+	module(a) | .a2,
+) : a -> a ->  -> (Str, B(b)) : b where module(b) | .b1 : b -> b ->  -> (
+	Str,
+	module(b) | .b2,
+) : b -> b ->  -> (
 	Str,
 	C(
-		(a, b) : (a, b),
+		(
+			a,
+			b,
+		) : (
+			a,
+			b,
+		),
 	),
 )
 D(
-	(a, b) : C (a, b),
+	(
+		a,
+		b,
+	) : C (
+		a,
+		b,
+	),
 )
 E :
 	{
@@ -379,28 +408,13 @@ at 31:2 to 31:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.binop_plus)
-  (Expr.binop_plus)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thin_arrow)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+# File does not contain a block of statements
 ~~~

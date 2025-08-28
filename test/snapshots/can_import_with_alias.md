@@ -18,9 +18,13 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
 ~~~clojure
 (block
   (import
-    (lc "json")
-    (uc "Json")
-    (uc "MyJson")
+    (binop_as
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (uc "MyJson")
+    )
   )
   (binop_equals
     (lc "main")
@@ -41,12 +45,20 @@ main = MyJson.decode
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:27
+
+**Unsupported Node**
+at 5:8 to 5:14
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_plus)
   (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
 )
 ~~~
 # SOLVED
@@ -55,4 +67,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

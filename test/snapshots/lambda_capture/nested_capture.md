@@ -53,7 +53,7 @@ OpenCurly LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar OpBar LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-f = \a -> \b -> a + b
+f = |a| |b| a + b
 g = f(10)
 g(5) # Expect: 15
 ~~~
@@ -63,16 +63,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.binop_thick_arrow)
-)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
+(expr :tag record_access :type "_c")
 ~~~
 # TYPES
 ~~~roc
+_c
 ~~~

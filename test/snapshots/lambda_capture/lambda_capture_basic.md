@@ -39,7 +39,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerI
 ~~~
 # FORMATTED
 ~~~roc
-\x -> \y -> x + y(1)(2)
+|x| |y| x + y(1)(2)
 ~~~
 # EXPECTED
 NIL
@@ -47,11 +47,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc

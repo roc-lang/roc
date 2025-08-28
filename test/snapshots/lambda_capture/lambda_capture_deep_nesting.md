@@ -78,7 +78,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar O
 ~~~
 # FORMATTED
 ~~~roc
-\a -> \b -> \c -> \d -> \e -> (((a + b) + c) + d) + e(1)(2)(3)(4)(5)
+|a| |b| |c| |d| |e| (((a + b) + c) + d) + e(1)(2)(3)(4)(5)
 ~~~
 # EXPECTED
 NIL
@@ -86,11 +86,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.binop_equals)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_f")
+(expr :tag binop_equals :type "_f")
 ~~~
 # TYPES
 ~~~roc

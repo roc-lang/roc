@@ -37,8 +37,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "x")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.unary_neg)
+  )
 )
 ~~~
 # SOLVED
@@ -47,4 +53,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
 ~~~
