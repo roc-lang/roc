@@ -193,15 +193,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-f : 
-
-
-UserId : U64
-
-ser : UserId -> Str
-getUser = |id| if  "big" else "l"
-
-ain! = |_| getUser(900)
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

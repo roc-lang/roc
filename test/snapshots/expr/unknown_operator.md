@@ -34,7 +34,7 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-1 + 
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

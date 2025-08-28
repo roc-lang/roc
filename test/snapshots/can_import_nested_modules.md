@@ -502,34 +502,7 @@ EndOfFile(27:1-27:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-import json.Parser
-
-import http.Client
-
-
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
-
-# Test multi-level value qualification
-authenticate : Str, Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login(user, pass)
-
-# Test deeply nested qualification
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
-processData = |advancedConfig, input|
-	Config.Parser.Advanced.parseWith(advancedConfig, input)
-
-# Test mixed qualification (exposed item + qualified)
-formatOutput : Str -> Str
-formatOutput = |text| padLeft(text, Config.defaultPadding)
-
-# Test qualified type in function signature
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-validateAuth = |creds| HttpAuth.validate(creds)
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

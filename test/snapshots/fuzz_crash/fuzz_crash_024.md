@@ -206,15 +206,7 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-pf : 
-
-
-# el
-t = 
-
-# el
-t = 0
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

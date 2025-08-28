@@ -98,10 +98,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-match numbers {
-	[] => acc
-	[first, .. as rest] => 0
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

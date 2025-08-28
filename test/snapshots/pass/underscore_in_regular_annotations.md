@@ -215,38 +215,7 @@ EndOfFile(32:1-32:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-main : _ -> _
-main = |x| x
-
-identity : a -> a
-identity = |x| x
-
-# Function with underscore in annotation
-process : List(_) -> Str
-process = |list| "processed"
-
-# Record with underscore
-get_data : { field : _, other : U32 } -> U32
-get_data = |record| record.other
-
-# Pattern matching with underscore type annotation
-handle_result : Result(_, Str) -> Str
-handle_result = |result|
-	match result {
-		Ok(_) => "success"
-		Err(msg) => msg
-	}
-
-# Underscore in function arguments
-map : (a -> b), List(a) -> List(b)
-map = |_, _| []
-
-# Named underscore type variables
-transform : _a -> _b
-
-transform = |_, b| b
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

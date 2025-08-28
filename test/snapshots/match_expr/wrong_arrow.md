@@ -74,10 +74,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-match l {
-	[] => Err(EmptyList)
-	[.., e] => Ok(e)
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

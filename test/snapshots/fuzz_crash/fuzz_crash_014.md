@@ -81,8 +81,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-
-
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

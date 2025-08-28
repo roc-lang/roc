@@ -68,7 +68,7 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-process_user! : 
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

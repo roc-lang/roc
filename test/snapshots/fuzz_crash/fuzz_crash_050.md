@@ -67,11 +67,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-_0 = {
-	
-
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

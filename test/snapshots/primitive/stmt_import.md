@@ -103,9 +103,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-import json.Json
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

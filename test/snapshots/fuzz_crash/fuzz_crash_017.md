@@ -119,8 +119,7 @@ EndOfFile(3:1-3:1),
 ~~~
 # FORMATTED
 ~~~roc
-
-foo = 
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

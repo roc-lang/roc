@@ -2043,39 +2043,42 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     var formatted = std.ArrayList(u8).init(output.gpa);
     defer formatted.deinit();
 
-    switch (content.meta.node_type) {
-        .file => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
-        },
-        .header => {
-            try fmt.formatHeader(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
-        },
-        .expr => {
-            try fmt.formatExpr(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
-        },
-        .statement => {
-            try fmt.formatStatement(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
-        },
-        .package => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
-        },
-        .platform => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
-        },
-        .app => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
-        },
-        .repl => {
-            // REPL doesn't use formatting
-            return;
-        },
-    }
+    var display_content: []const u8 = "MALFORMED INPUT\n";
+    if (parse_ast.parse_diagnostics.items.len == 0) {
+        switch (content.meta.node_type) {
+            .file => {
+                try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            },
+            .header => {
+                try fmt.formatHeader(parse_ast.*, formatted.writer().any());
+                try formatted.append('\n');
+            },
+            .expr => {
+                try fmt.formatExpr(parse_ast.*, formatted.writer().any());
+                try formatted.append('\n');
+            },
+            .statement => {
+                try fmt.formatStatement(parse_ast.*, formatted.writer().any());
+                try formatted.append('\n');
+            },
+            .package => {
+                try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            },
+            .platform => {
+                try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            },
+            .app => {
+                try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            },
+            .repl => {
+                // REPL doesn't use formatting
+                return;
+            },
+        }
 
-    const is_changed = !std.mem.eql(u8, formatted.items, content.source);
-    const display_content = if (is_changed) formatted.items else "NO CHANGE\n";
+        const is_changed = !std.mem.eql(u8, formatted.items, content.source);
+        display_content = if (is_changed) formatted.items else "NO CHANGE\n";
+    }
 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");

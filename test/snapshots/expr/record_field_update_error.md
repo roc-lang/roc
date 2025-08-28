@@ -84,10 +84,7 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-{
-	person
-		age : 
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -473,20 +473,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-{
-	
-	when : 
-			
-	expect 
-	"test assertion"
-	
-			"module load"
-	
-			Bool.true
-	
-			Bool.false
-	
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

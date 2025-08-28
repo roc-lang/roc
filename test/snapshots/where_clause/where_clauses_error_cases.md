@@ -169,21 +169,7 @@ EndOfFile(16:1-16:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [broken_fn1, broken_fn2, broken_fn3]
-
-# Missing colon in constraint
-broken_fn1 : a -> b
-	where
-		
-
-# Empty where clause
-broken_fn2 : a -> b
-	where 
-
-# Referencing undefined type variable
-broken_fn3 : a -> b
-	where
-		module(c).method : c -> d
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

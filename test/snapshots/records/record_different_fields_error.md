@@ -595,25 +595,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-{
-	_privateField : 
-			
-	field_ : 
-			
-	PascalCase
-		"pascal"
-	
-	kebab
-	-case
-		"kebab"
-	
-	field
-		special : 
-			
-	field
-			"at symbol"
-	
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

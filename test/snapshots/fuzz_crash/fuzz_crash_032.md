@@ -302,22 +302,7 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [tus, r]
-
-LocalStatus : lue => Loc
-
-
-olor : _ -> tus
-olor = |color| {
-		Color.RGB
-
-	match color {
-		RGB => LocalStatus.Pending
-		Green => LocalStatus
-		 => Complete
-		B.Blue => LocalStatus.Pending
-	}
-}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

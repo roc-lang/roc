@@ -117,13 +117,7 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-curry : (_a, _b -> _c) -> 
-
-curry = |fn| |x| |y| fn(x, y)
-
-main! = |_| {}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

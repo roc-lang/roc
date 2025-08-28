@@ -108,10 +108,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-
-
-# el
-t = 
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

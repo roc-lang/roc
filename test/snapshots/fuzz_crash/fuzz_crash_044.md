@@ -139,10 +139,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-app [] { f: platform "" }
-
-
-
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

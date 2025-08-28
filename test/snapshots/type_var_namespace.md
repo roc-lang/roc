@@ -160,23 +160,7 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-# Type variable 'elem' introduced in annotation
-process : List(elem) -> elem
-process = |list| {
-	# value identifier named 'elem' is allowed - different namespace from type variable
-	elem = 42
-
-	# type variable 'elem' still refers to the function annotation's type parameter
-	result : elem
-	result = List.first(list)
-		Result.withDefault(elem)
-
-	result
-}
-
-main! = |_| {}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure

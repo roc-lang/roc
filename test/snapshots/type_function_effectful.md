@@ -90,13 +90,7 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-runEffect! : (_a => _b) -> _a
-
-runEffect! = |fn!, x| fn!(x)
-
-main! = |_| {}
+MALFORMED INPUT
 ~~~
 # CANONICALIZE
 ~~~clojure
