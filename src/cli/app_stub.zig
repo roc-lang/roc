@@ -172,10 +172,14 @@ pub fn getTestPlatformEntrypoints(allocator: Allocator, platform_type: []const u
 
 /// Detect platform type from file path
 pub fn detectPlatformType(platform_path: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, platform_path, "/int/") != null) {
-        return "int";
-    } else if (std.mem.indexOf(u8, platform_path, "/str/") != null) {
-        return "str";
+    // Use cross-platform path checking
+    var iter = std.fs.path.componentIterator(platform_path) catch return "unknown";
+    while (iter.next()) |component| {
+        if (std.mem.eql(u8, component.name, "int")) {
+            return "int";
+        } else if (std.mem.eql(u8, component.name, "str")) {
+            return "str";
+        }
     }
     return "unknown";
 }

@@ -34,6 +34,16 @@ pub const TargetFormat = enum {
             else => .elf,
         };
     }
+
+    /// Detect target format from OS tag
+    pub fn detectFromOs(os: std.Target.Os.Tag) TargetFormat {
+        return switch (os) {
+            .windows => .coff,
+            .macos, .ios, .watchos, .tvos => .macho,
+            .wasi => .wasm,
+            else => .elf,
+        };
+    }
 };
 
 /// Target ABI for runtime-configurable linking
@@ -60,6 +70,12 @@ pub const LinkConfig = struct {
 
     /// Target ABI - determines static vs dynamic linking strategy
     target_abi: ?TargetAbi = null, // null means detect from system
+
+    /// Target OS tag - for cross-compilation support
+    target_os: ?std.Target.Os.Tag = null, // null means detect from system
+
+    /// Target CPU architecture - for cross-compilation support
+    target_arch: ?std.Target.Cpu.Arch = null, // null means detect from system
 
     /// Output executable path
     output_path: []const u8,
@@ -102,7 +118,11 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     defer args.deinit();
 
     // Add platform-specific linker name and arguments
-    switch (builtin.target.os.tag) {
+    // Use target OS if provided, otherwise fall back to host OS
+    const target_os = config.target_os orelse builtin.target.os.tag;
+    const target_arch = config.target_arch orelse builtin.target.cpu.arch;
+
+    switch (target_os) {
         .macos => {
             // Add linker name for macOS
             try args.append("ld64.lld");
@@ -116,7 +136,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 
             // Add architecture flag
             try args.append("-arch");
-            switch (builtin.target.cpu.arch) {
+            switch (target_arch) {
                 .aarch64 => try args.append("arm64"),
                 .x86_64 => try args.append("x86_64"),
                 else => try args.append("arm64"), // default to arm64
@@ -207,7 +227,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("/subsystem:console");
 
             // Add machine type based on target architecture
-            switch (builtin.target.cpu.arch) {
+            switch (target_arch) {
                 .x86_64 => try args.append("/machine:x64"),
                 .x86 => try args.append("/machine:x86"),
                 .aarch64 => try args.append("/machine:arm64"),

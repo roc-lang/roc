@@ -544,11 +544,24 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Generate executable name based on the roc file path
     // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
-    const exe_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
+    const exe_base_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
         std.log.err("Failed to generate executable name: {}", .{err});
         std.process.exit(1);
     };
-    defer gpa.free(exe_name);
+    defer gpa.free(exe_base_name);
+
+    // Add .exe extension on Windows
+    const exe_name = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(gpa, "{s}.exe", .{exe_base_name}) catch |err| {
+            std.log.err("Failed to generate executable name with extension: {}", .{err});
+            std.process.exit(1);
+        }
+    else
+        gpa.dupe(u8, exe_base_name) catch |err| {
+            std.log.err("Failed to duplicate executable name: {}", .{err});
+            std.process.exit(1);
+        };
+    defer if (exe_name.ptr != exe_base_name.ptr) gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
         std.log.err("Failed to create executable path: {}", .{err});
@@ -672,7 +685,23 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         // Determine platform type from host library path to configure dependencies
         std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
-        if (std.mem.indexOf(u8, platform_paths.host_lib_path, "/int/") != null and std.mem.indexOf(u8, platform_paths.host_lib_path, "platform") != null) {
+
+        // Check if path contains "int" and "platform" directories using cross-platform path handling
+        const contains_int_platform = blk: {
+            var has_int = false;
+            var has_platform = false;
+            var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
+            while (iter.next()) |component| {
+                if (std.mem.eql(u8, component.name, "int")) {
+                    has_int = true;
+                } else if (std.mem.eql(u8, component.name, "platform")) {
+                    has_platform = true;
+                }
+            }
+            break :blk has_int and has_platform;
+        };
+
+        if (contains_int_platform) {
             std.log.debug("Detected int platform - using musl static linking", .{});
             // Int platform: use musl static linking with target-specific libraries
             target_abi = .musl;
@@ -711,150 +740,167 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
                     std.process.exit(1);
                 };
             }
-        } else if (std.mem.indexOf(u8, platform_paths.host_lib_path, "/str/") != null and std.mem.indexOf(u8, platform_paths.host_lib_path, "platform") != null) {
-            std.log.debug("Detected str platform - using gnu dynamic linking", .{});
-            // Str platform: use gnu dynamic linking
-            target_abi = .gnu;
-            if (builtin.target.os.tag == .linux) {
-                // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths
-                //
-                // According to the platform design (see Platform modules and linking design.md),
-                // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
-                // crtn.o) in their platform's targets/ directory. For example:
-                //   targets/x64glibc/crti.o
-                //   targets/x64glibc/crtn.o
-                //   targets/x64musl/crti.o
-                //   targets/x64musl/crtn.o
-                //
-                // The platform module header would then specify these in the targets section:
-                //   shared_lib: {
-                //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
-                //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
-                //   }
-                //
-                // Current implementation: We auto-detect system libc and use system CRT files as a
-                // convenience during platform development. This allows platform authors to develop
-                // and test without immediately vendoring architecture-specific CRT files.
-                //
-                // This auto-detection will be removed once platforms properly vendor their CRT files
-                // as specified in the design document.
-
-                const libc_finder = @import("libc_finder.zig");
-                if (libc_finder.findLibc(gpa)) |libc_info| {
-                    defer {
-                        var info = libc_info;
-                        info.deinit();
+        } else {
+            // Check if path contains "str" and "platform" directories using cross-platform path handling
+            const contains_str_platform = blk: {
+                var has_str = false;
+                var has_platform = false;
+                var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
+                while (iter.next()) |component| {
+                    if (std.mem.eql(u8, component.name, "str")) {
+                        has_str = true;
+                    } else if (std.mem.eql(u8, component.name, "platform")) {
+                        has_platform = true;
                     }
+                }
+                break :blk has_str and has_platform;
+            };
 
-                    // Use system CRT files from the detected lib directory
-                    // TODO: Remove this once platforms provide their own CRT files
-                    const scrt1_path = std.fmt.allocPrint(gpa, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch {
-                        std.log.err("Failed to allocate Scrt1.o path", .{});
-                        std.process.exit(1);
-                    };
-                    const crti_path = std.fmt.allocPrint(gpa, "{s}/crti.o", .{libc_info.lib_dir}) catch {
-                        std.log.err("Failed to allocate crti.o path", .{});
-                        std.process.exit(1);
-                    };
-                    const crtn_path = std.fmt.allocPrint(gpa, "{s}/crtn.o", .{libc_info.lib_dir}) catch {
-                        std.log.err("Failed to allocate crtn.o path", .{});
-                        std.process.exit(1);
-                    };
+            if (contains_str_platform) {
+                std.log.debug("Detected str platform - using gnu dynamic linking", .{});
+                // Str platform: use gnu dynamic linking
+                target_abi = .gnu;
+                if (builtin.target.os.tag == .linux) {
+                    // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths
+                    //
+                    // According to the platform design (see Platform modules and linking design.md),
+                    // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
+                    // crtn.o) in their platform's targets/ directory. For example:
+                    //   targets/x64glibc/crti.o
+                    //   targets/x64glibc/crtn.o
+                    //   targets/x64musl/crti.o
+                    //   targets/x64musl/crtn.o
+                    //
+                    // The platform module header would then specify these in the targets section:
+                    //   shared_lib: {
+                    //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
+                    //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
+                    //   }
+                    //
+                    // Current implementation: We auto-detect system libc and use system CRT files as a
+                    // convenience during platform development. This allows platform authors to develop
+                    // and test without immediately vendoring architecture-specific CRT files.
+                    //
+                    // This auto-detection will be removed once platforms properly vendor their CRT files
+                    // as specified in the design document.
 
-                    // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
-                    if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
-                        file.close();
-                        platform_files_pre.append(scrt1_path) catch {
-                            std.log.err("Failed to add system Scrt1.o", .{});
+                    const libc_finder = @import("libc_finder.zig");
+                    if (libc_finder.findLibc(gpa)) |libc_info| {
+                        defer {
+                            var info = libc_info;
+                            info.deinit();
+                        }
+
+                        // Use system CRT files from the detected lib directory
+                        // TODO: Remove this once platforms provide their own CRT files
+                        const scrt1_path = std.fmt.allocPrint(gpa, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate Scrt1.o path", .{});
                             std.process.exit(1);
                         };
-                    } else |_| {
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
-                                std.log.err("Failed to add vendored Scrt1.o", .{});
+                        const crti_path = std.fmt.allocPrint(gpa, "{s}/crti.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate crti.o path", .{});
+                            std.process.exit(1);
+                        };
+                        const crtn_path = std.fmt.allocPrint(gpa, "{s}/crtn.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate crtn.o path", .{});
+                            std.process.exit(1);
+                        };
+
+                        // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
+                        if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
+                            file.close();
+                            platform_files_pre.append(scrt1_path) catch {
+                                std.log.err("Failed to add system Scrt1.o", .{});
                                 std.process.exit(1);
                             };
-                        } else {
-                            std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
-                            std.process.exit(1);
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                                    std.log.err("Failed to add vendored Scrt1.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
+                                std.process.exit(1);
+                            }
                         }
-                    }
 
-                    if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
-                        file.close();
-                        platform_files_pre.append(crti_path) catch {
-                            std.log.err("Failed to add system crti.o", .{});
-                            std.process.exit(1);
-                        };
-                    } else |_| {
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
-                                std.log.err("Failed to add vendored crti.o", .{});
+                        if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
+                            file.close();
+                            platform_files_pre.append(crti_path) catch {
+                                std.log.err("Failed to add system crti.o", .{});
                                 std.process.exit(1);
                             };
-                        } else {
-                            std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
-                            std.process.exit(1);
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                                    std.log.err("Failed to add vendored crti.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
+                                std.process.exit(1);
+                            }
                         }
-                    }
 
-                    if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
-                        file.close();
-                        platform_files_post.append(crtn_path) catch {
-                            std.log.err("Failed to add system crtn.o", .{});
-                            std.process.exit(1);
-                        };
-                    } else |_| {
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
-                                std.log.err("Failed to add vendored crtn.o", .{});
+                        if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
+                            file.close();
+                            platform_files_post.append(crtn_path) catch {
+                                std.log.err("Failed to add system crtn.o", .{});
                                 std.process.exit(1);
                             };
-                        } else {
-                            std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
-                            std.process.exit(1);
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                                    std.log.err("Failed to add vendored crtn.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
+                                std.process.exit(1);
+                            }
                         }
-                    }
 
-                    const lib_path = std.fmt.allocPrint(gpa, "-L{s}", .{libc_info.lib_dir}) catch {
-                        std.log.err("Failed to allocate library path", .{});
-                        std.process.exit(1);
-                    };
-                    extra_args.append(lib_path) catch {
-                        std.log.err("Failed to add library path", .{});
-                        std.process.exit(1);
-                    };
-                } else |_| {
-                    // Fallback to vendored files for x86_64 or error for other architectures
-                    if (builtin.target.cpu.arch == .x86_64) {
-                        platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
-                            std.log.err("Failed to add gnu Scrt1.o", .{});
+                        const lib_path = std.fmt.allocPrint(gpa, "-L{s}", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate library path", .{});
                             std.process.exit(1);
                         };
-                        platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
-                            std.log.err("Failed to add gnu crti.o", .{});
-                            std.process.exit(1);
-                        };
-                        platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
-                            std.log.err("Failed to add gnu crtn.o", .{});
-                            std.process.exit(1);
-                        };
-                        extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
+                        extra_args.append(lib_path) catch {
                             std.log.err("Failed to add library path", .{});
                             std.process.exit(1);
                         };
-                    } else {
-                        std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
-                        std.process.exit(1);
+                    } else |_| {
+                        // Fallback to vendored files for x86_64 or error for other architectures
+                        if (builtin.target.cpu.arch == .x86_64) {
+                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                                std.log.err("Failed to add gnu Scrt1.o", .{});
+                                std.process.exit(1);
+                            };
+                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                                std.log.err("Failed to add gnu crti.o", .{});
+                                std.process.exit(1);
+                            };
+                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                                std.log.err("Failed to add gnu crtn.o", .{});
+                                std.process.exit(1);
+                            };
+                            extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
+                                std.log.err("Failed to add library path", .{});
+                                std.process.exit(1);
+                            };
+                        } else {
+                            std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
+                            std.process.exit(1);
+                        }
                     }
+                    extra_args.append("-lc") catch {
+                        std.log.err("Failed to add libc", .{});
+                        std.process.exit(1);
+                    };
                 }
-                extra_args.append("-lc") catch {
-                    std.log.err("Failed to add libc", .{});
-                    std.process.exit(1);
-                };
+            } else {
+                std.log.debug("No platform-specific configuration found, using defaults", .{});
             }
-        } else {
-            std.log.debug("No platform-specific configuration found, using defaults", .{});
         }
 
         std.log.debug("Final target_abi: {?}", .{target_abi});
@@ -1042,6 +1088,180 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     };
     defer gpa.free(temp_exe_path);
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
+
+    // TEMP --- Print all CPU instruction mnemonics used in temp_exe_path (deduplicated) using objdump ---
+    const Disasm = struct {
+        fn runCapture(gpa2: Allocator, args: []const []const u8) ![]u8 {
+            var child = std.process.Child.init(args, gpa2);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Inherit;
+            try child.spawn();
+
+            const out = try child.stdout.?.reader().readAllAlloc(gpa2, 64 * 1024 * 1024);
+            const term = try child.wait();
+            return switch (term) {
+                .Exited => |code| if (code == 0) out else error.ChildFailed,
+                else => error.ChildFailed,
+            };
+        }
+
+        fn isHexToken(tok: []const u8) bool {
+            if (tok.len == 0) return false;
+            for (tok) |ch| if (!std.ascii.isHex(ch)) return false;
+            return true;
+        }
+
+        fn isX86Prefix(tok: []const u8) bool {
+            return std.mem.eql(u8, tok, "rep") or
+                std.mem.eql(u8, tok, "repe") or
+                std.mem.eql(u8, tok, "repz") or
+                std.mem.eql(u8, tok, "repne") or
+                std.mem.eql(u8, tok, "repnz") or
+                std.mem.eql(u8, tok, "lock");
+        }
+
+        fn isIdentStart(ch: u8) bool {
+            return std.ascii.isAlphabetic(ch) or ch == '.' or ch == '_';
+        }
+        fn isIdentChar(ch: u8) bool {
+            return std.ascii.isAlphanumeric(ch) or ch == '.' or ch == '_';
+        }
+        fn skipWs(s: []const u8, start: usize) usize {
+            var i = start;
+            while (i < s.len and (s[i] == ' ' or s[i] == '\t')) : (i += 1) {}
+            return i;
+        }
+
+        /// Extract the mnemonic from an `objdump -d` line.
+        /// Returns null if the line isn't an instruction.
+        fn extractMnemonicFromObjdumpLine(line: []const u8) ?[]const u8 {
+            const colon_i = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+
+            // Left side must be a hex address
+            const addr = std.mem.trim(u8, line[0..colon_i], " \t");
+            if (!@This().isHexToken(addr)) return null;
+
+            var i: usize = colon_i + 1;
+            i = @This().skipWs(line, i);
+
+            // Skip the hex byte dump column (tokens of pure hex)
+            while (i < line.len) {
+                var j = i;
+                while (j < line.len and line[j] != ' ' and line[j] != '\t') : (j += 1) {}
+                const tok = line[i..j];
+                if (tok.len >= 2 and @This().isHexToken(tok)) {
+                    i = @This().skipWs(line, j);
+                    continue;
+                }
+                break;
+            }
+
+            // Now the mnemonic column should start here
+            i = @This().skipWs(line, i);
+            if (i >= line.len or !@This().isIdentStart(line[i])) return null;
+
+            var start = i;
+            i += 1;
+            while (i < line.len and @This().isIdentChar(line[i])) : (i += 1) {}
+            var mn = line[start..i];
+
+            // Handle x86 prefixes like "lock"/"rep*"
+            if (@This().isX86Prefix(mn)) {
+                i = @This().skipWs(line, i);
+                if (i >= line.len or !@This().isIdentStart(line[i])) return null;
+                start = i;
+                i += 1;
+                while (i < line.len and @This().isIdentChar(line[i])) : (i += 1) {}
+                mn = line[start..i];
+            }
+
+            // Stop at whitespace, comma, or other operand separators to avoid including operands
+            var end = start;
+            while (end < line.len and @This().isIdentChar(line[end])) : (end += 1) {}
+            mn = line[start..end];
+
+            // Filter out known register names and segment prefixes that might be misidentified
+            const known_registers = [_][]const u8{
+                "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+                "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+                "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+                "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+                "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
+                "cs", "ds", "es", "fs", "gs", "ss",
+                "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+                "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+                "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7",
+                "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15",
+            };
+
+            for (known_registers) |reg| {
+                if (std.ascii.eqlIgnoreCase(mn, reg)) {
+                    return null; // This is a register, not an instruction
+                }
+            }
+
+            return if (mn.len > 0) mn else null;
+        }
+
+        fn toLowerAlloc(gpa2: Allocator, s: []const u8) ![]u8 {
+            var out = try gpa2.alloc(u8, s.len);
+            for (s, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+            return out;
+        }
+    };
+
+    var disasm_out: ?[]u8 = null;
+    var used_variant: []const u8 = "";
+
+    // Prefer Intel syntax for x86; if objdump rejects it (non-x86), fall back.
+    const try_intel = Disasm.runCapture(gpa, &.{ "objdump", "-d", "-M", "intel", temp_exe_path }) catch null;
+    if (try_intel) |t| {
+        disasm_out = t;
+        used_variant = "objdump -d -M intel";
+    } else {
+        const try_plain = Disasm.runCapture(gpa, &.{ "objdump", "-d", temp_exe_path }) catch null;
+        if (try_plain) |t| {
+            disasm_out = t;
+            used_variant = "objdump -d";
+        }
+    }
+
+    if (disasm_out) |text| {
+        defer gpa.free(text);
+
+        var uniq = std.StringHashMap(void).init(gpa);
+        defer {
+            var it = uniq.keyIterator();
+            while (it.next()) |k| gpa.free(k.*);
+            uniq.deinit();
+        }
+
+        var line_it = std.mem.splitScalar(u8, text, '\n');
+        while (line_it.next()) |line| {
+            const maybe_mn = Disasm.extractMnemonicFromObjdumpLine(line) orelse continue;
+            const lower = Disasm.toLowerAlloc(gpa, maybe_mn) catch continue;
+
+            const gop = uniq.getOrPut(lower) catch {
+                gpa.free(lower);
+                break;
+            };
+            if (gop.found_existing) {
+                gpa.free(lower);
+            } else {
+                gop.key_ptr.* = lower;
+            }
+        }
+
+        std.log.info("Instruction mnemonics found via {s}:", .{used_variant});
+        var it2 = uniq.keyIterator();
+        while (it2.next()) |k| {
+            std.log.info("  {s}", .{k.*});
+        }
+    } else {
+        std.log.warn("Failed to disassemble with objdump; skipping instruction list.", .{});
+    }
+    // --- end objdump-only section ---
+
 
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
@@ -2021,7 +2241,18 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     }
 
     // Only support int test platform for cross-compilation
-    const platform_type = if (std.mem.indexOf(u8, args.path, "/int/") != null)
+    // Check if path contains "int" directory using cross-platform path handling
+    const path_contains_int = blk: {
+        var iter = std.fs.path.componentIterator(args.path) catch break :blk false;
+        while (iter.next()) |component| {
+            if (std.mem.eql(u8, component.name, "int")) {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    const platform_type = if (path_contains_int)
         "int"
     else {
         std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
@@ -2046,7 +2277,8 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     };
 
     // Get target-specific host library path
-    const host_lib_filename = if (builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+    // Use target OS to determine library filename, not host OS
+    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
     const host_lib_path = blk: {
         // Try target-specific host library first
         const target_specific_path = try std.fs.path.join(gpa, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
@@ -2187,7 +2419,7 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     }
 
     // Determine output path
-    const output_path = if (args.output) |output|
+    const base_output_path = if (args.output) |output|
         try gpa.dupe(u8, output)
     else blk: {
         const basename = std.fs.path.basename(args.path);
@@ -2197,18 +2429,28 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             basename;
         break :blk try gpa.dupe(u8, name_without_ext);
     };
-    defer gpa.free(output_path);
+    defer gpa.free(base_output_path);
+
+    // Add .exe extension on Windows if not already present
+    const output_path = if (target.toOsTag() == .windows and !std.mem.endsWith(u8, base_output_path, ".exe"))
+        try std.fmt.allocPrint(gpa, "{s}.exe", .{base_output_path})
+    else
+        try gpa.dupe(u8, base_output_path);
+    defer if (output_path.ptr != base_output_path.ptr) gpa.free(output_path);
 
     // Use LLD for linking
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
     const link_config = linker_mod.LinkConfig{
+        .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
         .object_files = object_files.items,
         .platform_files_pre = platform_files_pre.items,
         .platform_files_post = platform_files_post.items,
         .extra_args = extra_args.items,
         .output_path = output_path,
         .target_abi = target_abi,
+        .target_os = target.toOsTag(),
+        .target_arch = target.toCpuArch(),
     };
 
     try linker_mod.link(gpa, link_config);
