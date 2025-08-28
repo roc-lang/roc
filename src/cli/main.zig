@@ -2074,8 +2074,15 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
         std.log.info("  {}: roc__{s}", .{ i, ep.name });
     }
 
-    // Create temp directory for build artifacts
-    const temp_dir = try std.fs.path.join(gpa, &.{ "zig-cache", "roc_build" });
+    // Create temp directory for build artifacts using Roc's cache system
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(gpa, cache_config, Filesystem.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(gpa);
+    defer gpa.free(cache_dir);
+    const temp_dir = try std.fs.path.join(gpa, &.{ cache_dir, "roc_build" });
     defer gpa.free(temp_dir);
 
     std.fs.cwd().makePath(temp_dir) catch |err| switch (err) {
@@ -2115,21 +2122,61 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     if (crt_files.libc_a) |libc| {
         try platform_files_post.append(libc);
     } else if (target.isDynamic()) {
-        // For dynamic linking with glibc, add common library search paths
-        const common_lib_paths = [_][]const u8{
-            "/lib/x86_64-linux-gnu",
-            "/usr/lib/x86_64-linux-gnu",
-            "/lib64",
-            "/usr/lib64",
-            "/lib",
-            "/usr/lib",
-        };
+        // For dynamic linking with glibc, generate stub library for cross-compilation
+        // Check if we're doing actual cross-compilation
+        const is_cross_compiling = host_target != target;
 
-        for (common_lib_paths) |lib_path| {
-            // Check if the directory exists before adding it
-            std.fs.cwd().access(lib_path, .{}) catch continue;
-            const search_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{lib_path});
-            try extra_args.append(search_arg);
+        if (is_cross_compiling) {
+            // For cross-compilation, use pre-built vendored stubs from the platform targets folder
+            const target_name = switch (target) {
+                .x64glibc => "x64glibc",
+                .arm64glibc => "arm64glibc", 
+                else => {
+                    std.log.err("Cross-compilation target {} not supported for glibc", .{target});
+                    std.process.exit(1);
+                },
+            };
+            
+            // Check if vendored stubs exist in the platform targets folder
+            const stub_dir = try std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}", .{target_name});
+            defer gpa.free(stub_dir);
+            
+            const stub_so_path = try std.fmt.allocPrint(gpa, "{s}/libc.so.6", .{stub_dir});
+            defer gpa.free(stub_so_path);
+            
+            // Verify the vendored stub exists
+            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
+                std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});
+                std.log.err("Error: {}", .{err});
+                std.log.err("This suggests the build system didn't generate the required stubs.", .{});
+                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
+                std.process.exit(1);
+            };
+
+            // Use the vendored stub library
+            const stub_dir_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{stub_dir});
+            try extra_args.append(stub_dir_arg);
+            try extra_args.append("-lc");
+            std.log.info("Using pre-built glibc stub from platform targets: {s}", .{stub_dir});
+        } else {
+            // For native compilation, use system libraries
+            const common_lib_paths = [_][]const u8{
+                "/lib/x86_64-linux-gnu",
+                "/usr/lib/x86_64-linux-gnu",
+                "/lib64",
+                "/usr/lib64",
+                "/lib",
+                "/usr/lib",
+            };
+
+            for (common_lib_paths) |lib_path| {
+                // Check if the directory exists before adding it
+                std.fs.cwd().access(lib_path, .{}) catch continue;
+                const search_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{lib_path});
+                try extra_args.append(search_arg);
+            }
+
+            try extra_args.append("-lc");
         }
 
         // Add dynamic linker path
@@ -2137,8 +2184,6 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             const dl_arg = try std.fmt.allocPrint(gpa, "--dynamic-linker={s}", .{dl_path});
             try extra_args.append(dl_arg);
         } else |_| {}
-
-        try extra_args.append("-lc");
     }
 
     // Determine output path

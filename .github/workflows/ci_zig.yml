@@ -118,6 +118,11 @@ jobs:
           zig-out\bin\roc.exe --no-cache test/str/app.roc
           zig-out\bin\roc.exe --no-cache test/int/app.roc
 
+      - name: Build Test Platforms (cross-compile)
+        if: runner.os != 'Windows'
+        run: |
+          ./ci/test_int_platform.sh
+
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -223,3 +228,7 @@ jobs:
       - name: cross compile with llvm
         run: |
           ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }}
+
+  # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
+  roc-cross-compile:
+    uses: ./.github/workflows/ci_cross_compile.yml

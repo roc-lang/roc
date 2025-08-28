@@ -93,37 +93,28 @@ pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompila
         return CrossCompilationResult{ .supported = {} };
     }
 
-    // For actual cross-compilation, only support musl targets (static linking)
-    if (!isMuslTarget(target)) {
-        if (isGlibcTarget(target)) {
-            return CrossCompilationResult{
-                .unsupported_cross_compilation = .{
-                    .host = host,
-                    .target = target,
-                    .reason = "glibc cross-compilation not yet implemented. Please use musl targets (x64musl, arm64musl) or log an issue at https://github.com/roc-lang/roc/issues",
-                },
-            };
-        } else {
-            return CrossCompilationResult{
-                .unsupported_cross_compilation = .{
-                    .host = host,
-                    .target = target,
-                    .reason = "Windows and macOS cross-compilation not yet implemented. Please use musl targets (x64musl, arm64musl) or log an issue at https://github.com/roc-lang/roc/issues",
-                },
-            };
-        }
+    // Support both musl and glibc targets for cross-compilation
+    if (isMuslTarget(target) or isGlibcTarget(target)) {
+        return CrossCompilationResult{ .supported = {} };
     }
 
-    // Musl targets should work from any host (static linking)
-    return CrossCompilationResult{ .supported = {} };
+    // Windows and macOS cross-compilation not yet supported
+    return CrossCompilationResult{
+        .unsupported_cross_compilation = .{
+            .host = host,
+            .target = target,
+            .reason = "Windows and macOS cross-compilation not yet implemented. Please use Linux targets (x64musl, arm64musl, x64glibc, arm64glibc) or log an issue at https://github.com/roc-lang/roc/issues",
+        },
+    };
 }
 
 /// Get host capabilities (what this host can cross-compile to)
 pub fn getHostCapabilities(host: RocTarget) []const RocTarget {
     _ = host; // For now, all hosts have the same capabilities
 
-    // Currently only support musl targets from any host
-    return &CrossCompilationMatrix.musl_targets;
+    // Support both musl and glibc targets from any host
+    const all_targets = CrossCompilationMatrix.musl_targets ++ CrossCompilationMatrix.glibc_targets;
+    return &all_targets;
 }
 
 /// Print supported targets for the current host
@@ -137,7 +128,6 @@ pub fn printSupportedTargets(writer: anytype, host: RocTarget) !void {
 
     try writer.print("\nUnsupported targets (not yet implemented):\n", .{});
     const unsupported = [_][]const u8{
-        "x64glibc, arm64glibc (dynamic linking)",
         "x64windows, arm64windows (Windows cross-compilation)",
         "x64macos, arm64macos (macOS cross-compilation)",
     };

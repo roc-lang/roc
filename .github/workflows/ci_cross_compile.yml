@@ -7,8 +7,8 @@ name: Cross Compilation Test
 permissions: {}
 
 jobs:
-  # Step 1: Cross-compile musl targets from different host platforms
-  cross-compile-musl:
+  # Step 1: Cross-compile musl and glibc targets from different host platforms
+  cross-compile:
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false
@@ -22,6 +22,8 @@ jobs:
         target: [
           x64musl,           # Linux x86_64 musl
           arm64musl,         # Linux ARM64 musl
+          x64glibc,          # Linux x86_64 glibc
+          arm64glibc,        # Linux ARM64 glibc
         ]
     steps:
       - name: Checkout
@@ -64,7 +66,7 @@ jobs:
 
   # Step 2: Test cross-compiled executables on actual target platforms
   test-cross-compiled:
-    needs: cross-compile-musl
+    needs: cross-compile
     runs-on: ${{ matrix.target_os }}
     strategy:
       fail-fast: false
@@ -76,6 +78,14 @@ jobs:
             arch: x64
           # Test arm64musl executables on Linux ARM64  
           - target: arm64musl
+            target_os: ubuntu-24.04-arm
+            arch: arm64
+          # Test x64glibc executables on Linux x64
+          - target: x64glibc
+            target_os: ubuntu-22.04
+            arch: x64
+          # Test arm64glibc executables on Linux ARM64
+          - target: arm64glibc
             target_os: ubuntu-24.04-arm
             arch: arm64
     steps:

@@ -164,29 +164,34 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                     try args.append("-static");
                 },
                 .gnu => {
-                    // Dynamic GNU linking - find the dynamic linker
-                    if (libc_finder.findLibc(allocator)) |libc_info| {
-                        // We need to copy the path since args holds references
-                        const dynamic_linker = try allocator.dupe(u8, libc_info.dynamic_linker);
+                    // Dynamic GNU linking - dynamic linker path is handled by caller
+                    // for cross-compilation. Only detect locally for native builds
+                    if (config.extra_args.len == 0) {
+                        // Native build - try to detect dynamic linker
+                        if (libc_finder.findLibc(allocator)) |libc_info| {
+                            // We need to copy the path since args holds references
+                            const dynamic_linker = try allocator.dupe(u8, libc_info.dynamic_linker);
 
-                        // Clean up libc_info after copying what we need
-                        var info = libc_info;
-                        info.deinit();
+                            // Clean up libc_info after copying what we need
+                            var info = libc_info;
+                            info.deinit();
 
-                        try args.append("-dynamic-linker");
-                        try args.append(dynamic_linker);
-                    } else |err| {
-                        // Fallback to hardcoded path based on architecture
-                        std.log.warn("Failed to detect libc: {}, using fallback", .{err});
-                        try args.append("-dynamic-linker");
-                        const fallback_ld = switch (builtin.target.cpu.arch) {
-                            .x86_64 => "/lib64/ld-linux-x86-64.so.2",
-                            .aarch64 => "/lib/ld-linux-aarch64.so.1",
-                            .x86 => "/lib/ld-linux.so.2",
-                            else => "/lib/ld-linux.so.2",
-                        };
-                        try args.append(fallback_ld);
+                            try args.append("-dynamic-linker");
+                            try args.append(dynamic_linker);
+                        } else |err| {
+                            // Fallback to hardcoded path based on architecture
+                            std.log.warn("Failed to detect libc: {}, using fallback", .{err});
+                            try args.append("-dynamic-linker");
+                            const fallback_ld = switch (builtin.target.cpu.arch) {
+                                .x86_64 => "/lib64/ld-linux-x86-64.so.2",
+                                .aarch64 => "/lib/ld-linux-aarch64.so.1",
+                                .x86 => "/lib/ld-linux.so.2",
+                                else => "/lib/ld-linux.so.2",
+                            };
+                            try args.append(fallback_ld);
+                        }
                     }
+                    // Otherwise, dynamic linker is set via extra_args from caller
                 },
             }
         },
