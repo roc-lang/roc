@@ -273,9 +273,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
     (lc "transform")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
-))
+        (match <0 branches>)
       )
       (args
         (lc "result")
@@ -379,10 +377,7 @@ at 39:62 to 39:70
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
+  (Expr.module_access)
   (Expr.malformed)
   (Expr.apply_tag)
   (Expr.malformed)
@@ -395,10 +390,7 @@ at 39:62 to 39:70
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "simpleQualified")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_equals
     (Expr.lookup "simpleQualified")
@@ -406,10 +398,7 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "aliasedQualified")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_equals
     (Expr.lookup "aliasedQualified")
@@ -433,14 +422,7 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "getColor")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-      )
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "getColor")
@@ -448,13 +430,7 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processColor")
@@ -462,10 +438,7 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "transform")
-    (Expr.binop_thin_arrow
-      (Expr.apply_ident)
-      (Expr.lambda)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "transform")

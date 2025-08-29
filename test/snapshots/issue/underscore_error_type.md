@@ -241,10 +241,7 @@ at 23:14 to 23:15
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.lookup "qux")
@@ -256,10 +253,7 @@ at 23:14 to 23:15
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "quux")
@@ -267,10 +261,7 @@ at 23:14 to 23:15
   )
   (Expr.binop_equals
     (Expr.lookup "quux")
-    (Expr.tuple_literal
-      (Expr.str_literal_big)
-      (Expr.num_literal_i32 42)
-    )
+    (Expr.tuple_literal)
   )
 )
 ~~~

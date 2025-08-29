@@ -19,7 +19,7 @@ OpenRound UpperIdent Comma UpperIdent CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(True, False)
 ~~~
 # EXPECTED
 NIL
@@ -27,10 +27,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.tuple_literal
-  (Expr.apply_tag)
-  (Expr.apply_tag)
-)
+(Expr.tuple_literal)
 ~~~
 # SOLVED
 ~~~clojure

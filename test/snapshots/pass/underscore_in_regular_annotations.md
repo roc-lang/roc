@@ -149,9 +149,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
       (body
         (binop_thin_arrow
           (binop_colon
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (binop_thin_arrow
               (lc "a")
               (lc "b")
@@ -269,10 +267,7 @@ at 18:24 to 18:25
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "main")
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "main")
@@ -280,10 +275,7 @@ at 18:24 to 18:25
   )
   (Expr.binop_colon
     (Expr.lookup "identity")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "identity")
@@ -291,10 +283,7 @@ at 18:24 to 18:25
   )
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")
@@ -302,19 +291,7 @@ at 18:24 to 18:25
   )
   (Expr.binop_colon
     (Expr.lookup "get_data")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "field")
-          (Expr.malformed)
-        )
-        (Expr.binop_colon
-          (Expr.lookup "other")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "get_data")
@@ -322,10 +299,7 @@ at 18:24 to 18:25
   )
   (Expr.binop_colon
     (Expr.lookup "handle_result")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handle_result")
@@ -337,13 +311,7 @@ at 18:24 to 18:25
   )
   (Expr.binop_colon
     (Expr.lookup "transform")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "_a")
-        (Expr.lookup "_b")
-      )
-      (Expr.lookup "_b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "transform")

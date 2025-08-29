@@ -63,8 +63,9 @@ const OpInfo = struct {
 pub const Parser = @This();
 
 gpa: std.mem.Allocator,
-token_iter: tokenize_iter.TokenIterator,
-lookahead: ?Token, // Single token lookahead - LL(1) parser, no more!
+source: []const u8, // Source code for extracting string literals
+current: ?Token = null, // Current token
+lookahead: ?Token = null, // Lookahead token (LL(1))
 last_position: Position, // Track last valid position for error reporting
 last_region: Region, // Track last consumed token's region
 ast: *AST,
@@ -72,21 +73,95 @@ byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 scratch_op_stack: std.ArrayListUnmanaged(OpInfo), // For operator precedence parsing
 scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
-is_in_lambda_args: bool = false, // Track if we're parsing lambda parameters
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
-/// init the parser from source text using TokenIterator
-pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, messages: []tokenize.Diagnostic, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
-    return initWithOptions(env, gpa, source, messages, ast, byte_slices);
-}
+// Token-fed parsing state
+needs_token: bool = false, // Set to true when advance() needs a new token
 
-/// init the parser with options (for testing)
-pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, messages: []tokenize.Diagnostic, ast: *AST, byte_slices: *collections.ByteSlices) std.mem.Allocator.Error!Parser {
-    const token_iter = try tokenize_iter.TokenIterator.init(env, gpa, source, messages, byte_slices);
+// State machine fields for stack-safe parsing
+state_stack: std.ArrayListUnmanaged(ParseState),
+value_stack: std.ArrayListUnmanaged(Node.Idx),
+min_bp_stack: std.ArrayListUnmanaged(u8), // For operator precedence
 
-    var parser = Parser{
+/// Parsing states for the state machine
+pub const ParseState = enum {
+    // Top level
+    file_start,
+    file_header_done,
+    file_stmt_loop,
+    file_done,
+    
+    // Headers
+    header_check,
+    header_app,
+    header_app_after_exposes,
+    header_app_finish,
+    header_module,
+    header_package,
+    header_platform,
+    header_hosted,
+    header_parse_exposed_list,
+    header_parse_packages,
+    
+    // Statements
+    stmt_start,
+    stmt_check_colon,
+    stmt_type_anno,
+    stmt_complete,
+    
+    // Expressions with precedence
+    expr_start,
+    expr_primary,
+    expr_check_binop,
+    expr_binop_rhs,
+    expr_binop_combine,
+    expr_combine,
+    expr_done,
+    expr_unary_complete,
+    
+    // Primary expressions
+    primary_ident,
+    primary_number,
+    primary_string,
+    primary_list,
+    primary_record,
+    primary_if,
+    primary_match,
+    primary_lambda,
+    
+    // Lambda parsing
+    lambda_args,
+    lambda_body,
+    lambda_complete,
+    
+    // If expression parsing
+    if_arrow,
+    if_then_branch,
+    if_else_branch,
+    if_complete,
+    
+    // When/match expression parsing
+    when_is,
+    when_branches,
+    when_complete,
+    
+    // Utilities
+    done,
+    parse_error,
+};
+
+pub const StateValue = union(enum) {
+    none: void,
+    node: Node.Idx,
+    nodes: []Node.Idx,
+    region: Region,
+    ident: Ident.Idx,
+    precedence: u8,
+};
+/// Initialize a state machine parser
+pub fn initStateMachine(gpa: std.mem.Allocator, source: []const u8, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
+    return Parser{
         .gpa = gpa,
-        .token_iter = token_iter,
-        .lookahead = null,
+        .source = source,
         .last_position = Position{ .offset = 0 },
         .last_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } },
         .ast = ast,
@@ -95,31 +170,371 @@ pub fn initWithOptions(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []c
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
         .diagnostics = .{},
+        .state_stack = .{},
+        .value_stack = .{},
+        .min_bp_stack = .{},
     };
-
-    // Fill initial lookahead buffer
-    try parser.fillLookahead();
-
-    return parser;
 }
 
-/// Fill the lookahead buffer
-fn fillLookahead(self: *Parser) std.mem.Allocator.Error!void {
-    if (self.lookahead == null) {
-        self.lookahead = try self.token_iter.next(self.gpa);
-        // Initialize last_position from first token if available
-        if (self.lookahead) |token| {
-            self.last_position = token.region.start;
+/// Parse and collect tokens - this is the main driver for token-fed parsing
+/// Returns all tokens encountered during parsing (including comments)
+pub fn parseAndCollectTokens(
+    env: *base.CommonEnv,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    messages: []tokenize_iter.Diagnostic,
+    ast: *AST,
+    byte_slices: *collections.ByteSlices,
+) !struct { tokens: std.ArrayList(Token), root: ?Node.Idx } {
+    // Initialize the parser in token-fed mode
+    var parser = try initStateMachine(allocator, source, ast, byte_slices);
+    defer parser.deinit();
+    
+    // Create tokenizer
+    var token_iter = try tokenize_iter.TokenIterator.init(env, allocator, source, messages, byte_slices);
+    defer token_iter.deinit(allocator);
+    
+    // Collect all tokens as we parse
+    var tokens = std.ArrayList(Token).init(allocator);
+    errdefer tokens.deinit();
+    
+    // Get first two tokens to start
+    const first = try token_iter.next(allocator) orelse return .{ .tokens = tokens, .root = null };
+    try tokens.append(first);
+    
+    const second = try token_iter.next(allocator);
+    if (second) |s| try tokens.append(s);
+    
+    var current = first;
+    var lookahead = second;
+    
+    // Simple driver loop: feed current+lookahead, advance, repeat
+    while (true) {
+        // Feed current and lookahead to parser
+        const needs_more = try parser.chompToken(current, lookahead);
+        
+        if (!needs_more) {
+            // Parsing complete
+            break;
         }
+        
+        // Check if we're at EOF
+        if (lookahead == null or lookahead.?.tag == .EndOfFile) {
+            // Feed EOF one more time to complete parsing
+            _ = try parser.chompToken(current, lookahead);
+            break;
+        }
+        
+        // Advance: current becomes lookahead, get new lookahead
+        current = lookahead.?;
+        lookahead = try token_iter.next(allocator);
+        if (lookahead) |l| try tokens.append(l);
+    }
+    
+    // Get the root node from the value stack (if any)
+    const root = if (parser.value_stack.items.len > 0)
+        parser.value_stack.items[parser.value_stack.items.len - 1]
+    else
+        null;
+    
+    return .{ .tokens = tokens, .root = root };
+}
+
+/// Compatibility init function for existing code
+/// Creates a parser that expects to be used with parseAndCollectTokens
+pub fn init(
+    env: *base.CommonEnv,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    messages: []tokenize_iter.Diagnostic,
+    ast: *AST,
+    byte_slices: *collections.ByteSlices,
+) !Parser {
+    _ = env;
+    _ = messages;
+    return initStateMachine(allocator, source, ast, byte_slices);
+}
+
+// OLD processToken - commented out while refactoring to new state machine
+// pub fn processToken(self: *Parser, token: Token) !enum { need_more, complete, parse_error } {
+//     ...
+// }
+
+fn handleInitial(self: *Parser) !void {
+    _ = self.state_stack.pop();
+    try self.state_stack.append(self.gpa, .expect_header_or_stmt);
+}
+
+fn handleExpectHeaderOrStmt(self: *Parser) !void {
+    const curr = self.current.?;
+    
+    switch (curr.tag) {
+        .KwApp => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_header_app);
+            self.advance();
+        },
+        .KwModule => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_header_module);
+            self.advance();
+        },
+        .KwPackage => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_header_package);
+            self.advance();
+        },
+        .KwPlatform => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_header_platform);
+            self.advance();
+        },
+        .KwHosted => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_header_hosted);
+            self.advance();
+        },
+        .EndOfFile => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .done);
+        },
+        else => {
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .parsing_stmt);
+        },
     }
 }
 
+fn handleParsingHeaderApp(self: *Parser) !void {
+    // Parse app header: app [exports] { packages }
+    if (self.peek() == .OpenSquare) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_packages_record);
+        try self.state_stack.append(self.gpa, .parsing_exports_list);
+    } else if (self.peek() == .OpenCurly) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_packages_record);
+    } else {
+        // Error: expected [ or {
+        try self.pushDiagnostic(.expected_header_app_open, self.currentPosition(), self.currentPosition());
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parse_error);
+    }
+}
+
+fn handleParsingHeaderModule(self: *Parser) !void {
+    // Parse module header: module [exports]
+    if (self.peek() == .OpenSquare) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_stmt); // After exports, parse statements
+        try self.state_stack.append(self.gpa, .parsing_exports_list);
+    } else {
+        // Error: expected [
+        try self.pushDiagnostic(.expected_header_module_open, self.currentPosition(), self.currentPosition());
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parse_error);
+    }
+}
+
+fn handleParsingHeaderPackage(self: *Parser) !void {
+    // Similar to module
+    if (self.peek() == .OpenSquare) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_packages_record);
+        try self.state_stack.append(self.gpa, .parsing_exports_list);
+    } else {
+        try self.pushDiagnostic(.expected_header_package_open, self.currentPosition(), self.currentPosition());
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parse_error);
+    }
+}
+
+fn handleParsingHeaderPlatform(self: *Parser) !void {
+    // Parse platform header
+    if (self.peek() == .OpenSquare) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_packages_record);
+        try self.state_stack.append(self.gpa, .parsing_exports_list);
+    } else {
+        try self.pushDiagnostic(.expected_header_platform_open, self.currentPosition(), self.currentPosition());
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parse_error);
+    }
+}
+
+fn handleParsingHeaderHosted(self: *Parser) !void {
+    // Parse hosted header
+    if (self.peek() == .OpenSquare) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parsing_stmt);
+        try self.state_stack.append(self.gpa, .parsing_exports_list);
+    } else {
+        try self.pushDiagnostic(.expected_header_hosted_open, self.currentPosition(), self.currentPosition());
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .parse_error);
+    }
+}
+
+fn handleParsingExportsList(self: *Parser) !void {
+    // Parse [ident, ident, ...]
+    if (self.peek() != .OpenSquare) {
+        _ = self.state_stack.pop();
+        return;
+    }
+    
+    self.advance(); // consume [
+    
+    // Collect exports
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+        if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+            const ident = self.currentIdent();
+            const region = self.currentRegion();
+            self.advance();
+            
+            // Check for ! suffix
+            const is_effectful = self.peek() == .OpBang;
+            if (is_effectful) {
+                self.advance();
+            }
+            
+            // Create node for export
+            if (ident) |id| {
+                const tag: Node.Tag = if (is_effectful) .not_lc else .lc;
+                const node = try self.ast.appendNode(self.gpa, region, tag, .{ .ident = id });
+                try self.scratch_nodes.append(self.gpa, node);
+            }
+        }
+        
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    
+    if (self.peek() == .CloseSquare) {
+        self.advance();
+    }
+    
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingPackagesRecord(self: *Parser) !void {
+    // Parse { name: "value", ... }
+    if (self.peek() != .OpenCurly) {
+        _ = self.state_stack.pop();
+        return;
+    }
+    
+    self.advance(); // consume {
+    
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Parse field name
+        if (self.peek() == .LowerIdent) {
+            self.advance();
+            
+            if (self.peek() == .OpColon) {
+                self.advance();
+                
+                // Parse field value
+                try self.state_stack.append(self.gpa, .parsing_expr);
+            }
+        }
+        
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    
+    if (self.peek() == .CloseCurly) {
+        self.advance();
+    }
+    
+    _ = self.state_stack.pop();
+    // After packages, parse statements
+    try self.state_stack.append(self.gpa, .parsing_stmt);
+}
+
+fn handleParsingStmt(self: *Parser) !void {
+    if (self.peek() == .EndOfFile) {
+        _ = self.state_stack.pop();
+        try self.state_stack.append(self.gpa, .done);
+        return;
+    }
+    
+    // Parse a statement by parsing an expression
+    try self.state_stack.append(self.gpa, .parsing_expr);
+}
+
+fn handleParsingExpr(self: *Parser) !void {
+    // This is where expression parsing happens
+    // For now, consume any token to keep moving
+    if (self.current) |_| {
+        self.advance();
+    }
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingBinOp(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingApply(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingList(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingRecord(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingIf(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingMatch(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+fn handleParsingLambda(self: *Parser) !void {
+    _ = self.state_stack.pop();
+}
+
+/// Peek at current token tag (for compatibility with existing code)
+pub fn peek(self: *Parser) Token.Tag {
+    if (self.lookahead) |token| {
+        return token.tag;
+    }
+    return .EndOfFile;
+}
+
+/// Advance to next token
+/// In state machine mode, this clears lookahead to signal we need a new token
+fn advance(self: *Parser) void {
+    // Save the position of the token we're consuming
+    if (self.lookahead) |token| {
+        self.last_position = token.region.end;
+        self.last_region = token.region;
+    }
+    
+    // Move lookahead to current, clear lookahead
+    self.current = self.lookahead;
+    self.lookahead = null;
+}
+
 pub fn deinit(parser: *Parser) void {
-    parser.token_iter.deinit(parser.gpa);
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scratch_op_stack.deinit(parser.gpa);
     parser.scratch_bytes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
+    parser.state_stack.deinit(parser.gpa);
+    parser.value_stack.deinit(parser.gpa);
+    parser.min_bp_stack.deinit(parser.gpa);
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
 }
@@ -383,7 +798,8 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
             const op_tag = self.peek();
 
             // If we're inside lambda args and see |, treat it as a delimiter, not an operator
-            if (self.is_in_lambda_args and op_tag == .OpBar) {
+            // TODO: handle lambda args context
+            if (false and op_tag == .OpBar) {
                 // Stop parsing - we've hit the closing | of the lambda parameters
                 break :parse;
             }
@@ -580,16 +996,1214 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
     return try self.ast.appendNode(self.gpa, full_region, .apply_module, .{ .nodes = nodes_idx });
 }
 
-/// helper to advance the parser by one token
-pub fn advance(self: *Parser) void {
-    // Save current position before advancing
-    if (self.lookahead) |token| {
-        self.last_position = token.region.end;
-        self.last_region = token.region;
+/// Process tokens in state machine mode
+/// Returns true if more tokens needed, false if parsing complete
+pub fn chompToken(self: *Parser, current: Token, lookahead: ?Token) !bool {
+    // Update token state
+    self.current = current;
+    self.lookahead = lookahead;
+    
+    // If we haven't started, initialize
+    if (self.state_stack.items.len == 0) {
+        try self.state_stack.append(self.gpa, .file_start);
     }
+    
+    // Process states until we need a new token or are done
+    while (self.state_stack.items.len > 0) {
+        const state = self.state_stack.items[self.state_stack.items.len - 1];
+        
+        // Process current state
+        const action = try self.processState(state);
+        
+        switch (action) {
+            .need_token => return true, // Need more tokens
+            .continue_processing => {}, // Keep processing states
+            .complete => return false, // Parsing complete
+        }
+    }
+    
+    return false; // No more states, parsing complete
+}
 
-    // Get next token
-    self.lookahead = self.token_iter.next(self.gpa) catch null;
+const StateAction = enum {
+    need_token,
+    continue_processing,
+    complete,
+};
+
+/// Process a single state in the state machine
+fn processState(self: *Parser, state: ParseState) !StateAction {
+    switch (state) {
+        .file_start => {
+            // Pop this state and push next
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .file_stmt_loop);
+            try self.state_stack.append(self.gpa, .header_check);
+            return .continue_processing;
+        },
+        
+        .header_check => {
+            // Check for header keywords
+            switch (self.peek()) {
+                .KwApp => {
+                    _ = self.state_stack.pop();
+                    try self.state_stack.append(self.gpa, .header_app);
+                    return .continue_processing;
+                },
+                .KwModule => {
+                    _ = self.state_stack.pop();
+                    try self.state_stack.append(self.gpa, .header_module);
+                    return .continue_processing;
+                },
+                .KwPackage => {
+                    _ = self.state_stack.pop();
+                    try self.state_stack.append(self.gpa, .header_package);
+                    return .continue_processing;
+                },
+                .KwPlatform => {
+                    _ = self.state_stack.pop();
+                    try self.state_stack.append(self.gpa, .header_platform);
+                    return .continue_processing;
+                },
+                .KwHosted => {
+                    _ = self.state_stack.pop();
+                    try self.state_stack.append(self.gpa, .header_hosted);
+                    return .continue_processing;
+                },
+                else => {
+                    // No header
+                    _ = self.state_stack.pop();
+                    return .continue_processing;
+                },
+            }
+        },
+        
+        .file_stmt_loop => {
+            // Parse statements until EOF
+            if (self.peek() == .EndOfFile) {
+                _ = self.state_stack.pop();
+                try self.state_stack.append(self.gpa, .file_done);
+                return .continue_processing;
+            }
+            
+            // Parse a statement - pop and push back to continue loop after stmt
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .file_stmt_loop);
+            try self.state_stack.append(self.gpa, .stmt_complete);
+            try self.state_stack.append(self.gpa, .stmt_start);
+            return .continue_processing;
+        },
+        
+        .stmt_start => {
+            // Start parsing a statement
+            _ = self.state_stack.pop();
+            
+            // First parse as expression
+            try self.state_stack.append(self.gpa, .stmt_check_colon);
+            try self.state_stack.append(self.gpa, .expr_start);
+            try self.min_bp_stack.append(self.gpa, 3); // Stop at colons
+            return .continue_processing;
+        },
+        
+        .expr_start => {
+            // Start expression parsing with precedence
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .expr_check_binop);
+            try self.state_stack.append(self.gpa, .expr_primary);
+            return .continue_processing;
+        },
+        
+        .expr_primary => {
+            // Parse primary expression based on current token
+            _ = self.state_stack.pop();
+            
+            switch (self.peek()) {
+                .LowerIdent => {
+                    const ident = self.currentIdent();
+                    const region = self.currentRegion();
+                    self.advance();
+                    
+                    // Check for ! suffix
+                    const is_effectful = self.peek() == .OpBang;
+                    var final_region = region;
+                    if (is_effectful) {
+                        final_region.end = self.currentRegion().end;
+                        self.advance();
+                        return .need_token; // Need next token after consuming !
+                    }
+                    
+                    if (ident) |id| {
+                        const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
+                        const node = try self.ast.appendNode(self.gpa, final_region, node_tag, .{ .ident = id });
+                        try self.value_stack.append(self.gpa, node);
+                    }
+                    return .continue_processing;
+                },
+                
+                .UpperIdent => {
+                    const ident = self.currentIdent();
+                    const region = self.currentRegion();
+                    self.advance();
+                    
+                    if (ident) |id| {
+                        const node = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+                        try self.value_stack.append(self.gpa, node);
+                    }
+                    return .continue_processing;
+                },
+                
+                .Int, .IntBase, .Float => {
+                    const region = self.currentRegion();
+                    const extra = self.currentExtra();
+                    self.advance();
+                    
+                    // Extract the appropriate value from the Extra union
+                    const payload = switch (extra) {
+                        .num_literal_i32 => |val| Node.Payload{ .num_literal_i32 = val },
+                        .frac_literal_small => |val| Node.Payload{ .frac_literal_small = .{
+                            .numerator = val.numerator,
+                            .denominator_power_of_ten = val.denominator_power_of_ten,
+                        }},
+                        .bytes_idx => |idx| Node.Payload{ .num_literal_big = idx },
+                        else => Node.Payload{ .num_literal_i32 = 0 }, // Default fallback
+                    };
+                    
+                    // Determine node tag based on extra type
+                    const node_tag: Node.Tag = switch (extra) {
+                        .num_literal_i32 => .num_literal_i32,
+                        .frac_literal_small => .frac_literal_small,
+                        .bytes_idx => .num_literal_big,
+                        else => .num_literal_i32,
+                    };
+                    
+                    const node = try self.ast.appendNode(self.gpa, region, node_tag, payload);
+                    try self.value_stack.append(self.gpa, node);
+                    return .continue_processing;
+                },
+                
+                .String, .MultilineString => {
+                    const region = self.currentRegion();
+                    const extra = self.currentExtra();
+                    self.advance();
+                    
+                    // Extract string from Extra union
+                    const payload = switch (extra) {
+                        .bytes_idx => |idx| Node.Payload{ .str_literal_big = idx },
+                        else => Node.Payload{ .str_literal_big = @enumFromInt(0) }, // Default fallback
+                    };
+                    
+                    const node = try self.ast.appendNode(self.gpa, region, .str_literal_big, payload);
+                    try self.value_stack.append(self.gpa, node);
+                    return .continue_processing;
+                },
+                
+                .OpenRound => {
+                    // Could be tuple or parenthesized expression
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .OpenSquare => {
+                    // List literal
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .KwIf => {
+                    // Start parsing if expression
+                    const if_region = self.currentRegion();
+                    self.advance(); // consume 'if'
+                    
+                    // Save if start position for later
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(if_region.start.offset))));
+                    
+                    // Push states: after condition, parse arrow, then branch, else branch
+                    try self.state_stack.append(self.gpa, .if_complete);
+                    try self.state_stack.append(self.gpa, .if_else_branch);
+                    try self.state_stack.append(self.gpa, .if_then_branch);
+                    try self.state_stack.append(self.gpa, .if_arrow);
+                    try self.state_stack.append(self.gpa, .expr_start); // Parse condition
+                    
+                    return .continue_processing;
+                },
+                
+                .KwWhen => {
+                    // Start parsing when/match expression
+                    const when_region = self.currentRegion();
+                    self.advance(); // consume 'when'
+                    
+                    // Save when start position for later
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(when_region.start.offset))));
+                    
+                    // Push states to parse when expression
+                    try self.state_stack.append(self.gpa, .when_complete);
+                    try self.state_stack.append(self.gpa, .when_branches);
+                    try self.state_stack.append(self.gpa, .when_is);
+                    try self.state_stack.append(self.gpa, .expr_start); // Parse scrutinee
+                    
+                    return .continue_processing;
+                },
+                
+                .OpenCurly => {
+                    // Record literal or block
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .OpBar => {
+                    // Lambda - push states to parse it
+                    _ = self.state_stack.pop(); // Remove expr_primary
+                    try self.state_stack.append(self.gpa, .lambda_complete);
+                    try self.state_stack.append(self.gpa, .lambda_body);
+                    try self.state_stack.append(self.gpa, .lambda_args);
+                    return .continue_processing;
+                },
+                
+                .OpBang => {
+                    // Unary not
+                    self.advance();
+                    
+                    // Parse the operand
+                    try self.state_stack.append(self.gpa, .expr_unary_complete);
+                    try self.state_stack.append(self.gpa, .expr_primary);
+                    return .continue_processing;
+                },
+                
+                .OpUnaryMinus, .OpBinaryMinus => {
+                    // Unary negation (OpBinaryMinus can also be unary at start of expression)
+                    self.advance();
+                    
+                    // Parse the operand
+                    try self.state_stack.append(self.gpa, .expr_unary_complete);
+                    try self.state_stack.append(self.gpa, .expr_primary);
+                    return .continue_processing;
+                },
+                
+                .KwWhile => {
+                    // While loop
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .KwFor => {
+                    // For loop
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .Underscore => {
+                    // Underscore pattern
+                    const region = self.currentRegion();
+                    self.advance();
+                    const node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
+                    try self.value_stack.append(self.gpa, node);
+                    return .continue_processing;
+                },
+                
+                .KwVar => {
+                    // var keyword
+                    const var_region = self.currentRegion();
+                    self.advance();
+                    
+                    // Expect a lowercase identifier after var
+                    if (self.peek() == .LowerIdent) {
+                        const ident = self.currentIdent();
+                        const ident_region = self.currentRegion();
+                        self.advance();
+                        
+                        if (ident) |id| {
+                            const full_region = makeRegion(var_region.start, ident_region.end);
+                            const node = try self.ast.appendNode(self.gpa, full_region, .var_lc, .{ .ident = id });
+                            try self.value_stack.append(self.gpa, node);
+                        }
+                    } else {
+                        // Malformed var without identifier
+                        const node = try self.ast.appendNode(self.gpa, var_region, .malformed, .{ .malformed = .var_must_have_ident });
+                        try self.value_stack.append(self.gpa, node);
+                    }
+                    return .continue_processing;
+                },
+                
+                .KwReturn => {
+                    // Return statement
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                .KwCrash => {
+                    // Crash statement
+                    self.advance();
+                    
+                    // For now, create malformed node as placeholder
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    return .need_token;
+                },
+                
+                else => {
+                    // Unknown token - create malformed node
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                    self.advance();
+                    return .need_token;
+                },
+            }
+        },
+        
+        .expr_check_binop => {
+            // Check if there's a binary operator to handle
+            _ = self.state_stack.pop();
+            
+            // Get the current minimum binding power (precedence)
+            const min_bp = if (self.min_bp_stack.items.len > 0) 
+                self.min_bp_stack.items[self.min_bp_stack.items.len - 1]
+            else 
+                0;
+            
+            // Check if current token is a binary operator
+            const bp = getBindingPower(self.peek());
+            
+            if (bp.left > min_bp) {
+                // We have a binary operator to parse
+                // Save the operator info
+                const op_token = self.peek();
+                const op_region = self.currentRegion();
+                
+                // Get LHS from value stack
+                const lhs = if (self.value_stack.items.len > 0)
+                    self.value_stack.items[self.value_stack.items.len - 1]
+                else
+                    return .continue_processing; // No LHS, can't parse binop
+                
+                // Store operator info
+                try self.scratch_op_stack.append(self.gpa, .{
+                    .left = lhs,
+                    .op_tag = op_token,
+                    .op_region = op_region,
+                    .min_bp = bp.right,
+                });
+                
+                self.advance();
+                
+                // Push states to parse RHS then combine
+                try self.state_stack.append(self.gpa, .expr_binop_combine);
+                try self.state_stack.append(self.gpa, .expr_binop_rhs);
+                
+                return .need_token;
+            } else {
+                // No operator or lower precedence - done with this expression
+                try self.state_stack.append(self.gpa, .expr_done);
+                return .continue_processing;
+            }
+        },
+        
+        .expr_done => {
+            // Expression parsing complete
+            _ = self.state_stack.pop();
+            if (self.min_bp_stack.items.len > 0) {
+                _ = self.min_bp_stack.pop();
+            }
+            return .continue_processing;
+        },
+        
+        .expr_unary_complete => {
+            // Unary expression complete - combine operator with operand
+            _ = self.state_stack.pop();
+            
+            // Pop the operand from value stack
+            if (self.value_stack.items.len > 0) {
+                const operand = self.value_stack.items[self.value_stack.items.len - 1];
+                _ = self.value_stack.pop();
+                
+                // Create unary node (for now, just push operand back as placeholder)
+                // TODO: Create proper unary node
+                try self.value_stack.append(self.gpa, operand);
+            }
+            return .continue_processing;
+        },
+        
+        .stmt_check_colon => {
+            // Check if statement has type annotation
+            _ = self.state_stack.pop();
+            
+            if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
+                // TODO: Handle type annotation parsing
+                self.advance();
+                return .need_token;
+            }
+            // Statement is just an expression, value is already on stack
+            return .continue_processing;
+        },
+        
+        .stmt_complete => {
+            // Statement parsing complete, add to scratch_nodes
+            _ = self.state_stack.pop();
+            
+            // Pop the statement from value stack and add to scratch_nodes
+            if (self.value_stack.items.len > 0) {
+                const stmt = self.value_stack.items[self.value_stack.items.len - 1];
+                _ = self.value_stack.pop();
+                try self.scratch_nodes.append(self.gpa, stmt);
+            }
+            return .continue_processing;
+        },
+        
+        .file_done => {
+            // Create block node with all statements
+            _ = self.state_stack.pop();
+            
+            const statements = self.getScratchNodesSince(0);
+            if (statements.len > 0) {
+                const first_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(statements[0]))));
+                const region = makeRegion(
+                    first_region.start,
+                    self.last_position,
+                );
+                const statements_idx = try self.ast.node_slices.append(self.gpa, statements);
+                const block = try self.ast.appendNode(self.gpa, region, .block, .{ .nodes = statements_idx });
+                try self.value_stack.append(self.gpa, block);
+            }
+            return .complete;
+        },
+        
+        .header_module => {
+            // Parse module header
+            _ = self.state_stack.pop();
+            
+            const start_region = self.currentRegion();
+            self.advance(); // consume 'module'
+            
+            // Expect [exposes]
+            if (self.peek() != .OpenSquare) {
+                // Malformed header - still create it with empty exposes
+                const empty_slice: []const Node.Idx = &.{};
+                const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+                self.ast.header = .{ .module = .{
+                    .exposes = exposes_idx,
+                    .region = start_region.start,
+                }};
+                return .need_token;
+            }
+            
+            self.advance(); // consume [
+            
+            // Parse exposed items
+            const scratch_marker = self.markScratchNodes();
+            defer self.restoreScratchNodes(scratch_marker);
+            
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                switch (self.peek()) {
+                    .LowerIdent => {
+                        const ident = self.currentIdent();
+                        const region = self.currentRegion();
+                        self.advance();
+                        
+                        // Check for ! suffix
+                        const is_effectful = self.peek() == .OpBang;
+                        if (is_effectful) {
+                            self.advance();
+                        }
+                        
+                        if (ident) |id| {
+                            const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
+                            const node = try self.ast.appendNode(self.gpa, region, node_tag, .{ .ident = id });
+                            try self.scratch_nodes.append(self.gpa, node);
+                        }
+                    },
+                    .UpperIdent => {
+                        const ident = self.currentIdent();
+                        const region = self.currentRegion();
+                        self.advance();
+                        
+                        if (ident) |id| {
+                            const node = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+                            try self.scratch_nodes.append(self.gpa, node);
+                        }
+                    },
+                    else => break,
+                }
+                
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else if (self.peek() != .CloseSquare) {
+                    break;
+                }
+            }
+            
+            // Expect ]
+            if (self.peek() == .CloseSquare) {
+                self.advance();
+            }
+            
+            // Create header with exposed items
+            const exposes = self.getScratchNodesSince(scratch_marker);
+            const exposes_idx = try self.ast.node_slices.append(self.gpa, exposes);
+            
+            self.ast.header = .{ .module = .{
+                .exposes = exposes_idx,
+                .region = start_region.start,
+            }};
+            
+            return .need_token;
+        },
+        
+        .header_app => {
+            // Start parsing app header
+            _ = self.state_stack.pop();
+            
+            const start_region = self.currentRegion();
+            self.advance(); // consume 'app'
+            
+            // Push state to parse exposed list
+            try self.state_stack.append(self.gpa, .header_app_after_exposes);
+            try self.state_stack.append(self.gpa, .header_parse_exposed_list);
+            
+            // Save start position for later
+            try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(start_region.start.offset))));
+            
+            return .continue_processing;
+        },
+        
+        .header_app_after_exposes => {
+            // After parsing exposed list, now parse packages
+            _ = self.state_stack.pop();
+            
+            // Get exposed list from value stack
+            const exposes_idx_val = self.value_stack.pop();
+            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(exposes_idx_val orelse unreachable))));
+            
+            // Get start position
+            const start_pos_val = self.value_stack.pop();
+            const start_pos = Position{ .offset = @as(u32, @intCast(@intFromEnum(start_pos_val orelse unreachable))) };
+            
+            // Now parse packages if present
+            if (self.peek() == .OpenCurly) {
+                self.advance(); // consume {
+                
+                // Push state to finish app header after packages
+                try self.state_stack.append(self.gpa, .header_app_finish);
+                try self.state_stack.append(self.gpa, .header_parse_packages);
+                
+                // Save exposes and start pos for finish
+                try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(exposes_idx)));
+                try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(start_pos.offset))));
+                
+                return .continue_processing;
+            } else {
+                // No packages, create header now
+                const empty_slice: []const Node.Idx = &.{};
+                const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+                
+                self.ast.header = .{ .app = .{
+                    .exposes = exposes_idx,
+                    .packages = packages_idx,
+                    .region = start_pos,
+                }};
+                return .continue_processing;
+            }
+        },
+        
+        .header_app_finish => {
+            // Finish app header after parsing packages
+            _ = self.state_stack.pop();
+            
+            // Get packages from value stack
+            const packages_idx_val = self.value_stack.pop();
+            const packages_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(packages_idx_val orelse unreachable))));
+            
+            // Get start position
+            const start_pos_val = self.value_stack.pop();
+            const start_pos = Position{ .offset = @as(u32, @intCast(@intFromEnum(start_pos_val orelse unreachable))) };
+            
+            // Get exposes
+            const exposes_idx_val = self.value_stack.pop();
+            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(exposes_idx_val orelse unreachable))));
+            
+            self.ast.header = .{ .app = .{
+                .exposes = exposes_idx,
+                .packages = packages_idx,
+                .region = start_pos,
+            }};
+            
+            if (self.peek() == .CloseCurly) {
+                self.advance(); // consume }
+            }
+            
+            return .continue_processing;
+        },
+        
+        .header_package => {
+            // Parse package header - placeholder implementation
+            _ = self.state_stack.pop();
+            
+            const region = self.currentRegion();
+            self.advance(); // consume 'package'
+            
+            // Create empty header for now
+            const empty_slice: []const Node.Idx = &.{};
+            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            
+            self.ast.header = .{ .package = .{
+                .exposes = exposes_idx,
+                .packages = packages_idx,
+                .region = region.start,
+            }};
+            return .need_token;
+        },
+        
+        .header_parse_exposed_list => {
+            // Parse exposed list [a, b!, c]
+            _ = self.state_stack.pop();
+            
+            if (!self.eat(.OpenSquare)) {
+                // Error: expected [
+                // Push empty list
+                const empty_slice: []const Node.Idx = &.{};
+                const idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+                try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
+                return .continue_processing;
+            }
+            
+            // Start collecting exposed items
+            try self.scratch_nodes.resize(self.gpa, 0);
+            
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                const is_lower = self.peek() == .LowerIdent;
+                const is_upper = self.peek() == .UpperIdent;
+                
+                if (is_lower or is_upper) {
+                    const ident_token = self.currentToken() orelse unreachable;
+                    const ident_region = self.currentRegion();
+                    self.advance();
+                    
+                    // Check for effectful suffix
+                    const effectful = self.eat(.OpBang);
+                    
+                    const ident_idx: base.Ident.Idx = switch (ident_token.extra) {
+                        .interned => |idx| blk: {
+                            // Update attributes if effectful
+                            if (effectful) {
+                                break :blk .{
+                                    .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
+                                    .idx = idx.idx,
+                                };
+                            } else {
+                                break :blk idx;
+                            }
+                        },
+                        .ident_with_flags => |iwf| blk: {
+                            if (effectful) {
+                                break :blk .{
+                                    .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
+                                    .idx = iwf.ident.idx,
+                                };
+                            } else {
+                                break :blk iwf.ident;
+                            }
+                        },
+                        else => .{ .attributes = .{ .effectful = effectful, .ignored = false, .reassignable = false }, .idx = 0 },
+                    };
+                    
+                    const node_idx = try self.ast.nodes.add(self.gpa, .{
+                        .tag = if (is_lower) .ident else .tag,
+                        .main_token = 0,
+                        .data = .{ .ident = ident_idx },
+                    });
+                    
+                    try self.scratch_nodes.append(self.gpa, node_idx);
+                }
+                
+                // Skip commas
+                _ = self.eat(.Comma);
+            }
+            
+            if (!self.eat(.CloseSquare)) {
+                // Error: expected ]
+            }
+            
+            // Create slice from scratch nodes
+            const exposed_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
+            @memcpy(exposed_slice, self.scratch_nodes.items);
+            const idx = try self.ast.node_slices.append(self.gpa, exposed_slice);
+            try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
+            
+            return .continue_processing;
+        },
+        
+        .header_parse_packages => {
+            // Parse packages {pf: platform "../basic-cli/main.roc", a: "a"}
+            _ = self.state_stack.pop();
+            
+            // Start collecting package nodes
+            try self.scratch_nodes.resize(self.gpa, 0);
+            
+            while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                // Parse package name
+                if (self.peek() == .LowerIdent) {
+                    const pkg_name_token = self.currentToken() orelse unreachable;
+                    const pkg_region = self.currentRegion();
+                    self.advance();
+                    
+                    if (!self.eat(.Colon)) {
+                        // Error: expected :
+                        continue;
+                    }
+                    
+                    // Check for 'platform' keyword
+                    _ = self.eat(.Platform);
+                    
+                    // Parse package path (string literal)
+                    if (self.peek() == .String) {
+                        const path_token = self.currentToken() orelse unreachable;
+                        _ = self.currentRegion();
+                        self.advance();
+                        
+                        // Create string node for path
+                        const str_val = switch (path_token.extra) {
+                            .bytes_idx => |idx| idx,
+                            else => @as(collections.ByteSlices.Idx, @enumFromInt(0)),
+                        };
+                        
+                        const path_node = try self.ast.nodes.add(self.gpa, .{
+                            .tag = .string,
+                            .main_token = 0,
+                            .data = .{ .str_literal = str_val },
+                        });
+                        
+                        // Create package field node
+                        const pkg_ident_val: base.Ident.Idx = switch (pkg_name_token.extra) {
+                            .interned => |idx| idx,
+                            .ident_with_flags => |iwf| iwf.ident,
+                            else => .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+                        };
+                        
+                        const pkg_ident = Ident{
+                            .value = pkg_ident_val,
+                            .region = pkg_region.start,
+                        };
+                        
+                        const pkg_ident_idx = try self.ast.idents.put(self.gpa, pkg_ident, .{
+                            .effectful = false,
+                            .ignored = false,
+                            .reassignable = false,
+                        });
+                        
+                        const pkg_field_node = try self.ast.nodes.add(self.gpa, .{
+                            .tag = .ident,
+                            .main_token = 0,
+                            .data = .{ .ident = pkg_ident_idx },
+                        });
+                        
+                        // Create binop for field: name
+                        const binop_idx = try self.ast.binops.add(self.gpa, .{
+                            .left = pkg_field_node,
+                            .right = path_node,
+                        });
+                        
+                        const field_node = try self.ast.nodes.add(self.gpa, .{
+                            .tag = .binop_colon,
+                            .main_token = 0,
+                            .data = .{ .binop = binop_idx },
+                        });
+                        
+                        try self.scratch_nodes.append(self.gpa, field_node);
+                    }
+                }
+                
+                // Skip commas
+                _ = self.eat(.Comma);
+            }
+            
+            // Create slice from scratch nodes
+            const packages_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
+            @memcpy(packages_slice, self.scratch_nodes.items);
+            const idx = try self.ast.node_slices.append(self.gpa, packages_slice);
+            try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
+            
+            return .continue_processing;
+        },
+        
+        .header_platform => {
+            // Parse platform header - placeholder implementation
+            _ = self.state_stack.pop();
+            
+            const region = self.currentRegion();
+            self.advance(); // consume 'platform'
+            
+            // Create empty header for now - platform needs a dummy name node
+            const empty_slice: []const Node.Idx = &.{};
+            const dummy_ident = Ident.Idx{ 
+                .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
+                .idx = 0 
+            };
+            const name_node = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = dummy_ident });
+            const empty_node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
+            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            const provides_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            const rigids_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            
+            self.ast.header = .{ .platform = .{
+                .name = name_node,
+                .requires_rigids = rigids_idx,
+                .requires_signatures = empty_node,
+                .exposes = exposes_idx,
+                .packages = packages_idx,
+                .provides = provides_idx,
+                .region = region.start,
+            }};
+            return .need_token;
+        },
+        
+        .header_hosted => {
+            // Parse hosted header - placeholder implementation
+            _ = self.state_stack.pop();
+            
+            const region = self.currentRegion();
+            self.advance(); // consume 'hosted'
+            
+            // Create empty header for now
+            const empty_slice: []const Node.Idx = &.{};
+            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            
+            self.ast.header = .{ .hosted = .{
+                .exposes = exposes_idx,
+                .region = region.start,
+            }};
+            return .need_token;
+        },
+        
+        .expr_binop_rhs => {
+            // Parse the RHS of a binary operator
+            _ = self.state_stack.pop();
+            
+            // Get the operator's right binding power
+            const op_info = if (self.scratch_op_stack.items.len > 0)
+                self.scratch_op_stack.items[self.scratch_op_stack.items.len - 1]
+            else
+                return .continue_processing;
+            
+            // Pop the LHS from value stack (it's stored in op_info)
+            if (self.value_stack.items.len > 0) {
+                _ = self.value_stack.pop();
+            }
+            
+            // Parse RHS with the operator's right binding power
+            try self.min_bp_stack.append(self.gpa, op_info.min_bp);
+            try self.state_stack.append(self.gpa, .expr_start);
+            return .continue_processing;
+        },
+        
+        .expr_binop_combine => {
+            // Combine LHS, operator, and RHS into a binop node
+            _ = self.state_stack.pop();
+            
+            // Get operator info
+            const op_info = if (self.scratch_op_stack.items.len > 0) blk: {
+                const info = self.scratch_op_stack.items[self.scratch_op_stack.items.len - 1];
+                _ = self.scratch_op_stack.pop();
+                break :blk info;
+            } else return .continue_processing;
+            
+            // Get RHS from value stack
+            const rhs = if (self.value_stack.items.len > 0)
+                self.value_stack.items[self.value_stack.items.len - 1]
+            else
+                return .continue_processing;
+            _ = self.value_stack.pop();
+            
+            // Convert token to binop tag
+            const binop_tag = tokenToBinOpTag(op_info.op_tag) orelse .binop_equals;
+            
+            // Create binop node
+            const binop_idx = try self.ast.appendBinOp(self.gpa, op_info.left.?, rhs);
+            const full_region = makeRegion(
+                self.ast.start(op_info.left.?),
+                self.ast.getRegion(rhs).end
+            );
+            const binop_node = try self.ast.appendNode(self.gpa, full_region, binop_tag, .{ .binop = binop_idx });
+            
+            // Push result back on value stack
+            try self.value_stack.append(self.gpa, binop_node);
+            
+            // Continue checking for more operators
+            try self.state_stack.append(self.gpa, .expr_check_binop);
+            return .continue_processing;
+        },
+        
+        .lambda_args => {
+            // Parse lambda arguments between | |
+            _ = self.state_stack.pop();
+            
+            // Expect opening |
+            if (self.peek() != .OpBar) {
+                // Malformed lambda
+                const region = self.currentRegion();
+                const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                try self.value_stack.append(self.gpa, node);
+                try self.state_stack.append(self.gpa, .expr_done);
+                return .continue_processing;
+            }
+            
+            self.advance(); // consume |
+            
+            // Collect arguments
+            const scratch_marker = self.markScratchNodes();
+            
+            while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
+                // For now, just parse identifiers and underscores as args
+                switch (self.peek()) {
+                    .LowerIdent => {
+                        const ident = self.currentIdent();
+                        const region = self.currentRegion();
+                        self.advance();
+                        if (ident) |id| {
+                            const node = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = id });
+                            try self.scratch_nodes.append(self.gpa, node);
+                        }
+                    },
+                    .Underscore => {
+                        const region = self.currentRegion();
+                        self.advance();
+                        const node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
+                        try self.scratch_nodes.append(self.gpa, node);
+                    },
+                    else => break,
+                }
+                
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else if (self.peek() != .OpBar) {
+                    break;
+                }
+            }
+            
+            // Expect closing |
+            if (self.peek() != .OpBar) {
+                // Malformed lambda
+                const region = self.currentRegion();
+                const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expected_expr_bar });
+                try self.value_stack.append(self.gpa, node);
+                self.restoreScratchNodes(scratch_marker);
+                try self.state_stack.append(self.gpa, .expr_done);
+                return .continue_processing;
+            }
+            
+            self.advance(); // consume closing |
+            
+            // Store args in scratch_nodes (they're already there)
+            // The lambda_body state will collect them
+            
+            return .need_token;
+        },
+        
+        .lambda_body => {
+            // Parse lambda body
+            _ = self.state_stack.pop();
+            
+            // Parse body as expression
+            try self.state_stack.append(self.gpa, .expr_start);
+            return .continue_processing;
+        },
+        
+        .if_arrow => {
+            // After parsing condition, expect arrow
+            _ = self.state_stack.pop();
+            
+            if (self.peek() != .OpArrow) {
+                // Error: expected arrow after if condition
+                // But continue parsing anyway
+            } else {
+                self.advance(); // consume arrow
+            }
+            
+            return .continue_processing;
+        },
+        
+        .if_then_branch => {
+            // Parse then branch expression
+            _ = self.state_stack.pop();
+            
+            // Parse the then expression
+            try self.state_stack.append(self.gpa, .expr_start);
+            
+            return .continue_processing;
+        },
+        
+        .if_else_branch => {
+            // Check for else keyword and parse else branch
+            _ = self.state_stack.pop();
+            
+            if (self.peek() == .KwElse) {
+                self.advance(); // consume 'else'
+                
+                // Parse else expression
+                try self.state_stack.append(self.gpa, .expr_start);
+            }
+            // If no else, we'll create if without else branch
+            
+            return .continue_processing;
+        },
+        
+        .if_complete => {
+            // Complete if expression - combine all parts
+            _ = self.state_stack.pop();
+            
+            // Pop else branch (if present)
+            const else_branch = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            
+            // Pop then branch
+            const then_branch = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            
+            // Pop condition
+            const condition = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            
+            // Pop start position
+            const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            const start_pos = if (start_pos_val) |val| Position{ .offset = @as(u32, @intCast(@intFromEnum(val))) } else Position{ .offset = 0 };
+            
+            // Build if expression node
+            var nodes = std.ArrayList(Node.Idx).init(self.gpa);
+            defer nodes.deinit();
+            
+            if (condition) |c| try nodes.append(c);
+            if (then_branch) |t| try nodes.append(t);
+            if (else_branch) |e| try nodes.append(e);
+            
+            const nodes_slice = try self.gpa.alloc(Node.Idx, nodes.items.len);
+            @memcpy(nodes_slice, nodes.items);
+            const nodes_idx = try self.ast.node_slices.append(self.gpa, nodes_slice);
+            
+            // Determine end position
+            const end_pos = if (else_branch) |e| 
+                self.ast.getRegion(e).end
+            else if (then_branch) |t|
+                self.ast.getRegion(t).end
+            else
+                self.currentPosition();
+            
+            const region = makeRegion(start_pos, end_pos);
+            const if_node = try self.ast.nodes.add(self.gpa, .{
+                .tag = if (else_branch != null) .if_else else .if_no_else,
+                .main_token = 0,
+                .data = .{ .nodes = nodes_idx },
+            });
+            
+            try self.value_stack.append(self.gpa, if_node);
+            
+            return .continue_processing;
+        },
+        
+        .when_is => {
+            // After parsing scrutinee, expect 'is'
+            _ = self.state_stack.pop();
+            
+            if (self.peek() != .KwIs) {
+                // Error: expected 'is' after when scrutinee
+                // But continue parsing anyway
+            } else {
+                self.advance(); // consume 'is'
+            }
+            
+            return .continue_processing;
+        },
+        
+        .when_branches => {
+            // Parse when branches (pattern -> expr)
+            _ = self.state_stack.pop();
+            
+            // For now, create placeholder
+            // TODO: implement proper pattern and branch parsing
+            const region = self.currentRegion();
+            const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+            try self.value_stack.append(self.gpa, node);
+            
+            return .continue_processing;
+        },
+        
+        .when_complete => {
+            // Complete when expression
+            _ = self.state_stack.pop();
+            
+            // For now, just keep the placeholder from when_branches
+            // TODO: properly combine scrutinee and branches
+            
+            return .continue_processing;
+        },
+        
+        .lambda_complete => {
+            // Combine args and body into lambda node
+            _ = self.state_stack.pop();
+            
+            // Get body from value stack
+            const body = if (self.value_stack.items.len > 0)
+                self.value_stack.items[self.value_stack.items.len - 1]
+            else blk: {
+                // No body, create malformed
+                const region = self.currentRegion();
+                break :blk try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+            };
+            _ = self.value_stack.pop();
+            
+            // Get args from scratch_nodes
+            const args = self.getScratchNodesSince(0);
+            
+            // Build body_then_args array
+            var temp_nodes = std.ArrayList(Node.Idx).init(self.gpa);
+            defer temp_nodes.deinit();
+            try temp_nodes.append(body);
+            try temp_nodes.appendSlice(args);
+            
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, temp_nodes.items);
+            const region = self.currentRegion(); // TODO: Get proper region
+            const lambda_node = try self.ast.appendNode(self.gpa, region, .lambda, .{ .body_then_args = nodes_idx });
+            
+            // Push lambda node to value stack
+            try self.value_stack.append(self.gpa, lambda_node);
+            
+            // Continue with expression parsing
+            try self.state_stack.append(self.gpa, .expr_check_binop);
+            return .continue_processing;
+        },
+        
+        else => {
+            std.debug.print("PANIC: State not implemented: {s}\n", .{@tagName(state)});
+            std.debug.panic("State not implemented: {s}\n", .{@tagName(state)});
+        },
+    }
 }
 
 /// Get the region of the last consumed token
@@ -609,14 +2223,7 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
 
 /// Peek at the token at the current position (1 token lookahead only!)
 /// This is an LL(1) parser - we only ever look at the current token.
-///
-/// **note** caller is responsible to ensure this isn't the last token
-pub fn peek(self: *Parser) Token.Tag {
-    if (self.lookahead) |token| {
-        return token.tag;
-    }
-    return .EndOfFile;
-}
+// duplicate peek function removed
 
 /// Get the current token (if available)
 fn currentToken(self: *Parser) ?Token {
@@ -629,6 +2236,15 @@ fn currentExtra(self: *Parser) Token.Extra {
         return token.extra;
     }
     return .{ .none = 0 };
+}
+
+/// Try to consume a token of a specific type
+fn eat(self: *Parser, tag: Token.Tag) bool {
+    if (self.peek() == tag) {
+        self.advance();
+        return true;
+    }
+    return false;
 }
 
 /// Get the current token's region
@@ -1677,7 +3293,7 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
     if (tag == .SingleQuote) {
         // SingleQuote tokens are of the form 'x' where x is a single character
         // The region spans the entire token including quotes
-        const source_slice = self.token_iter.cursor.buf[region.start.offset..region.end.offset];
+        const source_slice = self.source[region.start.offset..region.end.offset];
 
         // Extract the character between the quotes
         // Format is 'x' where x could be an escaped character like '\n'
@@ -1967,7 +3583,8 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
             if (elem_opt) |elem| {
                 // In lambda args, { a, b } is shorthand for { a: a, b: b }
                 // If we're in lambda args and have a bare identifier, convert it
-                const final_elem = if (self.is_in_lambda_args and self.ast.tag(elem) == .lc) blk: {
+                // TODO: handle lambda args context
+                const final_elem = if (false and self.ast.tag(elem) == .lc) blk: {
                     // Convert bare identifier to field: identifier
                     const elem_region = self.ast.getRegion(elem);
                     const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
@@ -2243,8 +3860,9 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     defer self.restoreScratchNodes(scratch_marker);
 
     // Set flag to treat | as a closing delimiter while parsing parameters
-    self.is_in_lambda_args = true;
-    defer self.is_in_lambda_args = false;
+    // TODO: track lambda args context
+    // self.is_in_lambda_args = true;
+    // defer self.is_in_lambda_args = false;
 
     // Parse parameters (as expressions since we don't distinguish patterns)
     while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
@@ -2419,6 +4037,7 @@ pub fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpDoubleQuestion => .{ .left = 80, .right = 81 },
         .OpAssign => .{ .left = 5, .right = 6 },
         .OpColon => .{ .left = 3, .right = 4 },
+        .OpColonEqual => .{ .left = 3, .right = 4 },
         .OpArrow => .{ .left = 2, .right = 3 },
         .OpFatArrow => .{ .left = 1, .right = 2 },
         .KwAs => .{ .left = 3, .right = 4 },
@@ -2433,6 +4052,7 @@ pub fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpEquals => .binop_double_equals,
         .OpNotEquals => .binop_not_equals,
         .OpColon => .binop_colon,
+        .OpColonEqual => .binop_colon_equals,
         .OpPlus => .binop_plus,
         .OpBinaryMinus, .OpUnaryMinus => .binop_minus,
         .OpStar => .binop_star,
@@ -2453,3 +4073,4 @@ pub fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         else => null,
     };
 }
+

@@ -83,10 +83,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "addTwo")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "addTwo")
@@ -94,10 +91,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "addTwoF64")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "addTwoF64")

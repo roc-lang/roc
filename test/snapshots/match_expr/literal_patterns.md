@@ -17,9 +17,7 @@ match Answer {
 KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow String UpperIdent OpFatArrow Int Int OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (uc "Answer")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

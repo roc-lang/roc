@@ -15,9 +15,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 # PARSE
 ~~~clojure
 (binop_thick_arrow
-  (match
-    (scrutinee       (lc "numbers")
-))
+  (match <0 branches>)
   (ellipsis)
 )
 ~~~

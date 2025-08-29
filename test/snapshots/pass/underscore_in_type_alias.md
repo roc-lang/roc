@@ -154,18 +154,11 @@ at 15:18 to 15:19
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.malformed)
-      (Expr.apply_tag)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)

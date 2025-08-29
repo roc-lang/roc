@@ -99,22 +99,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "curry")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "_a")
-        (Expr.binop_thin_arrow
-          (Expr.lookup "_b")
-          (Expr.lookup "_c")
-        )
-      )
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "_a")
-          (Expr.lookup "_b")
-        )
-        (Expr.lookup "_c")
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "curry")

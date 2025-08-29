@@ -121,10 +121,7 @@ at 11:34 to 11:40
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.lookup "elem")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")

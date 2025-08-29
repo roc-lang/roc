@@ -166,13 +166,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "makeAdder")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.lookup "a")
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "makeAdder")
@@ -180,10 +174,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "curriedAdd")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "curriedAdd")
@@ -191,16 +182,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "applyTwice")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.lookup "a")
-      )
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.lookup "a")
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "applyTwice")
@@ -208,10 +190,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "addThreeTwice")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "addThreeTwice")

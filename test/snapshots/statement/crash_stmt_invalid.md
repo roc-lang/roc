@@ -16,7 +16,7 @@ KwCrash Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+crash 42
 ~~~
 # EXPECTED
 NIL

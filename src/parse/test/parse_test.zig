@@ -1090,8 +1090,8 @@ test "Parser2: iterative parser simple expression" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(allocator);
 
-        // Create parser with iterative mode enabled
-        var parser = try Parser2.initWithOptions(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        // Create parser
+        var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
         defer parser.deinit();
 
         const result = try parser.parseExpr();
@@ -1114,8 +1114,8 @@ test "Parser2: iterative parser simple expression" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(allocator);
 
-        // Create parser with iterative mode enabled
-        var parser = try Parser2.initWithOptions(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        // Create parser
+        var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
         defer parser.deinit();
 
         const result = try parser.parseExpr();

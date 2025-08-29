@@ -66,10 +66,7 @@ NIL
 (Expr.binop_or
   (Expr.binop_or
     (Expr.binop_gt
-      (Expr.binop_double_question
-        (Expr.apply_tag)
-        (Expr.num_literal_i32 12)
-      )
+      (Expr.binop_double_question)
       (Expr.binop_star
         (Expr.num_literal_i32 5)
         (Expr.num_literal_i32 5)

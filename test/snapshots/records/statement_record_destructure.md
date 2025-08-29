@@ -27,7 +27,9 @@ KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma Lowe
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+{ name, age, email } = person
 ~~~
 # EXPECTED
 NIL

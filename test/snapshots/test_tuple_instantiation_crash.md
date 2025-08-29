@@ -81,16 +81,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "swap")
-    (Expr.binop_thin_arrow
-      (Expr.tuple_literal
-        (Expr.lookup "a")
-        (Expr.lookup "b")
-      )
-      (Expr.tuple_literal
-        (Expr.lookup "b")
-        (Expr.lookup "a")
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "swap")

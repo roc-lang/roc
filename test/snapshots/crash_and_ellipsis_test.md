@@ -160,10 +160,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "testEllipsis")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "testEllipsis")
@@ -171,10 +168,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "testCrash")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "testCrash")
@@ -182,10 +176,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "testCrashSimple")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "testCrashSimple")

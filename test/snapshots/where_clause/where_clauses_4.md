@@ -81,10 +81,7 @@ at 6:14 to 6:17
   (Expr.binop_colon
     (Expr.lookup "decodeThings")
     (Expr.binop_colon
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
+      (Expr.binop_thin_arrow)
       (Expr.lambda)
     )
   )

@@ -17,9 +17,7 @@ match coord {
 KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound OpFatArrow String OpenRound LowerIdent Comma UpperIdent CloseRound OpFatArrow LowerIdent OpenRound UpperIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "coord")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

@@ -23,8 +23,7 @@ const Formatter = struct {
     ast: *const AST2,
     source: []const u8,
     ident_store: *const Ident.Store,
-    tokens: std.ArrayList(Token),
-    token_regions: std.ArrayList(base.Region), // Region for each token
+    tokens: []const Token, // Now uses pre-collected tokens from parser
     output: std.ArrayList(u8),
 
     // Formatting state - matches original formatter
@@ -33,28 +32,21 @@ const Formatter = struct {
     last_formatted_pos: usize = 0, // Current position in source being formatted
     last_comment_end: usize = 0, // Track last comment position to avoid duplicates
 
-    fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store) !Formatter {
-        var formatter = Formatter{
+    fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, tokens: []const Token) !Formatter {
+        return Formatter{
             .allocator = allocator,
             .ast = ast,
             .source = source,
             .ident_store = ident_store,
-            .tokens = std.ArrayList(Token).init(allocator),
-            .token_regions = std.ArrayList(base.Region).init(allocator),
+            .tokens = tokens, // Use pre-collected tokens
             .output = std.ArrayList(u8).init(allocator),
             .last_formatted_pos = 0,
             .last_comment_end = 0,
         };
-
-        // Tokenize once at the beginning
-        try formatter.tokenizeSource();
-
-        return formatter;
     }
 
     fn deinit(self: *Formatter) void {
-        self.tokens.deinit();
-        self.token_regions.deinit();
+        // tokens are now owned externally, don't deinit them
         self.output.deinit();
     }
 
@@ -79,7 +71,7 @@ const Formatter = struct {
         }
 
         // Flush any trailing comments using token-based approach
-        if (self.token_regions.items.len > 0) {
+        if (self.tokens.len > 0) {
             _ = try self.flushTrailingComments();
         }
     }
@@ -124,8 +116,8 @@ const Formatter = struct {
 
     /// Find the token index that contains or is after the given position
     fn findTokenAtPosition(self: *const Formatter, pos: Position) ?usize {
-        for (self.token_regions.items, 0..) |region, i| {
-            if (region.start.offset >= pos.offset) {
+        for (self.tokens, 0..) |token, i| {
+            if (token.region.start.offset >= pos.offset) {
                 return i;
             }
         }
@@ -135,8 +127,8 @@ const Formatter = struct {
     /// Find the token index that is before the given position
     fn findTokenBeforePosition(self: *const Formatter, pos: Position) ?usize {
         var result: ?usize = null;
-        for (self.token_regions.items, 0..) |region, i| {
-            if (region.end.offset <= pos.offset) {
+        for (self.tokens, 0..) |token, i| {
+            if (token.region.end.offset <= pos.offset) {
                 result = i;
             } else {
                 break;
@@ -2928,7 +2920,7 @@ const Formatter = struct {
         if (token_idx == 0) return false;
 
         // Get the region between previous token and this position
-        const prev_token_end = self.token_regions.items[token_idx - 1].end.offset;
+        const prev_token_end = self.tokens[token_idx - 1].region.end.offset;
         const end_offset = pos.offset;
 
         if (end_offset <= prev_token_end) return false;
@@ -2940,11 +2932,11 @@ const Formatter = struct {
     fn flushCommentsAfterToken(self: *Formatter, pos: Position) !bool {
         // Find the token before this position
         const token_idx = self.findTokenBeforePosition(pos) orelse return false;
-        if (token_idx >= self.token_regions.items.len - 1) return false;
+        if (token_idx >= self.tokens.len - 1) return false;
 
         // Get the region between this position and next token
         const start_offset = pos.offset;
-        const next_token_start = self.token_regions.items[token_idx + 1].start.offset;
+        const next_token_start = self.tokens[token_idx + 1].region.start.offset;
 
         if (next_token_start <= start_offset) return false;
 
@@ -3052,9 +3044,9 @@ const Formatter = struct {
     }
 
     fn flushTrailingComments(self: *Formatter) !bool {
-        if (self.token_regions.items.len == 0) return false;
+        if (self.tokens.len == 0) return false;
 
-        const last_token_end = self.token_regions.items[self.token_regions.items.len - 1].end.offset;
+        const last_token_end = self.tokens[self.tokens.len - 1].region.end.offset;
         if (last_token_end >= self.source.len) return false;
 
         const remaining = self.source[last_token_end..];
@@ -3063,8 +3055,39 @@ const Formatter = struct {
 };
 
 /// Formats AST2 with source code
-pub fn formatAst(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, root_node: ?Node.Idx) ![]u8 {
-    var formatter = try Formatter.init(allocator, ast, source, ident_store);
+pub fn formatAst(
+    allocator: std.mem.Allocator,
+    ast: *const AST2,
+    source: []const u8,
+    ident_store: *const Ident.Store,
+    root_node: ?Node.Idx,
+) ![]u8 {
+    // Parse and collect tokens using the new token-fed architecture
+    var env = try CommonEnv.init(allocator, source);
+    defer env.deinit(allocator);
+    
+    var byte_slices = collections.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
+    
+    var messages: [256]tokenize_iter.Diagnostic = undefined;
+    
+    // Create a temporary AST for parsing (we'll use the provided one for formatting)
+    var parse_ast = try AST2.initCapacity(allocator, 1024);
+    defer parse_ast.deinit(allocator);
+    
+    // Parse and collect tokens
+    const parse_result = try Parser2.parseAndCollectTokens(
+        &env,
+        allocator,
+        source,
+        &messages,
+        &parse_ast,
+        &byte_slices,
+    );
+    var tokens = parse_result.tokens;
+    defer tokens.deinit();
+    
+    var formatter = try Formatter.init(allocator, ast, source, ident_store, tokens.items);
     defer formatter.deinit();
 
     try formatter.format(root_node);
@@ -3074,5 +3097,6 @@ pub fn formatAst(allocator: std.mem.Allocator, ast: *const AST2, source: []const
 
     return output;
 }
+
 
 // Keep the old interface for compatibility

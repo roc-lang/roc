@@ -79,16 +79,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "apply")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "_a")
-          (Expr.lookup "_b")
-        )
-        (Expr.lookup "_a")
-      )
-      (Expr.lookup "_b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "apply")

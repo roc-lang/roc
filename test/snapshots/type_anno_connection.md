@@ -71,10 +71,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add_one")

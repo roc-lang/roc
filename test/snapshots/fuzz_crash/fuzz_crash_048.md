@@ -116,28 +116,15 @@ at 8:36 to 8:37
   )
   (Expr.binop_colon
     (Expr.lookup "biz")
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-      (Expr.lookup "c")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.lookup "tag_tuple")

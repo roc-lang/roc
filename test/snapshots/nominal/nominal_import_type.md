@@ -66,10 +66,7 @@ at 6:12 to 6:16
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "red")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_equals
     (Expr.lookup "red")

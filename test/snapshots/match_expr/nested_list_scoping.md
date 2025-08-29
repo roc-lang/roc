@@ -16,9 +16,7 @@ match nestedList {
 KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma OpenSquare LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare OpenSquare LowerIdent Comma LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpBinaryMinus LowerIdent OpenSquare LowerIdent Comma OpenSquare LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpStar LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "nestedList")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

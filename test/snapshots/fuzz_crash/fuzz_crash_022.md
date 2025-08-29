@@ -121,10 +121,7 @@ at 6:35 to 6:40
   )
   (Expr.binop_colon
     (Expr.lookup "ser")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "getUser")

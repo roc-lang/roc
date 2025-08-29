@@ -72,13 +72,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "pair")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.tuple_literal
-        (Expr.lookup "a")
-        (Expr.lookup "a")
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "pair")

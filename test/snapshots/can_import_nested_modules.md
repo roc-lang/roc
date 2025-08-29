@@ -332,13 +332,7 @@ at 26:24 to 26:32
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "parseConfig")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "parseConfig")
@@ -346,16 +340,7 @@ at 26:24 to 26:32
   )
   (Expr.binop_colon
     (Expr.lookup "authenticate")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "authenticate")
@@ -363,13 +348,7 @@ at 26:24 to 26:32
   )
   (Expr.binop_colon
     (Expr.lookup "processData")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processData")
@@ -377,10 +356,7 @@ at 26:24 to 26:32
   )
   (Expr.binop_colon
     (Expr.lookup "formatOutput")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "formatOutput")
@@ -388,13 +364,7 @@ at 26:24 to 26:32
   )
   (Expr.binop_colon
     (Expr.lookup "validateAuth")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "validateAuth")

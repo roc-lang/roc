@@ -51,10 +51,7 @@ NIL
 (Expr.block
   (Expr.binop_equals
     (Expr.lookup "foo")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.malformed)
 )

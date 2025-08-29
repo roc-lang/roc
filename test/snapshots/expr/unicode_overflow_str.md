@@ -16,7 +16,7 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"\u(FFFFFF)"
 ~~~
 # EXPECTED
 NIL

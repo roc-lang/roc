@@ -437,70 +437,7 @@ at 16:37 to 16:40
       (Expr.lookup "a")
       (Expr.binop_colon
         (Expr.lambda)
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.binop_thin_arrow
-            (Expr.lookup "a")
-            (Expr.binop_thin_arrow
-              (Expr.malformed)
-              (Expr.binop_colon
-                (Expr.tuple_literal
-                  (Expr.apply_tag)
-                  (Expr.lambda)
-                )
-                (Expr.binop_thin_arrow
-                  (Expr.lookup "a")
-                  (Expr.binop_thin_arrow
-                    (Expr.lookup "a")
-                    (Expr.binop_thin_arrow
-                      (Expr.malformed)
-                      (Expr.binop_colon
-                        (Expr.binop_colon
-                          (Expr.tuple_literal
-                            (Expr.apply_tag)
-                            (Expr.apply_tag)
-                          )
-                          (Expr.lookup "b")
-                        )
-                        (Expr.binop_colon
-                          (Expr.lambda)
-                          (Expr.binop_thin_arrow
-                            (Expr.lookup "b")
-                            (Expr.binop_thin_arrow
-                              (Expr.lookup "b")
-                              (Expr.binop_thin_arrow
-                                (Expr.malformed)
-                                (Expr.binop_colon
-                                  (Expr.tuple_literal
-                                    (Expr.apply_tag)
-                                    (Expr.lambda)
-                                  )
-                                  (Expr.binop_thin_arrow
-                                    (Expr.lookup "b")
-                                    (Expr.binop_thin_arrow
-                                      (Expr.lookup "b")
-                                      (Expr.binop_thin_arrow
-                                        (Expr.malformed)
-                                        (Expr.tuple_literal
-                                          (Expr.apply_tag)
-                                          (Expr.apply_tag)
-                                        )
-                                      )
-                                    )
-                                  )
-                                )
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
+        (Expr.binop_thin_arrow)
       )
     )
   )
@@ -525,17 +462,7 @@ at 16:37 to 16:40
   (Expr.binop_colon
     (Expr.lookup "g")
     (Expr.binop_equals
-      (Expr.tuple_literal
-        (Expr.binop_colon
-          (Expr.binop_thin_arrow
-            (Expr.lookup "e")
-            (Expr.lookup "e")
-          )
-          (Expr.lambda)
-        )
-        (Expr.lambda)
-        (Expr.lookup "h")
-      )
+      (Expr.tuple_literal)
       (Expr.malformed)
     )
   )

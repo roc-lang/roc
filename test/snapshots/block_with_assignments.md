@@ -139,10 +139,7 @@ at 5:16 to 5:20
   )
   (Expr.binop_equals
     (Expr.lookup "pair")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 1)
-      (Expr.str_literal_big)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "record")

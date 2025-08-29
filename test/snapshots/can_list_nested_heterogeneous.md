@@ -24,7 +24,7 @@ OpenSquare OpenSquare CloseSquare Comma OpenSquare Int CloseSquare Comma OpenSqu
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[[], [1], ["hello"]]
 ~~~
 # EXPECTED
 NIL

@@ -16,7 +16,7 @@ KwCrash String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+crash "some message"
 ~~~
 # EXPECTED
 NIL

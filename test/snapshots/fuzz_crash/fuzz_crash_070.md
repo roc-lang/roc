@@ -33,8 +33,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.tuple_literal
-  )
+  (Expr.tuple_literal)
   (Expr.lambda)
 )
 ~~~

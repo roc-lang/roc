@@ -15,9 +15,7 @@ match isReady {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "isReady")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

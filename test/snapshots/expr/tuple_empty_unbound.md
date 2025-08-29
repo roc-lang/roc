@@ -16,7 +16,7 @@ OpenRound CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+()
 ~~~
 # EXPECTED
 NIL
@@ -24,8 +24,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.tuple_literal
-)
+(Expr.tuple_literal)
 ~~~
 # SOLVED
 ~~~clojure

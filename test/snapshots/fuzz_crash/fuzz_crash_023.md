@@ -1501,32 +1501,16 @@ at 193:4 to 193:7
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.apply_tag)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -1577,13 +1561,7 @@ at 193:4 to 193:7
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add_one_oneline")
@@ -1591,10 +1569,7 @@ at 193:4 to 193:7
   )
   (Expr.binop_colon
     (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add_one")
@@ -1675,18 +1650,13 @@ at 193:4 to 193:7
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.not_lookup)
     (Expr.lambda)
   )
-  (Expr.crash
-    (Expr.str_literal_big)
-  )
+  (Expr.crash)
   (Expr.binop_equals
     (Expr.lookup "tag_with_payload")
     (Expr.apply_tag)
@@ -1738,56 +1708,23 @@ at 193:4 to 193:7
   )
   (Expr.binop_colon
     (Expr.lookup "az")
-    (Expr.tuple_literal
-      (Expr.binop_colon
-        (Expr.tuple_literal
-          (Expr.lookup "tag")
-          (Expr.lookup "qux")
-        )
-        (Expr.apply_tag)
-      )
-      (Expr.lookup "punned")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.malformed)
   (Expr.binop_equals
     (Expr.lookup "tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "multiline_tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag1")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "bin_op_result")
     (Expr.binop_or
       (Expr.binop_or
         (Expr.binop_gt
-          (Expr.binop_double_question
-            (Expr.apply_tag)
-            (Expr.num_literal_i32 12)
-          )
+          (Expr.binop_double_question)
           (Expr.binop_star
             (Expr.num_literal_i32 5)
             (Expr.num_literal_i32 5)

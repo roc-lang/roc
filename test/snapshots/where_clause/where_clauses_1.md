@@ -102,32 +102,11 @@ at 8:27 to 8:30
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.binop_thin_arrow
-        (Expr.binop_colon
-          (Expr.lookup "a")
-          (Expr.binop_colon
-            (Expr.lambda)
-            (Expr.lookup "hasher")
-          )
-        )
-        (Expr.lookup "hasher")
-      )
-      (Expr.lambda)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.lookup "a")
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.lookup "a")
-    )
+    (Expr.binop_thin_arrow)
   )
 )
 ~~~

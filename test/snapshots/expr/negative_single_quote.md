@@ -16,7 +16,7 @@ OpUnaryMinus SingleQuote ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-'i'
 ~~~
 # EXPECTED
 NIL

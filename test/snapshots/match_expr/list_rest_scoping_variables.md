@@ -17,9 +17,7 @@ match data {
 KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "data")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

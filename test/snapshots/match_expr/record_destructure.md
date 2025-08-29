@@ -16,9 +16,7 @@ match ... {
 KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpFatArrow String OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly CloseCurly OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (ellipsis)
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

@@ -106,17 +106,11 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "swapPair")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "swapPair")

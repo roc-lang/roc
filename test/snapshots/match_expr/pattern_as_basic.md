@@ -14,12 +14,7 @@ match (1, 2) {
 KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound KwAs LowerIdent OpFatArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (tuple_literal
-      (num_literal_i32 1)
-      (num_literal_i32 2)
-    )
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

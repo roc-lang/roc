@@ -84,31 +84,7 @@ at 6:9 to 6:12
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.binop_thin_arrow
-          (Expr.binop_colon
-            (Expr.tuple_literal
-              (Expr.binop_thin_arrow
-                (Expr.binop_colon
-                  (Expr.lookup "c")
-                  (Expr.binop_colon
-                    (Expr.lambda)
-                    (Expr.lookup "a")
-                  )
-                )
-                (Expr.lookup "c")
-              )
-              (Expr.lambda)
-            )
-            (Expr.lookup "b")
-          )
-          (Expr.lookup "c")
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")

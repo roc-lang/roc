@@ -28,7 +28,10 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x : Dec
+x = 123.456
 ~~~
 # EXPECTED
 NIL

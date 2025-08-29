@@ -16,7 +16,7 @@ KwIf LowerIdent Int KwElse Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool 1 else 2
 ~~~
 # EXPECTED
 NIL

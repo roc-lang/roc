@@ -69,9 +69,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (body
         (binop_thin_arrow
           (binop_colon
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (apply_uc
               (uc "Maybe")
               (apply_uc
@@ -199,10 +197,7 @@ at 6:18 to 12:12
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "processComplex")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processComplex")

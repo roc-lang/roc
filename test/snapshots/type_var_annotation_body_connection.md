@@ -87,10 +87,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "identity")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "identity")

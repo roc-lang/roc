@@ -90,9 +90,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
     (lc "is_ok")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
-))
+        (match <0 branches>)
       )
       (args
         (lc "result")
@@ -135,10 +133,7 @@ at 5:25 to 5:26
   )
   (Expr.binop_colon
     (Expr.lookup "ok")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "ok")
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "ok")
@@ -146,10 +141,7 @@ at 5:25 to 5:26
   )
   (Expr.binop_colon
     (Expr.lookup "is_ok")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "is_ok")

@@ -59,19 +59,7 @@ at 1:28 to 1:31
   (Expr.binop_colon
     (Expr.lookup "s")
     (Expr.binop_colon
-      (Expr.tuple_literal
-        (Expr.binop_colon
-          (Expr.binop_thin_arrow
-            (Expr.lookup "b")
-            (Expr.lookup "c")
-          )
-          (Expr.binop_colon
-            (Expr.lambda)
-            (Expr.lookup "c")
-          )
-        )
-        (Expr.lookup "u")
-      )
+      (Expr.tuple_literal)
       (Expr.lookup "o")
     )
   )

@@ -19,9 +19,7 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
     (uc "C")
     (binop_or
       (lc "k")
-      (match
-        (scrutinee           (num_literal_i32 0)
-))
+      (match <0 branches>)
     )
   )
 )

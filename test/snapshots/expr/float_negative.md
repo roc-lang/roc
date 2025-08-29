@@ -16,7 +16,7 @@ OpUnaryMinus Float ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-2.5
 ~~~
 # EXPECTED
 NIL

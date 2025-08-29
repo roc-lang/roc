@@ -15,47 +15,7 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "person")
-)
-  (branch1     (binop_thick_arrow
-      (binop_as
-        (block
-          (record_literal
-            (lc "name")
-            (binop_colon
-              (lc "address")
-              (block
-                (lc "city")
-              )
-            )
-          )
-          (malformed malformed:expr_unexpected_token)
-          (lc "addr")
-        )
-        (lc "fullPerson")
-      )
-      (tuple_literal
-        (lc "fullPerson")
-        (lc "addr")
-        (lc "city")
-      )
-    )
-)
-  (branch2     (binop_thick_arrow
-      (binop_as
-        (block
-          (lc "name")
-        )
-        (lc "simplePerson")
-      )
-      (tuple_literal
-        (lc "simplePerson")
-        (lc "name")
-        (str_literal_big "unknown")
-      )
-    )
-))
+(match <2 branches>)
 ~~~
 # FORMATTED
 ~~~roc

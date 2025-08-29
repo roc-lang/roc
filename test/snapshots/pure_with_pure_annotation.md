@@ -116,13 +116,7 @@ at 5:14 to 5:28
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "add")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add")
@@ -130,10 +124,7 @@ at 5:14 to 5:28
   )
   (Expr.binop_colon
     (Expr.lookup "double")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "double")

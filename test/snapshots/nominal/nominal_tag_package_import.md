@@ -81,10 +81,7 @@ at 8:10 to 8:16
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "blue")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_equals
     (Expr.lookup "blue")

@@ -71,9 +71,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
       (body
         (binop_thin_arrow
           (record_literal
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (binop_colon
               (lc "identity")
               (binop_thin_arrow
@@ -251,16 +249,7 @@ at 5:34 to 17:18
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "map_result")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "map_result")
@@ -272,10 +261,7 @@ at 5:34 to 17:18
   )
   (Expr.binop_colon
     (Expr.lookup "list_length")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "list_length")
@@ -283,10 +269,7 @@ at 5:34 to 17:18
   )
   (Expr.binop_colon
     (Expr.lookup "wrap_in_result")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "wrap_in_result")

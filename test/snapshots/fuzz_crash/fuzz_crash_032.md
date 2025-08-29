@@ -55,9 +55,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare UpperIdent OpColon L
               (uc "RGB")
             )
           )
-          (match
-            (scrutinee               (lc "color")
-))
+          (match <0 branches>)
         )
       )
       (args
@@ -107,20 +105,11 @@ at 6:18 to 6:34
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.binop_equals
-        (Expr.apply_tag)
-        (Expr.list_literal)
-      )
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_colon
     (Expr.lookup "olor")
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.lookup "tus")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "olor")

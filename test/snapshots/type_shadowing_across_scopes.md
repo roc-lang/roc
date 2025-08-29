@@ -99,10 +99,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "processData")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processData")

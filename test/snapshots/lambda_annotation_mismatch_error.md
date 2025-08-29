@@ -83,10 +83,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "string_function")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "string_function")
@@ -94,10 +91,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "wrong_type_function")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "wrong_type_function")

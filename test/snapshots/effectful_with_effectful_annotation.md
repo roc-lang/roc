@@ -87,11 +87,7 @@ at 7:20 to 7:26
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.record_literal
-      )
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_equals
     (Expr.not_lookup)

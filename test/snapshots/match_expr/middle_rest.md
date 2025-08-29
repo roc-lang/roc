@@ -18,9 +18,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
 # PARSE
 ~~~clojure
 (binop_thick_arrow
-  (match
-    (scrutinee       (lc "items")
-))
+  (match <0 branches>)
   (binop_plus
     (binop_plus
       (binop_plus

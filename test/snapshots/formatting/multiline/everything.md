@@ -385,9 +385,7 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
               (malformed malformed:expr_unexpected_token)
             )
           )
-          (match
-            (scrutinee               (lc "x")
-))
+          (match <0 branches>)
         )
       )
       (args
@@ -621,31 +619,7 @@ at 58:37 to 58:40
       (Expr.lookup "a")
       (Expr.binop_colon
         (Expr.lambda)
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.binop_thin_arrow
-            (Expr.lookup "a")
-            (Expr.binop_thin_arrow
-              (Expr.malformed)
-              (Expr.binop_colon
-                (Expr.tuple_literal
-                  (Expr.apply_tag)
-                  (Expr.lambda)
-                )
-                (Expr.binop_thin_arrow
-                  (Expr.lookup "a")
-                  (Expr.binop_thin_arrow
-                    (Expr.lookup "a")
-                    (Expr.binop_thin_arrow
-                      (Expr.malformed)
-                      (Expr.apply_tag)
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
+        (Expr.binop_thin_arrow)
       )
     )
   )
@@ -655,31 +629,7 @@ at 58:37 to 58:40
       (Expr.lookup "b")
       (Expr.binop_colon
         (Expr.lambda)
-        (Expr.binop_thin_arrow
-          (Expr.lookup "b")
-          (Expr.binop_thin_arrow
-            (Expr.lookup "b")
-            (Expr.binop_thin_arrow
-              (Expr.malformed)
-              (Expr.binop_colon
-                (Expr.tuple_literal
-                  (Expr.apply_tag)
-                  (Expr.lambda)
-                )
-                (Expr.binop_thin_arrow
-                  (Expr.lookup "b")
-                  (Expr.binop_thin_arrow
-                    (Expr.lookup "b")
-                    (Expr.binop_thin_arrow
-                      (Expr.malformed)
-                      (Expr.apply_tag)
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
+        (Expr.binop_thin_arrow)
       )
     )
   )
@@ -704,16 +654,7 @@ at 58:37 to 58:40
   )
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.tuple_literal
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "e")
-          (Expr.lookup "e")
-        )
-        (Expr.lambda)
-      )
-      (Expr.lambda)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "h")

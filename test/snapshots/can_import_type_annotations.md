@@ -172,9 +172,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
                 )
               )
             )
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (binop_colon
               (lc "config")
               (binop_pipe
@@ -285,9 +283,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
     (lc "combineResults")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result1")
-))
+        (match <0 branches>)
       )
       (args
         (tuple_literal
@@ -404,10 +400,7 @@ at 27:44 to 27:51
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "processRequest")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processRequest")
@@ -415,13 +408,7 @@ at 27:44 to 27:51
   )
   (Expr.binop_colon
     (Expr.lookup "parseJson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "parseJson")
@@ -429,13 +416,7 @@ at 27:44 to 27:51
   )
   (Expr.binop_colon
     (Expr.lookup "handleApi")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handleApi")
@@ -447,13 +428,7 @@ at 27:44 to 27:51
   )
   (Expr.binop_colon
     (Expr.lookup "combineResults")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "combineResults")

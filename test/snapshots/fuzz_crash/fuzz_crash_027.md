@@ -1211,32 +1211,16 @@ at 145:4 to 145:7
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.apply_tag)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "line")
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -1276,13 +1260,7 @@ at 145:4 to 145:7
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "ane")
@@ -1290,10 +1268,7 @@ at 145:4 to 145:7
   )
   (Expr.binop_colon
     (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add_one")
@@ -1363,18 +1338,13 @@ at 145:4 to 145:7
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.not_lookup)
     (Expr.lambda)
   )
-  (Expr.crash
-    (Expr.malformed)
-  )
+  (Expr.crash)
   (Expr.binop_equals
     (Expr.lookup "tag_with")
     (Expr.apply_tag)
@@ -1432,42 +1402,18 @@ at 145:4 to 145:7
   )
   (Expr.binop_equals
     (Expr.lookup "tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "m_tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag1")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "bsult")
     (Expr.binop_or
       (Expr.binop_or
         (Expr.binop_gt
-          (Expr.binop_double_question
-            (Expr.apply_tag)
-            (Expr.num_literal_i32 12)
-          )
+          (Expr.binop_double_question)
           (Expr.binop_star
             (Expr.num_literal_i32 5)
             (Expr.num_literal_i32 5)

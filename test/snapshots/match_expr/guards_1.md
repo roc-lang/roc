@@ -16,9 +16,7 @@ match value {
 KwMatch LowerIdent OpenCurly LowerIdent KwIf LowerIdent OpGreaterThan Int OpFatArrow String LowerIdent KwIf LowerIdent OpLessThan Int OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "value")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

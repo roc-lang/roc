@@ -365,9 +365,7 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperI
               (lc "y")
             )
           )
-          (match
-            (scrutinee               (lc "x")
-))
+          (match <0 branches>)
         )
       )
       (args
@@ -479,66 +477,15 @@ at 58:37 to 58:40
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.tuple_literal
-          (Expr.binop_thin_arrow
-            (Expr.binop_colon
-              (Expr.lookup "a")
-              (Expr.binop_colon
-                (Expr.lambda)
-                (Expr.tuple_literal
-                  (Expr.lookup "a")
-                  (Expr.lookup "a")
-                )
-              )
-            )
-            (Expr.apply_tag)
-          )
-          (Expr.lambda)
-        )
-        (Expr.tuple_literal
-          (Expr.lookup "a")
-          (Expr.lookup "a")
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.tuple_literal
-          (Expr.binop_thin_arrow
-            (Expr.binop_colon
-              (Expr.lookup "b")
-              (Expr.binop_colon
-                (Expr.lambda)
-                (Expr.tuple_literal
-                  (Expr.lookup "b")
-                  (Expr.lookup "b")
-                )
-              )
-            )
-            (Expr.apply_tag)
-          )
-          (Expr.lambda)
-        )
-        (Expr.tuple_literal
-          (Expr.lookup "b")
-          (Expr.lookup "b")
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -563,16 +510,7 @@ at 58:37 to 58:40
   )
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.tuple_literal
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "e")
-          (Expr.lookup "e")
-        )
-        (Expr.lambda)
-      )
-      (Expr.lambda)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_equals
     (Expr.lookup "h")

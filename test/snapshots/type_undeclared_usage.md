@@ -79,10 +79,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "processValue")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processValue")
@@ -90,10 +87,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
 )
 ~~~

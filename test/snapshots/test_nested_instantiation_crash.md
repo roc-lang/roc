@@ -154,19 +154,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "make_record")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "value")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "tag")
-          (Expr.apply_tag)
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "make_record")
@@ -174,19 +162,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "get_value")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "value")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "tag")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.lookup "a")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "get_value")
@@ -194,10 +170,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "composed")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "composed")

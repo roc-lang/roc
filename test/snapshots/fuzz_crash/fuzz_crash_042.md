@@ -64,10 +64,7 @@ at 1:26 to 1:28
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "r")
-      (Expr.lambda)
-    )
+    (Expr.binop_thin_arrow)
   )
 )
 ~~~

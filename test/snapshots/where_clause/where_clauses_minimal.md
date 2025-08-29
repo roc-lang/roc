@@ -63,19 +63,7 @@ at 5:9 to 5:12
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "convert_me")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.lookup "a")
-        )
-      )
-      (Expr.lookup "b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "convert_me")

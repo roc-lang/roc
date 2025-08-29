@@ -16,7 +16,7 @@ KwIf LowerIdent OpGreaterThan Int String KwElse String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if x > 5 "big" else "small"
 ~~~
 # EXPECTED
 NIL

@@ -20,7 +20,7 @@ OpenSquare Int Comma Int Comma Int CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[1, 2, 3]
 ~~~
 # EXPECTED
 NIL

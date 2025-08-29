@@ -87,10 +87,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "helper")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "helper")
@@ -98,13 +95,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "main")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "main")

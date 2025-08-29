@@ -113,10 +113,7 @@ at 7:5 to 7:11
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "printName")
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "printName")

@@ -193,10 +193,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "processResult")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processResult")
@@ -204,10 +201,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "handleResponse")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handleResponse")

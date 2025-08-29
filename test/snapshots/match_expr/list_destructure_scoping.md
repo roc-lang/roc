@@ -15,9 +15,7 @@ match list {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "list")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

@@ -87,19 +87,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "getName")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "name")
-          (Expr.apply_tag)
-        )
-        (Expr.binop_colon
-          (Expr.lookup "age")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "getName")

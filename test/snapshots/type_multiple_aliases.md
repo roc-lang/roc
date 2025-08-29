@@ -204,16 +204,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "create_user")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.apply_tag)
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "create_user")
@@ -221,10 +212,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "get_user_name")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "get_user_name")

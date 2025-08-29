@@ -23,7 +23,9 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x = 0xFF
 ~~~
 # EXPECTED
 NIL

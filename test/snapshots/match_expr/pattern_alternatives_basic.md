@@ -43,9 +43,7 @@ KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColon OpenSquare UpperId
     (lc "kind")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "color")
-))
+        (match <0 branches>)
       )
       (args
         (lc "color")
@@ -80,10 +78,7 @@ at 6:28 to 9:2
   )
   (Expr.binop_colon
     (Expr.lookup "kind")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "kind")

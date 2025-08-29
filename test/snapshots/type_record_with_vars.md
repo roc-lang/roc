@@ -78,19 +78,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "getField")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "field")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "other")
-          (Expr.lookup "_b")
-        )
-      )
-      (Expr.lookup "a")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "getField")

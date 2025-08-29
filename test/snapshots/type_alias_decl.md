@@ -260,10 +260,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.apply_tag)

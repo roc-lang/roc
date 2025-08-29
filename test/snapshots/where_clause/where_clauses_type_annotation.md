@@ -57,7 +57,10 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [convert]
+
+convert : a -> b where module(a).to_b : a -> b
+convert = |a| a.to_b()
 ~~~
 # EXPECTED
 NIL
@@ -70,19 +73,7 @@ at 3:30 to 3:33
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "convert")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.lookup "a")
-        )
-      )
-      (Expr.lookup "b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "convert")

@@ -71,17 +71,11 @@ at 7:6 to 7:9
   (Expr.list_literal)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thick_arrow)
   )
 )
 ~~~

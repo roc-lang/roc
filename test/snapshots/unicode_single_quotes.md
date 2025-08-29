@@ -272,10 +272,7 @@ at 23:1 to 23:3
 (Expr.block
   (Expr.binop_equals
     (Expr.lookup "x")
-    (Expr.tuple_literal
-      (Expr.str_literal_small)
-      (Expr.malformed)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.malformed)
   (Expr.malformed)

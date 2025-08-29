@@ -53,9 +53,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEq
               (uc "RGB")
             )
           )
-          (match
-            (scrutinee               (lc "color")
-))
+          (match <0 branches>)
         )
       )
       (args
@@ -109,10 +107,7 @@ at 9:5 to 9:21
   )
   (Expr.binop_colon
     (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processColor")

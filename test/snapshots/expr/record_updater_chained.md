@@ -163,10 +163,7 @@ at 6:52 to 6:53
   (Expr.binop_colon
     (Expr.lookup "name")
     (Expr.binop_colon
-      (Expr.tuple_literal
-        (Expr.str_literal_big)
-        (Expr.lookup "age")
-      )
+      (Expr.tuple_literal)
       (Expr.num_literal_i32 32)
     )
   )

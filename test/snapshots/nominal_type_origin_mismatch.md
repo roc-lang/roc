@@ -79,10 +79,7 @@ at 3:1 to 3:30
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "expectsPerson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "expectsPerson")

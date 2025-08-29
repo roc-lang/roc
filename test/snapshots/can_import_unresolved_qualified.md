@@ -259,13 +259,7 @@ at 27:30 to 27:42
   )
   (Expr.binop_colon
     (Expr.lookup "parseData")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "parseData")
@@ -273,10 +267,7 @@ at 27:30 to 27:42
   )
   (Expr.binop_colon
     (Expr.lookup "processRequest")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.lambda)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processRequest")

@@ -63,10 +63,7 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "value")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
 )
 ~~~

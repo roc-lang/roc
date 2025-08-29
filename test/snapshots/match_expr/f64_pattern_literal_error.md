@@ -16,9 +16,7 @@ match x {
 KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "x")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

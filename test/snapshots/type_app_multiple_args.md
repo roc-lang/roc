@@ -94,10 +94,7 @@ at 6:25 to 6:37
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "processDict")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "processDict")

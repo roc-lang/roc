@@ -115,28 +115,15 @@ at 7:36 to 7:37
   )
   (Expr.binop_colon
     (Expr.lookup "baz")
-    (Expr.tuple_literal
-      (Expr.lookup "_a")
-      (Expr.lookup "_b")
-      (Expr.lookup "_c")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.lookup "tag_tuple")

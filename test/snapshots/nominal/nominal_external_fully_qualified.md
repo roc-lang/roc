@@ -47,9 +47,7 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColo
     (lambda
       (body
         (block
-          (match
-            (scrutinee               (lc "result")
-))
+          (match <0 branches>)
         )
       )
       (args
@@ -93,10 +91,7 @@ at 3:1 to 3:22
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "handleResult")
-    (Expr.binop_thin_arrow
-      (Expr.apply_ident)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handleResult")

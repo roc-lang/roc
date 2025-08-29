@@ -76,9 +76,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (body
         (binop_thin_arrow
           (binop_colon
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (list_literal
               (apply_uc
                 (uc "Ok")
@@ -102,9 +100,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "is_ok_ret_bool")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
-))
+        (match <0 branches>)
       )
       (args
         (lc "result")
@@ -164,10 +160,7 @@ at 18:5 to 18:6
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")
@@ -175,10 +168,7 @@ at 18:5 to 18:6
   )
   (Expr.binop_colon
     (Expr.lookup "is_ok_ret_unqualified_bool")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "is_ok_ret_unqualified_bool")

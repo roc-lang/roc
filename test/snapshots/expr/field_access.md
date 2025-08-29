@@ -19,7 +19,7 @@ LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person.name
 ~~~
 # EXPECTED
 NIL

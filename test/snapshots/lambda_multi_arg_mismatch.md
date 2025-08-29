@@ -144,37 +144,7 @@ at 10:10 to 19:2
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "multi_arg_fn")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.binop_thin_arrow
-            (Expr.lookup "c")
-            (Expr.binop_thin_arrow
-              (Expr.lookup "a")
-              (Expr.binop_thin_arrow
-                (Expr.lookup "d")
-                (Expr.binop_thin_arrow
-                  (Expr.lookup "a")
-                  (Expr.binop_thin_arrow
-                    (Expr.lookup "e")
-                    (Expr.tuple_literal
-                      (Expr.lookup "a")
-                      (Expr.lookup "b")
-                      (Expr.lookup "c")
-                      (Expr.lookup "d")
-                      (Expr.lookup "e")
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "multi_arg_fn")

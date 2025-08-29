@@ -16,9 +16,7 @@ match color {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "color")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

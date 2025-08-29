@@ -28,7 +28,10 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssig
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x : U8
+x = 500
 ~~~
 # EXPECTED
 NIL

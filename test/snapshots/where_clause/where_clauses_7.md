@@ -125,19 +125,7 @@ at 14:9 to 14:12
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.binop_thin_arrow
-        (Expr.binop_colon
-          (Expr.lookup "a")
-          (Expr.binop_colon
-            (Expr.lambda)
-            (Expr.lookup "hasher")
-          )
-        )
-        (Expr.lookup "hasher")
-      )
-      (Expr.lambda)
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.apply_tag)

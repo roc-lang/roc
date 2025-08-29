@@ -14,9 +14,7 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpFatArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "person")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

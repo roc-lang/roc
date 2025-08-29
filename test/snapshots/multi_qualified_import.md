@@ -174,10 +174,7 @@ at 14:17 to 14:22
   )
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")

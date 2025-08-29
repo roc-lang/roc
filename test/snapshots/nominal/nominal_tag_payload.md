@@ -130,10 +130,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "some1")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "some1")
@@ -145,10 +142,7 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "none1")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_equals
     (Expr.lookup "some2")
@@ -156,10 +150,7 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "none2")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
 )
 ~~~

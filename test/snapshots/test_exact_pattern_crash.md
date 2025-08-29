@@ -220,17 +220,11 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
+    (Expr.tuple_literal)
   )
   (Expr.binop_colon
     (Expr.lookup "swap_pair")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "swap_pair")
@@ -238,22 +232,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "map_pair")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "c")
-        )
-        (Expr.binop_thin_arrow
-          (Expr.binop_thin_arrow
-            (Expr.lookup "b")
-            (Expr.lookup "d")
-          )
-          (Expr.apply_tag)
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "map_pair")

@@ -16,7 +16,7 @@ KwIf UpperIdent Dot UpperIdent UpperIdent OpenRound Int CloseRound KwElse UpperI
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if Bool.True Ok(0) else Err(1)
 ~~~
 # EXPECTED
 NIL

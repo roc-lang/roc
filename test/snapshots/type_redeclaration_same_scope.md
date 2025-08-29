@@ -46,7 +46,10 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [Maybe]
+
+Maybe(a) : [Some(a), None]
+Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
 NIL

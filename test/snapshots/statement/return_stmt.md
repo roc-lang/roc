@@ -16,7 +16,7 @@ KwReturn UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+return Bool.True
 ~~~
 # EXPECTED
 NIL

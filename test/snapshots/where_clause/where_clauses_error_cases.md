@@ -98,41 +98,11 @@ at 15:11 to 15:14
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "broken_fn1")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.lambda)
-      )
-      (Expr.lookup "b")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_colon
     (Expr.lookup "broken_fn2")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.binop_colon
-            (Expr.binop_thin_arrow
-              (Expr.lookup "a")
-              (Expr.lookup "b")
-            )
-            (Expr.binop_colon
-              (Expr.lookup "broken_fn3")
-              (Expr.lookup "a")
-            )
-          )
-          (Expr.lookup "b")
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.lookup "c")
-        )
-      )
-      (Expr.lookup "d")
-    )
+    (Expr.binop_thin_arrow)
   )
 )
 ~~~

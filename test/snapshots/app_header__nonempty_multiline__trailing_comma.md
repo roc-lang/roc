@@ -38,5 +38,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

@@ -49,9 +49,7 @@ at 3:5 to 3:8
     (Expr.malformed)
   )
   (Expr.block
-    (Expr.crash
-      (Expr.num_literal_i32 1)
-    )
+    (Expr.crash)
   )
 )
 ~~~

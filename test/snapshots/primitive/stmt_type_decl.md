@@ -47,12 +47,7 @@ NIL
 (Expr.record_literal
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.tuple_literal)
   )
 )
 ~~~

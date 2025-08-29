@@ -32,7 +32,7 @@ LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIde
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+process_user! : { name : Str, age : U32, ..a } => Str
 ~~~
 # EXPECTED
 NIL

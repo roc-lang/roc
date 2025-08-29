@@ -487,7 +487,7 @@ fn generateReportsFromNewSystem(
 
     // Convert Parser2 diagnostics to reports
     for (parser.diagnostics.items) |diag| {
-        const report = try convertParser2DiagnosticToReport(allocator, diag, parser, snapshot_path);
+        const report = try convertParser2DiagnosticToReport(allocator, diag, parser, env, snapshot_path);
         try reports.append(report);
     }
 
@@ -505,9 +505,11 @@ fn convertParser2DiagnosticToReport(
     allocator: std.mem.Allocator,
     diag: AST.Diagnostic,
     parser: *const Parser,
+    env: *const base.CommonEnv,
     snapshot_path: []const u8,
 ) !Report {
     _ = snapshot_path;
+    _ = parser;
 
     const title = switch (diag.tag) {
         .multiple_platforms => "Multiple Platforms",
@@ -531,7 +533,7 @@ fn convertParser2DiagnosticToReport(
     var report = Report.init(allocator, title, .runtime_error);
 
     // Convert offsets to line/column using CommonEnv
-    const region_info = parser.token_iter.env.calcRegionInfo(diag.region);
+    const region_info = env.calcRegionInfo(diag.region);
     const start_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
     defer allocator.free(start_str);
     const end_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
@@ -1174,7 +1176,7 @@ fn processSnapshotContent(
     // We'll generate other sections that depend on AST here too
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    try generateTokensSection2(&output, &parser, &content);
+    try generateTokensSection2(&output, &parser, &content, &env);
     try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
     const root_node_idx: ?AST.Node.Idx = if (parse_result) |idx| @as(AST.Node.Idx, @enumFromInt(idx)) else null;
     try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx);
@@ -2267,7 +2269,7 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
 // ============================================================================
 
 /// Generate TOKENS section for Parser2
-fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *const Content) !void {
+fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *const Content, env: *base.CommonEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("text");
 
@@ -2277,7 +2279,7 @@ fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *
     defer byte_slices_temp.entries.deinit(parser.gpa);
 
     var token_iter = try parse.tokenize_iter.TokenIterator.init(
-        parser.token_iter.env,
+        env,
         parser.gpa,
         content.source,
         &messages,

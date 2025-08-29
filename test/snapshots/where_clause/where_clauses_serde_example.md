@@ -91,19 +91,7 @@ at 4:14 to 4:17
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "deserialize")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.apply_tag)
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "deserialize")

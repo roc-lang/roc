@@ -284,9 +284,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
               )
             )
           )
-          (match
-            (scrutinee               (lc "bytes")
-))
+          (match <0 branches>)
           (binop_colon
             (lc "to_str")
             (binop_thin_arrow
@@ -298,9 +296,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
             (lc "to_str")
             (lambda
               (body
-                (match
-                  (scrutinee                     (lc "color")
-))
+                (match <0 branches>)
               )
               (args
                 (lc "color")
@@ -602,16 +598,7 @@ at 68:14 to 68:17
   )
   (Expr.binop_colon
     (Expr.lookup "rgb")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.apply_tag)
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "rgb")
@@ -619,19 +606,7 @@ at 68:14 to 68:17
   )
   (Expr.binop_colon
     (Expr.lookup "rgba")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.binop_thin_arrow
-            (Expr.apply_tag)
-            (Expr.apply_tag)
-          )
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "rgba")
@@ -639,10 +614,7 @@ at 68:14 to 68:17
   )
   (Expr.binop_colon
     (Expr.lookup "hex")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "hex")

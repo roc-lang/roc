@@ -61,17 +61,11 @@ at 12:6 to 12:9
 (Expr.block
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thick_arrow)
   )
 )
 ~~~

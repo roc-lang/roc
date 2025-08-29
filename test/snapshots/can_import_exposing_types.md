@@ -162,9 +162,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
                 )
               )
             )
-            (match
-              (scrutinee                 (lc "result")
-))
+            (match <0 branches>)
             (binop_colon
               (lc "processData")
               (uc "Config")
@@ -290,12 +288,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
       (body
         (binop_thin_arrow
           (binop_colon
-            (match
-              (scrutinee                 (binop_pipe
-                  (lc "response")
-                  (dot_lc "status")
-                )
-))
+            (match <0 branches>)
             (apply_uc
               (uc "Result")
               (tuple_literal
@@ -325,9 +318,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing Op
     (lc "combineResults")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "jsonResult")
-))
+        (match <0 branches>)
       )
       (args
         (tuple_literal
@@ -453,10 +444,7 @@ at 38:25 to 38:29
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "parseJson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "parseJson")
@@ -464,10 +452,7 @@ at 38:25 to 38:29
   )
   (Expr.binop_colon
     (Expr.lookup "handleRequest")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handleRequest")
@@ -496,13 +481,7 @@ at 38:25 to 38:29
   )
   (Expr.binop_colon
     (Expr.lookup "createClient")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "createClient")
@@ -510,10 +489,7 @@ at 38:25 to 38:29
   )
   (Expr.binop_colon
     (Expr.lookup "handleResponse")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "handleResponse")

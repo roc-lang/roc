@@ -196,10 +196,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "add")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "add")
@@ -207,10 +204,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "multiply")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "multiply")
@@ -218,10 +212,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "process")
@@ -229,10 +220,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "double")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "double")

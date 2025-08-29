@@ -83,10 +83,7 @@ at 4:15 to 4:18
 (Expr.block
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.lookup "_b")
-    )
+    (Expr.binop_thick_arrow)
   )
   (Expr.binop_equals
     (Expr.not_lookup)

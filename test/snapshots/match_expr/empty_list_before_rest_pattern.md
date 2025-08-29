@@ -15,9 +15,7 @@ match l {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow UpperIdent OpenRound UpperIdent CloseRound OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "l")
-))
+(match <0 branches>)
 ~~~
 # FORMATTED
 ~~~roc

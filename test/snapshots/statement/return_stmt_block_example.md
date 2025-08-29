@@ -87,10 +87,7 @@ at 5:11 to 5:25
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "foo")

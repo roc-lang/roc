@@ -179,10 +179,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "single_use")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "single_use")
@@ -190,10 +187,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "ending_underscore")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.lookup "elem_")
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "ending_underscore")
@@ -201,10 +195,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "combo_single")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "combo_single")
@@ -212,10 +203,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "valid_single")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "valid_single")
@@ -223,10 +211,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "valid_multi")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "elem")
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "valid_multi")

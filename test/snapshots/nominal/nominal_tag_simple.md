@@ -80,10 +80,7 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "blue")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
   (Expr.binop_colon
     (Expr.lookup "yellow")
@@ -91,10 +88,7 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "yellow")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
+    (Expr.module_access)
   )
 )
 ~~~

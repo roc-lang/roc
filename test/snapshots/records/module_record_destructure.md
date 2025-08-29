@@ -110,15 +110,7 @@ at 7:21 to 7:29
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "extract_age")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "age")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "extract_age")

@@ -84,11 +84,7 @@ at 7:22 to 7:28
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "bad_function")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.record_literal
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "bad_function")

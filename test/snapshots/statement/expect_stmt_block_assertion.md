@@ -72,10 +72,7 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "foo")

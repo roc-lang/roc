@@ -179,16 +179,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "combine")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.tuple_literal
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-      )
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "combine")
@@ -196,10 +187,7 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "addOne")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
+    (Expr.binop_thin_arrow)
   )
   (Expr.binop_equals
     (Expr.lookup "addOne")
