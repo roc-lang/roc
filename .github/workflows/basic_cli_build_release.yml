@@ -12,7 +12,7 @@ permissions: {}
 
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.gz
+  ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
   RELEASE_TAG: 0.20.0
 
