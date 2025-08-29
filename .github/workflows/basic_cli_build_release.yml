@@ -250,7 +250,7 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
-          sudo apt install -y expect ncat ripgrep tree
+          sudo apt install -y expect ncat ripgrep
 
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
@@ -258,7 +258,6 @@ jobs:
           brew install expect
           brew install nmap  # includes ncat
           brew install ripgrep
-          brew install tree
 
       - name: prepare testing
         run: |
@@ -294,10 +293,3 @@ jobs:
           # no need to build platform anymore
           cd basic-cli-platform
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
-
-      
-      - name: print directory tree on test failure
-        if: failure()
-        run: |
-          realpath basic-cli-platform/tests/cmd-test
-          ./basic-cli-platform/tests/cmd-test
