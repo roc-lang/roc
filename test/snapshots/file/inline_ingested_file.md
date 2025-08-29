@@ -13,17 +13,78 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - inline_ingested_file.md:1:9:1:12
+PARSE ERROR - inline_ingested_file.md:3:8:3:9
+PARSE ERROR - inline_ingested_file.md:3:9:3:19
+PARSE ERROR - inline_ingested_file.md:3:19:3:20
+PARSE ERROR - inline_ingested_file.md:3:21:3:23
+MODULE NOT FOUND - inline_ingested_file.md:4:1:4:12
+UNDEFINED VARIABLE - inline_ingested_file.md:6:18:6:22
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `foo` is exposed, but it is not defined anywhere in this module.
+**PARSE ERROR**
+A parsing error occurred: `incomplete_import`
+This is an unexpected parsing error. Please check your syntax.
 
-**inline_ingested_file.md:1:9:1:12:**
+**inline_ingested_file.md:3:8:3:9:**
 ```roc
-module [foo]
+import "users.json" as data : Str
 ```
-        ^^^
-You can fix this by either defining `foo` in this module, or by removing it from the list of exposed values.
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**inline_ingested_file.md:3:9:3:19:**
+```roc
+import "users.json" as data : Str
+```
+        ^^^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**inline_ingested_file.md:3:19:3:20:**
+```roc
+import "users.json" as data : Str
+```
+                  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**inline_ingested_file.md:3:21:3:23:**
+```roc
+import "users.json" as data : Str
+```
+                    ^^
+
+
+**MODULE NOT FOUND**
+The module `Json` was not found in this Roc project.
+
+You're attempting to use this module here:
+**inline_ingested_file.md:4:1:4:12:**
+```roc
+import Json
+```
+^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**inline_ingested_file.md:6:18:6:22:**
+```roc
+foo = Json.parse(data)
+```
+                 ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -40,19 +101,47 @@ EndOfFile(7:1-7:1),
 		(exposes @1.8-1.13
 			(exposed-lower-ident @1.9-1.12
 				(text "foo"))))
-	(statements))
+	(statements
+		(s-malformed @3.1-3.9 (tag "incomplete_import"))
+		(s-malformed @3.9-3.19 (tag "statement_unexpected_token"))
+		(s-malformed @3.19-3.20 (tag "statement_unexpected_token"))
+		(s-malformed @3.21-3.23 (tag "statement_unexpected_token"))
+		(s-type-anno @3.24-3.34 (name "data")
+			(ty @3.31-3.34 (name "Str")))
+		(s-import @4.1-4.12 (raw "Json"))
+		(s-decl @6.1-6.23
+			(p-ident @6.1-6.4 (raw "foo"))
+			(e-apply @6.7-6.23
+				(e-ident @6.7-6.17 (raw "Json.parse"))
+				(e-ident @6.18-6.22 (raw "data"))))))
 ~~~
 # FORMATTED
 ~~~roc
 module [foo]
+
+data : Str
+import Json
+
+foo = Json.parse(data)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign @6.1-6.4 (ident "foo"))
+		(e-call @6.7-6.23
+			(e-lookup-external @6.7-6.17
+				(module-idx "0")
+				(target-node-idx "0"))
+			(e-runtime-error (tag "ident_not_in_scope"))))
+	(s-import @4.1-4.12 (module "Json")
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @6.1-6.4 (type "_a")))
+	(expressions
+		(expr @6.7-6.23 (type "_a"))))
 ~~~

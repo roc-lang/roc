@@ -207,13 +207,9 @@ pub fn parseFile(self: *Parser) Error!void {
 
     while (self.peek() != .EndOfFile) {
         const current_scratch_top = self.store.scratchStatementTop();
-        if (try self.parseTopLevelStatement()) |idx| {
-            std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
-            try self.store.addScratchStatement(idx);
-        } else {
-            std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
-            break;
-        }
+        const idx = try self.parseTopLevelStatement();
+        std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
+        try self.store.addScratchStatement(idx);
     }
 
     try self.store.addFile(.{
@@ -936,7 +932,7 @@ const StatementType = enum { top_level, in_body };
 /// Parse a top level roc statement
 ///
 /// e.g. `import Foo`
-pub fn parseTopLevelStatement(self: *Parser) Error!?AST.Statement.Idx {
+pub fn parseTopLevelStatement(self: *Parser) Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -946,7 +942,7 @@ pub fn parseTopLevelStatement(self: *Parser) Error!?AST.Statement.Idx {
 /// parse a in-body roc statement
 ///
 /// e.g. `foo = 2 + x`
-pub fn parseStmt(self: *Parser) Error!?AST.Statement.Idx {
+pub fn parseStmt(self: *Parser) Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -956,7 +952,7 @@ pub fn parseStmt(self: *Parser) Error!?AST.Statement.Idx {
 /// parse a roc statement
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
-fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.Statement.Idx {
+fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statement.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1024,7 +1020,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!?AST.State
                 } });
                 return statement_idx;
             }
-            return null;
+            return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
         },
         .KwExpect => {
             const start = self.pos;
@@ -2918,7 +2914,7 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
-        const statement = try self.parseStmt() orelse break;
+        const statement = try self.parseStmt();
         try self.store.addScratchStatement(statement);
         if (self.peek() == .CloseCurly) {
             break;
