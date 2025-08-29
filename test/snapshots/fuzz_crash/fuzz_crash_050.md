@@ -42,15 +42,25 @@ at 2:1 to 2:1
 **Parse Error**
 at 1:12 to 3:2
 
+**Pattern in Expression Context**
+at 1:9 to 1:10
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.num_literal_i32 0)
+    (Expr.block
+      (Expr.malformed)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

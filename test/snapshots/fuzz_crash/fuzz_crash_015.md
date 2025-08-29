@@ -42,16 +42,32 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:1 to 1:4
+
+**Pattern in Expression Context**
+at 2:2 to 2:3
+
+**Pattern in Expression Context**
+at 4:2 to 4:3
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.lambda)
+  (Expr.num_literal_i32 0)
+  (Expr.malformed)
+  (Expr.num_literal_i32 0)
+  (Expr.num_literal_i32 0)
+  (Expr.lambda)
+  (Expr.num_literal_i32 0)
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -29,16 +29,20 @@ S
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:20 to 1:28
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.apply_tag)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

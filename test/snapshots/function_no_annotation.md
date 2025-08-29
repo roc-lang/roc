@@ -112,9 +112,6 @@ NIL
 at 3:1 to 3:17
 
 **Unsupported Node**
-at 6:13 to 6:17
-
-**Unsupported Node**
 at 9:21 to 9:27
 
 # CANONICALIZE

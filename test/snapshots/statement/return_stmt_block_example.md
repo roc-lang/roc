@@ -64,7 +64,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow
 ~~~roc
 module [foo]
 
-foo : U64 -> Result (Str, [TooBig])
+foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
 	str = if num > 10
 		{
@@ -84,13 +84,25 @@ at 5:11 to 5:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "foo")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+foo : _a
 ~~~

@@ -522,7 +522,8 @@ app { pf: "c" platform [main] }
 
 import pf.Stdout exposing [line]
 import Stdot exposing [ #tem
-Cust]
+	Cust,
+]
 import Bae as Gooe
 import Ba
 Map((a, b)) : Lis -> ab -> List b
@@ -533,13 +534,19 @@ List -> ab -> # row
 List b
 #z)
 
-line : () # Co
+line : (,
+) # Co
 Som : {foo : O, bar : g}
-Ml(a) : {}
-Soine(a) : {}
+Ml(a) :
+	{
+	}
+Soine(a) :
+	{
+	}
 #
 Maybe(a) : [Somne]
-Mayine(a) : [] #)
+Mayine(a) : [,
+] #)
 
 ane = |num| if num 2 else 5
 one : U6
@@ -559,7 +566,7 @@ s : s
 	}
 }
 me = # Cord
-main! : Listlt ({  }, _)
+main! : Listlt({}, _)
 ma = |_| {
 	e : e
 	w = "d"
@@ -568,12 +575,19 @@ ma = |_| {
 	return #d
 tag
 	...
-	me((...))
+	me((
+		...,
+	))
 	crash ke
 	"Unr!" #)
 	i = "H, ${d}"
-	t = [one((er, 456, # two
-9))]
+	t = [
+		one((
+			er,
+			456, # two
+			9,
+		)),
+	]
 	for n in list {
 		{
 			line!("Ag ${n} to ${er}")
@@ -606,7 +620,7 @@ tag
 
 y : {}
 e = {  }
-t : V (a, c)
+t : V(a, c)
 expect {
 	foo == 1
 	h == foo
@@ -705,15 +719,146 @@ at 110:2 to 110:2
 **Parse Error**
 at 111:1 to 111:1
 
+**Unsupported Node**
+at 4:1 to 4:34
+
+**Unsupported Node**
+at 6:1 to 8:6
+
+**Unsupported Node**
+at 10:1 to 10:19
+
+**Unsupported Node**
+at 11:1 to 12:4
+
+**Pattern in Expression Context**
+at 74:20 to 74:21
+
+**Unsupported Node**
+at 105:65 to 105:65
+
+**Unsupported Node**
+at 105:71 to 105:71
+
+**Unsupported Node**
+at 105:78 to 105:78
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "ab")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "ab")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "line")
+    (Expr.tuple_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.lookup "g")
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ane")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "one")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "me")
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ma")
+    (Expr.lambda)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "y")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "e")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "t")
+    (Expr.apply_tag)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+ane : _d
+add : _d
+me : Error
+ma : _d
+e : {}
 ~~~

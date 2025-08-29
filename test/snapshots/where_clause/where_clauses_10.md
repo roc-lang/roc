@@ -67,16 +67,32 @@ List List U8 -> List a where module(a) | Decode
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:32
+
+**Unsupported Node**
+at 9:11 to 9:14
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "decodeThings")
+    (Expr.binop_colon
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+      (Expr.lambda)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -412,8 +412,8 @@ import I2 exposing [I21]
 Ias1
 I22
 Ias2
-A(a) : a where module(a) | .a1 : a -> a ->  -> (Str, module(a) | .a2) : a -> a ->  -> Str
-B(b) : b where module(b) | .b1 : b -> b ->  -> (Str, module(b) | .b2) : b -> b ->  -> Str
+A(a) : a where module(a).a1 : a -> a ->  -> Str, module(a).a2 : a -> a ->  -> Str
+B(b) : b where module(b).b1 : b -> b ->  -> Str, module(b).b2 : b -> b ->  -> Str
 C(
 	(
 		a,
@@ -426,10 +426,7 @@ C(
 	(
 		a,
 		b,
-	) : C (
-		a,
-		b,
-	),
+	) : C(a, b, ),
 )
 E :
 	{
@@ -440,7 +437,7 @@ F : [
 	A,
 	B,
 ]
-g : (e -> e where module(e) | A, module(e) | B)
+g : e -> e where module(e) | A, module(e) | B
 h = |x, y| {
 	h1 = {
 		h11 : x,
@@ -611,9 +608,6 @@ at 58:24 to 58:27
 
 **Unsupported Node**
 at 58:37 to 58:40
-
-**Unsupported Node**
-at 60:6 to 60:10
 
 # CANONICALIZE
 ~~~clojure

@@ -48,15 +48,33 @@ NIL
 **Parse Error**
 at 1:19 to 1:19
 
+**Unsupported Node**
+at 1:9 to 1:19
+
+**Unsupported Node**
+at 1:25 to 1:26
+
+**Unsupported Node**
+at 1:26 to 1:28
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "r")
+      (Expr.lambda)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

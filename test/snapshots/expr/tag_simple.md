@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.str_literal_big)
+(Expr.apply_tag)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_literal_big :type "Str")
+(expr :tag apply_tag :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-Str
+[]_others
 ~~~

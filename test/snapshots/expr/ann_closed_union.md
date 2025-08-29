@@ -47,13 +47,22 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "apple")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "apple")
+    (Expr.apply_tag)
+  )
+  (Expr.lookup "apple")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
 ~~~

@@ -258,9 +258,6 @@ NIL
 **Parse Error**
 at 19:50 to 19:50
 
-**Unsupported Node**
-at 19:16 to 19:36
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

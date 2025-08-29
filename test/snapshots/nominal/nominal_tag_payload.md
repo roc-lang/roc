@@ -129,13 +129,54 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "some1")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "some1")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "none1")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "none1")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "some2")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "none2")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+some1 : _b
+none1 : _b
+some2 : _b
+none2 : _b
 ~~~

@@ -26,7 +26,7 @@ OpenRound OpBar LowerIdent OpBar OpBang LowerIdent CloseRound OpenRound UpperIde
 ~~~
 # FORMATTED
 ~~~roc
-|x| !x(True)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -26,11 +26,11 @@ at 1:3 to 1:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_slash)
+(Expr.num_literal_i32 1)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_slash :type "Num(_size)")
+(expr :tag num_literal_i32 :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc

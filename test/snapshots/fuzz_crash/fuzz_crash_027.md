@@ -789,7 +789,8 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 app { pf: "c" platform [main] }
 
 import pf.Stdout exposing [line, e]
-import Stdot exposing [] # Cose
+import Stdot exposing [,
+] # Cose
 
 import pkg.S exposing [func]
 fry
@@ -808,8 +809,10 @@ List(b) #
 ))
 Foo : (Bar, Baz)
 line : # Cpen
-(Bar, #
-Baz)
+(
+	Bar, #
+	Baz,
+)
 # Co
 Some(a) : {foo : Ok a, bar : g}
 Ml(a) : {
@@ -821,7 +824,8 @@ Soine(a) : {
 bar : Som
 } #
 Maya
- : [] #se
+ : [,
+] #se
 
 Func(a) : Maybe a -> a -> Maybe a
 ane = |num| if num 2 else 5
@@ -852,9 +856,11 @@ ist
 12-
 add(34)
 { #
-foo : #ue
+	foo : #ue
 1, # Aftd field
-bar : 2, _ }
+	bar : 2,
+	_,
+}
 12
 { foo : 1, bar : 2 } | 7
 12
@@ -867,17 +873,31 @@ Ok(123)
 expect # Commeneyword
 blah == 1 # Commnt
 
-main! : List String -> Result ({  }, _)
-main! = |_| { # Yeah Ie
-world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comd
-tag, ..., match_time((...)), some_func(), # bug
-42 }
+main! : List String -> Result({}, _)
+main! = |_| {
+	 # Yeah Ie
+world = "World",
+	var number = 123,
+	expect blah == 1,
+	tag = Blue,
+	return # Comd
+tag,
+	...,
+	match_time((
+		...,
+	)),
+	some_func(), # bug
+	42,
+}
 crash 
 tag_with = Ok(number)
 ited = "Hello, ${world}"
-list = [add_one()]
-# Afin list
-e[] # afarg
+list = [
+	add_one(), # Afin list
+]
+e[
+	, # afarg
+]
 456
 # ee
 for n in list {
@@ -906,7 +926,7 @@ a
 
 empty : {}
 empty = {  }
-tuple : Value (a, b, c)
+tuple : Value(a, b, c)
 expect {
 	foo = 1 # Thio
 	blah = 1
@@ -1123,15 +1143,399 @@ at 147:2 to 147:2
 **Parse Error**
 at 148:1 to 148:1
 
+**Unsupported Node**
+at 4:1 to 4:38
+
+**Unsupported Node**
+at 6:1 to 8:4
+
+**Unsupported Node**
+at 10:1 to 10:28
+
+**Unsupported Node**
+at 12:1 to 12:19
+
+**Unsupported Node**
+at 13:1 to 14:4
+
+**Unsupported Node**
+at 79:3 to 79:7
+
+**Pattern in Expression Context**
+at 88:4 to 88:4
+
+**Unsupported Node**
+at 89:3 to 89:21
+
+**Pattern in Expression Context**
+at 99:36 to 99:37
+
+**Unsupported Node**
+at 142:23 to 142:23
+
+**Unsupported Node**
+at 142:33 to 142:33
+
+**Unsupported Node**
+at 142:40 to 142:40
+
+**Unsupported Node**
+at 145:4 to 145:7
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "fry")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "line")
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.lookup "g")
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ane")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add_one")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "match_time")
+    (Expr.malformed)
+  )
+  (Expr.lookup "ist")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.num_literal_i32 314)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.unary_double_dot)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 121000)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.crash
+    (Expr.malformed)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "tag_with")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ited")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "list")
+    (Expr.list_literal)
+  )
+  (Expr.lookup "e")
+  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 456)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.malformed)
+    (Expr.lookup "list")
+    (Expr.block
+      (Expr.apply_ident)
+      (Expr.binop_equals
+        (Expr.lookup "number")
+        (Expr.binop_plus
+          (Expr.lookup "number")
+          (Expr.lookup "n")
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "record")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.num_literal_i32 123)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "baz")
+        (Expr.lookup "tag")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "qux")
+        (Expr.apply_tag)
+      )
+      (Expr.lookup "punned")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "m_tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag1")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "bsult")
+    (Expr.binop_or
+      (Expr.binop_or
+        (Expr.binop_gt
+          (Expr.binop_double_question
+            (Expr.apply_tag)
+            (Expr.num_literal_i32 12)
+          )
+          (Expr.binop_star
+            (Expr.num_literal_i32 5)
+            (Expr.num_literal_i32 5)
+          )
+        )
+        (Expr.binop_and
+          (Expr.binop_lt
+            (Expr.binop_plus
+              (Expr.num_literal_i32 13)
+              (Expr.num_literal_i32 2)
+            )
+            (Expr.num_literal_i32 5)
+          )
+          (Expr.binop_gte
+            (Expr.binop_minus
+              (Expr.num_literal_i32 10)
+              (Expr.num_literal_i32 1)
+            )
+            (Expr.num_literal_i32 16)
+          )
+        )
+      )
+      (Expr.binop_lte
+        (Expr.num_literal_i32 12)
+        (Expr.binop_slash
+          (Expr.num_literal_i32 3)
+          (Expr.num_literal_i32 5)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "stale")
+    (Expr.apply_ident)
+  )
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.unary_not)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "a")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "tuple")
+    (Expr.apply_tag)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+ane : _d
+add_one : _d
+match_time : Error
+tag_with : []_others
+ited : Str
+list : List(_elem)
+record : {}
+tuple : _d
+m_tuple : _d
+bsult : [True, False]_others
+stale : _d
+empty : {}
 ~~~

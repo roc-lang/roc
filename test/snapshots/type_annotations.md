@@ -87,11 +87,11 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 module []
 
 foo : U64
-bar : Thing (_a, _b, _)
+bar : Thing(_a, _b, _)
 baz : (_a, _b, _c)
 add_one : U8 -> U16 -> U32
-main! : List String -> Result ({  }, _)
-tag_tuple : Value (_a, _b, _c)
+main! : List String -> Result({}, _)
+tag_tuple : Value(_a, _b, _c)
 ~~~
 # EXPECTED
 NIL

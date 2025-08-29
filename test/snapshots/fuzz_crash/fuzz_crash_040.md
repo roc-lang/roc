@@ -43,13 +43,20 @@ at 1:20 to 2:5
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.block
+    (Expr.binop_colon
+      (Expr.lookup "o")
+      (Expr.num_literal_i32 0)
+    )
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -33,13 +33,22 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

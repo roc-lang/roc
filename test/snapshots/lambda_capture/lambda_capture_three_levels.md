@@ -52,7 +52,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar L
 ~~~
 # FORMATTED
 ~~~roc
-|outer| |middle| |inner| (outer + middle) + inner(1)(2)(3)
+(|outer| |middle| |inner| (outer + middle) + inner)(1)(2)(3)
 ~~~
 # EXPECTED
 NIL
@@ -60,11 +60,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_equals)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_equals :type "_a")
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc

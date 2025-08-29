@@ -47,19 +47,21 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-|{ x : x, y : y }| x * y({ x : 10, y : 20 })
+(|{ x : x, y : y }| x * y)({ x : 10, y : 20 })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:3 to 1:11
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_equals)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_equals :type "_a")
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc

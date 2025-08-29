@@ -44,11 +44,21 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc

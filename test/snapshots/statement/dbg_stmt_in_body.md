@@ -55,13 +55,29 @@ at 5:5 to 5:5
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.block
+      (Expr.binop_equals
+        (Expr.lookup "x")
+        (Expr.num_literal_i32 42)
+      )
+      (Expr.malformed)
+      (Expr.lookup "x")
+      (Expr.binop_plus
+        (Expr.lookup "x")
+        (Expr.num_literal_i32 1)
+      )
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+main : _a
 ~~~

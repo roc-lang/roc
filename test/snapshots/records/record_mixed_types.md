@@ -49,16 +49,39 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:35 to 1:39
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "active")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "scores")
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "balance")
+    (Expr.frac_literal_big big:<idx:6>)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

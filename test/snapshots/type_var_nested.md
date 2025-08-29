@@ -217,7 +217,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "platform.roc" platform [main] }
 
-map_result : Result (a, e) -> (a -> b) -> Result (b, e)
+map_result : Result(a, e) -> (a -> b) -> Result(b, e)
 map_result = |result, transform| {
 	match result
 }
@@ -227,7 +227,7 @@ make_pair : a -> b -> {first : a, second : b}
 make_pair = |x, y| { first : x, second : y }
 list_length : List _a -> U64
 list_length = |_lst| 42
-wrap_in_result : a -> Result (Result((a, Str)), Str)
+wrap_in_result : a -> Result(Result(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
 main = |_| "done"
 ~~~
@@ -239,12 +239,6 @@ at 7:19 to 7:19
 
 **Parse Error**
 at 8:20 to 8:20
-
-**Unsupported Node**
-at 5:15 to 5:32
-
-**Unsupported Node**
-at 18:14 to 18:18
 
 # CANONICALIZE
 ~~~clojure

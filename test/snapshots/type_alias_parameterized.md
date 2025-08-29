@@ -93,7 +93,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 app { pf: "../basic-cli/main.roc" platform [main] }
 
 Pair((a, b)) : (a, b)
-swapPair : Pair (a, b) -> Pair (b, a)
+swapPair : Pair(a, b) -> Pair(b, a)
 swapPair = |x, y| (y, x)
 main! = |_| swapPair((1, 2))
 ~~~

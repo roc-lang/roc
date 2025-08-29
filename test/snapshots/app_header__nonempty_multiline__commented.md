@@ -28,19 +28,14 @@ app # Comment after keyword
 	pf: "../main.roc" platform [ # Comment after provides open
 main],
 # Comment after platform
-	other: ("../../other/main.roc"),
+	other: "../../other/main.roc",
 }
 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 7:2 to 7:2
-
-**Expected Close Curly Brace**
-at 1:1 to 7:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

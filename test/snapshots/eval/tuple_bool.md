@@ -45,11 +45,32 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.tuple_literal
+  (Expr.apply_tag)
+  (Expr.apply_tag)
+  (Expr.module_access
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+  (Expr.module_access
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+  (Expr.unary_not)
+  (Expr.unary_not)
+  (Expr.binop_and
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_or
+    (Expr.unary_not)
+    (Expr.unary_not)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag tuple_literal :type "_a")
 ~~~
 # TYPES
 ~~~roc

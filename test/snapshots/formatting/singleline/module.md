@@ -40,13 +40,23 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "a")
+    (Expr.str_literal_small)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "b")
+    (Expr.str_literal_small)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+a : Str
+b : Str
 ~~~

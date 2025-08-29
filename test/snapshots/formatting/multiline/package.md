@@ -61,15 +61,35 @@ at 9:2 to 9:2
 **Expected Close Curly Brace**
 at 1:1 to 11:1
 
+**Unsupported Node**
+at 11:6 to 11:9
+
+**Unsupported Node**
+at 12:6 to 12:9
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

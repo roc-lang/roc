@@ -337,15 +337,148 @@ at 42:24 to 42:24
 **Parse Error**
 at 43:25 to 43:25
 
+**Unsupported Node**
+at 8:1 to 8:21
+
+**Unsupported Node**
+at 9:1 to 9:13
+
+**Unsupported Node**
+at 10:1 to 10:40
+
+**Unsupported Node**
+at 11:1 to 11:32
+
+**Unsupported Node**
+at 19:20 to 19:26
+
+**Unsupported Node**
+at 19:26 to 19:35
+
+**Unsupported Node**
+at 22:23 to 22:30
+
+**Unsupported Node**
+at 22:30 to 22:38
+
+**Unsupported Node**
+at 23:23 to 23:28
+
+**Unsupported Node**
+at 39:55 to 39:62
+
+**Unsupported Node**
+at 39:62 to 39:70
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.module_access
+    (Expr.malformed)
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "simpleQualified")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "simpleQualified")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "aliasedQualified")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "aliasedQualified")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "multiLevelQualified")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "multiLevelQualified")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "resultType")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "resultType")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "getColor")
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+      )
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getColor")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "processColor")
+    (Expr.binop_thin_arrow
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processColor")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "transform")
+    (Expr.binop_thin_arrow
+      (Expr.apply_ident)
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "transform")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+simpleQualified : _a
+aliasedQualified : _a
+multiLevelQualified : _a
+resultType : _a
+getColor : _a
+processColor : _a
+transform : _a
 ~~~

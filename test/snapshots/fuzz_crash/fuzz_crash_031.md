@@ -40,13 +40,21 @@ at 4:10 to 4:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.lookup "mule")
+  (Expr.list_literal)
+  (Expr.lookup "vavar")
+  (Expr.binop_equals
+    (Expr.lookup "t")
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+t : Error
 ~~~

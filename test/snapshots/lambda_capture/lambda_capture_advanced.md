@@ -53,7 +53,7 @@ OpenRound OpBar LowerIdent Comma LowerIdent Comma LowerIdent OpBar OpBar LowerId
 ~~~
 # FORMATTED
 ~~~roc
-|a, b, c| |x| ((a + b) + c) + x((10, 20, 5))(7)
+(|a, b, c| |x| ((a + b) + c) + x)((10, 20, 5))(7)
 ~~~
 # EXPECTED
 NIL
@@ -61,11 +61,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_equals)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_equals :type "_d")
+(expr :tag apply_ident :type "_d")
 ~~~
 # TYPES
 ~~~roc

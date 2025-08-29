@@ -43,16 +43,31 @@ foo = 42
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 3:12 to 3:13
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "foo")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.num_literal_i32 42)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+foo : Num(_size)
 ~~~

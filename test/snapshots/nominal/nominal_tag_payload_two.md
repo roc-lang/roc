@@ -106,9 +106,9 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Upp
 module [MyResult, ok, is_ok]
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
-ok : ok -> MyResult (ok, _)
+ok : ok -> MyResult(ok, _)
 ok = |a| MyResult.Ok(a)
-is_ok : MyResult (_ok, _err) -> Bool
+is_ok : MyResult(_ok, _err) -> Bool
 is_ok = |result| match result
 ~~~
 # EXPECTED
@@ -120,15 +120,46 @@ at 10:20 to 10:20
 **Parse Error**
 at 11:21 to 11:21
 
+**Pattern in Expression Context**
+at 5:25 to 5:26
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "ok")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "ok")
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "ok")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "is_ok")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "is_ok")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+ok : _b
+is_ok : _b
 ~~~

@@ -49,22 +49,45 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~roc
 module [convert_me]
 
-convert_me : a -> b where module(a) | .convert : a -> b
+convert_me : a -> b where module(a).convert : a -> b
 convert_me = ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 5:9 to 5:12
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "convert_me")
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.lookup "a")
+        )
+      )
+      (Expr.lookup "b")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "convert_me")
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+convert_me : Error
 ~~~

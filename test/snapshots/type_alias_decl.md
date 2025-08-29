@@ -216,7 +216,7 @@ UserId : U64
 Result((ok, err)) : [Ok(ok), Err(err)]
 Person : {name : Str, age : U64}
 MapFn((a, b)) : a -> b
-ApiResponse(data) : Result (data, Str)
+ApiResponse(data) : Result(data, Str)
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
 main! = |_| {

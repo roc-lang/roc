@@ -457,7 +457,7 @@ rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
-hex : Str -> Result (Color, [InvalidHex(Str)])
+hex : Str -> Result(Color, [InvalidHex(Str)])
 hex = |str| {
 	bytes = str.to_utf8()
 	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
@@ -540,7 +540,7 @@ to_str = |color| match color
 expect rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
-named : Str -> Result (Color, [UnknownColor(Str)])
+named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str| if str.is_named_color() Ok(Color.Named(str)) else Err(UnknownColor("Unknown color ${str}"))
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -574,13 +574,107 @@ at 53:22 to 53:22
 **Parse Error**
 at 62:5 to 63:9
 
+**Unsupported Node**
+at 56:8 to 56:25
+
+**Unsupported Node**
+at 57:8 to 57:31
+
+**Unsupported Node**
+at 58:8 to 58:22
+
+**Unsupported Node**
+at 68:14 to 68:17
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "rgb")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.binop_thin_arrow
+          (Expr.apply_tag)
+          (Expr.apply_tag)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "rgb")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "rgba")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.binop_thin_arrow
+          (Expr.apply_tag)
+          (Expr.binop_thin_arrow
+            (Expr.apply_tag)
+            (Expr.apply_tag)
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "rgba")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "hex")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "hex")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "to_str")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "to_str")
+    (Expr.lambda)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "named")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "named")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "is_named_color")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_h")
+(expr :tag block :type "_h")
 ~~~
 # TYPES
 ~~~roc

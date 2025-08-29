@@ -76,7 +76,7 @@ NIL
 at 3:25 to 3:27
 
 **Unsupported Node**
-at 4:15 to 4:21
+at 4:15 to 4:18
 
 # CANONICALIZE
 ~~~clojure

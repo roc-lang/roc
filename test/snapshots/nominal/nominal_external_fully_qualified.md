@@ -78,15 +78,31 @@ at 8:47 to 8:47
 **Parse Error**
 at 9:47 to 9:47
 
+**Unsupported Node**
+at 3:1 to 3:22
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "handleResult")
+    (Expr.binop_thin_arrow
+      (Expr.apply_ident)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "handleResult")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+handleResult : _a
 ~~~

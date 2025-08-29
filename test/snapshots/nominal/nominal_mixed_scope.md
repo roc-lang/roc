@@ -88,15 +88,37 @@ at 13:19 to 13:19
 **Parse Error**
 at 14:18 to 14:18
 
+**Pattern in Expression Context**
+at 5:16 to 5:17
+
+**Unsupported Node**
+at 9:5 to 9:21
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "processColor")
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processColor")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+processColor : _a
 ~~~

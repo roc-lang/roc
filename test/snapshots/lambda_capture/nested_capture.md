@@ -63,13 +63,22 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "f")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "g")
+    (Expr.apply_ident)
+  )
+  (Expr.apply_ident)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-_c
 ~~~

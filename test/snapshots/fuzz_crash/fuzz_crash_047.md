@@ -62,13 +62,39 @@ at 5:10 to 5:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "person")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "updated")
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 31)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+person : {}
+updated : {}
 ~~~

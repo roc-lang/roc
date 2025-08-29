@@ -961,8 +961,9 @@ import # Comment after import keyword
 pf # Comment after qualifier
 .StdoutMultiline # Comment after ident
  exposing [ # Comment after exposing open
-line, # Comment after exposed item
-write] # Comment after exposing close
+	line, # Comment after exposed item
+	write,
+] # Comment after exposing close
 
 import pkg.Something exposing [func]
 function
@@ -981,34 +982,43 @@ MapML(
 List ( # Inside Tag args
 a -> # After tag arg
  -> (a -> b) -> # After arrow
-List # Inside tag args
-(
-		b,
-	)),
+List( # Inside tag args
+b, )),
 )
 # And after the type decl
 
 Foo : (Bar, Baz)
 FooMultiline : # Comment after pattern tuple open
-(Bar, # Comment after pattern tuple item
-Baz)
+(
+	Bar, # Comment after pattern tuple item
+	Baz,
+)
 # Comment after pattern tuple close
 
 Some(a) : {foo : Ok a, bar : Something}
-SomeMl(a) : { # After record open
-foo : Ok a, # After field
-bar : Something}
-SomeMultiline(a) : { # Comment after pattern record open
+SomeMl(a) :
+	{
+		 # After record open
+foo : Ok a,
+		 # After field
+bar : Something
+	}
+SomeMultiline(a) :
+	{
+		 # Comment after pattern record open
 foo # After field name
  : # Before field anno
-Ok a, # Comment after pattern record field
-bar : Something}
+Ok a,
+		 # Comment after pattern record field
+bar : Something
+	}
 # Comment after pattern record close
 
 Maybe(a) : [Some(a), None]
 MaybeMultiline(a) : [ # Comment after tag union open
-Some(a), # Comment after tag union member
-None] # Comment after tag union close
+	Some(a), # Comment after tag union member
+	None,
+] # Comment after tag union close
 
 SomeFunc(a) : Maybe a -> a -> Maybe a
 add_one_oneline = |num| if num 2 else 5
@@ -1047,9 +1057,11 @@ rest
 12-
 add(34)
 { # After pattern record field name
-foo : # Before pattern record field value
+	foo : # Before pattern record field value
 1, # After pattern record field
-bar : 2, ..rest }
+	bar : 2,
+	..rest,
+}
 12
 { foo : 1, bar : 2 } | 7
 12
@@ -1065,20 +1077,32 @@ TwoArgs(("hello", Some("world")))
 expect # Comment after expect keyword
 blah == 1 # Comment after expect statement
 
-main! : List String -> Result ({  }, _)
-main! = |_| { # Yeah I can leave a comment here
-world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comment after return keyword
+main! : List String -> Result({}, _)
+main! = |_| {
+	 # Yeah I can leave a comment here
+world = "World",
+	var number = 123,
+	expect blah == 1,
+	tag = Blue,
+	return # Comment after return keyword
 tag # Comment after return statement
 
-# Just a random comment!
+	# Just a random comment!
 
-, ..., match_time((...)), some_func(), # After debug
-42 } # Comment after crash keyword
+,
+	...,
+	match_time((
+		...,
+	)),
+	some_func(), # After debug
+	42,
+} # Comment after crash keyword
 crash "Unreachable!" # Comment after crash statement
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
-list = [add_one()]
-# After dbg in list
+list = [
+	add_one(), # After dbg in list
+]
 number
 # after dbg expr as arg
 # Comment one
@@ -1114,7 +1138,7 @@ string
 
 empty : {}
 empty = {  }
-tuple : Value (a, b, c)
+tuple : Value(a, b, c)
 expect {
 	foo = 1 # This should work too
 	blah = 1
@@ -1388,15 +1412,445 @@ at 195:2 to 195:2
 **Parse Error**
 at 196:1 to 196:1
 
+**Unsupported Node**
+at 4:1 to 4:42
+
+**Unsupported Node**
+at 6:1 to 12:4
+
+**Unsupported Node**
+at 14:1 to 14:36
+
+**Unsupported Node**
+at 16:1 to 16:27
+
+**Unsupported Node**
+at 17:1 to 20:20
+
+**Unsupported Node**
+at 118:3 to 118:7
+
+**Unsupported Node**
+at 130:3 to 130:21
+
+**Unsupported Node**
+at 131:3 to 133:12
+
+**Pattern in Expression Context**
+at 143:36 to 143:37
+
+**Unsupported Node**
+at 175:3 to 175:9
+
+**Unsupported Node**
+at 189:39 to 189:39
+
+**Unsupported Node**
+at 189:65 to 189:65
+
+**Unsupported Node**
+at 189:96 to 189:96
+
+**Unsupported Node**
+at 190:2 to 190:8
+
+**Unsupported Node**
+at 191:2 to 191:8
+
+**Unsupported Node**
+at 193:4 to 193:7
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "function")
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add_one_oneline")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add_one")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "match_time")
+    (Expr.malformed)
+  )
+  (Expr.num_literal_i32 1)
+  (Expr.malformed)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.num_literal_i32 3)
+  (Expr.malformed)
+  (Expr.unary_double_dot)
+  (Expr.lookup "rest")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.num_literal_i32 314)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.unary_double_dot)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.lookup "foo")
+      (Expr.num_literal_i32 1)
+    )
+    (Expr.binop_colon
+      (Expr.lookup "bar")
+      (Expr.num_literal_i32 2)
+    )
+    (Expr.unary_double_dot)
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 123)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.lookup "dude")
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 1000)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+  (Expr.crash
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "tag_with_payload")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "interpolated")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "list")
+    (Expr.list_literal)
+  )
+  (Expr.lookup "number")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.num_literal_i32 456)
+  (Expr.malformed)
+  (Expr.num_literal_i32 789)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.malformed)
+    (Expr.lookup "list")
+    (Expr.block
+      (Expr.apply_ident)
+      (Expr.binop_equals
+        (Expr.lookup "number")
+        (Expr.binop_plus
+          (Expr.lookup "number")
+          (Expr.lookup "n")
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "record")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.num_literal_i32 123)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.str_literal_big)
+      )
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "az")
+    (Expr.tuple_literal
+      (Expr.binop_colon
+        (Expr.tuple_literal
+          (Expr.lookup "tag")
+          (Expr.lookup "qux")
+        )
+        (Expr.apply_tag)
+      )
+      (Expr.lookup "punned")
+    )
+  )
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "multiline_tuple")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag1")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "bin_op_result")
+    (Expr.binop_or
+      (Expr.binop_or
+        (Expr.binop_gt
+          (Expr.binop_double_question
+            (Expr.apply_tag)
+            (Expr.num_literal_i32 12)
+          )
+          (Expr.binop_star
+            (Expr.num_literal_i32 5)
+            (Expr.num_literal_i32 5)
+          )
+        )
+        (Expr.binop_and
+          (Expr.binop_lt
+            (Expr.binop_plus
+              (Expr.num_literal_i32 13)
+              (Expr.num_literal_i32 2)
+            )
+            (Expr.num_literal_i32 5)
+          )
+          (Expr.binop_gte
+            (Expr.binop_minus
+              (Expr.num_literal_i32 10)
+              (Expr.num_literal_i32 1)
+            )
+            (Expr.num_literal_i32 16)
+          )
+        )
+      )
+      (Expr.binop_lte
+        (Expr.num_literal_i32 12)
+        (Expr.binop_slash
+          (Expr.num_literal_i32 3)
+          (Expr.num_literal_i32 5)
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "static_dispatch_style")
+    (Expr.apply_ident)
+  )
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "a")
+  (Expr.lookup "string")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "empty")
+    (Expr.record_literal
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "tuple")
+    (Expr.apply_tag)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+add_one_oneline : _d
+add_one : _d
+match_time : Error
+tag_with_payload : []_others
+interpolated : Str
+list : List(_elem)
+record : {}
+tuple : _d
+multiline_tuple : _d
+bin_op_result : [True, False]_others
+static_dispatch_style : _d
+empty : {}
 ~~~

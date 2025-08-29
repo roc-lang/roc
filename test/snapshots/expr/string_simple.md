@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_and)
+(Expr.str_literal_big)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_and :type "[True, False]_others")
+(expr :tag str_literal_big :type "Str")
 ~~~
 # TYPES
 ~~~roc
-[True, False]_others
+Str
 ~~~

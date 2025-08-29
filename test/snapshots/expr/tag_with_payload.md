@@ -27,13 +27,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_colon)
+(Expr.apply_tag)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_colon :type "_a")
+(expr :tag apply_tag :type "[]_others")
 ~~~
 # TYPES
 ~~~roc
-_a
+[]_others
 ~~~

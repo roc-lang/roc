@@ -389,13 +389,13 @@ import I2 exposing [I21]
 Ias1
 I22
 Ias2
-A(a) : ((a where module(a) | .a1 : (a, a)) -> Str, module(a) | .a2) : (a, a) -> Str
-B(b) : ((b where module(b) | .b1 : (b, b)) -> Str, module(b) | .b2) : (b, b) -> Str
+A(a) : (a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str
+B(b) : (b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str
 C((a, b)) : (a, b)
-D((a, b)) : C (a, b)
+D((a, b)) : C(a, b)
 E : {a : Str, b : Str}
 F : [A, B]
-g : (e -> e where module(e) | A, module(e) | B)
+g : e -> e where module(e) | A, module(e) | B
 h = |x, y| {
 	h1 = { h11 : x, h12 : x, h13 : {h131 : x, h132 : y} }
 	h2 = h((x, y))
@@ -432,15 +432,150 @@ at 102:5 to 102:5
 **Parse Error**
 at 108:5 to 108:5
 
+**Unsupported Node**
+at 4:1 to 7:2
+
+**Unsupported Node**
+at 8:1 to 9:5
+
+**Unsupported Node**
+at 16:9 to 16:12
+
+**Unsupported Node**
+at 20:9 to 20:12
+
+**Unsupported Node**
+at 26:9 to 26:12
+
+**Unsupported Node**
+at 30:9 to 30:12
+
+**Unsupported Node**
+at 58:24 to 58:27
+
+**Unsupported Node**
+at 58:37 to 58:40
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.tuple_literal
+          (Expr.binop_thin_arrow
+            (Expr.binop_colon
+              (Expr.lookup "a")
+              (Expr.binop_colon
+                (Expr.lambda)
+                (Expr.tuple_literal
+                  (Expr.lookup "a")
+                  (Expr.lookup "a")
+                )
+              )
+            )
+            (Expr.apply_tag)
+          )
+          (Expr.lambda)
+        )
+        (Expr.tuple_literal
+          (Expr.lookup "a")
+          (Expr.lookup "a")
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.tuple_literal
+          (Expr.binop_thin_arrow
+            (Expr.binop_colon
+              (Expr.lookup "b")
+              (Expr.binop_colon
+                (Expr.lambda)
+                (Expr.tuple_literal
+                  (Expr.lookup "b")
+                  (Expr.lookup "b")
+                )
+              )
+            )
+            (Expr.apply_tag)
+          )
+          (Expr.lambda)
+        )
+        (Expr.tuple_literal
+          (Expr.lookup "b")
+          (Expr.lookup "b")
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "b")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.tuple_literal
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "e")
+          (Expr.lookup "e")
+        )
+        (Expr.lambda)
+      )
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "h")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+h : _c
 ~~~

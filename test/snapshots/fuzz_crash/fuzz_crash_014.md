@@ -40,15 +40,23 @@ at 1:1 to 1:1
 **Parse Error**
 at 2:1 to 2:1
 
+**Unsupported Node**
+at 1:1 to 1:1
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.lookup "u22")
+  (Expr.num_literal_i32 0)
+  (Expr.lookup "u22")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

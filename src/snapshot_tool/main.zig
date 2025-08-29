@@ -2754,14 +2754,8 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             try writer.print(" {}", .{expr.payload.num_literal_i32});
         },
         .int_literal_i32 => {
-            // Get the original AST node to access the correct payload
-            const inner_node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(inner_node_idx)));
-
-            // Check if the original node has int_literal_i32 payload
-            if (ast_node.tag == .int_literal_i32) {
-                try writer.print(" 0x{x}", .{ast_node.payload.int_literal_i32});
-            }
+            // Use the expr.payload directly - after mutation, we can't check AST nodes
+            try writer.print(" 0x{x}", .{expr.payload.int_literal_i32});
         },
         .frac_literal_small => {
             // Use the expr.payload directly - it's the same as the AST payload
@@ -2770,28 +2764,17 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             try writer.print(" {d}", .{decimal_value});
         },
         .frac_literal_big => {
-            // Check if the original AST node actually has a frac_literal_big payload
-            const frac_node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-            const ast_node = cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(frac_node_idx)));
-
-            const has_frac_big = switch (ast_node.tag) {
-                .frac_literal_big => true,
-                else => false,
-            };
-
-            if (has_frac_big) {
-                // Use the expr.payload directly
-                const idx = expr.payload.frac_literal_big;
-                // Check if ByteSlices is empty or index is out of bounds
-                const cir_ast = cir.ast.*;
-                const byte_slices_len = cir_ast.byte_slices.entries.items.items.len;
-                const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
-                if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
-                    try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
-                } else {
-                    const slice = cir_ast.byte_slices.slice(idx);
-                    try writer.print(" {s}", .{slice});
-                }
+            // Use the expr.payload directly - after mutation, we can't check AST nodes
+            const idx = expr.payload.frac_literal_big;
+            // Check if ByteSlices is empty or index is out of bounds
+            const cir_ast = cir.ast.*;
+            const byte_slices_len = cir_ast.byte_slices.entries.items.items.len;
+            const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
+            if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
+                try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
+            } else {
+                const slice = cir_ast.byte_slices.slice(idx);
+                try writer.print(" {s}", .{slice});
             }
         },
         .lookup => {
@@ -2799,6 +2782,30 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             const ident_idx = expr.payload.ident;
             const ident_name = env.idents.getText(ident_idx);
             try writer.print(" \"{s}\"", .{ident_name});
+        },
+        .module_access => {
+            // Module access has binop payload
+            const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
+            try writer.writeAll("\n");
+            try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+            try outputCIR2ExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .crash => {
+            // Crash has nodes payload with the message expression
+            const nodes_idx = expr.payload.nodes;
+            var iter = cir.ast.node_slices.nodes(&nodes_idx);
+            try writer.writeAll("\n");
+            if (iter.next()) |msg_node| {
+                // Cast the AST node to CIR expr
+                const msg_expr = CIR.asExprIdx(msg_node);
+                try outputCIR2ExprAsSExpr(writer, cir, env, msg_expr, indent + 1);
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
         },
         .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_thin_arrow, .binop_colon, .binop_equals => {
             // After mutation, binop nodes still have their binop payloads

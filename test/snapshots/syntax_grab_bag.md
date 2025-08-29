@@ -955,8 +955,9 @@ import # Comment after import keyword
 pf # Comment after qualifier
 .StdoutMultiline # Comment after ident
  exposing [ # Comment after exposing open
-line, # Comment after exposed item
-write] # Comment after exposing close
+	line, # Comment after exposed item
+	write,
+] # Comment after exposing close
 
 import pkg.Something exposing [func]
 function
@@ -975,34 +976,43 @@ MapML(
 List ( # Inside Tag args
 a -> # After tag arg
  -> (a -> b) -> # After arrow
-List # Inside tag args
-(
-		b,
-	)),
+List( # Inside tag args
+b, )),
 )
 # And after the type decl
 
 Foo : (Bar, Baz)
 FooMultiline : # Comment after pattern tuple open
-(Bar, # Comment after pattern tuple item
-Baz)
+(
+	Bar, # Comment after pattern tuple item
+	Baz,
+)
 # Comment after pattern tuple close
 
 Some(a) : {foo : Ok a, bar : Something}
-SomeMl(a) : { # After record open
-foo : Ok a, # After field
-bar : Something}
-SomeMultiline(a) : { # Comment after pattern record open
+SomeMl(a) :
+	{
+		 # After record open
+foo : Ok a,
+		 # After field
+bar : Something
+	}
+SomeMultiline(a) :
+	{
+		 # Comment after pattern record open
 foo # After field name
  : # Before field anno
-Ok a, # Comment after pattern record field
-bar : Something}
+Ok a,
+		 # Comment after pattern record field
+bar : Something
+	}
 # Comment after pattern record close
 
 Maybe(a) : [Some(a), None]
 MaybeMultiline(a) : [ # Comment after tag union open
-Some(a), # Comment after tag union member
-None] # Comment after tag union close
+	Some(a), # Comment after tag union member
+	None,
+] # Comment after tag union close
 
 SomeFunc(a) : Maybe a -> a -> Maybe a
 add_one_oneline = |num| if num 2 else 5
@@ -1041,9 +1051,11 @@ rest
 12-
 add(34)
 { # After pattern record field name
-foo : # Before pattern record field value
+	foo : # Before pattern record field value
 1, # After pattern record field
-bar : 2, ..rest }
+	bar : 2,
+	..rest,
+}
 12
 { foo : 1, bar : 2 } | 7
 12
@@ -1059,20 +1071,32 @@ TwoArgs(("hello", Some("world")))
 expect # Comment after expect keyword
 blah == 1 # Comment after expect statement
 
-main! : List String -> Result ({  }, _)
-main! = |_| { # Yeah I can leave a comment here
-world = "World", var number = 123, expect blah == 1, tag = Blue, return # Comment after return keyword
+main! : List String -> Result({}, _)
+main! = |_| {
+	 # Yeah I can leave a comment here
+world = "World",
+	var number = 123,
+	expect blah == 1,
+	tag = Blue,
+	return # Comment after return keyword
 tag # Comment after return statement
 
-# Just a random comment!
+	# Just a random comment!
 
-, ..., match_time((...)), some_func(), # After debug
-42 } # Comment after crash keyword
+,
+	...,
+	match_time((
+		...,
+	)),
+	some_func(), # After debug
+	42,
+} # Comment after crash keyword
 crash "Unreachable!" # Comment after crash statement
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
-list = [add_one()]
-# After dbg in list
+list = [
+	add_one(), # After dbg in list
+]
 number
 # after dbg expr as arg
 # Comment one
@@ -1107,7 +1131,7 @@ string
 
 empty : {}
 empty = {  }
-tuple : Value (a, b, c)
+tuple : Value(a, b, c)
 expect {
 	foo = 1 # This should work too
 	blah = 1
@@ -1391,9 +1415,6 @@ at 17:1 to 20:20
 at 118:3 to 118:7
 
 **Unsupported Node**
-at 120:4 to 120:8
-
-**Unsupported Node**
 at 130:3 to 130:21
 
 **Unsupported Node**
@@ -1401,12 +1422,6 @@ at 131:3 to 133:12
 
 **Pattern in Expression Context**
 at 143:36 to 143:37
-
-**Unsupported Node**
-at 149:2 to 150:6
-
-**Unsupported Node**
-at 162:2 to 163:17
 
 **Unsupported Node**
 at 175:3 to 175:9
@@ -1582,7 +1597,7 @@ at 193:4 to 193:7
       (Expr.lookup "bar")
       (Expr.num_literal_i32 2)
     )
-    (Expr.lookup "rest")
+    (Expr.unary_double_dot)
   )
   (Expr.malformed)
   (Expr.num_literal_i32 12)
@@ -1597,7 +1612,7 @@ at 193:4 to 193:7
       (Expr.lookup "bar")
       (Expr.num_literal_i32 2)
     )
-    (Expr.lookup "rest")
+    (Expr.unary_double_dot)
   )
   (Expr.malformed)
   (Expr.num_literal_i32 12)
@@ -1632,7 +1647,9 @@ at 193:4 to 193:7
     (Expr.not_lookup)
     (Expr.lambda)
   )
-  (Expr.malformed)
+  (Expr.crash
+    (Expr.str_literal_big)
+  )
   (Expr.binop_equals
     (Expr.lookup "tag_with_payload")
     (Expr.apply_tag)

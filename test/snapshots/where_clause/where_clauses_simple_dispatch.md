@@ -57,24 +57,44 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-module [stringify]
-
-stringify : a -> Str where module(a) | .to_str : a -> Str
-stringify = |value| value.to_str()
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:34 to 3:37
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "stringify")
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.apply_tag)
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.lookup "a")
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "stringify")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+stringify : _b
 ~~~

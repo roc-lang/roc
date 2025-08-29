@@ -74,22 +74,60 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent Comma L
 ~~~roc
 module [process]
 
-process : a -> b -> ((c where module(a) | .convert : a) -> c, module(b) | .transform) : b -> c
+process : a -> b -> (c where module(a).convert : a) -> c, module(b).transform : b -> c
 process = |_, _| ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:33 to 3:36
+
+**Unsupported Node**
+at 3:61 to 3:64
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.binop_thin_arrow
+          (Expr.binop_colon
+            (Expr.tuple_literal
+              (Expr.binop_thin_arrow
+                (Expr.binop_colon
+                  (Expr.lookup "c")
+                  (Expr.binop_colon
+                    (Expr.lambda)
+                    (Expr.lookup "a")
+                  )
+                )
+                (Expr.lookup "c")
+              )
+              (Expr.lambda)
+            )
+            (Expr.lookup "b")
+          )
+          (Expr.lookup "c")
+        )
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+process : _d
 ~~~

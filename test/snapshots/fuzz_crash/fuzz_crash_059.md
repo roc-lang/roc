@@ -41,15 +41,21 @@ at 2:3 to 2:7
 **Parse Error**
 at 2:13 to 2:13
 
+**Unsupported Node**
+at 1:20 to 2:2
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.if_else)
+  (Expr.num_literal_i32 0)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

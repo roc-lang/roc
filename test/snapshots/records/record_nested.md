@@ -110,13 +110,75 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "person")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "address")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "street")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "city")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "coordinates")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "lat")
+            (Expr.frac_literal_big alice@example.com)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "lng")
+            (Expr.unary_neg)
+          )
+        )
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "contact")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "email")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "phone")
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "home")
+            (Expr.str_literal_big)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "work")
+            (Expr.str_literal_big)
+          )
+        )
+      )
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

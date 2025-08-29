@@ -37,10 +37,12 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:17 to 1:47
+
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Stmt.type_anno)
 ~~~
 # SOLVED
 ~~~clojure

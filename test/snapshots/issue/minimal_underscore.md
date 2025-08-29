@@ -28,16 +28,22 @@ NO CHANGE
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 3:12 to 3:13
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

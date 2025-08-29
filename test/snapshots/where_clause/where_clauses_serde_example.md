@@ -77,22 +77,45 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpenRou
 ~~~roc
 module [deserialize]
 
-deserialize : List U8 -> Result (a, [DecodeErr]) where module(a) | .decode : List U8 -> Result (a, [DecodeErr])
+deserialize : List U8 -> Result(a, [DecodeErr]) where module(a).decode : List U8 -> Result(a, [DecodeErr])
 deserialize = |_| ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 4:14 to 4:17
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "deserialize")
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.apply_tag)
+          (Expr.apply_tag)
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "deserialize")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+deserialize : _b
 ~~~

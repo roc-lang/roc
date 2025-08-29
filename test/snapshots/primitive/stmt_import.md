@@ -37,16 +37,20 @@ import json.Json
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:17
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.list_literal)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

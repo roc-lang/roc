@@ -26,11 +26,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.str_interpolation)
+(Expr.lookup "when")
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_interpolation :type "_a")
+(expr :tag lookup :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -65,13 +65,40 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "a")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "a")
+    (Expr.frac_literal_small 3.14)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "b")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "b")
+    (Expr.frac_literal_big big:<idx:0>)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "c")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "c")
+    (Expr.frac_literal_big big:<idx:8>)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+a : F64
+b : F64
+c : F64
 ~~~

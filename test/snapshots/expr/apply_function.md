@@ -30,11 +30,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thin_arrow)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thin_arrow :type "_a")
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc

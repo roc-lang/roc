@@ -200,9 +200,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
 Pair((a, b)) : (a, b)
-swap_pair : Pair (a, b) -> Pair (b, a)
+swap_pair : Pair(a, b) -> Pair(b, a)
 swap_pair = |x, y| (y, x)
-map_pair : Pair (a, b) -> (a -> c) -> (b -> d) -> Pair (c, d)
+map_pair : Pair(a, b) -> (a -> c) -> (b -> d) -> Pair(c, d)
 map_pair = |(x, y), f, g| (f(x), g(y))
 main = {
 		# This creates Pair(Num, Num)
@@ -214,12 +214,7 @@ p1 = swap_pair((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 8:15 to 8:19
-
-**Unsupported Node**
-at 12:14 to 12:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

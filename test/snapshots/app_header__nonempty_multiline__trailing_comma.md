@@ -20,21 +20,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 app
 {
 	pf: "../main.roc" platform [main],
-	somePkg: (
-		"../main.roc",
-	),
+	somePkg: "../main.roc",
 }
 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:65 to 2:65
-
-**Expected Close Curly Brace**
-at 1:1 to 2:66
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

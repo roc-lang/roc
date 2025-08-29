@@ -111,9 +111,6 @@ NIL
 **Unsupported Node**
 at 5:14 to 5:28
 
-**Unsupported Node**
-at 5:8 to 5:12
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

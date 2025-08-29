@@ -36,23 +36,25 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
 ~~~
 # FORMATTED
 ~~~roc
-|{
+(|{
 	x : x
-}| x({
+}| x)({
 	x : -10
 })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:3 to 1:8
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_equals)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_equals :type "_a")
+(expr :tag apply_ident :type "_a")
 ~~~
 # TYPES
 ~~~roc

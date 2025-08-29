@@ -66,11 +66,24 @@ at 13:2 to 13:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.tuple_literal
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.frac_literal_big big:<idx:30>)
+  (Expr.frac_literal_big big:<idx:37>)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.num_literal_big)
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag tuple_literal :type "_a")
 ~~~
 # TYPES
 ~~~roc

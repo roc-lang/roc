@@ -169,9 +169,7 @@ num = identity(42)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 7:12 to 7:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

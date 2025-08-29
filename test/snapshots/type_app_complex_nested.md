@@ -174,13 +174,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main] }
 
-processComplex : Result (List(Maybe(a)), Dict((Str, Error(_b)))) -> List a
+processComplex : Result(List Maybe a, Dict(Str, Error _b)) -> List a
 processComplex = |result| match result
-deepNested : Maybe Result (List(Dict((Str, a))), _b) -> a
+deepNested : Maybe Result(List Dict(Str, a), _b) -> a
 deepNested = |_| {
 	crash "not implemented"
 }
-ComplexType((a, b)) : Result (List(Maybe(a)), Dict((Str, Error(b))))
+ComplexType((a, b)) : Result(List Maybe a, Dict(Str, Error b))
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
@@ -191,9 +191,6 @@ at 7:23 to 7:23
 
 **Parse Error**
 at 8:16 to 8:16
-
-**Unsupported Node**
-at 14:2 to 14:25
 
 # CANONICALIZE
 ~~~clojure

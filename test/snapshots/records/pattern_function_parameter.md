@@ -44,7 +44,9 @@ formatUser = |{ name : name, age : age, email : email }| "User: ${name} (${age.t
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:15 to 1:35
+
 # CANONICALIZE
 ~~~clojure
 (Stmt.assign)

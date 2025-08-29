@@ -38,9 +38,12 @@ diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
 // Scope state for tracking variable definitions and nested scopes
 scope_state: ScopeState,
 
-/// CIR Statement tags - start at 0
+/// Starting offset for statement tags to avoid collision with AST2.Node.Tag
+/// Calculated at compile time based on actual AST2.Node.Tag values
+const STMT_TAG_START = @typeInfo(AST2.Node.Tag).@"enum".fields.len;
+
 pub const StmtTag = enum(u8) {
-    assign, // immutable assignment
+    assign = STMT_TAG_START, // immutable assignment
     init_var, // mutable variable initialization
     reassign, // reassignment to existing var
     type_alias, // type alias definition
@@ -58,14 +61,15 @@ pub const StmtTag = enum(u8) {
 };
 
 /// Calculate the starting offset for expression tags
-/// We start at 100 to avoid collision with AST2.Node.Tag values (which go up to ~68)
-const EXPR_TAG_START = 100;
+/// Starts after all statement tags
+const EXPR_TAG_START = STMT_TAG_START + @typeInfo(StmtTag).@"enum".fields.len;
 
 /// CIR Expression tags - start after statement tags
 pub const ExprTag = enum(u8) {
     lookup = EXPR_TAG_START, // First expr tag starts at calculated offset
     neg_lookup,
     not_lookup,
+    module_access, // Module access like Bool.True (uses binop payload)
     num_literal_i32,
     int_literal_i32,
     num_literal_big,
@@ -110,12 +114,13 @@ pub const ExprTag = enum(u8) {
     unary_neg, // Unary negation (e.g., -expr)
     unary_not, // Unary not (e.g., !expr)
     unary_double_dot, // Unary double dot (e.g., ..(expr))
+    crash, // Crash expression (e.g., crash "message")
     malformed,
 };
 
 /// Calculate the starting offset for pattern tags
-/// We start at 150 (EXPR_TAG_START=100 + ~48 ExprTag values + buffer)
-const PATT_TAG_START = 150;
+/// Starts after all expression tags
+const PATT_TAG_START = EXPR_TAG_START + @typeInfo(ExprTag).@"enum".fields.len;
 
 /// CIR Pattern tags - start after expression tags
 pub const PattTag = enum(u8) {
@@ -254,8 +259,8 @@ pub const Stmts = struct {
         // Skip index 0 (sentinel node)
         for (tags[1..]) |tag| {
             const tag_value = @as(u8, @intFromEnum(tag));
-            // Statement tags are in the range [0, EXPR_TAG_START)
-            if (tag_value < EXPR_TAG_START) {
+            // Statement tags are in the range [STMT_TAG_START, EXPR_TAG_START)
+            if (tag_value >= STMT_TAG_START and tag_value < EXPR_TAG_START) {
                 count += 1;
             }
         }
@@ -404,9 +409,18 @@ pub fn getStmt(self: *const CIR, idx: Stmt.Idx) struct {
         .assign => .assign,
         .init_var => .init_var,
         .reassign => .reassign,
+        .type_alias => .type_alias,
+        .type_anno => .type_anno,
+        .nominal_type => .nominal_type,
+        .import => .import,
+        .match => .match,
+        .if_without_else => .if_without_else,
+        .ret => .ret,
+        .for_loop => .for_loop,
+        .while_loop => .while_loop,
+        .crash => .crash,
         .expr => .expr,
         .malformed => .malformed,
-        else => .malformed, // Fallback for unexpected tags
     };
 
     return .{
@@ -445,6 +459,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .lookup => .lookup,
         .neg_lookup => .neg_lookup,
         .not_lookup => .not_lookup,
+        .module_access => .module_access,
         .num_literal_i32 => .num_literal_i32,
         .int_literal_i32 => .int_literal_i32,
         .num_literal_big => .num_literal_big,
@@ -489,6 +504,7 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .unary_neg => .unary_neg,
         .unary_not => .unary_not,
         .unary_double_dot => .unary_double_dot,
+        .crash => .crash,
         .malformed => .malformed,
     };
 
@@ -736,6 +752,7 @@ pub const Expr = struct {
         lookup, // .var_lc (e.g. `foo`)
         neg_lookup, // .neg_lc (e.g. `-foo`)
         not_lookup, // .not_lc (e.g. `!foo`)
+        module_access, // .binop_dot with UC.UC (e.g. `Bool.True`)
         record_accessor, // .dot_lc (e.g. `.foo`)
         double_dot_ident, // .double_dot_lc (e.g. `..others`)
         dot_num, // dot followed by number (e.g. `.0`) - this is a tuple accessor
@@ -789,6 +806,7 @@ pub const Expr = struct {
         unary_not, // e.g. `!(foo())` - note that `!foo` is special-cased to .not_lc instead
         unary_neg, // e.g. `-(foo())` - note that `-foo` is special-cased to .neg_lc instead
         unary_double_dot, // e.g. `..(foo())` - note that `..foo` is special-cased to .double_dot_lc instead)
+        crash, // e.g. `crash "not implemented"` - crash expression with message
         malformed, // e.g. tokenization or parsing failed (stores a Diagnostic.Tag)
     };
 
@@ -894,6 +912,7 @@ pub const Type = struct {
         unary_not, // e.g. `!(foo())` - note that `!foo` is special-cased to .not_lc instead
         unary_neg, // e.g. `-(foo())` - note that `-foo` is special-cased to .neg_lc instead
         unary_double_dot, // e.g. `..(foo())` - note that `..foo` is special-cased to .double_dot_lc instead)
+        crash, // e.g. `crash "not implemented"` - crash expression with message
         malformed, // e.g. tokenization or parsing failed (stores a Diagnostic.Tag)
     };
 
@@ -1106,7 +1125,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         },
 
         // Binary operators
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_colon, .binop_equals => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_colon, .binop_equals => {
             // Get the binop data from AST's node slices
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
@@ -1120,6 +1139,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .binop_minus => .binop_minus,
                 .binop_star => .binop_star,
                 .binop_slash => .binop_slash,
+                .binop_double_slash => .binop_double_slash,
                 .binop_colon => .binop_colon,
                 .binop_equals => .binop_equals,
                 else => unreachable,
@@ -1561,8 +1581,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
             if (lhs_tag == .uc and rhs_tag == .uc) {
                 // This is module access like Bool.True
-                // Treat it as a lookup for now
-                self.mutateToExpr(node_idx, .lookup);
+                self.mutateToExpr(node_idx, .module_access);
                 try self.ensureTypeVarExists(node_idx);
                 return asExprIdx(node_idx);
             } else {
@@ -1603,8 +1622,8 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
         // Record spread operator (e.g., ..person in { ..person, age: 31 })
         .double_dot_lc => {
-            // This represents a record being spread - treat as a special lookup for now
-            self.mutateToExpr(node_idx, .lookup);
+            // This represents a record being spread
+            self.mutateToExpr(node_idx, .unary_double_dot);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1612,13 +1631,17 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Module/package qualified identifiers (e.g., Module.Type, pkg.Module.Type)
         .uc_dot_ucs => {
             // Module-qualified type or tag (e.g., Module.Type or Module.Tag)
-            self.mutateToExpr(node_idx, .lookup);
+            // These have nodes payload with multiple identifiers
+            // Keep as apply_tag since they're tag applications
+            self.mutateToExpr(node_idx, .apply_tag);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
         .lc_dot_ucs => {
             // Package-qualified module access (e.g., pkg.Module.Type)
-            self.mutateToExpr(node_idx, .lookup);
+            // These have nodes payload with multiple identifiers
+            // Keep as apply_tag since they're tag applications
+            self.mutateToExpr(node_idx, .apply_tag);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1838,6 +1861,35 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
+        // Crash expression
+        .crash => {
+            // Crash takes an expression to print before crashing
+            const nodes_iter = self.ast.*.node_slices.nodes(&node.payload.nodes);
+            var iter = nodes_iter;
+
+            if (iter.next()) |expr_node_idx| {
+                // Canonicalize the crash message expression
+                _ = try self.canonicalizeExpr(allocator, expr_node_idx, raw_src, idents);
+            }
+
+            // Mutate to crash expression
+            self.mutateToExpr(node_idx, .crash);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
+        // Return statement in expression context - shouldn't happen but handle it
+        .ret => {
+            // Return is a statement, but if we encounter it in expression context,
+            // we'll canonicalize it as a statement first
+            const stmt_idx = try self.canonicalizeStmt(allocator, node_idx, raw_src, idents);
+            // Then treat it as a malformed expression
+            self.mutateToExpr(node_idx, .malformed);
+            try self.ensureTypeVarExists(node_idx);
+            _ = stmt_idx;
+            return asExprIdx(node_idx);
+        },
+
         else => {
             // This should never happen if we've handled all cases
             std.log.err("Unhandled AST node tag in canonicalizeExpr: {}", .{node.tag});
@@ -2010,7 +2062,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
     // Check if this node has already been canonicalized (mutated)
     const tag_value = @as(u8, @intFromEnum(node.tag));
-    if (tag_value < EXPR_TAG_START) {
+    if (tag_value >= STMT_TAG_START and tag_value < EXPR_TAG_START) {
         // This node has already been canonicalized as a statement
         return asStmtIdx(node_idx);
     }
@@ -2117,6 +2169,22 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             }
         },
 
+        // Crash statement
+        .crash => {
+            // Crash takes an expression to print before crashing
+            const nodes_iter = self.ast.*.node_slices.nodes(&node.payload.nodes);
+            var iter = nodes_iter;
+
+            if (iter.next()) |expr_node_idx| {
+                // Canonicalize the crash message expression
+                _ = try self.canonicalizeExpr(allocator, expr_node_idx, raw_src, idents);
+            }
+
+            // Mutate to crash statement
+            self.mutateToStmt(node_idx, .crash);
+            return asStmtIdx(node_idx);
+        },
+
         // Return statement
         .ret => {
             // Parse return statement with expression
@@ -2131,23 +2199,6 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
             // Mutate to return statement
             self.mutateToStmt(node_idx, .ret);
-            return asStmtIdx(node_idx);
-        },
-
-        // Crash statement
-        .crash => {
-            // Parse crash statement with expression
-            // Get the expression from nodes payload
-            const nodes_iter = self.ast.*.node_slices.nodes(&node.payload.nodes);
-            var iter = nodes_iter;
-
-            if (iter.next()) |expr_node_idx| {
-                // Canonicalize the crash expression
-                _ = try self.canonicalizeExpr(allocator, expr_node_idx, raw_src, idents);
-            }
-
-            // Mutate to crash statement
-            self.mutateToStmt(node_idx, .crash);
             return asStmtIdx(node_idx);
         },
 

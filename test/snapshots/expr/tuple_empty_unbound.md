@@ -24,11 +24,12 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_slash)
+(Expr.tuple_literal
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_slash :type "_a")
+(expr :tag tuple_literal :type "_a")
 ~~~
 # TYPES
 ~~~roc

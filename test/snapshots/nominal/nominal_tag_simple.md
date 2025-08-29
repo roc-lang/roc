@@ -69,13 +69,41 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "blue")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "blue")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "yellow")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "yellow")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+blue : _a
+yellow : _a
 ~~~

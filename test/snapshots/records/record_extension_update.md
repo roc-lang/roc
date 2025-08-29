@@ -29,7 +29,7 @@ at 1:1 to 1:13
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.lookup "person")
+  (Expr.unary_double_dot)
 )
 ~~~
 # SOLVED

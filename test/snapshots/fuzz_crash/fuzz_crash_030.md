@@ -39,7 +39,9 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang Op
 ~~~roc
 platform # Cd
 "foo" # Ce
- requires (n! : List Str => {  }) exposes  [
+ requires (
+	n! : List Str => {  },
+) exposes  [
 	,
 ] packages { # pen
 pkg, 77}
@@ -85,13 +87,16 @@ at 13:2 to 13:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.list_literal)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

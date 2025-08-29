@@ -24,7 +24,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Stmt.crash)
 ~~~
 # SOLVED
 ~~~clojure

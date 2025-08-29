@@ -75,9 +75,7 @@ main = swap((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:10 to 5:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

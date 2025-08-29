@@ -40,13 +40,22 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "hello")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "world")
+    (Expr.str_literal_big)
+  )
+  (Expr.str_literal_big)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
 ~~~

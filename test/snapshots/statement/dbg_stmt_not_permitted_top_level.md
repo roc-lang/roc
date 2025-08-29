@@ -41,13 +41,20 @@ at 4:1 to 4:1
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+foo : Error
 ~~~

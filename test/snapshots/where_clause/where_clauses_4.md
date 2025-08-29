@@ -68,16 +68,37 @@ decodeThings = ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:32
+
+**Unsupported Node**
+at 6:14 to 6:17
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "decodeThings")
+    (Expr.binop_colon
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "decodeThings")
+    (Expr.malformed)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+decodeThings : Error
 ~~~

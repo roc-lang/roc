@@ -51,16 +51,37 @@ red = Color.RGB | Red
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:13
+
+**Unsupported Node**
+at 6:7 to 6:12
+
+**Unsupported Node**
+at 6:12 to 6:16
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "red")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "red")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+red : _a
 ~~~

@@ -29,13 +29,16 @@ at 1:1 to 1:14
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.lookup "i")
+  (Expr.apply_tag)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

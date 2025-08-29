@@ -50,16 +50,38 @@ value = 42
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 3:15 to 3:16
+
+**Pattern in Expression Context**
+at 5:13 to 5:14
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "value")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "value")
+    (Expr.num_literal_i32 42)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+value : Num(_size)
 ~~~

@@ -260,13 +260,13 @@ import I2 exposing [I21]
 Ias1
 I22
 Ias2
-A(a) : a where module(a) | .a1 : a -> a ->  -> (
+A(a) : a where module(a).a1 : a -> a ->  -> 
 	Str,
-	module(a) | .a2,
-) : a -> a ->  -> (Str, B(b)) : b where module(b) | .b1 : b -> b ->  -> (
+	module(a).a2,
+ : a -> a ->  -> (Str, B(b)) : b where module(b).b1 : b -> b ->  -> 
 	Str,
-	module(b) | .b2,
-) : b -> b ->  -> (
+	module(b).b2,
+ : b -> b ->  -> (
 	Str,
 	C(
 		(
@@ -282,10 +282,7 @@ D(
 	(
 		a,
 		b,
-	) : C (
-		a,
-		b,
-	),
+	) : C(a, b, ),
 )
 E :
 	{
@@ -296,7 +293,7 @@ F : [
 	A,
 	B,
 ]
-g : (e -> e where module(e) | A, module(e) | B, h) = 
+g : e -> e where module(e) | A, module(e) | B, h = 
 ~~~
 # EXPECTED
 NIL
@@ -406,15 +403,157 @@ at 31:2 to 31:2
 **Parse Error**
 at 31:2 to 31:2
 
+**Unsupported Node**
+at 4:1 to 4:31
+
+**Unsupported Node**
+at 5:1 to 5:24
+
+**Unsupported Node**
+at 8:22 to 8:25
+
+**Unsupported Node**
+at 8:53 to 8:56
+
+**Unsupported Node**
+at 9:22 to 9:25
+
+**Unsupported Node**
+at 9:53 to 9:56
+
+**Unsupported Node**
+at 16:24 to 16:27
+
+**Unsupported Node**
+at 16:37 to 16:40
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_colon
+      (Expr.lookup "a")
+      (Expr.binop_colon
+        (Expr.lambda)
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.binop_thin_arrow
+            (Expr.lookup "a")
+            (Expr.binop_thin_arrow
+              (Expr.malformed)
+              (Expr.binop_colon
+                (Expr.tuple_literal
+                  (Expr.apply_tag)
+                  (Expr.lambda)
+                )
+                (Expr.binop_thin_arrow
+                  (Expr.lookup "a")
+                  (Expr.binop_thin_arrow
+                    (Expr.lookup "a")
+                    (Expr.binop_thin_arrow
+                      (Expr.malformed)
+                      (Expr.binop_colon
+                        (Expr.binop_colon
+                          (Expr.tuple_literal
+                            (Expr.apply_tag)
+                            (Expr.apply_tag)
+                          )
+                          (Expr.lookup "b")
+                        )
+                        (Expr.binop_colon
+                          (Expr.lambda)
+                          (Expr.binop_thin_arrow
+                            (Expr.lookup "b")
+                            (Expr.binop_thin_arrow
+                              (Expr.lookup "b")
+                              (Expr.binop_thin_arrow
+                                (Expr.malformed)
+                                (Expr.binop_colon
+                                  (Expr.tuple_literal
+                                    (Expr.apply_tag)
+                                    (Expr.lambda)
+                                  )
+                                  (Expr.binop_thin_arrow
+                                    (Expr.lookup "b")
+                                    (Expr.binop_thin_arrow
+                                      (Expr.lookup "b")
+                                      (Expr.binop_thin_arrow
+                                        (Expr.malformed)
+                                        (Expr.tuple_literal
+                                          (Expr.apply_tag)
+                                          (Expr.apply_tag)
+                                        )
+                                      )
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "b")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "g")
+    (Expr.binop_equals
+      (Expr.tuple_literal
+        (Expr.binop_colon
+          (Expr.binop_thin_arrow
+            (Expr.lookup "e")
+            (Expr.lookup "e")
+          )
+          (Expr.lambda)
+        )
+        (Expr.lambda)
+        (Expr.lookup "h")
+      )
+      (Expr.malformed)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

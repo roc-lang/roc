@@ -40,11 +40,19 @@ at 2:2 to 2:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_or
+      (Expr.lookup "k")
+      (Expr.match)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc

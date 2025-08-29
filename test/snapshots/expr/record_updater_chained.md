@@ -111,13 +111,73 @@ at 6:52 to 6:52
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "person")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "city")
+        (Expr.str_literal_big)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "updated_one")
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 31)
+  )
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "updated2")
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "city")
+    (Expr.str_literal_big)
+  )
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "final")
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.binop_colon
+      (Expr.tuple_literal
+        (Expr.str_literal_big)
+        (Expr.lookup "age")
+      )
+      (Expr.num_literal_i32 32)
+    )
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+person : {}
+updated_one : {}
+updated2 : {}
+final : {}
 ~~~

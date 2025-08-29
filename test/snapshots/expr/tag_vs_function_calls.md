@@ -133,13 +133,34 @@ at 1:1 to 10:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "someTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "noneTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "okTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "errTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "addOne")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

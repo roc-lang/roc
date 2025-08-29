@@ -47,10 +47,15 @@ create_user! : Str => (U32 => { name : Str, age : U32, id : U64, active : Bool }
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:16 to 1:19
+
+**Unsupported Node**
+at 1:21 to 1:24
+
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Stmt.type_anno)
 ~~~
 # SOLVED
 ~~~clojure

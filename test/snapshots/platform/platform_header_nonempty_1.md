@@ -39,12 +39,18 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma CloseCurly OpenCurly Low
 platform # Comment after platform keyword
 "foo" # Comment after name
  requires { # Comment after rigids open
-(Main)} ( # Comment after signatures open
-main! : List Str => {  }) exposes  [
+(
+	Main,
+)} (
+	 # Comment after signatures open
+main! : List Str => {  },
+) exposes  [
 # Comment after exposes open
 	foo,
 ] packages { # Comment after packages open
-some_pkg, ("../some_pkg.roc")}
+some_pkg, (
+	"../some_pkg.roc",
+)}
 
 ~~~
 # EXPECTED

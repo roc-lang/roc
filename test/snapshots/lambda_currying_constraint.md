@@ -160,9 +160,7 @@ addThreeTwice = |n| applyTwice(|x| (x + 3, n))
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 13:15 to 13:19
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

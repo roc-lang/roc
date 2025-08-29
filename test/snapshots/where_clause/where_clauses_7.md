@@ -95,9 +95,10 @@ module [Hash]
 
 # After header
 Hash((a, hasher)) : # After method
-((a where module(a) | .hash : hasher) -> # After arrow
-hasher, module(hasher) | Hasher)
-Decode(a) : a where module(a) | .decode( # After method args open
+	(a where module(a).hash : hasher) -> # After arrow
+hasher,
+	module(hasher) | Hasher,
+Decode(a) : a where module(a).decode( # After method args open
 List(U8) -> ( # After method arg
  -> a))
 ~~~
@@ -110,15 +111,47 @@ at 16:3 to 16:3
 **Parse Error**
 at 14:9 to 16:9
 
+**Unsupported Node**
+at 7:11 to 7:14
+
+**Unsupported Node**
+at 10:11 to 10:19
+
+**Unsupported Node**
+at 14:9 to 14:12
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.tuple_literal
+      (Expr.binop_thin_arrow
+        (Expr.binop_colon
+          (Expr.lookup "a")
+          (Expr.binop_colon
+            (Expr.lambda)
+            (Expr.lookup "hasher")
+          )
+        )
+        (Expr.lookup "hasher")
+      )
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_colon
+      (Expr.lookup "a")
+      (Expr.apply_ident)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_b")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

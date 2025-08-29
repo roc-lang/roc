@@ -463,8 +463,8 @@ const Formatter = struct {
             .binop_platform => try self.formatBinOp(node_idx, " platform "),
             .binop_pipe => {
                 // Check if this is a module field access pattern
-                const node = self.getNode(node_idx);
-                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                const pipe_node = self.getNode(node_idx);
+                const binop = self.ast.node_slices.binOp(pipe_node.payload.binop);
                 const lhs_node = self.getNode(binop.lhs);
                 const rhs_node = self.getNode(binop.rhs);
 

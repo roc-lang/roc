@@ -312,16 +312,16 @@ processRequest : Request -> Response
 processRequest = |req| Http.defaultResponse
 parseJson : Str -> Json.Value
 parseJson = |input| Json.parse(input)
-handleApi : Http.Request -> Result (Http.Response, Json.Error)
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
 handleApi = |request| {
 	result = Json.decode(request.body)
 	match result
 }
 config : Json.Config
 config = Json.defaultConfig
-advancedParser : Json.Parser | Config -> Str -> Result (Json.Value, Json.Parser | Error)
+advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
 advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
-combineResults : Result (a, err) -> Result (b, err) -> Result ((a, b), err)
+combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
 combineResults = |result1, result2| match result1
 ~~~
 # EXPECTED
@@ -345,15 +345,141 @@ at 36:26 to 36:26
 **Parse Error**
 at 38:18 to 38:18
 
+**Unsupported Node**
+at 3:1 to 3:56
+
+**Unsupported Node**
+at 4:1 to 4:17
+
+**Unsupported Node**
+at 5:1 to 5:38
+
+**Unsupported Node**
+at 8:24 to 8:28
+
+**Unsupported Node**
+at 11:21 to 11:25
+
+**Unsupported Node**
+at 15:14 to 15:18
+
+**Unsupported Node**
+at 23:10 to 23:14
+
+**Unsupported Node**
+at 26:18 to 26:22
+
+**Unsupported Node**
+at 26:22 to 26:29
+
+**Unsupported Node**
+at 26:64 to 26:68
+
+**Unsupported Node**
+at 26:68 to 26:75
+
+**Unsupported Node**
+at 27:40 to 27:44
+
+**Unsupported Node**
+at 27:44 to 27:51
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "processRequest")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processRequest")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "parseJson")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "parseJson")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "handleApi")
+    (Expr.binop_thin_arrow
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "handleApi")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "config")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "config")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "advancedParser")
+    (Expr.binop_thin_arrow
+      (Expr.lambda)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "advancedParser")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "combineResults")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "combineResults")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+processRequest : _c
+parseJson : _c
+handleApi : _c
+config : _c
+advancedParser : _c
+combineResults : _c
 ~~~

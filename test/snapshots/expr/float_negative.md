@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.unary_neg)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag unary_neg :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc
-Error
+Num(_a)
 ~~~

@@ -88,25 +88,67 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon
 module []
 
 foo : U64
-bar : Thing (a, b, _)
+bar : Thing(a, b, _)
 biz : (a, b, c)
 add_one : U8 -> U16 -> U32
-main! : List String -> Result ({  }, _)
-tag_tuple : Value (a, b, c)
+main! : List String -> Result({}, _)
+tag_tuple : Value(a, b, c)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 4:19 to 4:20
+
+**Pattern in Expression Context**
+at 8:36 to 8:37
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "foo")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "bar")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "biz")
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+      (Expr.lookup "c")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "add_one")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "tag_tuple")
+    (Expr.apply_tag)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

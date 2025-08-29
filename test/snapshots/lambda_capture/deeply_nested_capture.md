@@ -64,13 +64,13 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 ~~~
 # FORMATTED
 ~~~roc
-|a| {
+(|a| {
 	2
 	|b| {
 		b : b
 		|c| b_loc + c
 	}
-}(100)(20)(3)
+})(100)(20)(3)
 ~~~
 # EXPECTED
 NIL
@@ -78,11 +78,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_equals)
+(Expr.apply_ident)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_equals :type "_d")
+(expr :tag apply_ident :type "_d")
 ~~~
 # TYPES
 ~~~roc

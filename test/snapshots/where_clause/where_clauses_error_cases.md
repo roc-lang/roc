@@ -81,22 +81,65 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 ~~~roc
 module [broken_fn1, broken_fn2, broken_fn3]
 
-broken_fn1 : a -> b where module(a) | .method -> b
-broken_fn2 : a -> b where broken_fn3 : a -> b where module(c) | .method : c -> d
+broken_fn1 : a -> b where module(a).method -> b
+broken_fn2 : a -> b where broken_fn3 : a -> b where module(c).method : c -> d
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 6:11 to 6:14
+
+**Unsupported Node**
+at 15:11 to 15:14
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "broken_fn1")
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.lambda)
+      )
+      (Expr.lookup "b")
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "broken_fn2")
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.binop_colon
+            (Expr.binop_thin_arrow
+              (Expr.lookup "a")
+              (Expr.lookup "b")
+            )
+            (Expr.binop_colon
+              (Expr.lookup "broken_fn3")
+              (Expr.lookup "a")
+            )
+          )
+          (Expr.lookup "b")
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.lookup "c")
+        )
+      )
+      (Expr.lookup "d")
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_e")
+(expr :tag block :type "_e")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -49,7 +49,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Stmt.type_anno)
 ~~~
 # SOLVED
 ~~~clojure

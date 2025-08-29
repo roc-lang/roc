@@ -26,13 +26,13 @@ at 1:1 to 1:9
 
 # CANONICALIZE
 ~~~clojure
-(Expr.unary_neg)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag unary_neg :type "Num(_size)")
+(expr :tag if_else :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+_a
 ~~~

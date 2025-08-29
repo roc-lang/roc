@@ -24,11 +24,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_slash)
+(Expr.num_literal_i32 1)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_slash :type "Num(_a)")
+(expr :tag num_literal_i32 :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc

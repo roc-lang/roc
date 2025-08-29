@@ -53,16 +53,31 @@ foo = Json.parse(data)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:34
+
+**Unsupported Node**
+at 4:1 to 4:12
+
+**Unsupported Node**
+at 6:7 to 6:11
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "foo")
+    (Expr.apply_ident)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+foo : _a
 ~~~

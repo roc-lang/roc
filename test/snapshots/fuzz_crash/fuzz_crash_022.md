@@ -108,13 +108,41 @@ at 6:35 to 6:35
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "ser")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "getUser")
+    (Expr.lambda)
+  )
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.binop_minus
+      (Expr.str_literal_small)
+      (Expr.not_lookup)
+    )
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+getUser : _a
 ~~~

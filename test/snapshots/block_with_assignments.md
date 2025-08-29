@@ -111,16 +111,69 @@ y = x + 10
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 5:16 to 5:20
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 42)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "pi")
+    (Expr.frac_literal_big hello)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "isActive")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "add")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "pair")
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.str_literal_big)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "record")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "city")
+        (Expr.str_literal_small)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "list")
+    (Expr.list_literal)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "y")
+    (Expr.binop_plus
+      (Expr.lookup "x")
+      (Expr.num_literal_i32 10)
+    )
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-_c
 ~~~

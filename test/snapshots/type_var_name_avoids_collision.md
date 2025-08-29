@@ -356,9 +356,7 @@ result1 = identity(123)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 20:12 to 20:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

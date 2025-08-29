@@ -123,13 +123,37 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.binop_equals
+      (Expr.binop_equals
+        (Expr.binop_equals
+          (Expr.binop_equals
+            (Expr.tuple_literal
+              (Expr.lookup "x")
+              (Expr.lookup "y")
+            )
+            (Expr.apply_ident)
+          )
+          (Expr.apply_ident)
+        )
+        (Expr.apply_ident)
+      )
+      (Expr.apply_ident)
+    )
+    (Expr.tuple_literal
+      (Expr.list_literal)
+      (Expr.str_literal_big)
+    )
+  )
+  (Expr.record_literal
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_e")
+(expr :tag block :type "_e")
 ~~~
 # TYPES
 ~~~roc
-_e
 ~~~

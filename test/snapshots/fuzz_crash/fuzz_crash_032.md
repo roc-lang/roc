@@ -90,15 +90,43 @@ at 9:7 to 9:7
 **Parse Error**
 at 10:10 to 10:10
 
+**Pattern in Expression Context**
+at 5:8 to 5:9
+
+**Unsupported Node**
+at 6:18 to 6:34
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.binop_equals
+        (Expr.apply_tag)
+        (Expr.list_literal)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "olor")
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.lookup "tus")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "olor")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+olor : _a
 ~~~

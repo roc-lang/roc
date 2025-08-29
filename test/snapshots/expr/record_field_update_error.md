@@ -34,13 +34,19 @@ at 1:10 to 1:10
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.lookup "person")
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 31)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
 ~~~

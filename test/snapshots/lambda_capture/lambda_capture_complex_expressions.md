@@ -46,11 +46,11 @@ at 1:52 to 1:52
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_accessor)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_accessor :type "_a")
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc

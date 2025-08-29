@@ -84,13 +84,40 @@ at 1:23 to 1:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "modu")
+    (Expr.binop_colon
+      (Expr.binop_colon
+        (Expr.binop_colon
+          (Expr.binop_colon
+            (Expr.binop_colon
+              (Expr.binop_colon
+                (Expr.binop_colon
+                  (Expr.malformed)
+                  (Expr.malformed)
+                )
+                (Expr.malformed)
+              )
+              (Expr.malformed)
+            )
+            (Expr.malformed)
+          )
+          (Expr.malformed)
+        )
+        (Expr.malformed)
+      )
+      (Expr.malformed)
+    )
+  )
+  (Expr.lookup "le")
+  (Expr.list_literal)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

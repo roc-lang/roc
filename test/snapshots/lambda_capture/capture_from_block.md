@@ -44,7 +44,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 # FORMATTED
 ~~~roc
 a = 10
-b = |_| a * 2(5)
+b = (|_| a * 2)(5)
 b
 ~~~
 # EXPECTED
@@ -53,13 +53,22 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_equals
+    (Expr.lookup "a")
+    (Expr.num_literal_i32 10)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "b")
+    (Expr.apply_ident)
+  )
+  (Expr.lookup "b")
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-_c
 ~~~

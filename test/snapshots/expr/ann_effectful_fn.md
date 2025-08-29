@@ -57,16 +57,33 @@ launchTheNukes({  })
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 2:22 to 2:24
+
+**Unsupported Node**
+at 3:23 to 3:25
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "launchTheNukes")
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "launchTheNukes")
+    (Expr.lambda)
+  )
+  (Expr.apply_ident)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
 ~~~

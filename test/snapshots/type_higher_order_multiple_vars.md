@@ -89,9 +89,7 @@ main! = |_| {  }
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:12 to 4:16
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

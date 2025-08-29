@@ -80,6 +80,12 @@ at 2:5 to 2:31
 **Parse Error**
 at 2:31 to 2:31
 
+**Unsupported Node**
+at 2:55 to 2:57
+
+**Unsupported Node**
+at 3:14 to 3:16
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

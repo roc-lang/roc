@@ -50,16 +50,35 @@ value = "test"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Pattern in Expression Context**
+at 3:12 to 3:13
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.malformed)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "value")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "value")
+    (Expr.str_literal_small)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+value : Str
 ~~~

@@ -54,15 +54,27 @@ at 4:1 to 4:1
 **Parse Error**
 at 1:1 to 4:2
 
+**Unsupported Node**
+at 3:23 to 3:25
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_thick_arrow)
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.lookup "answer")
+    (Expr.num_literal_i32 42)
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_thick_arrow :type "_a")
+(expr :tag record_literal :type "{}")
 ~~~
 # TYPES
 ~~~roc
-_a
+{}
 ~~~

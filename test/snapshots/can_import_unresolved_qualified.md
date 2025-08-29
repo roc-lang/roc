@@ -191,16 +191,126 @@ parser = ((Json.Parser | Advanced) | NonExistent) | .create
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 3:1 to 3:17
+
+**Unsupported Node**
+at 4:1 to 4:27
+
+**Unsupported Node**
+at 7:8 to 7:12
+
+**Unsupported Node**
+at 7:12 to 7:24
+
+**Unsupported Node**
+at 11:20 to 11:24
+
+**Unsupported Node**
+at 14:18 to 14:22
+
+**Unsupported Node**
+at 14:22 to 14:29
+
+**Unsupported Node**
+at 14:41 to 14:45
+
+**Unsupported Node**
+at 14:45 to 14:52
+
+**Unsupported Node**
+at 15:24 to 15:28
+
+**Unsupported Node**
+at 15:28 to 15:35
+
+**Unsupported Node**
+at 18:10 to 18:14
+
+**Unsupported Node**
+at 21:10 to 21:17
+
+**Unsupported Node**
+at 21:17 to 21:24
+
+**Unsupported Node**
+at 24:10 to 24:14
+
+**Unsupported Node**
+at 27:10 to 27:14
+
+**Unsupported Node**
+at 27:14 to 27:21
+
+**Unsupported Node**
+at 27:21 to 27:30
+
+**Unsupported Node**
+at 27:30 to 27:42
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "parseData")
+    (Expr.binop_thin_arrow
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "parseData")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "processRequest")
+    (Expr.binop_thin_arrow
+      (Expr.lambda)
+      (Expr.lambda)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processRequest")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "result")
+    (Expr.apply_ident)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "config")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "client")
+    (Expr.lambda)
+  )
+  (Expr.binop_equals
+    (Expr.lookup "parser")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+main : _a
+parseData : _a
+processRequest : _a
+result : _a
+config : _a
+client : _a
+parser : _a
 ~~~

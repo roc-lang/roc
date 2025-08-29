@@ -349,14 +349,14 @@ module []
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
-parseJson : Str -> Result (Value, Error)
+parseJson : Str -> Result(Value, Error)
 parseJson = |input| Json.parse(input)
 handleRequest : Request -> Response
 handleRequest = |req| {
 	result = Json.decode(req.body)
 	match result
 }
-processData : Config -> List Value -> Result (List(Value), Error)
+processData : Config -> List Value -> Result(List Value, Error)
 processData = |
 	config,
 	values,
@@ -378,7 +378,7 @@ createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
 handleResponse : Response -> Str
 handleResponse = |response| match response.status
-combineResults : Result (Value, Error) -> Status -> Result (Response, Error)
+combineResults : Result(Value, Error) -> Status -> Result(Response, Error)
 combineResults = |jsonResult, httpStatus| match jsonResult
 ~~~
 # EXPECTED
@@ -408,15 +408,140 @@ at 52:19 to 52:19
 **Parse Error**
 at 53:20 to 53:20
 
+**Unsupported Node**
+at 3:1 to 3:49
+
+**Unsupported Node**
+at 4:1 to 4:64
+
+**Unsupported Node**
+at 5:1 to 5:38
+
+**Unsupported Node**
+at 9:21 to 9:25
+
+**Unsupported Node**
+at 14:14 to 14:18
+
+**Unsupported Node**
+at 24:5 to 24:9
+
+**Unsupported Node**
+at 26:13 to 26:17
+
+**Unsupported Node**
+at 38:25 to 38:29
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "parseJson")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "parseJson")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "handleRequest")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "handleRequest")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "processData")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "processData")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "jsonConfig")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "httpStatus")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "defaultResponse")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "createClient")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "createClient")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "handleResponse")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "handleResponse")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "combineResults")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "combineResults")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+parseJson : _a
+handleRequest : _a
+processData : _a
+createClient : _a
+handleResponse : _a
+combineResults : _a
 ~~~

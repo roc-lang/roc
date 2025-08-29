@@ -215,12 +215,12 @@ Person : {name : Str, age : U64}
 Result((ok, err)) : [Ok(ok), Err(err)]
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 Node(a) : {value : a, children : List Tree a}
-MyResult : Result (Str, U64)
+MyResult : Result(Str, U64)
 Person : U64
 BadType : SomeUndeclaredType
 MyList : List Str
-MyDict : Dict (Str, U64)
-Complex : {person : Person, result : Result (Bool, Str), tree : Tree U64}
+MyDict : Dict(Str, U64)
+Complex : {person : Person, result : Result(Bool, Str), tree : Tree U64}
 ~~~
 # EXPECTED
 NIL

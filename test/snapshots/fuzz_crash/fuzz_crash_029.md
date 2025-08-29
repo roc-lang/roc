@@ -51,15 +51,20 @@ KwPlatform String KwRequires OpenCurly LowerIdent OpBang OpColon UpperIdent Open
 ~~~roc
 platform # Cd
 "foo" # Ce
- requires {( # d
-n! : List Str => {  })} #Ce
+ requires {(
+	 # d
+n! : List Str => {  },
+)} #Ce
  exposes  []
 
 "..l"
 mmen
 # Cose
 # Cd
-[Ok(world), n # pen
+[
+	Ok(world),
+	n # pen
+,
 ]ar
 ~~~
 # EXPECTED
@@ -127,13 +132,23 @@ at 17:3 to 17:3
 
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.lookup "mmen")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.list_literal)
+  (Expr.lookup "ar")
+  (Expr.malformed)
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -28,13 +28,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_double_question)
+(Expr.list_literal)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_double_question :type "_a")
+(expr :tag list_literal :type "List(_a)")
 ~~~
 # TYPES
 ~~~roc
-_a
+List(_a)
 ~~~

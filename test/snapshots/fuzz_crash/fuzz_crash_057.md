@@ -44,22 +44,44 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent
 ~~~roc
 module []
 
-s : (b -> c where module(a) | .t : c, u) : o
+s : (b -> c where module(a).t : c, u) : o
 ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:28 to 1:31
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "s")
+    (Expr.binop_colon
+      (Expr.tuple_literal
+        (Expr.binop_colon
+          (Expr.binop_thin_arrow
+            (Expr.lookup "b")
+            (Expr.lookup "c")
+          )
+          (Expr.binop_colon
+            (Expr.lambda)
+            (Expr.lookup "c")
+          )
+        )
+        (Expr.lookup "u")
+      )
+      (Expr.lookup "o")
+    )
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_d")
+(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

@@ -66,16 +66,37 @@ blue = CC.Color | RGB((0, 0, 255))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 4:1 to 4:26
+
+**Unsupported Node**
+at 8:8 to 8:10
+
+**Unsupported Node**
+at 8:10 to 8:16
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "blue")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "blue")
+    (Expr.apply_ident)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_a")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+blue : _a
 ~~~

@@ -148,7 +148,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 app { pf: "../basic-cli/main.roc" platform [main] }
 
 MyResult((ok, err)) : [Good(ok), Bad(err)]
-process : MyResult (Str, I32) -> Str
+process : MyResult(Str, I32) -> Str
 process = |_result| "processed"
 Option(a) : [Some(a), None]
 getString : Option Str -> Str

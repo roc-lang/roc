@@ -13,28 +13,42 @@ app[]{f:platform"",r:"
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon MalformedString CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(block
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+)
 ~~~
 # FORMATTED
 ~~~roc
-app { f: ("", r) :  platform [] }
+app { f: "" platform [] }
 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
+**Expected String**
+at 1:1 to 1:22
+
+**Expected Close Curly Brace**
+at 1:1 to 1:22
+
 **Parse Error**
 at 1:22 to 1:22
 
+**Parse Error**
+at 2:1 to 2:1
+
 # CANONICALIZE
 ~~~clojure
-(empty)
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No top-level expression found in file
 ~~~

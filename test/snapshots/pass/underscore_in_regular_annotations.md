@@ -227,7 +227,7 @@ process : List _ -> Str
 process = |list| "processed"
 get_data : {field : _, other : U32} -> U32
 get_data = |record| record.other
-handle_result : Result (_, Str) -> Str
+handle_result : Result(_, Str) -> Str
 handle_result = |result| match result
 map :
 	(a -> b) -> List a -> List b
@@ -248,15 +248,132 @@ at 20:18 to 22:18
 **Parse Error**
 at 23:5 to 23:5
 
+**Pattern in Expression Context**
+at 3:8 to 3:9
+
+**Pattern in Expression Context**
+at 3:13 to 3:14
+
+**Pattern in Expression Context**
+at 10:16 to 10:17
+
+**Pattern in Expression Context**
+at 14:21 to 14:22
+
+**Pattern in Expression Context**
+at 18:24 to 18:25
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_access)
+(Expr.block
+  (Expr.binop_colon
+    (Expr.lookup "main")
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "main")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "identity")
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "identity")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "process")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "process")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "get_data")
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "field")
+          (Expr.malformed)
+        )
+        (Expr.binop_colon
+          (Expr.lookup "other")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "get_data")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "handle_result")
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "handle_result")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "map")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "map")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "transform")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.lookup "_a")
+        (Expr.lookup "_b")
+      )
+      (Expr.lookup "_b")
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "transform")
+    (Expr.lambda)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_access :type "_c")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
+main : _c
+identity : _c
+process : _c
+get_data : _c
+handle_result : _c
+map : _c
+transform : _c
 ~~~

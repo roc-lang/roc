@@ -27,7 +27,9 @@ get_name!({  }) ?? "Bob"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Unsupported Node**
+at 1:15 to 1:17
+
 # CANONICALIZE
 ~~~clojure
 (Stmt.malformed)
