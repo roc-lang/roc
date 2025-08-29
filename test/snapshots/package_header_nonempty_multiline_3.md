@@ -18,7 +18,10 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 ~~~
 # FORMATTED
 ~~~roc
-package [something, SomeType] packages {somePkg, (
+package [
+	something,
+	SomeType,
+] packages {somePkg, (
 	"../main.roc",
 )}
 
@@ -27,7 +30,7 @@ package [something, SomeType] packages {somePkg, (
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:28 to 3:28
+at 3:28 to 3:29
 
 **Expected Close Curly Brace**
 at 1:1 to 3:29

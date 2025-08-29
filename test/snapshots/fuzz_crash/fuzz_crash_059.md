@@ -29,8 +29,7 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 app { f: "" platform [] }
 
 import B as G
-if 0 {  } else 
-0
+if 0 {  } else ||0
 ~~~
 # EXPECTED
 NIL
@@ -39,7 +38,7 @@ NIL
 at 2:3 to 2:7
 
 **Parse Error**
-at 2:13 to 2:13
+at 2:13 to 2:15
 
 **Unsupported Node**
 at 1:20 to 2:2

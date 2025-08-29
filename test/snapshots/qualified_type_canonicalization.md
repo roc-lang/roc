@@ -288,9 +288,11 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~roc
 module [Color, ModuleA]
 
-ModuleB.TypeC
-Result
-ExternalModule
+.ModuleB.TypeC,
+    Result,
+    ExternalModule,
+]
+
 import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
@@ -317,25 +319,28 @@ NIL
 at 1:1 to 3:12
 
 **Parse Error**
-at 3:12 to 3:12
+at 3:12 to 3:13
 
 **Parse Error**
-at 3:26 to 3:26
+at 3:26 to 4:5
 
 **Parse Error**
-at 4:11 to 4:11
+at 4:11 to 5:5
 
 **Parse Error**
-at 5:19 to 5:19
+at 5:19 to 6:1
 
 **Parse Error**
-at 6:1 to 6:1
+at 6:1 to 8:1
 
 **Parse Error**
-at 42:24 to 42:24
+at 42:24 to 42:27
 
 **Parse Error**
-at 43:25 to 43:25
+at 43:25 to 43:28
+
+**Parse Error**
+at 41:18 to 44:6
 
 **Unsupported Node**
 at 8:1 to 8:21

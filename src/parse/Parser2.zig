@@ -24,9 +24,15 @@ const Ident = base.Ident;
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
 const MAX_PARSE_STACK_SIZE: usize = 10_000;
 
-/// Temporary helper to create a Region from start and end positions
-/// TODO: Update all callers to compute proper end positions
+/// Helper to create a Region from start and end positions
 fn makeRegion(start: Position, end: Position) Region {
+    // In debug mode, catch bugs where end is before start
+    if (std.debug.runtime_safety) {
+        if (end.offset < start.offset) {
+            std.debug.print("makeRegion error: end.offset ({}) < start.offset ({})\n", .{ end.offset, start.offset });
+            std.debug.assert(end.offset >= start.offset);
+        }
+    }
     return Region{ .start = start, .end = end };
 }
 
@@ -564,7 +570,7 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
         close_paren_region = self.currentRegion();
         self.advance();
     } else {
-        // Use last position as approximation
+        // Use current position for missing close paren
         close_paren_region = makeRegion(self.currentPosition(), self.currentPosition());
     }
 
@@ -689,11 +695,14 @@ pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position
         }
     } else start_pos;
 
-    const end_pos = self.currentPosition();
+    var end_pos = self.currentPosition();
 
     if (self.peek() != .EndOfFile) {
         self.advance();
+        end_pos = self.currentPosition();
     }
+
+    std.debug.assert(end_pos.offset >= actual_start_pos.offset);
 
     // Only add diagnostics if we haven't hit the limit
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
@@ -860,6 +869,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
                 self.advance(); // consume 'platform' keyword
 
                 // Parse provides list after platform keyword
+                const provides_start = self.currentPosition();
                 self.expect(.OpenSquare) catch {
                     try self.pushDiagnostic(.header_expected_open_square, field_start, self.currentPosition());
                     continue;
@@ -872,8 +882,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
                 };
 
                 // Create the provides list node (use block as a container for the exposed items)
-                // The region for the provides list spans from the current position to the last exposed item
-                const provides_start = self.currentPosition();
+                // The region for the provides list spans from the start to the last exposed item
                 const provides_region = if (provides_idx != @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(0))) blk: {
                     // Get the region of the provides list (should have items)
                     var iter = self.ast.node_slices.nodes(&provides_idx);
@@ -885,9 +894,15 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
                         const last_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(last))));
                         break :blk makeRegion(provides_start, last_region.end);
                     } else {
-                        break :blk makeRegion(provides_start, provides_start);
+                        // Empty list, use current position for end
+                        const end_pos = self.currentPosition();
+                        break :blk makeRegion(provides_start, end_pos);
                     }
-                } else makeRegion(provides_start, provides_start);
+                } else blk: {
+                    // No items, use current position for end
+                    const end_pos = self.currentPosition();
+                    break :blk makeRegion(provides_start, end_pos);
+                };
                 const provides_node = try self.ast.appendNode(self.gpa, provides_region, .block, .{ .nodes = provides_idx });
 
                 // Create the platform binop: string_value platform provides_node
@@ -1850,7 +1865,7 @@ fn parseListLiteral(self: *Parser) Error!Node.Idx {
         self.advance();
     } else {
         try self.pushDiagnostic(.expected_expr_close_square_or_comma, start_pos, self.currentPosition());
-        // Use the current position as an approximation for error recovery
+        // Use current position for missing close bracket
         close_bracket_region = makeRegion(self.currentPosition(), self.currentPosition());
     }
 
@@ -2183,10 +2198,10 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
         const branch_node = self.ast.nodes.get(branch_idx);
 
         if (branch_node.tag != .binop_thick_arrow) {
-            // Not a branch - restore position and break
-            // Actually we can't easily restore position, so just break
-            // This means we might have consumed a token that's not part of the match
-            // TODO: Better error recovery here
+            // Not a branch - we've parsed something that's not a valid match branch
+            // Since we don't backtrack, treat it as a malformed branch and report error
+            // Then break out of branch parsing
+            _ = try self.pushMalformed(.expr_unexpected_token, branch_node.region.start);
             break;
         }
 
@@ -2387,12 +2402,12 @@ pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
 }
 
 // Operator precedence
-const BindingPower = struct {
+pub const BindingPower = struct {
     left: u8,
     right: u8,
 };
 
-fn getBindingPower(tag: Token.Tag) BindingPower {
+pub fn getBindingPower(tag: Token.Tag) BindingPower {
     return switch (tag) {
         .OpBar => .{ .left = 10, .right = 11 },
         .OpOr => .{ .left = 20, .right = 21 },
@@ -2412,7 +2427,7 @@ fn getBindingPower(tag: Token.Tag) BindingPower {
     };
 }
 
-fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
+pub fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
     return switch (tag) {
         .OpAssign => .binop_equals,
         .OpEquals => .binop_double_equals,

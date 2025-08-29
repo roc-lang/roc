@@ -32,16 +32,17 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 app { f: "" platform [] }
 
 import S exposing [c]
-f
+as
+f]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:40 to 1:40
+at 1:40 to 2:1
 
 **Parse Error**
-at 2:2 to 2:2
+at 2:2 to 2:3
 
 **Unsupported Node**
 at 1:20 to 1:39

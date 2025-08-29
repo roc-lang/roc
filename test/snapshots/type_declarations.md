@@ -125,15 +125,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Map,
-	Foo,
-	Some,
-	Maybe,
-	SomeFunc,
-	add_one,
-	main,
-]
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main]
 
 Map((a, b)) : List a -> (a -> b) -> List b
 Foo : (Bar, Baz)

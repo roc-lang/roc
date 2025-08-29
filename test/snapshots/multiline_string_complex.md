@@ -90,19 +90,14 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	value1,
-	value2,
-	value3,
-	value4,
-]
+module [value1, value2, value3, value4]
 
 value1 = ""
 This
 is
 a
 "string"
-just
+with just
 one
 line
 value2 = ""
@@ -110,7 +105,7 @@ This
 is
 a
 "string"
-just
+with just
 one
 line
 value3 = ""
@@ -121,8 +116,7 @@ string
 ""With
 multiple
 lines
-""
-{
+""${
 	value1
 }
 value4 = ""
@@ -133,8 +127,7 @@ string# A comment in between
 ""With
 multiple
 lines
-""
-{
+""${
 	value2
 }
 ~~~
@@ -142,16 +135,16 @@ lines
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:32 to 3:32
+at 3:32 to 3:37
 
 **Parse Error**
-at 6:24 to 6:24
+at 6:24 to 6:29
 
 **Parse Error**
-at 10:5 to 10:5
+at 10:5 to 10:6
 
 **Parse Error**
-at 16:5 to 16:5
+at 16:5 to 16:6
 
 # CANONICALIZE
 ~~~clojure

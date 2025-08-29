@@ -20,8 +20,13 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comm
 ~~~
 # FORMATTED
 ~~~roc
-app { f: "" platform [] }
+app
+{
+	f: "" platform [],
+}
 
+"
+}
 ~~~
 # EXPECTED
 NIL
@@ -33,10 +38,10 @@ at 1:1 to 1:22
 at 1:1 to 1:22
 
 **Parse Error**
-at 1:22 to 1:22
+at 1:22 to 2:1
 
 **Parse Error**
-at 2:1 to 2:1
+at 2:1 to 2:2
 
 # CANONICALIZE
 ~~~clojure

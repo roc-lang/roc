@@ -39,14 +39,14 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~roc
 module []
 
-import u.R
+import u.R}
 g : r -> R.a | E
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:19 to 1:19
+at 1:19 to 1:20
 
 **Unsupported Node**
 at 1:9 to 1:19

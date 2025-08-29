@@ -29,16 +29,19 @@ match result
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:15 to 2:15
+at 2:15 to 2:18
 
 **Parse Error**
-at 3:16 to 3:16
+at 3:16 to 3:19
 
 **Parse Error**
-at 4:19 to 4:19
+at 4:19 to 4:22
 
 **Parse Error**
-at 5:20 to 5:20
+at 5:20 to 5:23
+
+**Parse Error**
+at 1:14 to 6:2
 
 # CANONICALIZE
 ~~~clojure

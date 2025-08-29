@@ -27,19 +27,22 @@ match l
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:8 to 2:8
+at 2:8 to 2:11
 
 **Parse Error**
-at 3:8 to 3:8
+at 3:8 to 3:10
 
 **Parse Error**
 at 3:5 to 3:10
 
 **Parse Error**
-at 3:11 to 3:11
+at 3:11 to 3:13
 
 **Parse Error**
-at 3:13 to 3:13
+at 3:13 to 3:16
+
+**Parse Error**
+at 1:9 to 4:2
 
 # CANONICALIZE
 ~~~clojure

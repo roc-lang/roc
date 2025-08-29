@@ -16,14 +16,14 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes
 ~~~
 # FORMATTED
 ~~~roc
-platform "" requires  exposes  []
+platform "" requires } exposes  []
 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:22 to 1:22
+at 1:22 to 1:23
 
 **Parse Error**
 at 1:1 to 1:23

@@ -83,10 +83,13 @@ module [person, final]
 person = { name : "Alice", age : 30, city : "Boston" }
 updated_one = { ..person }
 age : 31
+}
 updated2 = { ..updated_one }
 city : "New York"
+}
 final = { ..updated2 }
 name : ("Alice Smith", age) : 32
+}
 ~~~
 # EXPECTED
 NIL
@@ -95,19 +98,19 @@ NIL
 at 4:15 to 4:27
 
 **Parse Error**
-at 4:35 to 4:35
+at 4:35 to 5:1
 
 **Parse Error**
 at 5:12 to 5:29
 
 **Parse Error**
-at 5:46 to 5:46
+at 5:46 to 6:1
 
 **Parse Error**
 at 6:9 to 6:23
 
 **Parse Error**
-at 6:52 to 6:52
+at 6:52 to 6:53
 
 # CANONICALIZE
 ~~~clojure

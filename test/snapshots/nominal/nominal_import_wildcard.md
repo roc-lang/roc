@@ -58,7 +58,8 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwI
 ~~~roc
 module [red, green, blue]
 
-import Color
+import Color*
+
 red : Color
 red = Red
 blue : Color
@@ -70,7 +71,7 @@ green = Green
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:14 to 3:14
+at 3:14 to 5:1
 
 **Unsupported Node**
 at 3:1 to 3:14

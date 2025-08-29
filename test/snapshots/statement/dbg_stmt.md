@@ -16,16 +16,16 @@ KwDbg UpperIdent Dot UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-
+ 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:1
+at 1:4 to 1:5
 
 **Unsupported Node**
-at 1:1 to 1:1
+at 1:4 to 1:5
 
 # CANONICALIZE
 ~~~clojure

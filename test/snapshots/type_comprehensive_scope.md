@@ -200,13 +200,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	MyU64,
-	Person,
-	Result,
-	Tree,
-	Node,
-]
+module [MyU64, Person, Result, Tree, Node]
 
 MyU64 : U64
 MyString : Str

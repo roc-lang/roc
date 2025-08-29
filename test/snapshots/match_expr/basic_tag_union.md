@@ -28,13 +28,16 @@ match color
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:6 to 2:6
+at 2:6 to 2:9
 
 **Parse Error**
-at 3:7 to 3:7
+at 3:7 to 3:10
 
 **Parse Error**
-at 4:8 to 4:8
+at 4:8 to 4:11
+
+**Parse Error**
+at 1:13 to 5:2
 
 # CANONICALIZE
 ~~~clojure

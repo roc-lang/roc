@@ -25,7 +25,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~
 # FORMATTED
 ~~~roc
-if  (
+if :  (
 	((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false,
 )
 ~~~
@@ -33,25 +33,25 @@ if  (
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:7 to 2:7
+at 2:7 to 2:9
 
 **Parse Error**
 at 2:5 to 2:9
 
 **Parse Error**
-at 4:5 to 4:5
+at 4:5 to 4:11
 
 **Parse Error**
-at 5:5 to 5:5
+at 5:5 to 5:11
 
 **Parse Error**
-at 6:5 to 6:5
+at 6:5 to 6:8
 
 **Parse Error**
-at 7:5 to 7:5
+at 7:5 to 7:7
 
 **Parse Error**
-at 8:1 to 8:1
+at 8:1 to 8:2
 
 **Parse Error**
 at 1:1 to 8:2

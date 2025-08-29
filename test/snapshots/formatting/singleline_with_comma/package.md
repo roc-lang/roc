@@ -34,12 +34,10 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare
 ~~~
 # FORMATTED
 ~~~roc
-package [a, b] packages {a, (
-	(
-		"a",
-		b,
-	) : "b",
-)}
+package [
+	a,
+	b,
+] packages {a, (("a", b) : "b")}
 
 a! : Str => Str
 b! : Str => Str
@@ -48,7 +46,7 @@ b! : Str => Str
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:37 to 1:37
+at 1:37 to 3:1
 
 **Expected Close Curly Brace**
 at 1:1 to 3:1

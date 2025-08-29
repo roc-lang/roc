@@ -522,7 +522,6 @@ pub const Cursor = struct {
     pos: u32,
     messages: []Diagnostic,
     message_count: u32,
-    tab_width: u8 = 4, // TODO: make this configurable
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
     pub fn init(buf: []const u8, messages: []Diagnostic) Cursor {

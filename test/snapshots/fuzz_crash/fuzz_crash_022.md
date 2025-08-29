@@ -72,11 +72,14 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
 ~~~roc
 app {  }
 
-[main!]
+platform [main!]
+}
+
 UserId : U64
 ser : UserId -> Str
-getUser = |id| if id > 1 !
+getUser = |id| if id > 1 !) 
 "big"
+else 
 "l" - ain! = |_| getUser(900)
 ~~~
 # EXPECTED
@@ -89,10 +92,10 @@ at 1:1 to 1:7
 at 1:1 to 1:7
 
 **Parse Error**
-at 1:15 to 1:15
+at 1:15 to 1:24
 
 **Parse Error**
-at 1:32 to 1:32
+at 1:32 to 3:1
 
 **Parse Error**
 at 6:26 to 6:26
@@ -101,10 +104,10 @@ at 6:26 to 6:26
 at 6:16 to 6:26
 
 **Parse Error**
-at 6:27 to 6:27
+at 6:27 to 6:29
 
 **Parse Error**
-at 6:35 to 6:35
+at 6:35 to 6:40
 
 # CANONICALIZE
 ~~~clojure

@@ -80,9 +80,9 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 module [main]
 
 import json.Json exposing [decode]
-fromJson
-encode
-toJson
+as fromJson, encode
+as toJson]
+
 main = {
 	data = { name : "Bob", age : 25 }
 	encoded = toJson(data)
@@ -94,16 +94,16 @@ main = {
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:35 to 3:35
+at 3:35 to 3:38
 
 **Parse Error**
-at 3:46 to 3:46
+at 3:46 to 3:48
 
 **Parse Error**
-at 3:55 to 3:55
+at 3:55 to 3:58
 
 **Parse Error**
-at 3:64 to 3:64
+at 3:64 to 5:1
 
 **Unsupported Node**
 at 3:1 to 3:34

@@ -55,23 +55,26 @@ platform # Cd
 	 # d
 n! : List Str => {  },
 )} #Ce
- exposes  []
+exposes #rd
+		 exposes  []
 
-"..l"
-mmen
-# Cose
-# Cd
+: "..l", mmen
+} # Cose
+	 # Cose
+provides # Cd
+		 # Cd
 [
 	Ok(world),
 	n # pen
 ,
-]ar
+]ar,
+		]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 6:4 to 6:4
+at 6:4 to 7:2
 
 **Parse Error**
 at 1:1 to 7:2
@@ -80,7 +83,7 @@ at 1:1 to 7:2
 at 1:1 to 7:2
 
 **Parse Error**
-at 7:2 to 7:2
+at 7:2 to 8:3
 
 **Parse Error**
 at 1:1 to 8:3
@@ -92,7 +95,7 @@ at 1:1 to 8:3
 at 1:1 to 11:3
 
 **Parse Error**
-at 12:3 to 12:3
+at 12:3 to 13:1
 
 **Expected Close Curly Brace**
 at 1:1 to 13:1
@@ -107,16 +110,16 @@ at 1:1 to 13:1
 at 1:1 to 13:4
 
 **Parse Error**
-at 13:4 to 13:4
+at 13:4 to 13:6
 
 **Parse Error**
-at 13:11 to 13:11
+at 13:11 to 13:13
 
 **Parse Error**
-at 13:19 to 13:19
+at 13:19 to 14:2
 
 **Parse Error**
-at 14:2 to 14:2
+at 14:2 to 15:3
 
 **Parse Error**
 at 16:1 to 16:1
@@ -125,10 +128,10 @@ at 16:1 to 16:1
 at 15:3 to 16:1
 
 **Parse Error**
-at 16:3 to 16:3
+at 16:3 to 17:3
 
 **Parse Error**
-at 17:3 to 17:3
+at 17:3 to 17:4
 
 # CANONICALIZE
 ~~~clojure

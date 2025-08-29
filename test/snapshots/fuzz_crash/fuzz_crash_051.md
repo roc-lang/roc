@@ -25,25 +25,25 @@ KwModule OpenSquare CloseCurly OpenCurly Int Int CloseRound OpenRound Int CloseC
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [}]
 
 {
 	0
 	0
-	(0)
+	)(0)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
 at 1:1 to 1:9
 
 **Parse Error**
-at 1:18 to 1:18
+at 1:18 to 1:19
 
 **Parse Error**
 at 1:18 to 1:21

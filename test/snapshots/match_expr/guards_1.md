@@ -33,6 +33,9 @@ at 2:7 to 3:5
 **Parse Error**
 at 3:7 to 4:5
 
+**Parse Error**
+at 1:13 to 5:2
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

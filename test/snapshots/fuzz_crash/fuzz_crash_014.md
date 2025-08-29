@@ -28,20 +28,20 @@ MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIden
 # FORMATTED
 ~~~roc
  | 0
-u22
+0bu22
 0u22
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:1
+at 1:3 to 1:3
 
 **Parse Error**
-at 2:1 to 2:1
+at 2:1 to 2:3
 
 **Unsupported Node**
-at 1:1 to 1:1
+at 1:3 to 1:3
 
 # CANONICALIZE
 ~~~clojure

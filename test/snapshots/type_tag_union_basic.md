@@ -74,29 +74,28 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "is_ok_ret_unqualified_bool")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
+        (binop_thin_arrow
+          (binop_colon
+            (match
+              (scrutinee                 (lc "result")
 ))
+            (list_literal
+              (apply_uc
+                (uc "Ok")
+                (lc "_ok2")
+              )
+              (apply_uc
+                (uc "Err")
+                (lc "_err2")
+              )
+            )
+          )
+          (uc "Bool")
+        )
       )
       (args
         (lc "result")
       )
-    )
-  )
-  (binop_colon
-    (lc "is_ok_ret_bool")
-    (binop_thin_arrow
-      (list_literal
-        (apply_uc
-          (uc "Ok")
-          (lc "_ok2")
-        )
-        (apply_uc
-          (uc "Err")
-          (lc "_err2")
-        )
-      )
-      (uc "Bool")
     )
   )
   (binop_equals
@@ -112,16 +111,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       )
     )
   )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
+  (binop_pipe
+    (binop_pipe
+      (unary_not <unary>)
+      (underscore)
     )
+    (record_literal)
   )
 )
 ~~~
@@ -133,24 +128,36 @@ process : [Some(Str), None] -> Str
 process = |maybe| "result"
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = |result| match result
-is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
+ : [Ok(_ok2), Err(_err2)] -> Bool
 is_ok_ret_bool = |result| match result
-main! = |_| {  }
+(!=  | _) | {  }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 8:11 to 8:11
+at 8:11 to 8:14
 
 **Parse Error**
-at 9:12 to 9:12
+at 9:12 to 9:15
 
 **Parse Error**
-at 14:11 to 14:11
+at 7:52 to 12:16
 
 **Parse Error**
-at 15:12 to 15:12
+at 14:11 to 14:14
+
+**Parse Error**
+at 15:12 to 15:15
+
+**Parse Error**
+at 13:40 to 18:5
+
+**Parse Error**
+at 18:7 to 18:9
+
+**Unsupported Node**
+at 18:5 to 18:6
 
 # CANONICALIZE
 ~~~clojure
@@ -177,21 +184,11 @@ at 15:12 to 15:12
     (Expr.lookup "is_ok_ret_unqualified_bool")
     (Expr.lambda)
   )
-  (Expr.binop_colon
-    (Expr.lookup "is_ok_ret_bool")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
-  )
   (Expr.binop_equals
     (Expr.lookup "is_ok_ret_bool")
     (Expr.lambda)
   )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.lambda)
 )
 ~~~
 # SOLVED

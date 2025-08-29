@@ -64,7 +64,7 @@ match person
 		{ name, address : {
 			city
 		} }
-		
+		as 
 		addr
 	} as fullPerson => (fullPerson, addr, city)
 	{
@@ -78,7 +78,7 @@ NIL
 at 2:5 to 2:31
 
 **Parse Error**
-at 2:31 to 2:31
+at 2:31 to 2:34
 
 **Unsupported Node**
 at 2:55 to 2:57

@@ -52,18 +52,19 @@ module [foo]
 
 foo = |num| {
 		# statement - prints out the value of num convertert to a string
+dbg 
 	num.to_str()
-	(num)
+	dbg(num)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 5:5 to 5:5
+at 5:5 to 5:9
 
 **Parse Error**
-at 8:5 to 8:5
+at 8:5 to 8:8
 
 # CANONICALIZE
 ~~~clojure

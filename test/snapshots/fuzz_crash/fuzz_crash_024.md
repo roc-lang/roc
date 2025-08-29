@@ -38,12 +38,16 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [module ]
 
 {
-	pf : 
-	
-	var t = 
+	pf : platform 
+	".-/main._]where # A
+
+#el
+	var t = ]
+
+#el
 	var t = 0
 }
 ~~~
@@ -51,16 +55,16 @@ module []
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:9 to 1:9
+at 1:9 to 1:16
 
 **Parse Error**
-at 1:24 to 1:24
+at 1:24 to 1:33
 
 **Parse Error**
-at 1:33 to 1:33
+at 1:33 to 4:1
 
 **Parse Error**
-at 4:8 to 4:8
+at 4:8 to 7:1
 
 **Parse Error**
 at 1:18 to 7:9

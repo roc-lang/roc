@@ -96,7 +96,7 @@ process = |list| {
 elem = 42
 	result : elem
 	List.first(list)
-	 | .withDefault(elem)
+	Result | .withDefault(elem)
 	result
 }
 main! = |_| {  }
@@ -105,16 +105,16 @@ main! = |_| {  }
 NIL
 # PROBLEMS
 **Parse Error**
-at 11:32 to 11:32
+at 11:32 to 11:34
 
 **Parse Error**
-at 11:34 to 11:34
+at 11:34 to 11:40
 
 **Unsupported Node**
 at 11:14 to 11:18
 
 **Unsupported Node**
-at 11:34 to 11:34
+at 11:34 to 11:40
 
 # CANONICALIZE
 ~~~clojure

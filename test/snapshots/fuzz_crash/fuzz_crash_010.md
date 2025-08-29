@@ -31,19 +31,19 @@ UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 # FORMATTED
 ~~~roc
 H{ o }
-foo = 
+foo = "on        (string 'onmo %')))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:6 to 2:6
+at 2:6 to 3:1
 
 **Parse Error**
 at 1:2 to 3:1
 
 **Parse Error**
-at 5:5 to 5:5
+at 5:5 to 5:35
 
 # CANONICALIZE
 ~~~clojure

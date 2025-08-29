@@ -49,6 +49,7 @@ module [person, updated]
 person = { name : "Alice", age : 30 }
 updated = { ..person }
 age : 31
+}
 ~~~
 # EXPECTED
 NIL
@@ -57,7 +58,7 @@ NIL
 at 4:11 to 4:23
 
 **Parse Error**
-at 4:31 to 4:31
+at 4:31 to 4:32
 
 # CANONICALIZE
 ~~~clojure

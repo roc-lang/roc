@@ -19,14 +19,14 @@ KwModule OpenSquare CloseCurly OpBar Int KwAs LowerIdent OpOr OpBar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [}]
 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
 at 1:1 to 1:9

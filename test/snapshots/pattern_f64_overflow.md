@@ -30,19 +30,22 @@ match x
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:11 to 2:11
+at 2:11 to 2:14
 
 **Parse Error**
-at 3:11 to 3:11
+at 3:11 to 3:14
 
 **Parse Error**
-at 4:28 to 4:28
+at 4:28 to 4:31
 
 **Parse Error**
-at 5:9 to 5:9
+at 5:9 to 5:12
 
 **Parse Error**
-at 6:11 to 6:11
+at 6:11 to 6:14
+
+**Parse Error**
+at 1:9 to 7:2
 
 # CANONICALIZE
 ~~~clojure

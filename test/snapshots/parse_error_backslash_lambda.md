@@ -22,13 +22,13 @@ OpBackslash LowerIdent OpArrow LowerIdent OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
- -> x + 1
+x  -> x + 1
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:2 to 1:2
+at 1:2 to 1:4
 
 **Unsupported Node**
 at 1:4 to 1:6

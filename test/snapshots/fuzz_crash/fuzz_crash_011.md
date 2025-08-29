@@ -20,10 +20,9 @@ KwModule UpperIdent CloseSquare UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [P, , F]
+module [P, ], F]
 
-P
-F
+P]F
 ~~~
 # EXPECTED
 NIL
@@ -32,7 +31,7 @@ NIL
 at 1:1 to 1:8
 
 **Parse Error**
-at 1:9 to 1:9
+at 1:9 to 1:10
 
 # CANONICALIZE
 ~~~clojure

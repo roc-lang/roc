@@ -26,14 +26,13 @@ LowerIdent OpAssign String LowerIdent OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-me = "luc"
-foo = 
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:7 to 2:7
+at 2:7 to 2:20
 
 # CANONICALIZE
 ~~~clojure

@@ -82,13 +82,19 @@ olor = |color| {
 NIL
 # PROBLEMS
 **Parse Error**
-at 8:23 to 8:23
+at 8:23 to 8:26
 
 **Parse Error**
-at 9:7 to 9:7
+at 9:7 to 9:10
 
 **Parse Error**
-at 10:10 to 10:10
+at 10:10 to 10:13
+
+**Parse Error**
+at 8:17 to 12:2
+
+**Parse Error**
+at 6:16 to 12:2
 
 **Pattern in Expression Context**
 at 5:8 to 5:9

@@ -488,7 +488,6 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "match_time")
     (malformed malformed:expr_unexpected_token)
   )
-  (num_literal_i32 1)
   (malformed malformed:expr_unexpected_token)
   (binop_pipe
     (num_literal_i32 2)
@@ -966,10 +965,10 @@ pf # Comment after qualifier
 ] # Comment after exposing close
 
 import pkg.Something exposing [func]
-function
-Type
-ValueCategory
-.
+as function, Type
+as ValueCategory, 
+.*]
+
 import BadName as GoodName
 import BadNameMultiline as GoodNameMultiline
 Map((a, b)) : List a -> (a -> b) -> List b
@@ -978,12 +977,15 @@ MapML(
 (
 		a,
 		b,
-	) : # And after the colon
+	) :
+		 # And after the colon
 List ( # Inside Tag args
 a -> # After tag arg
- -> (a -> b) -> # After arrow
+) -> (a -> b) -> # After arrow
 List( # Inside tag args
-b, )),
+b, ) # And after the type decl
+
+)),
 )
 # And after the type decl
 
@@ -1027,53 +1029,60 @@ add_one = |num| {
 	other = 1
 	if num
 		{
+			dbg # After debug
 			
 			 # After debug
 some_func() # After debug expr
 			0
 		}
 	else {
-		
+		dbg 
 		123
 		other : other
 	}
 }
-match_time = 
-1
+match_time = 1
+,
+			
 2 | 5
-3
-.. # After DoubleDot
+,
+			3,
+			.. # After DoubleDot
+as # Before alias
+					
 # Before alias
-rest
-# After last pattern in list
-123
+rest, # After last pattern in list
+		 # After last pattern in list
+] => 123
 3.14
-314
+=> 314
 3.14 | 6.28
-314((1, 2, 3))
-123(((1, 2) | 5, 3))
-123
+=> 314((1, 2, 3))
+=> 123(((1, 2) | 5, 3))
+=> 123
 { foo : 1, bar : 2, ..rest }
-12-
-add(34)
+=> 12-->add(34)
 { # After pattern record field name
 	foo : # Before pattern record field value
 1, # After pattern record field
 	bar : 2,
 	..rest,
 }
-12
+=> 12
 { foo : 1, bar : 2 } | 7
-12
+} => 12
 { foo : 1, bar : 2 } | 7
-# After last record field
-12
+, # After last record field
+		 # After last record field
+} => 12
 Ok(123)
-123
+=> 123
 Ok(Some(dude))
-dude
+=> dude
 TwoArgs(("hello", Some("world")))
-1000
+=> 1000
+}
+
 expect # Comment after expect keyword
 blah == 1 # Comment after expect statement
 
@@ -1094,23 +1103,27 @@ tag # Comment after return statement
 	match_time((
 		...,
 	)),
-	some_func(), # After debug
+	some_func(dbg # After debug
+			), # After debug
 	42,
 } # Comment after crash keyword
 crash "Unreachable!" # Comment after crash statement
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
 list = [
-	add_one(), # After dbg in list
+	add_one(dbg # After dbg in list
+				), # After dbg in list
 ]
-number
-# after dbg expr as arg
-# Comment one
-456
-# Comment two
-789
-# Comment three
-for n in list {
+number, # after dbg expr as arg
+		 # after dbg expr as arg
+), # Comment one
+		 # Comment one
+456, # Comment two
+		 # Comment two
+789, # Comment three
+	 # Comment three
+]
+	for n in list {
 	{
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
@@ -1118,6 +1131,8 @@ for n in list {
 }
 record = { foo : 123, bar : "Hello" }
 az : ((tag, qux) : Ok world, punned)
+}
+	
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 multiline_tuple = (
 		123,
@@ -1129,11 +1144,15 @@ multiline_tuple = (
 	)
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
- | .static_dispatch_method() | .next_static_dispatch_method() | .record_field
-Stdout.line!(interpolated)
-Stdout.line!()Num.toStr(number) # Comment after string interpolation expr
-a
-string
+? | .static_dispatch_method()? | .next_static_dispatch_method()? | .record_field?
+	Stdout.line!(interpolated)?
+	Stdout.line!("How about ${ # Comment after string interpolation open
+			)Num.toStr(number) # Comment after string interpolation expr
+} as a
+string?",
+	)
+} # Comment after top-level decl
+
 # Comment after top-level decl
 
 empty : {}
@@ -1149,31 +1168,31 @@ expect {
 NIL
 # PROBLEMS
 **Parse Error**
-at 14:37 to 14:37
+at 14:37 to 14:40
 
 **Parse Error**
-at 14:48 to 14:48
+at 14:48 to 14:50
 
 **Parse Error**
-at 14:55 to 14:55
+at 14:55 to 14:58
 
 **Parse Error**
-at 14:71 to 14:71
+at 14:71 to 14:73
 
 **Parse Error**
-at 14:79 to 14:80
+at 14:79 to 14:81
 
 **Parse Error**
-at 14:81 to 14:81
+at 14:81 to 16:1
 
 **Parse Error**
-at 26:1 to 26:1
+at 26:1 to 27:2
 
 **Parse Error**
-at 30:3 to 30:3
+at 30:3 to 30:4
 
 **Parse Error**
-at 34:4 to 34:4
+at 34:4 to 36:1
 
 **Parse Error**
 at 32:4 to 36:1
@@ -1185,7 +1204,7 @@ at 28:3 to 36:1
 at 23:1 to 36:1
 
 **Parse Error**
-at 41:1 to 41:1
+at 41:1 to 43:1
 
 **Parse Error**
 at 43:1 to 43:1
@@ -1197,34 +1216,34 @@ at 65:25 to 65:32
 at 70:2 to 70:9
 
 **Parse Error**
-at 71:3 to 71:3
+at 71:3 to 72:4
 
 **Parse Error**
-at 75:3 to 75:3
+at 75:3 to 75:7
 
 **Parse Error**
-at 93:4 to 93:4
+at 93:4 to 93:7
 
 **Parse Error**
-at 98:4 to 98:4
+at 98:4 to 98:7
 
 **Parse Error**
-at 99:9 to 99:9
+at 99:9 to 100:4
 
 **Parse Error**
-at 101:17 to 101:17
+at 101:17 to 101:20
 
 **Parse Error**
-at 102:16 to 102:16
+at 102:16 to 102:19
 
 **Parse Error**
 at 102:3 to 102:19
 
 **Parse Error**
-at 102:23 to 102:23
+at 102:23 to 103:4
 
 **Parse Error**
-at 103:4 to 103:4
+at 103:4 to 104:5
 
 **Parse Error**
 at 108:3 to 108:9
@@ -1233,106 +1252,109 @@ at 108:3 to 108:9
 at 84:10 to 108:20
 
 **Parse Error**
-at 108:27 to 108:27
+at 108:20 to 108:29
 
 **Parse Error**
-at 109:3 to 109:3
+at 109:3 to 110:4
 
 **Parse Error**
-at 110:5 to 110:5
+at 110:4 to 110:5
 
 **Parse Error**
-at 111:9 to 111:9
+at 110:5 to 111:4
 
 **Parse Error**
-at 112:5 to 112:5
+at 111:9 to 112:4
 
 **Parse Error**
-at 114:5 to 114:5
+at 112:5 to 113:4
 
 **Parse Error**
-at 115:10 to 115:10
+at 114:5 to 115:6
 
 **Parse Error**
-at 116:3 to 116:3
+at 115:10 to 116:3
 
 **Parse Error**
-at 116:5 to 116:5
+at 116:3 to 116:5
 
 **Parse Error**
-at 117:8 to 117:8
+at 116:5 to 116:8
 
 **Parse Error**
-at 118:15 to 118:15
+at 117:8 to 117:11
 
 **Parse Error**
-at 119:13 to 119:13
+at 118:15 to 118:18
 
 **Parse Error**
-at 120:17 to 120:17
+at 119:13 to 119:16
 
 **Parse Error**
-at 121:30 to 121:30
+at 120:17 to 120:20
 
 **Parse Error**
-at 121:35 to 121:35
+at 121:30 to 121:33
 
 **Parse Error**
-at 129:5 to 129:5
+at 121:35 to 121:37
+
+**Parse Error**
+at 129:5 to 129:8
 
 **Parse Error**
 at 130:3 to 130:20
 
 **Parse Error**
-at 130:24 to 130:24
+at 130:24 to 130:26
 
 **Parse Error**
-at 130:26 to 130:26
+at 130:26 to 130:29
 
 **Parse Error**
 at 131:3 to 133:11
 
 **Parse Error**
-at 133:14 to 133:14
+at 133:14 to 134:3
 
 **Parse Error**
-at 134:3 to 134:3
+at 134:3 to 134:5
 
 **Parse Error**
-at 134:5 to 134:5
+at 134:5 to 134:8
 
 **Parse Error**
-at 135:11 to 135:11
+at 135:11 to 135:14
 
 **Parse Error**
-at 136:18 to 136:18
+at 136:18 to 136:21
 
 **Parse Error**
-at 137:35 to 137:35
+at 137:35 to 137:38
 
 **Parse Error**
-at 138:2 to 138:2
+at 138:2 to 140:1
 
 **Parse Error**
-at 157:2 to 157:2
+at 157:2 to 158:2
 
 **Parse Error**
 at 155:2 to 158:2
 
 **Parse Error**
-at 159:3 to 159:3
+at 159:3 to 160:4
 
 **Parse Error**
 at 158:2 to 160:4
 
 **Parse Error**
-at 161:2 to 161:2
+at 161:2 to 162:2
 
 **Parse Error**
 at 144:13 to 162:2
 
 **Parse Error**
-at 168:4 to 168:4
+at 168:4 to 169:5
 
 **Parse Error**
 at 167:3 to 169:5
@@ -1341,76 +1363,76 @@ at 167:3 to 169:5
 at 166:9 to 169:5
 
 **Parse Error**
-at 169:11 to 169:11
+at 169:11 to 170:3
 
 **Parse Error**
-at 170:3 to 170:3
+at 170:3 to 170:4
 
 **Parse Error**
-at 170:4 to 170:4
+at 170:4 to 171:3
 
 **Parse Error**
-at 171:6 to 171:6
+at 171:6 to 172:3
 
 **Parse Error**
-at 172:6 to 172:6
+at 172:6 to 173:2
 
 **Parse Error**
-at 173:2 to 173:2
+at 173:2 to 174:2
 
 **Parse Error**
-at 178:37 to 178:37
+at 178:37 to 178:38
 
 **Parse Error**
 at 178:11 to 178:38
 
 **Parse Error**
-at 178:70 to 178:70
+at 178:70 to 179:2
 
 **Parse Error**
-at 187:2 to 187:2
+at 187:2 to 188:2
 
 **Parse Error**
 at 188:2 to 188:2
 
 **Parse Error**
-at 189:39 to 189:39
+at 189:39 to 189:40
 
 **Parse Error**
-at 189:65 to 189:65
+at 189:65 to 189:66
 
 **Parse Error**
-at 189:96 to 189:96
+at 189:96 to 189:97
 
 **Parse Error**
-at 189:110 to 189:110
+at 189:110 to 190:2
 
 **Parse Error**
-at 190:28 to 190:28
+at 190:28 to 191:2
 
 **Parse Error**
-at 192:3 to 192:3
+at 192:3 to 193:4
 
 **Parse Error**
 at 191:2 to 193:4
 
 **Parse Error**
-at 194:3 to 194:3
+at 194:3 to 194:5
 
 **Parse Error**
-at 194:5 to 194:5
+at 194:5 to 194:8
 
 **Parse Error**
-at 194:16 to 194:16
+at 194:16 to 194:17
 
 **Parse Error**
-at 194:17 to 194:17
+at 194:17 to 195:2
 
 **Parse Error**
-at 195:2 to 195:2
+at 195:2 to 196:1
 
 **Parse Error**
-at 196:1 to 196:1
+at 196:1 to 198:1
 
 **Unsupported Node**
 at 4:1 to 4:42
@@ -1443,13 +1465,13 @@ at 143:36 to 143:37
 at 175:3 to 175:9
 
 **Unsupported Node**
-at 189:39 to 189:39
+at 189:39 to 189:40
 
 **Unsupported Node**
-at 189:65 to 189:65
+at 189:65 to 189:66
 
 **Unsupported Node**
-at 189:96 to 189:96
+at 189:96 to 189:97
 
 **Unsupported Node**
 at 190:2 to 190:8
@@ -1582,7 +1604,6 @@ at 193:4 to 193:7
     (Expr.lookup "match_time")
     (Expr.malformed)
   )
-  (Expr.num_literal_i32 1)
   (Expr.malformed)
   (Expr.lambda)
   (Expr.malformed)

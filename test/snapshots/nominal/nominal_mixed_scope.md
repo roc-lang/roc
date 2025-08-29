@@ -80,13 +80,19 @@ processColor = |color| {
 NIL
 # PROBLEMS
 **Parse Error**
-at 12:17 to 12:17
+at 12:17 to 12:20
 
 **Parse Error**
-at 13:19 to 13:19
+at 13:19 to 13:22
 
 **Parse Error**
-at 14:18 to 14:18
+at 14:18 to 14:21
+
+**Parse Error**
+at 11:17 to 16:2
+
+**Parse Error**
+at 6:24 to 16:2
 
 **Pattern in Expression Context**
 at 5:16 to 5:17

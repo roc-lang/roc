@@ -409,24 +409,20 @@ import I1 exposing [
 	I12,
 ]
 import I2 exposing [I21]
-Ias1
-I22
-Ias2
-A(a) : a where module(a).a1 : a -> a ->  -> Str, module(a).a2 : a -> a ->  -> Str
-B(b) : b where module(b).b1 : b -> b ->  -> Str, module(b).b2 : b -> b ->  -> Str
+as Ias1,
+	I22
+as Ias2,
+]
+
+# Where constraint
+A(a) : a where module(a).a1 : a -> a -> )  -> Str, module(a).a2 : a -> a -> )  -> Str
+B(b) : b where module(b).b1 : b -> b -> )  -> Str, module(b).b2 : b -> b -> )  -> Str
 C(
-	(
-		a,
-		b,
-	) : (
-		a,
-		b,
-	),
+	(a, b) : (a, b),
 )D(
-	(
-		a,
-		b,
-	) : C(a, b, ),
+	(a, b) :
+		C(a, b, )
+),
 )
 E :
 	{
@@ -449,25 +445,16 @@ h = |x, y| {
 			},
 	}
 	h2 = h(
-		(
-			x,
-			y,
-		),
+		(x, y),
 	)
 	h3 = A(
-		(
-			x,
-			y,
-		),
+		(x, y),
 	)
 	h4 = [
 		x,
 		y,
 	]
-	h5 = (
-			x,
-			y,
-		)
+	h5 = (x, y)
 	match x
 }
 ~~~
@@ -475,37 +462,37 @@ h = |x, y| {
 NIL
 # PROBLEMS
 **Parse Error**
-at 9:6 to 9:6
+at 9:6 to 9:9
 
 **Parse Error**
-at 9:13 to 9:13
+at 9:13 to 10:2
 
 **Parse Error**
-at 10:6 to 10:6
+at 10:6 to 10:9
 
 **Parse Error**
-at 10:13 to 10:13
+at 10:13 to 11:1
 
 **Parse Error**
-at 11:1 to 11:1
+at 11:1 to 14:1
 
 **Parse Error**
-at 19:3 to 19:3
+at 19:3 to 19:5
 
 **Parse Error**
-at 23:3 to 23:3
-
-**Parse Error**
-at 24:1 to 24:1
+at 23:3 to 23:5
 
 **Parse Error**
 at 24:1 to 24:1
 
 **Parse Error**
-at 29:3 to 29:3
+at 24:1 to 24:1
 
 **Parse Error**
-at 33:3 to 33:3
+at 29:3 to 29:5
+
+**Parse Error**
+at 33:3 to 33:5
 
 **Parse Error**
 at 35:1 to 35:1
@@ -514,10 +501,10 @@ at 35:1 to 35:1
 at 35:1 to 35:1
 
 **Parse Error**
-at 38:1 to 38:1
+at 38:1 to 38:3
 
 **Parse Error**
-at 41:1 to 41:1
+at 41:1 to 42:1
 
 **Parse Error**
 at 42:1 to 42:1
@@ -526,10 +513,10 @@ at 42:1 to 42:1
 at 35:1 to 42:1
 
 **Parse Error**
-at 45:1 to 45:1
+at 45:1 to 45:3
 
 **Parse Error**
-at 48:1 to 48:1
+at 48:1 to 49:1
 
 **Parse Error**
 at 45:5 to 49:1
@@ -538,28 +525,28 @@ at 45:5 to 49:1
 at 42:1 to 49:1
 
 **Parse Error**
-at 72:2 to 72:2
+at 72:2 to 73:2
 
 **Parse Error**
 at 69:7 to 73:2
 
 **Parse Error**
-at 76:2 to 76:2
+at 76:2 to 77:2
 
 **Parse Error**
 at 73:7 to 77:2
 
 **Parse Error**
-at 84:2 to 84:2
+at 84:2 to 86:2
 
 **Parse Error**
 at 86:2 to 86:2
 
 **Parse Error**
-at 91:4 to 91:4
+at 91:4 to 91:5
 
 **Parse Error**
-at 92:3 to 92:3
+at 92:3 to 92:5
 
 **Parse Error**
 at 93:3 to 93:3
@@ -568,22 +555,28 @@ at 93:3 to 93:3
 at 87:3 to 93:3
 
 **Parse Error**
-at 96:3 to 96:3
+at 96:3 to 96:5
 
 **Parse Error**
 at 93:3 to 97:3
 
 **Parse Error**
-at 102:3 to 102:3
+at 102:3 to 102:5
 
 **Parse Error**
 at 97:3 to 103:3
 
 **Parse Error**
-at 108:3 to 108:3
+at 108:3 to 108:5
 
 **Parse Error**
 at 103:3 to 109:2
+
+**Parse Error**
+at 86:10 to 110:2
+
+**Parse Error**
+at 60:12 to 110:2
 
 **Unsupported Node**
 at 4:1 to 7:2

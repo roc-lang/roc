@@ -40,7 +40,9 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 ~~~roc
 {
 	answer : 42,
-	launchTheNukes! : |{  }| (
+	launchTheNukes! : |
+		{  },
+	| (
 		...,
 	),
 }
@@ -49,7 +51,7 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 NIL
 # PROBLEMS
 **Parse Error**
-at 4:1 to 4:1
+at 4:1 to 4:2
 
 **Parse Error**
 at 1:1 to 4:2

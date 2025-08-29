@@ -21,13 +21,13 @@ LowerIdent OpBar MalformedUnknownToken ~~~
 ~~~
 # FORMATTED
 ~~~roc
-mo | 
+mo | %
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:4 to 1:4
+at 1:4 to 1:5
 
 # CANONICALIZE
 ~~~clojure

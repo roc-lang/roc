@@ -18,7 +18,9 @@ KwPackage OpenSquare UpperIdent Comma CloseSquare OpenCurly CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-package [Color]
+package [
+	Color,
+]
 
 ~~~
 # EXPECTED

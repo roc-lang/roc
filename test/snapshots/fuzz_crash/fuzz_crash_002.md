@@ -46,38 +46,38 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
 ~~~
 # FORMATTED
 ~~~roc
-modu :  :  :  :  :  :  :  : 
-le[]
+modu : ; : : : : : : : : : : : : : :
+le[%]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:6 to 1:6
+at 1:6 to 1:7
 
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
-at 1:10 to 1:10
+at 1:10 to 1:11
 
 **Parse Error**
-at 1:12 to 1:12
+at 1:12 to 1:13
 
 **Parse Error**
-at 1:14 to 1:14
+at 1:14 to 1:15
 
 **Parse Error**
-at 1:16 to 1:16
+at 1:16 to 1:17
 
 **Parse Error**
-at 1:18 to 1:18
+at 1:18 to 1:19
 
 **Parse Error**
-at 1:20 to 1:20
+at 1:20 to 1:21
 
 **Parse Error**
-at 1:24 to 1:24
+at 1:24 to 1:25
 
 **Parse Error**
 at 1:23 to 1:25

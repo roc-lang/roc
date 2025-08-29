@@ -50,7 +50,8 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 module [red]
 
 import design.Styles | Color exposing [Encoder]
-CE
+as CE]
+
 red : CE
 red = ... # not implemented
 ~~~
@@ -58,10 +59,10 @@ red = ... # not implemented
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:46 to 3:46
+at 3:46 to 3:49
 
 **Parse Error**
-at 3:51 to 3:51
+at 3:51 to 5:1
 
 **Unsupported Node**
 at 3:1 to 3:45

@@ -22,13 +22,13 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
 ~~~
 # FORMATTED
 ~~~roc
-Stdout.line ?? 
+Stdout.line ?? ?
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:14 to 1:14
+at 1:14 to 1:15
 
 **Unsupported Node**
 at 1:12 to 1:14

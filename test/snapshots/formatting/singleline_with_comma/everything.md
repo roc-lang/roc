@@ -257,32 +257,17 @@ import I1 exposing [
 	I12,
 ]
 import I2 exposing [I21]
-Ias1
-I22
-Ias2
-A(a) : a where module(a).a1 : a -> a ->  -> 
-	Str,
-	module(a).a2,
- : a -> a ->  -> (Str, B(b)) : b where module(b).b1 : b -> b ->  -> 
-	Str,
-	module(b).b2,
- : b -> b ->  -> (
-	Str,
-	C(
-		(
-			a,
-			b,
-		) : (
-			a,
-			b,
-		),
-	),
-)
+as Ias1, I22
+as Ias2,]
+
+# Where constraint
+A(a) : a where module(a).a1 : a -> a -> )  -> Str, module(a).a2 : a -> a -> )  -> (Str, B(b)) : b where module(b).b1 : b -> b -> )  -> Str, module(b).b2 : b -> b -> )  -> (Str, C(
+	(a, b) : (a, b),
+))
 D(
-	(
-		a,
-		b,
-	) : C(a, b, ),
+	(a, b) :
+		C(a, b, )
+),
 )
 E :
 	{
@@ -299,37 +284,37 @@ g : e -> e where module(e) | A, module(e) | B, h =
 NIL
 # PROBLEMS
 **Parse Error**
-at 5:25 to 5:25
+at 5:25 to 5:28
 
 **Parse Error**
-at 5:32 to 5:32
+at 5:32 to 5:34
 
 **Parse Error**
-at 5:38 to 5:38
+at 5:38 to 5:41
 
 **Parse Error**
-at 5:45 to 5:45
+at 5:45 to 5:46
 
 **Parse Error**
-at 5:46 to 5:46
+at 5:46 to 8:1
 
 **Parse Error**
-at 8:37 to 8:37
+at 8:37 to 8:39
 
 **Parse Error**
-at 8:68 to 8:68
+at 8:68 to 8:70
 
 **Parse Error**
-at 9:37 to 9:37
+at 9:37 to 9:39
 
 **Parse Error**
-at 9:68 to 9:68
+at 9:68 to 9:70
 
 **Parse Error**
-at 11:8 to 11:8
+at 11:8 to 11:10
 
 **Parse Error**
-at 11:18 to 11:18
+at 11:18 to 12:1
 
 **Parse Error**
 at 12:1 to 12:1
@@ -350,10 +335,10 @@ at 12:1 to 12:1
 at 12:1 to 12:1
 
 **Parse Error**
-at 12:8 to 12:8
+at 12:8 to 12:10
 
 **Parse Error**
-at 12:19 to 12:19
+at 12:19 to 13:1
 
 **Parse Error**
 at 12:12 to 13:1
@@ -362,40 +347,46 @@ at 12:12 to 13:1
 at 12:1 to 13:1
 
 **Parse Error**
-at 20:14 to 20:14
+at 20:14 to 21:2
 
 **Parse Error**
 at 20:7 to 21:2
 
 **Parse Error**
-at 21:14 to 21:14
+at 21:14 to 22:2
 
 **Parse Error**
 at 21:7 to 22:2
 
 **Parse Error**
-at 23:13 to 23:13
+at 23:13 to 25:2
 
 **Parse Error**
 at 25:2 to 25:2
 
 **Parse Error**
-at 26:12 to 26:12
+at 26:12 to 26:13
 
 **Parse Error**
 at 26:3 to 27:3
 
 **Parse Error**
-at 27:11 to 27:11
+at 27:11 to 27:13
 
 **Parse Error**
 at 27:3 to 28:3
 
 **Parse Error**
-at 28:17 to 28:17
+at 28:17 to 28:20
 
 **Parse Error**
-at 29:15 to 29:15
+at 29:15 to 29:18
+
+**Parse Error**
+at 25:10 to 31:2
+
+**Parse Error**
+at 18:13 to 31:2
 
 **Parse Error**
 at 31:2 to 31:2

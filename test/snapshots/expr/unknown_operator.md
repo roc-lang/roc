@@ -19,13 +19,13 @@ Int OpPlus OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-1 + 
+1 + + 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:4 to 1:4
+at 1:4 to 1:6
 
 # CANONICALIZE
 ~~~clojure

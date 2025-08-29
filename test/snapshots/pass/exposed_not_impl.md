@@ -38,14 +38,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	foo,
-	bar,
-	MyType,
-	OtherType,
-	foo,
-	MyType,
-]
+module [foo, bar, MyType, OtherType, foo, MyType]
 
 foo = 42
 MyType : [A, B, C]

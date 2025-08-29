@@ -19,20 +19,21 @@ KwModule OpenSquare CloseCurly OpenRound MalformedSingleQuoteUnclosed CloseRound
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [}]
 
+'
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
 at 1:1 to 1:9
 
 **Parse Error**
-at 1:10 to 1:10
+at 1:10 to 2:1
 
 # CANONICALIZE
 ~~~clojure

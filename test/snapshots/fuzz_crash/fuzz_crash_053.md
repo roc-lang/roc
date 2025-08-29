@@ -23,15 +23,15 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [)]
 
-{ _ }0
+{ _ }0,)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
 at 1:1 to 1:9
@@ -40,10 +40,10 @@ at 1:1 to 1:9
 at 1:9 to 1:12
 
 **Parse Error**
-at 1:13 to 1:13
+at 1:13 to 1:14
 
 **Parse Error**
-at 1:14 to 1:14
+at 1:14 to 1:15
 
 **Pattern in Expression Context**
 at 1:10 to 1:10

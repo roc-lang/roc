@@ -22,24 +22,24 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
+module [}]
 
-0 | .a
+0} | .a
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:8 to 1:8
+at 1:8 to 1:9
 
 **Parse Error**
 at 1:1 to 1:9
 
 **Parse Error**
-at 1:10 to 1:10
+at 1:10 to 1:11
 
 **Unsupported Node**
-at 1:10 to 1:10
+at 1:10 to 1:11
 
 # CANONICALIZE
 ~~~clojure

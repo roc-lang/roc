@@ -30,13 +30,13 @@ LowerIdent OpenSquare CloseSquare LowerIdent LowerIdent OpAssign MalformedSingle
 mule
 []
 vavar
-t = 
+t = '
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 4:10 to 4:10
+at 4:10 to 4:11
 
 # CANONICALIZE
 ~~~clojure

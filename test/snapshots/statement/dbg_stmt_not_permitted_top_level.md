@@ -30,14 +30,14 @@ KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign Trip
 ~~~roc
 module [foo]
 
-"foo"
+dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 4:1 to 4:1
+at 4:1 to 4:5
 
 # CANONICALIZE
 ~~~clojure

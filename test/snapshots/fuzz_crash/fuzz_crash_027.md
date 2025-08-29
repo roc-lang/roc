@@ -385,7 +385,6 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "match_time")
     (malformed malformed:expr_unexpected_token)
   )
-  (lc "ist")
   (malformed malformed:expr_unexpected_token)
   (malformed malformed:expr_unexpected_token)
   (num_literal_i32 123)
@@ -793,8 +792,9 @@ import Stdot exposing [,
 ] # Cose
 
 import pkg.S exposing [func]
-fry
-.
+as fry, 
+.*]
+
 import Bae as Gooe
 import Ba
 Map((a, b)) : List a -> (a -> b) -> List b
@@ -802,7 +802,8 @@ MapML( # Ag
 (
 	a,
 	b,
-) : # Aon
+) :
+	 # Aon
 List -> ((a -> b) -> # row
 List(b) #
 
@@ -824,7 +825,7 @@ Soine(a) : {
 bar : Som
 } #
 Maya
- : [,
+)  : [,
 ] #se
 
 Func(a) : Maybe a -> a -> Maybe a
@@ -834,42 +835,44 @@ add_one = |num| {
 	other = 1
 	if num
 		{
-			() #r
+			dbg # bug
+() #r
 			0
 		}
 	else {
-		
+		dbg 
 		123
 		other : other
 	}
 }
-match_time = 
-ist
-123
+match_time = ist
+		
+] => 123
 3.14
-314
+=> 314
 3.14 | 6.28
-314((1, 2, 3))
-123(((1, 2) | 5, 3))
-123
+=> 314((1, 2, 3))
+=> 123(((1, 2) | 5, 3))
+=> 123
 { foo : 1, bar : 2, ..rest }
-12-
-add(34)
+=> 12-->add(34)
 { #
 	foo : #ue
 1, # Aftd field
 	bar : 2,
 	_,
 }
-12
+=> 12
 { foo : 1, bar : 2 } | 7
-12
+} => 12
 {
 	foo : 1,
 }
-12
+=> 12
 Ok(123)
-121000
+=> 121000
+}
+
 expect # Commeneyword
 blah == 1 # Commnt
 
@@ -886,21 +889,25 @@ tag,
 	match_time((
 		...,
 	)),
-	some_func(), # bug
+	some_func(dbg # bug
+			), # bug
 	42,
 }
-crash 
+crash "Unreachtement
+	
 tag_with = Ok(number)
 ited = "Hello, ${world}"
 list = [
-	add_one(), # Afin list
+	add_one(dbg # Afin list
+), # Afin list
 ]
 e[
 	, # afarg
+		, # afarg
+]),	456, # ee
+	 # ee
 ]
-456
-# ee
-for n in list {
+	for n in list {
 	{
 		line!("Adding ${n} to ${number}")
 		number = number + n
@@ -918,10 +925,14 @@ m_tuple = (
 	)
 bsult = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 stale = some_fn(arg1)
- | .statod() | .ned() | .recd
-Stdoline!
+? | .statod()? | .ned()? | .recd?
+	Stdoline!"How about ${ #
+			
 Num.toStr(number) # on expr
-a
+} as a",
+	)
+} # Commenl decl
+
 # Commenl decl
 
 empty : {}
@@ -937,31 +948,31 @@ expect {
 NIL
 # PROBLEMS
 **Parse Error**
-at 10:29 to 10:29
+at 10:29 to 10:32
 
 **Parse Error**
-at 10:35 to 10:35
+at 10:35 to 10:37
 
 **Parse Error**
-at 10:43 to 10:44
+at 10:43 to 10:45
 
 **Parse Error**
-at 10:45 to 10:45
+at 10:45 to 12:1
 
 **Parse Error**
-at 19:1 to 19:1
+at 19:1 to 20:2
 
 **Parse Error**
 at 16:1 to 26:1
 
 **Parse Error**
-at 31:1 to 31:1
+at 31:1 to 32:1
 
 **Parse Error**
 at 32:1 to 32:1
 
 **Parse Error**
-at 40:5 to 40:5
+at 40:5 to 40:7
 
 **Parse Error**
 at 45:13 to 45:20
@@ -970,34 +981,34 @@ at 45:13 to 45:20
 at 50:2 to 50:9
 
 **Parse Error**
-at 51:3 to 51:3
+at 51:3 to 52:1
 
 **Parse Error**
-at 55:3 to 55:3
+at 55:3 to 55:7
 
 **Parse Error**
-at 67:3 to 67:3
+at 67:3 to 67:9
 
 **Parse Error**
-at 67:9 to 67:9
+at 67:9 to 67:12
 
 **Parse Error**
-at 68:9 to 68:9
+at 68:9 to 69:1
 
 **Parse Error**
-at 70:17 to 70:17
+at 70:17 to 70:20
 
 **Parse Error**
-at 70:35 to 70:35
+at 70:35 to 70:38
 
 **Parse Error**
 at 70:22 to 70:38
 
 **Parse Error**
-at 70:42 to 70:42
+at 70:42 to 71:4
 
 **Parse Error**
-at 71:4 to 71:4
+at 71:4 to 71:7
 
 **Parse Error**
 at 74:3 to 74:9
@@ -1006,79 +1017,82 @@ at 74:3 to 74:9
 at 64:10 to 74:20
 
 **Parse Error**
-at 74:27 to 74:27
+at 74:20 to 74:29
 
 **Parse Error**
-at 75:3 to 75:3
+at 75:3 to 76:1
 
 **Parse Error**
-at 77:3 to 77:3
+at 76:1 to 77:3
 
 **Parse Error**
-at 77:5 to 77:5
+at 77:3 to 77:5
 
 **Parse Error**
-at 78:8 to 78:8
+at 77:5 to 77:8
 
 **Parse Error**
-at 79:15 to 79:15
+at 78:8 to 78:11
 
 **Parse Error**
-at 80:13 to 80:13
+at 79:15 to 79:18
 
 **Parse Error**
-at 81:17 to 81:17
+at 80:13 to 80:16
 
 **Parse Error**
-at 82:30 to 82:30
+at 81:17 to 81:20
 
 **Parse Error**
-at 82:35 to 82:35
+at 82:30 to 82:33
 
 **Parse Error**
-at 88:8 to 88:8
+at 82:35 to 82:37
+
+**Parse Error**
+at 88:8 to 88:11
 
 **Parse Error**
 at 89:3 to 89:20
 
 **Parse Error**
-at 89:24 to 89:24
+at 89:24 to 89:26
 
 **Parse Error**
-at 89:26 to 89:26
+at 89:26 to 89:29
 
 **Parse Error**
-at 92:6 to 92:6
+at 92:6 to 92:9
 
 **Parse Error**
-at 93:11 to 93:11
+at 93:11 to 93:14
 
 **Parse Error**
-at 94:2 to 94:2
+at 94:2 to 96:1
 
 **Parse Error**
-at 113:2 to 113:2
+at 113:2 to 114:2
 
 **Parse Error**
 at 111:2 to 114:2
 
 **Parse Error**
-at 115:3 to 115:3
+at 115:3 to 116:4
 
 **Parse Error**
 at 114:2 to 116:4
 
 **Parse Error**
-at 117:2 to 117:2
+at 117:2 to 118:2
 
 **Parse Error**
 at 100:13 to 118:2
 
 **Parse Error**
-at 118:8 to 118:8
+at 118:8 to 119:2
 
 **Parse Error**
-at 123:4 to 123:4
+at 123:4 to 124:1
 
 **Parse Error**
 at 122:3 to 124:1
@@ -1087,61 +1101,61 @@ at 122:3 to 124:1
 at 121:9 to 124:1
 
 **Parse Error**
-at 124:3 to 124:3
+at 124:3 to 125:3
 
 **Parse Error**
 at 124:2 to 125:3
 
 **Parse Error**
-at 125:3 to 125:3
+at 125:3 to 125:4
 
 **Parse Error**
-at 125:4 to 125:4
+at 125:4 to 125:6
 
 **Parse Error**
-at 125:9 to 125:9
+at 125:9 to 126:2
 
 **Parse Error**
-at 126:2 to 126:2
+at 126:2 to 127:2
 
 **Parse Error**
-at 140:2 to 140:2
+at 140:2 to 141:2
 
 **Parse Error**
 at 141:2 to 141:2
 
 **Parse Error**
-at 142:23 to 142:23
+at 142:23 to 142:24
 
 **Parse Error**
-at 142:33 to 142:33
+at 142:33 to 142:34
 
 **Parse Error**
-at 142:40 to 142:40
+at 142:40 to 142:41
 
 **Parse Error**
-at 142:46 to 142:46
+at 142:46 to 143:2
 
 **Parse Error**
-at 144:3 to 144:3
+at 144:3 to 145:4
 
 **Parse Error**
 at 145:4 to 145:4
 
 **Parse Error**
-at 146:3 to 146:3
+at 146:3 to 146:5
 
 **Parse Error**
-at 146:5 to 146:5
+at 146:5 to 146:8
 
 **Parse Error**
-at 146:9 to 146:9
+at 146:9 to 147:2
 
 **Parse Error**
-at 147:2 to 147:2
+at 147:2 to 148:1
 
 **Parse Error**
-at 148:1 to 148:1
+at 148:1 to 150:1
 
 **Unsupported Node**
 at 4:1 to 4:38
@@ -1171,13 +1185,13 @@ at 89:3 to 89:21
 at 99:36 to 99:37
 
 **Unsupported Node**
-at 142:23 to 142:23
+at 142:23 to 142:24
 
 **Unsupported Node**
-at 142:33 to 142:33
+at 142:33 to 142:34
 
 **Unsupported Node**
-at 142:40 to 142:40
+at 142:40 to 142:41
 
 **Unsupported Node**
 at 145:4 to 145:7
@@ -1289,7 +1303,6 @@ at 145:4 to 145:7
     (Expr.lookup "match_time")
     (Expr.malformed)
   )
-  (Expr.lookup "ist")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.num_literal_i32 123)

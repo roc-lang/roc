@@ -30,7 +30,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar KwIf LowerIdent OpGreate
 ~~~
 # FORMATTED
 ~~~roc
-|outer| |inner| if outer > 0(outer + inner) 
+|outer| |inner| if outer > 0(outer + inner) else 
 ~~~
 # EXPECTED
 NIL
@@ -39,7 +39,7 @@ NIL
 at 1:18 to 1:47
 
 **Parse Error**
-at 1:47 to 1:47
+at 1:47 to 1:52
 
 **Parse Error**
 at 1:52 to 1:52

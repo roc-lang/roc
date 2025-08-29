@@ -307,9 +307,10 @@ module []
 
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
-Ias1
-I22
-Ias2
+as Ias1, I22
+as Ias2]
+
+# Where constraint
 A(a) : (a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str
 B(b) : (b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str
 C((a, b)) : (a, b)
@@ -330,28 +331,34 @@ h = |x, y| {
 NIL
 # PROBLEMS
 **Parse Error**
-at 5:25 to 5:25
+at 5:25 to 5:28
 
 **Parse Error**
-at 5:32 to 5:32
+at 5:32 to 5:34
 
 **Parse Error**
-at 5:38 to 5:38
+at 5:38 to 5:41
 
 **Parse Error**
-at 5:45 to 5:45
+at 5:45 to 8:1
 
 **Parse Error**
-at 26:14 to 26:14
+at 26:14 to 26:17
 
 **Parse Error**
-at 27:12 to 27:12
+at 27:12 to 27:15
 
 **Parse Error**
-at 28:16 to 28:16
+at 28:16 to 28:19
 
 **Parse Error**
-at 29:14 to 29:14
+at 29:14 to 29:17
+
+**Parse Error**
+at 25:10 to 31:2
+
+**Parse Error**
+at 18:12 to 31:2
 
 **Unsupported Node**
 at 4:1 to 4:30

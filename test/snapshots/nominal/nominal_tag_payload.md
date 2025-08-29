@@ -107,13 +107,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Maybe,
-	some1,
-	none1,
-	some2,
-	none2,
-]
+module [Maybe, some1, none1, some2, none2]
 
 Maybe(a) := [Some(a), None]
 some1 : a -> Maybe a

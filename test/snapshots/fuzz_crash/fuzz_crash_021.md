@@ -40,16 +40,18 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString UpperIdent OpenRoun
 # FORMATTED
 ~~~roc
 Fli / main.roc
-Pair((a, b + ()))
+" }
+
+Pair((a, b + : ()))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:13 to 1:13
+at 1:13 to 3:1
 
 **Parse Error**
-at 3:12 to 3:12
+at 3:12 to 3:14
 
 **Parse Error**
 at 3:12 to 3:15

@@ -30,7 +30,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int C
 ~~~roc
 module []
 
-f = 
+f = || 
 {
 	crash 1
 }
@@ -39,7 +39,7 @@ f =
 NIL
 # PROBLEMS
 **Parse Error**
-at 3:5 to 3:5
+at 3:5 to 3:8
 
 # CANONICALIZE
 ~~~clojure

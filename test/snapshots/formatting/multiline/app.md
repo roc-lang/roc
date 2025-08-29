@@ -22,7 +22,10 @@ KwApp OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare Ope
 ~~~
 # FORMATTED
 ~~~roc
-app  [a1, a2]
+app  [
+	a1,
+	a2,
+]
 {
 	pf: "../basic-cli/main.roc" platform [],
 	a: "a",

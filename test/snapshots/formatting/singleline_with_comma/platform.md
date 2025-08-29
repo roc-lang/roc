@@ -21,16 +21,11 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma UpperIdent Comma CloseCu
 ~~~
 # FORMATTED
 ~~~roc
-platform "pf" requires {(
-	R1,
-	R2,
-)} (
-	(r1 : R1 -> R2, r2) : R1 -> R2,
-) exposes  [E1, E2] packages {pa1, (
-	(
-		"pa1",
-		pa2,
-	) : "pa2",
+platform "pf" requires {(R1, R2)} ((r1 : R1 -> R2, r2) : R1 -> R2) exposes  [
+	E1,
+	E2,
+] packages {pa1, (
+	("pa1", pa2) : "pa2",
 )}
 
 ~~~
@@ -38,19 +33,19 @@ platform "pf" requires {(
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:21 to 2:21
+at 2:21 to 2:23
 
 **Parse Error**
 at 1:1 to 2:23
 
 **Parse Error**
-at 2:55 to 2:55
+at 2:55 to 3:2
 
 **Parse Error**
 at 1:1 to 3:2
 
 **Parse Error**
-at 4:37 to 4:37
+at 4:37 to 6:2
 
 **Expected Close Curly Brace**
 at 1:1 to 6:2

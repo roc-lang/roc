@@ -28,13 +28,16 @@ match ...
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:8 to 2:8
+at 2:8 to 2:11
 
 **Parse Error**
-at 3:13 to 3:13
+at 3:13 to 3:16
 
 **Parse Error**
-at 4:4 to 4:4
+at 4:4 to 4:7
+
+**Parse Error**
+at 1:11 to 5:2
 
 # CANONICALIZE
 ~~~clojure

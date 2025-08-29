@@ -31,37 +31,40 @@ match items
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:9 to 2:9
+at 2:9 to 2:12
 
 **Parse Error**
-at 3:8 to 3:8
+at 3:8 to 3:10
 
 **Parse Error**
 at 3:5 to 3:10
 
 **Parse Error**
-at 3:14 to 3:14
+at 3:14 to 3:16
 
 **Parse Error**
-at 3:16 to 3:16
+at 3:16 to 3:19
 
 **Parse Error**
-at 4:15 to 4:15
+at 4:15 to 4:17
 
 **Parse Error**
 at 4:5 to 4:17
 
 **Parse Error**
-at 4:17 to 4:17
+at 4:17 to 4:20
 
 **Parse Error**
-at 5:19 to 5:19
+at 5:19 to 5:22
 
 **Parse Error**
-at 6:18 to 6:18
+at 6:18 to 6:21
 
 **Parse Error**
-at 7:8 to 7:8
+at 7:8 to 7:11
+
+**Parse Error**
+at 1:13 to 8:2
 
 # CANONICALIZE
 ~~~clojure

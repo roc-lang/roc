@@ -162,23 +162,14 @@ main = {
 	result2 = Http.post
 	result3 = get
 	result4 = post
-	combined = Str.concat((
-		client,
-		parser,
-		helper,
-		result1,
-		result2,
-		result3,
-		result4,
-		combined,
-	))
+	combined = Str.concat((client, parser, helper, result1, result2, result3, result4, combined))
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 34:5 to 34:5
+at 34:5 to 35:1
 
 **Parse Error**
 at 23:16 to 35:1

@@ -19,7 +19,8 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-platform  requires n : 0 exposes  []
+platform "
+ requires n : 0 exposes  [import ]
 
 []
 ~~~
@@ -27,7 +28,7 @@ platform  requires n : 0 exposes  []
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:9 to 1:9
+at 1:9 to 2:1
 
 **Parse Error**
 at 1:1 to 2:15
@@ -36,7 +37,7 @@ at 1:1 to 2:15
 at 1:1 to 2:15
 
 **Parse Error**
-at 2:16 to 2:16
+at 2:16 to 2:23
 
 **Expected Close Square Bracket**
 at 1:1 to 2:23
@@ -48,7 +49,7 @@ at 1:1 to 2:23
 at 1:1 to 2:23
 
 **Parse Error**
-at 2:23 to 2:23
+at 2:23 to 2:25
 
 **Expected Close Curly Brace**
 at 1:1 to 2:25
@@ -60,7 +61,7 @@ at 1:1 to 2:25
 at 1:1 to 2:25
 
 **Parse Error**
-at 2:25 to 2:25
+at 2:25 to 2:33
 
 **Parse Error**
 at 1:1 to 2:33

@@ -67,38 +67,37 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "processComplex")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
+        (binop_thin_arrow
+          (binop_colon
+            (match
+              (scrutinee                 (lc "result")
 ))
+            (apply_uc
+              (uc "Maybe")
+              (apply_uc
+                (uc "Result")
+                (tuple_literal
+                  (apply_uc
+                    (uc "List")
+                    (apply_uc
+                      (uc "Dict")
+                      (tuple_literal
+                        (uc "Str")
+                        (lc "a")
+                      )
+                    )
+                  )
+                  (lc "_b")
+                )
+              )
+            )
+          )
+          (lc "a")
+        )
       )
       (args
         (lc "result")
       )
-    )
-  )
-  (binop_colon
-    (lc "deepNested")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Maybe")
-        (apply_uc
-          (uc "Result")
-          (tuple_literal
-            (apply_uc
-              (uc "List")
-              (apply_uc
-                (uc "Dict")
-                (tuple_literal
-                  (uc "Str")
-                  (lc "a")
-                )
-              )
-            )
-            (lc "_b")
-          )
-        )
-      )
-      (lc "a")
     )
   )
   (binop_equals
@@ -176,7 +175,7 @@ app { pf: "../basic-cli/main.roc" platform [main] }
 
 processComplex : Result(List Maybe a, Dict(Str, Error _b)) -> List a
 processComplex = |result| match result
-deepNested : Maybe Result(List Dict(Str, a), _b) -> a
+ : Maybe Result(List Dict(Str, a), _b) -> a
 deepNested = |_| {
 	crash "not implemented"
 }
@@ -187,10 +186,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 NIL
 # PROBLEMS
 **Parse Error**
-at 7:23 to 7:23
+at 7:23 to 7:26
 
 **Parse Error**
-at 8:16 to 8:16
+at 8:16 to 8:19
+
+**Parse Error**
+at 6:18 to 12:12
 
 # CANONICALIZE
 ~~~clojure
@@ -205,13 +207,6 @@ at 8:16 to 8:16
   (Expr.binop_equals
     (Expr.lookup "processComplex")
     (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "deepNested")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.lookup "a")
-    )
   )
   (Expr.binop_equals
     (Expr.lookup "deepNested")

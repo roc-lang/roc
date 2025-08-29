@@ -237,7 +237,7 @@ pub fn binOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).B
 
 /// Special accessor for arrow nodes which may have multiple parameters
 /// Returns the first parameter and return type as a BinOp for compatibility
-pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).BinOp {
+fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).BinOp {
     const node_tag = self.tag(idx);
     std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
 
@@ -275,7 +275,7 @@ pub fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.I
 
 /// Returns an iterator over all parameters and return type of an arrow node
 /// The last node in the iteration is the return type, all others are parameters
-pub fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
+fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     const node_tag = self.tag(idx);
     std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
 
@@ -291,7 +291,7 @@ pub fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.I
 }
 
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
-pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx) Region {
+fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx) Region {
     // This function returns the region of lambda args
     // Since we now store complete regions, just return the lambda's region
     // This function isn't actually used anywhere in the codebase
@@ -299,7 +299,7 @@ pub fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx) Region {
 }
 
 /// Given the idx to a BinOp, return the region of just its symbol (e.g. "*" or "==") etc.
-pub fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx) Region {
+fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx) Region {
     const binop = self.binOp(idx);
 
     // To find the binop symbol itself, we scan from lhs_end to either rhs_start or first whitespace.

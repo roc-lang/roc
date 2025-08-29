@@ -22,15 +22,16 @@ MalformedString LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRoun
 # FORMATTED
 ~~~roc
 
+	
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:1
+at 1:26 to 2:2
 
 **Unsupported Node**
-at 1:1 to 1:1
+at 1:26 to 2:2
 
 # CANONICALIZE
 ~~~clojure

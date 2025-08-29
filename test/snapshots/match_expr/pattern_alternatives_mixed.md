@@ -31,22 +31,25 @@ match ...
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:12 to 2:12
+at 2:12 to 2:15
 
 **Parse Error**
-at 3:20 to 3:20
+at 3:20 to 3:23
 
 **Parse Error**
-at 4:18 to 4:18
+at 4:18 to 4:21
 
 **Parse Error**
-at 5:11 to 5:11
+at 5:11 to 5:14
 
 **Parse Error**
-at 6:18 to 6:18
+at 6:18 to 6:21
 
 **Parse Error**
-at 7:4 to 7:4
+at 7:4 to 7:7
+
+**Parse Error**
+at 1:11 to 8:2
 
 # CANONICALIZE
 ~~~clojure

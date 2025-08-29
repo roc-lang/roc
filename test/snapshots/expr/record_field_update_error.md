@@ -24,13 +24,14 @@ OpenCurly LowerIdent OpAmpersand LowerIdent OpColon Int CloseCurly ~~~
 # FORMATTED
 ~~~roc
 person
+& 
 age : 31
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:10 to 1:10
+at 1:10 to 1:12
 
 # CANONICALIZE
 ~~~clojure

@@ -36,7 +36,10 @@ C : k || match 0
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:2 to 2:2
+at 2:2 to 3:1
+
+**Parse Error**
+at 1:21 to 3:2
 
 # CANONICALIZE
 ~~~clojure

@@ -42,12 +42,15 @@ platform # Cd
  requires (
 	n! : List Str => {  },
 ) exposes  [
-	,
+	.
+		,
 ] packages { # pen
 pkg, 77}
 
-#
-# Cd
+} #
+	 #
+provides # Cd
+		 # Cd
 [ # pen
 	ar,
 ]
@@ -56,13 +59,13 @@ pkg, 77}
 NIL
 # PROBLEMS
 **Parse Error**
-at 6:4 to 6:4
+at 6:4 to 7:2
 
 **Parse Error**
 at 1:1 to 7:2
 
 **Parse Error**
-at 8:5 to 8:5
+at 8:5 to 9:3
 
 **Expected Close Curly Brace**
 at 1:1 to 12:8
@@ -74,16 +77,16 @@ at 1:1 to 12:8
 at 1:1 to 12:8
 
 **Parse Error**
-at 12:8 to 12:8
+at 12:8 to 12:13
 
 **Parse Error**
 at 1:1 to 12:17
 
 **Parse Error**
-at 12:17 to 12:17
+at 12:17 to 13:2
 
 **Parse Error**
-at 13:2 to 13:2
+at 13:2 to 14:3
 
 # CANONICALIZE
 ~~~clojure

@@ -30,14 +30,15 @@ module []
 
 _
 0 = {
-	
+	)
+ 
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:1 to 2:1
+at 2:1 to 3:2
 
 **Parse Error**
 at 1:12 to 3:2

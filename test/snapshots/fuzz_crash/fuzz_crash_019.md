@@ -277,14 +277,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "me")
     (malformed malformed:expr_unexpected_token)
   )
-  (binop_colon
-    (not_lc "main")
-    (apply_uc
-      (uc "Listlt")
-      (tuple_literal
-        (record_literal)
-        (underscore)
-      )
+  (unary_not <unary>)
+  (apply_uc
+    (uc "Listlt")
+    (tuple_literal
+      (record_literal)
+      (underscore)
     )
   )
   (binop_equals
@@ -554,19 +552,21 @@ add = |num| {
 	1
 	if num
 		{
+			dbg # bug
 			
 			 # bug
 s : s
 			exp0 : exp0
 		}
 	else {
-		
+		dbg 
 		123
 		r : r
 	}
 }
-me = # Cord
-main! : Listlt({}, _)
+me = main
+!: 
+Listlt(({  }, _))
 ma = |_| {
 	e : e
 	w = "d"
@@ -608,14 +608,20 @@ tag
 	)
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
-	 | .od()
-	 | .ned()
-	 | .recd
+	? | .od()
+	? | .ned()
+	? | .recd
+	?
 	
 	Stdo
-	!
+	!"Ho${ #
+			
 	r(nu) # xpr
 }
+",
+	)
+} # Cocl
+
 # Cocl
 
 y : {}
@@ -636,49 +642,55 @@ at 35:13 to 35:20
 at 40:2 to 40:9
 
 **Parse Error**
-at 41:3 to 41:3
+at 41:3 to 42:4
 
 **Parse Error**
-at 44:3 to 44:3
+at 44:3 to 44:7
 
 **Parse Error**
-at 55:7 to 55:7
+at 55:7 to 55:10
 
 **Parse Error**
-at 58:12 to 58:12
+at 58:12 to 58:15
 
 **Parse Error**
-at 65:7 to 65:7
+at 65:7 to 65:9
 
 **Parse Error**
 at 64:18 to 66:12
 
 **Parse Error**
-at 66:12 to 66:12
+at 66:12 to 67:3
 
 **Parse Error**
-at 67:8 to 67:8
+at 67:8 to 67:11
 
 **Parse Error**
-at 68:11 to 68:11
+at 68:11 to 68:14
 
 **Parse Error**
-at 71:1 to 71:1
+at 52:10 to 72:2
 
 **Parse Error**
-at 72:2 to 72:2
+at 72:2 to 74:1
 
 **Parse Error**
-at 86:2 to 86:2
+at 74:1 to 74:5
+
+**Parse Error**
+at 74:7 to 74:9
+
+**Parse Error**
+at 86:2 to 86:3
 
 **Parse Error**
 at 84:2 to 86:3
 
 **Parse Error**
-at 89:13 to 89:13
+at 89:13 to 89:14
 
 **Parse Error**
-at 91:2 to 91:2
+at 91:2 to 92:2
 
 **Parse Error**
 at 89:3 to 92:2
@@ -687,37 +699,37 @@ at 89:3 to 92:2
 at 88:5 to 92:2
 
 **Parse Error**
-at 104:2 to 104:2
+at 104:2 to 105:2
 
 **Parse Error**
 at 98:2 to 105:2
 
 **Parse Error**
-at 105:65 to 105:65
+at 105:65 to 105:66
 
 **Parse Error**
-at 105:71 to 105:71
+at 105:71 to 105:72
 
 **Parse Error**
-at 105:78 to 105:78
+at 105:78 to 105:79
 
 **Parse Error**
-at 105:84 to 105:84
+at 105:84 to 106:2
 
 **Parse Error**
-at 107:3 to 107:3
+at 107:3 to 108:4
 
 **Parse Error**
 at 108:4 to 108:4
 
 **Parse Error**
-at 109:5 to 109:5
+at 109:5 to 110:2
 
 **Parse Error**
-at 110:2 to 110:2
+at 110:2 to 111:1
 
 **Parse Error**
-at 111:1 to 111:1
+at 111:1 to 113:1
 
 **Unsupported Node**
 at 4:1 to 4:34
@@ -735,13 +747,13 @@ at 11:1 to 12:4
 at 74:20 to 74:21
 
 **Unsupported Node**
-at 105:65 to 105:65
+at 105:65 to 105:66
 
 **Unsupported Node**
-at 105:71 to 105:71
+at 105:71 to 105:72
 
 **Unsupported Node**
-at 105:78 to 105:78
+at 105:78 to 105:79
 
 # CANONICALIZE
 ~~~clojure
@@ -822,10 +834,8 @@ at 105:78 to 105:78
     (Expr.lookup "me")
     (Expr.malformed)
   )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.apply_tag)
-  )
+  (Expr.unary_not)
+  (Expr.apply_tag)
   (Expr.binop_equals
     (Expr.lookup "ma")
     (Expr.lambda)

@@ -26,7 +26,8 @@ app # Comment after keyword
 {
 # Comment after packages open
 	pf: "../main.roc" platform [ # Comment after provides open
-main],
+		main
+	],
 # Comment after platform
 	other: "../../other/main.roc",
 }

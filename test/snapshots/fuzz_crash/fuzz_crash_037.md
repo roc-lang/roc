@@ -20,12 +20,13 @@ KwModule OpenSquare CloseSquare MalformedString ~~~
 ~~~roc
 module []
 
+"\
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:9 to 1:9
+at 1:9 to 1:11
 
 # CANONICALIZE
 ~~~clojure

@@ -42,7 +42,7 @@ module [main]
 
 main = {
 	x = 42
-	
+	dbg 
 	x
 	x + 1
 }
@@ -51,7 +51,7 @@ main = {
 NIL
 # PROBLEMS
 **Parse Error**
-at 5:5 to 5:5
+at 5:5 to 5:9
 
 # CANONICALIZE
 ~~~clojure

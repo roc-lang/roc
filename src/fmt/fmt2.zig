@@ -9,6 +9,7 @@ const can = @import("can");
 
 const AST2 = parse.AST2;
 const Node = AST2.Node;
+const Parser2 = parse.Parser2;
 const tokenize_iter = parse.tokenize_iter;
 const Token = tokenize_iter.Token;
 const CommonEnv = base.CommonEnv;
@@ -85,11 +86,19 @@ const Formatter = struct {
 
     /// Helper to get a node from an index - eliminates massive boilerplate
     inline fn getNode(self: *const Formatter, idx: Node.Idx) Node {
-        // Node.Idx is i32, SafeMultiList.Idx expects u32
+        return self.ast.nodes.get(nodeIdxToMultiListIdx(idx));
+    }
+
+    /// Convert Node.Idx (i32) to SafeMultiList.Idx (u32 enum)
+    inline fn nodeIdxToMultiListIdx(idx: Node.Idx) collections.SafeMultiList(Node).Idx {
         const idx_val = @intFromEnum(idx);
         const u32_idx = @as(u32, @intCast(idx_val));
-        const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(u32_idx));
-        return self.ast.nodes.get(multi_list_idx);
+        return @as(collections.SafeMultiList(Node).Idx, @enumFromInt(u32_idx));
+    }
+
+    /// Convert u32 payload to NodeSlices.Idx
+    inline fn payloadToNodeSlicesIdx(payload_u32: u32) collections.NodeSlices(Node.Idx).Idx {
+        return @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(payload_u32));
     }
 
     fn tokenizeSource(self: *Formatter) !void {
@@ -99,8 +108,12 @@ const Formatter = struct {
         var byte_slices = ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(self.allocator);
 
-        var messages: [128]tokenize_iter.Diagnostic = undefined;
-        var iter = try tokenize_iter.TokenIterator.init(&env, self.allocator, self.source, &messages, &byte_slices);
+        var messages = std.ArrayList(tokenize_iter.Diagnostic).init(self.allocator);
+        defer messages.deinit();
+        // Pre-allocate reasonable capacity to avoid reallocations
+        try messages.ensureTotalCapacity(256);
+
+        var iter = try tokenize_iter.TokenIterator.init(&env, self.allocator, self.source, messages.items, &byte_slices);
         while (try iter.next(self.allocator)) |token| {
             try self.tokens.append(token);
 
@@ -168,7 +181,27 @@ const Formatter = struct {
                         package_count += 1;
                     }
 
-                    needs_multiline = package_count > 1;
+                    // Check if there are comments between packages or a trailing comma
+                    var pkg_iter = self.ast.node_slices.nodes(&packages_idx);
+                    var prev_end: usize = 0;
+                    while (pkg_iter.next()) |pkg_idx| {
+                        const pkg_node = self.getNode(pkg_idx);
+                        if (prev_end > 0 and self.hasCommentBetween(prev_end, pkg_node.region.start.offset)) {
+                            needs_multiline = true;
+                            break;
+                        }
+                        prev_end = pkg_node.region.end.offset;
+                    }
+
+                    // Also check for trailing comma after last package
+                    if (!needs_multiline and prev_end > 0 and prev_end < self.source.len) {
+                        // Look for comma after the last package
+                        var i = prev_end;
+                        while (i < self.source.len and (self.source[i] == ' ' or self.source[i] == '\t')) : (i += 1) {}
+                        if (i < self.source.len and self.source[i] == ',') {
+                            needs_multiline = true;
+                        }
+                    }
                 }
 
                 if (needs_multiline) {
@@ -389,8 +422,27 @@ const Formatter = struct {
             }
         }
 
-        // Use multiline if: more than 3 items, or has comments
-        const multiline = item_count > 3 or has_comments;
+        // Use multiline if there are comments
+        // We can't use collectionIsMultiline here because exposes_idx is a NodeSlices index, not a node
+        // Check for trailing comma by looking at the source after the last item
+        var has_trailing_comma = false;
+        if (item_count > 0) {
+            // Reset iterator to find last item
+            iter = self.ast.node_slices.nodes(&exposes_idx);
+            var last_node_idx: Node.Idx = undefined;
+            while (iter.next()) |n| {
+                last_node_idx = n;
+            }
+            const last_node = self.getNode(last_node_idx);
+            // Check for comma after last item
+            var i = last_node.region.end.offset;
+            while (i < self.source.len and (self.source[i] == ' ' or self.source[i] == '\t')) : (i += 1) {}
+            if (i < self.source.len and self.source[i] == ',') {
+                has_trailing_comma = true;
+            }
+        }
+
+        const multiline = has_comments or has_trailing_comma;
 
         if (multiline) {
             self.curr_indent_level += 1;
@@ -609,17 +661,16 @@ const Formatter = struct {
                 }
             },
 
-            // Malformed nodes - preserve source bytes with diagnostic-aware recovery
+            // Malformed nodes - preserve source bytes
             .malformed => |_| {
                 // For malformed nodes, we preserve the original source text
+                // Parser ensures regions are always valid (end >= start)
                 const start = node.region.start.offset;
                 const end = node.region.end.offset;
 
-                if (start < end and end <= self.source.len) {
+                if (end <= self.source.len) {
                     const source_text = self.source[start..end];
-                    if (source_text.len > 0) {
-                        try self.pushAll(source_text);
-                    }
+                    try self.pushAll(source_text);
                     self.last_formatted_pos = end;
                 }
             },
@@ -840,13 +891,8 @@ const Formatter = struct {
             },
             // Record types with many fields
             .record_literal => self.collectionIsMultiline(rhs),
-            // Type applications with multiple parameters
-            .apply_uc => blk: {
-                var count: usize = 0;
-                var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
-                while (it.next()) |_| count += 1;
-                break :blk count > 2;
-            },
+            // Type applications - check if they have multiline markers
+            .apply_uc => self.collectionIsMultiline(rhs),
             else => false,
         };
 
@@ -1607,8 +1653,7 @@ const Formatter = struct {
         try self.pushAll("if ");
 
         // if_without_else uses if_branches payload
-        const if_branches_u32 = node.payload.if_branches;
-        const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(if_branches_u32));
+        const nodes_idx = payloadToNodeSlicesIdx(node.payload.if_branches);
         var it = self.ast.node_slices.nodes(&nodes_idx);
 
         // Condition
@@ -1627,9 +1672,8 @@ const Formatter = struct {
     fn formatIfElse(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // The if_branches field contains the node slice index encoded as a u32
-        const if_branches_u32 = node.payload.if_branches;
-        const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(if_branches_u32));
+        // The if_branches field contains the node slice index
+        const nodes_idx = payloadToNodeSlicesIdx(node.payload.if_branches);
 
         // Get the nodes for this if-else
         var it = self.ast.node_slices.nodes(&nodes_idx);
@@ -2303,142 +2347,6 @@ const Formatter = struct {
         try self.pushAll(ident_text);
     }
 
-    fn findNumberEnd(self: *const Formatter, start: usize) usize {
-        var end = start;
-        while (end < self.source.len) {
-            const c = self.source[end];
-            if (std.ascii.isHex(c) or c == '_' or c == '.' or c == 'x' or c == 'e' or c == 'E' or c == '+' or c == '-') {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-        return end;
-    }
-
-    fn findIfEnd(self: *const Formatter, node_idx: Node.Idx) usize {
-        const node = self.getNode(node_idx);
-        var pos = node.region.start.offset;
-
-        // Scan for the end of the if expression
-        // Look for the last relevant token after "else"
-        var found_else = false;
-        var depth: usize = 0;
-        var in_string = false;
-        var escape_next = false;
-        var last_relevant_pos = pos;
-
-        while (pos < self.source.len) {
-            const ch = self.source[pos];
-
-            if (in_string) {
-                if (escape_next) {
-                    escape_next = false;
-                } else if (ch == '\\') {
-                    escape_next = true;
-                } else if (ch == '"') {
-                    in_string = false;
-                    last_relevant_pos = pos + 1;
-                }
-            } else {
-                switch (ch) {
-                    '"' => {
-                        in_string = true;
-                    },
-                    '{' => {
-                        depth += 1;
-                        last_relevant_pos = pos + 1;
-                    },
-                    '}' => {
-                        if (depth > 0) {
-                            depth -= 1;
-                            last_relevant_pos = pos + 1;
-                        } else if (found_else) {
-                            // End of if expression
-                            return pos + 1;
-                        }
-                    },
-                    '(' => {
-                        depth += 1;
-                    },
-                    ')' => {
-                        if (depth > 0) {
-                            depth -= 1;
-                            last_relevant_pos = pos + 1;
-                        } else if (found_else) {
-                            // End of if expression
-                            return pos + 1;
-                        }
-                    },
-                    '\n', ' ', '\t', '\r' => {},
-                    else => {
-                        // Check for "else" keyword
-                        if (!found_else and pos + 4 <= self.source.len) {
-                            if (std.mem.eql(u8, self.source[pos .. pos + 4], "else")) {
-                                found_else = true;
-                                pos += 3; // Will be incremented again at loop end
-                            }
-                        }
-                        if (depth == 0 and found_else) {
-                            last_relevant_pos = pos + 1;
-                        }
-                    },
-                }
-            }
-            pos += 1;
-
-            // If we've found else and we're at depth 0, check for end of expression
-            if (found_else and depth == 0 and pos < self.source.len) {
-                const next_ch = self.source[pos];
-                if (next_ch == '\n' or next_ch == ',' or next_ch == '}' or next_ch == ')' or next_ch == ']') {
-                    return last_relevant_pos;
-                }
-            }
-        }
-
-        return last_relevant_pos;
-    }
-
-    fn findMatchEnd(self: *const Formatter, node_idx: Node.Idx) usize {
-        const node = self.getNode(node_idx);
-        var pos = node.region.start.offset;
-
-        // Scan for the closing brace of the match expression
-        var brace_depth: usize = 0;
-        var in_string = false;
-        var escape_next = false;
-
-        while (pos < self.source.len) {
-            const ch = self.source[pos];
-
-            if (in_string) {
-                if (escape_next) {
-                    escape_next = false;
-                } else if (ch == '\\') {
-                    escape_next = true;
-                } else if (ch == '"') {
-                    in_string = false;
-                }
-            } else {
-                switch (ch) {
-                    '"' => in_string = true,
-                    '{' => brace_depth += 1,
-                    '}' => {
-                        if (brace_depth == 0) {
-                            // Found the closing brace
-                            return pos + 1;
-                        }
-                        brace_depth -= 1;
-                    },
-                    else => {},
-                }
-            }
-            pos += 1;
-        }
-
-        return pos;
-    }
-
     fn findMaxChildEnd(self: *const Formatter, node_idx: Node.Idx) usize {
         const node = self.getNode(node_idx);
         var max_end: usize = node.region.start.offset;
@@ -2744,13 +2652,13 @@ const Formatter = struct {
 
         // Look for a comma before the closing delimiter
         const start = node.region.start.offset;
-        const end_estimate = node.region.end.offset;
+        const end = node.region.end.offset;
 
-        if (end_estimate <= start or end_estimate > self.source.len) {
+        if (end <= start or end > self.source.len) {
             // For tuples, if the region is incomplete, try to find the closing paren
             if (node.tag == .tuple_literal and start < self.source.len) {
                 // Scan forward from the end of the known region to find the closing paren
-                var scan_pos = if (end_estimate <= self.source.len) end_estimate else start;
+                var scan_pos = if (end <= self.source.len) end else start;
                 var depth: i32 = 0;
 
                 while (scan_pos < self.source.len) {
@@ -2783,19 +2691,14 @@ const Formatter = struct {
         }
 
         // Single backward scan to find both delimiter and comma
-        var i = end_estimate;
+        var i = end;
         var found_delimiter = false;
 
-        // For tuples, if we haven't found a closing paren at the end, look forward a bit
+        // For tuples, if we haven't found a closing paren at the end, there's a parser error
         if (node.tag == .tuple_literal and i < self.source.len and self.source[i - 1] != ')') {
-            // Scan forward to find the real end
-            while (i < self.source.len and i < end_estimate + 10) {
-                if (self.source[i] == ')') {
-                    i += 1; // Include the paren
-                    break;
-                }
-                i += 1;
-            }
+            // The parser should have given us the correct end position
+            // If it didn't, that's a parser bug that should be fixed in the parser
+            return false;
         }
 
         while (i > start) {
@@ -2866,26 +2769,39 @@ const Formatter = struct {
         return false;
     }
 
-    fn getOperatorPrecedence(_: *const Formatter, tag: Node.Tag) struct { left: u8, right: u8 } {
-        // Based on getBindingPower from Parser2.zig
+    fn getOperatorPrecedence(_: *const Formatter, tag: Node.Tag) Parser2.BindingPower {
+        // Convert Node.Tag to Token.Tag, then use parser's getBindingPower
+        const token_tag = nodeTagToTokenTag(tag);
+        return Parser2.getBindingPower(token_tag);
+    }
+
+    fn nodeTagToTokenTag(tag: Node.Tag) Token.Tag {
+        // Map AST node tags to their corresponding token tags
         return switch (tag) {
-            .binop_pipe => .{ .left = 10, .right = 11 },
-            .binop_or => .{ .left = 20, .right = 21 },
-            .binop_and => .{ .left = 30, .right = 31 },
-            .binop_double_equals, .binop_not_equals => .{ .left = 40, .right = 41 },
-            .binop_lt, .binop_lte, .binop_gt, .binop_gte => .{ .left = 50, .right = 51 },
-            .binop_plus, .binop_minus => .{ .left = 60, .right = 61 },
-            .binop_star, .binop_slash, .binop_double_slash => .{ .left = 70, .right = 71 },
-            .binop_double_question => .{ .left = 80, .right = 81 },
-            .binop_equals => .{ .left = 5, .right = 6 },
-            .binop_colon => .{ .left = 3, .right = 4 },
-            .binop_thin_arrow => .{ .left = 2, .right = 3 },
-            .binop_thick_arrow => .{ .left = 1, .right = 2 },
-            .binop_as => .{ .left = 3, .right = 4 },
-            .binop_exposing => .{ .left = 3, .right = 4 },
-            .binop_where => .{ .left = 1, .right = 2 },
-            .binop_platform => .{ .left = 3, .right = 4 },
-            else => .{ .left = 0, .right = 0 },
+            .binop_pipe => .OpBar,
+            .binop_or => .OpOr,
+            .binop_and => .OpAnd,
+            .binop_double_equals => .OpEquals,
+            .binop_not_equals => .OpNotEquals,
+            .binop_lt => .OpLessThan,
+            .binop_lte => .OpLessThanOrEq,
+            .binop_gt => .OpGreaterThan,
+            .binop_gte => .OpGreaterThanOrEq,
+            .binop_plus => .OpPlus,
+            .binop_minus => .OpBinaryMinus,
+            .binop_star => .OpStar,
+            .binop_slash => .OpSlash,
+            .binop_double_slash => .OpDoubleSlash,
+            .binop_double_question => .OpDoubleQuestion,
+            .binop_equals => .OpAssign,
+            .binop_colon => .OpColon,
+            .binop_thin_arrow => .OpArrow,
+            .binop_thick_arrow => .OpFatArrow,
+            .binop_as => .KwAs,
+            .binop_where => .KwWhere,
+            .binop_exposing => .KwExposing,
+            .binop_platform => .KwPlatform,
+            else => .EndOfFile, // Fallback for non-operator nodes
         };
     }
 
@@ -2903,247 +2819,6 @@ const Formatter = struct {
     }
 
     /// Flush comments and blank lines before a position
-    /// Returns true if there was at least one newline
-    fn findLineEnd(self: *const Formatter, start: usize) usize {
-        var i = start;
-        while (i < self.source.len and self.source[i] != '\n') {
-            i += 1;
-        }
-        return i;
-    }
-
-    fn findMalformedEndSmart(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
-        // The best way to find where a malformed node ends is to look at the next node in the AST
-        const node = self.getNode(node_idx);
-        const start = node.region.start.offset;
-
-        // Try to find the next sibling node in the AST by checking all nodes
-        // and finding the one with the smallest start position that's after this node
-        var next_node_start: ?usize = null;
-
-        // Iterate through all nodes to find the next one after this malformed node
-        // This is more reliable than string matching
-        var i: u32 = 0;
-        const node_count = self.ast.nodes.len();
-        while (i < node_count) : (i += 1) {
-            const idx = @as(Node.Idx, @enumFromInt(i));
-            if (idx == node_idx) continue; // Skip self
-
-            const other_node = self.getNode(idx);
-            const other_start = other_node.region.start.offset;
-
-            // Is this node after ours and before our current best candidate?
-            if (other_start > start) {
-                if (next_node_start == null or other_start < next_node_start.?) {
-                    next_node_start = other_start;
-                }
-            }
-        }
-
-        // If we found a next node, use its start as our end
-        if (next_node_start) |next_start| {
-            // Back up to remove any whitespace between nodes
-            var end = next_start;
-            while (end > start and (self.source[end - 1] == ' ' or
-                self.source[end - 1] == '\t' or
-                self.source[end - 1] == '\n' or
-                self.source[end - 1] == '\r'))
-            {
-                end -= 1;
-            }
-            return end;
-        }
-
-        // No next node found, try using diagnostic information
-        const has_missing_close = @hasField(@TypeOf(diagnostic), "missing_close");
-        const has_unexpected_token = @hasField(@TypeOf(diagnostic), "unexpected_token");
-
-        if (has_missing_close) {
-            // Look for the next matching closing delimiter
-            var depth: i32 = 1;
-            var pos = start + 1;
-            while (pos < self.source.len) {
-                switch (self.source[pos]) {
-                    '{', '[', '(' => depth += 1,
-                    '}', ']', ')' => {
-                        depth -= 1;
-                        if (depth == 0) return pos + 1;
-                    },
-                    else => {},
-                }
-                pos += 1;
-            }
-        }
-
-        if (has_unexpected_token) {
-            // Stop at the unexpected token
-            return self.findNextTokenBoundary(start);
-        }
-
-        // Fall back to finding the end based on heuristics
-        return self.findMalformedEndHeuristic(node_idx, diagnostic);
-    }
-
-    fn trimMalformedTextSmart(self: *const Formatter, text: []const u8, diagnostic: anytype) []const u8 {
-        // Apply smarter trimming based on diagnostic
-        const has_incomplete = @hasField(@TypeOf(diagnostic), "incomplete");
-        const has_trailing_comma = @hasField(@TypeOf(diagnostic), "trailing_comma");
-
-        var result = text;
-
-        // Always trim trailing whitespace
-        while (result.len > 0) {
-            const last = result[result.len - 1];
-            if (last == ' ' or last == '\t' or last == '\n' or last == '\r') {
-                result = result[0 .. result.len - 1];
-            } else {
-                break;
-            }
-        }
-
-        if (has_incomplete or has_trailing_comma) {
-            // Remove trailing comma
-            if (result.len > 0 and result[result.len - 1] == ',') {
-                result = result[0 .. result.len - 1];
-            }
-        }
-
-        // Fall back to original trimming
-        return self.trimMalformedText(result, diagnostic);
-    }
-
-    fn findNextTokenBoundary(self: *const Formatter, start: usize) usize {
-        var pos = start;
-        var in_identifier = false;
-
-        while (pos < self.source.len) {
-            const c = self.source[pos];
-
-            const is_id_char = (c >= 'a' and c <= 'z') or
-                (c >= 'A' and c <= 'Z') or
-                (c >= '0' and c <= '9') or
-                c == '_';
-
-            if (in_identifier) {
-                if (!is_id_char) return pos;
-            } else {
-                if (is_id_char) {
-                    in_identifier = true;
-                } else if (c != ' ' and c != '\t') {
-                    // Found a non-whitespace, non-identifier character
-                    return pos;
-                }
-            }
-            pos += 1;
-        }
-
-        return self.source.len;
-    }
-
-    fn findMalformedEndHeuristic(self: *const Formatter, node_idx: Node.Idx, diagnostic: anytype) usize {
-        const node = self.getNode(node_idx);
-        const start = node.region.start.offset;
-        var pos = start;
-        var depth: i32 = 0;
-        var in_string = false;
-        var escape_next = false;
-
-        // Since diagnostic is a generic tag, we'll use a simple heuristic
-        // Look for natural boundaries like unmatched delimiters or new statements
-        _ = diagnostic; // Unused for now, but could be used for smarter recovery
-
-        while (pos < self.source.len) {
-            const c = self.source[pos];
-
-            // Handle string literals to avoid false positives
-            if (escape_next) {
-                escape_next = false;
-                pos += 1;
-                continue;
-            }
-
-            if (c == '\\' and in_string) {
-                escape_next = true;
-                pos += 1;
-                continue;
-            }
-
-            if (c == '"') {
-                in_string = !in_string;
-                pos += 1;
-                continue;
-            }
-
-            if (!in_string) {
-                switch (c) {
-                    '{', '[', '(' => depth += 1,
-                    '}', ']', ')' => {
-                        // If depth goes negative, we found an unmatched closer
-                        depth -= 1;
-                        if (depth < 0) {
-                            // Unmatched closer - stop here
-                            return pos;
-                        }
-                    },
-                    '\n' => {
-                        if (depth == 0) {
-                            // Check if next line starts a new statement
-                            var next_pos = pos + 1;
-                            while (next_pos < self.source.len and
-                                (self.source[next_pos] == ' ' or self.source[next_pos] == '\t'))
-                            {
-                                next_pos += 1;
-                            }
-
-                            if (next_pos < self.source.len) {
-                                const next_char = self.source[next_pos];
-                                // Check for statement keywords or identifiers at column 0-4 indentation
-                                const indent = next_pos - (pos + 1);
-                                if (indent <= 4 and
-                                    ((next_char >= 'a' and next_char <= 'z') or
-                                        (next_char >= 'A' and next_char <= 'Z') or
-                                        next_char == '_'))
-                                {
-                                    // At low indentation with an identifier - likely a new statement
-                                    // Stop here rather than continuing into the next statement
-                                    return pos;
-                                }
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-
-            pos += 1;
-        }
-
-        return self.source.len;
-    }
-
-    fn trimMalformedText(_: *const Formatter, text: []const u8, diagnostic: anytype) []const u8 {
-        var result = text;
-
-        // Trim trailing whitespace
-        while (result.len > 0) {
-            const last = result[result.len - 1];
-            if (last == ' ' or last == '\t' or last == '\n' or last == '\r') {
-                result = result[0 .. result.len - 1];
-            } else {
-                break;
-            }
-        }
-
-        // Also trim trailing commas if present (often incomplete)
-        if (result.len > 0 and result[result.len - 1] == ',') {
-            result = result[0 .. result.len - 1];
-        }
-
-        _ = diagnostic; // Not used currently but could enable smarter trimming
-
-        return result;
-    }
-
     /// Flush comments and blank lines, preserving formatting
     /// Returns true if there was at least one newline
     fn flushComments(self: *Formatter, between_text: []const u8) !bool {

@@ -29,14 +29,14 @@ app { f: "" platform [] }
 
 {
 	o : 0
-	
+	)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:4 to 2:4
+at 2:4 to 2:5
 
 **Parse Error**
 at 1:20 to 2:5

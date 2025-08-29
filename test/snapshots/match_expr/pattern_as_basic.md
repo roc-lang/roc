@@ -29,10 +29,13 @@ match (1, 2)
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:12 to 2:12
+at 2:12 to 2:15
 
 **Parse Error**
-at 2:21 to 2:21
+at 2:21 to 2:24
+
+**Parse Error**
+at 1:14 to 3:2
 
 # CANONICALIZE
 ~~~clojure

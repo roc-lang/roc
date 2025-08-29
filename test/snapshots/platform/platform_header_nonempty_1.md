@@ -57,19 +57,19 @@ some_pkg, (
 NIL
 # PROBLEMS
 **Parse Error**
-at 6:3 to 6:3
+at 6:3 to 7:4
 
 **Parse Error**
 at 1:1 to 7:4
 
 **Parse Error**
-at 9:4 to 9:4
+at 9:4 to 10:2
 
 **Parse Error**
 at 1:1 to 10:2
 
 **Parse Error**
-at 17:3 to 17:3
+at 17:3 to 18:2
 
 **Expected Close Curly Brace**
 at 1:1 to 18:2

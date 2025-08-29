@@ -176,11 +176,11 @@ my_empty_list = []
 int_list = [1, 2, 3]
 str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
-all_int_list = int_list + 
+all_int_list = int_list + + 
 my_empty_list
-all_str_list = str_list + 
+all_str_list = str_list + + 
 my_empty_list
-all_float_list = float_list + 
+all_float_list = float_list + + 
 my_empty_list
 get_empty = |_| []
 empty_int_list = get_empty(42)
@@ -197,13 +197,13 @@ len1 = List.len(all_int_list)
 NIL
 # PROBLEMS
 **Parse Error**
-at 12:26 to 12:26
+at 12:26 to 12:28
 
 **Parse Error**
-at 13:26 to 13:26
+at 13:26 to 13:28
 
 **Parse Error**
-at 14:30 to 14:30
+at 14:30 to 14:32
 
 **Unsupported Node**
 at 25:12 to 25:16

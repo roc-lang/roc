@@ -147,31 +147,30 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore
     (lc "handle_result")
     (lambda
       (body
-        (match
-          (scrutinee             (lc "result")
+        (binop_thin_arrow
+          (binop_colon
+            (match
+              (scrutinee                 (lc "result")
 ))
+            (binop_thin_arrow
+              (lc "a")
+              (lc "b")
+            )
+          )
+          (binop_thin_arrow
+            (apply_uc
+              (uc "List")
+              (lc "a")
+            )
+            (apply_uc
+              (uc "List")
+              (lc "b")
+            )
+          )
+        )
       )
       (args
         (lc "result")
-      )
-    )
-  )
-  (binop_colon
-    (lc "map")
-    (binop_thin_arrow
-      (binop_thin_arrow
-        (lc "a")
-        (lc "b")
-      )
-      (binop_thin_arrow
-        (apply_uc
-          (uc "List")
-          (lc "a")
-        )
-        (apply_uc
-          (uc "List")
-          (lc "b")
-        )
       )
     )
   )
@@ -229,8 +228,7 @@ get_data : {field : _, other : U32} -> U32
 get_data = |record| record.other
 handle_result : Result(_, Str) -> Str
 handle_result = |result| match result
-map :
-	(a -> b) -> List a -> List b
+ : a -> b -> (List(a) -> List(b))
 map = |_, _| []
 transform :
 	(_a -> _b) -> _b
@@ -240,13 +238,16 @@ transform = |_, b| b
 NIL
 # PROBLEMS
 **Parse Error**
-at 21:15 to 21:15
+at 21:15 to 21:18
 
 **Parse Error**
 at 20:18 to 22:18
 
 **Parse Error**
-at 23:5 to 23:5
+at 23:5 to 26:1
+
+**Parse Error**
+at 22:18 to 26:5
 
 **Pattern in Expression Context**
 at 3:8 to 3:9
@@ -329,19 +330,6 @@ at 18:24 to 18:25
   (Expr.binop_equals
     (Expr.lookup "handle_result")
     (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "map")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.lookup "b")
-      )
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
   )
   (Expr.binop_equals
     (Expr.lookup "map")

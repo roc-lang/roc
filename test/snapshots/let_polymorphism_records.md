@@ -236,7 +236,7 @@ str_container = make_container(str)
 list_container = make_container(my_empty_list)
 update_data = |container, new_value| {
 	container : container
-	
+	& 
 	data : new_value
 }
 updated_int = update_data((int_container, 100))
@@ -256,7 +256,7 @@ int_container.count + str_container.count
 NIL
 # PROBLEMS
 **Parse Error**
-at 19:50 to 19:50
+at 19:50 to 19:52
 
 # CANONICALIZE
 ~~~clojure

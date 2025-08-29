@@ -19,16 +19,16 @@ OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-
+ "te
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:1
+at 1:2 to 1:3
 
 **Parse Error**
-at 1:3 to 1:3
+at 1:3 to 1:6
 
 # CANONICALIZE
 ~~~clojure

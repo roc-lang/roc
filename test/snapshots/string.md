@@ -58,18 +58,19 @@ x = (
 		"\u(K)",
 		"\u(1F680)",
 	)
+"\
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 12:1 to 12:1
+at 12:1 to 15:1
 
 **Parse Error**
 at 15:1 to 15:1
 
 **Parse Error**
-at 15:1 to 15:1
+at 15:1 to 15:3
 
 # CANONICALIZE
 ~~~clojure

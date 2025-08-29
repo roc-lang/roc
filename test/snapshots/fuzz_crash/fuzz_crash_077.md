@@ -18,11 +18,11 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
 ~~~roc
 package [] packages {d, {
 	{
-		d : 
+		d : ||
 		{
 			0
 		}
-		
+		->
 		R
 	}
 }}
@@ -32,10 +32,10 @@ package [] packages {d, {
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:17 to 1:17
+at 1:17 to 1:19
 
 **Parse Error**
-at 1:22 to 1:22
+at 1:22 to 1:24
 
 # CANONICALIZE
 ~~~clojure

@@ -69,53 +69,51 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
     (lc "map_result")
     (lambda
       (body
-        (block
-          (match
-            (scrutinee               (lc "result")
+        (binop_thin_arrow
+          (record_literal
+            (match
+              (scrutinee                 (lc "result")
 ))
+            (binop_colon
+              (lc "identity")
+              (binop_thin_arrow
+                (lc "a")
+                (lc "a")
+              )
+            )
+            (binop_equals
+              (lc "identity")
+              (lambda
+                (body
+                  (lc "x")
+                )
+                (args
+                  (lc "x")
+                )
+              )
+            )
+            (binop_colon
+              (lc "make_pair")
+              (lc "a")
+            )
+            (lc "b")
+          )
+          (record_literal
+            (binop_colon
+              (lc "first")
+              (lc "a")
+            )
+            (binop_colon
+              (lc "second")
+              (lc "b")
+            )
+          )
         )
       )
       (args
         (tuple_literal
           (lc "result")
           (lc "transform")
-        )
-      )
-    )
-  )
-  (binop_colon
-    (lc "identity")
-    (binop_thin_arrow
-      (lc "a")
-      (lc "a")
-    )
-  )
-  (binop_equals
-    (lc "identity")
-    (lambda
-      (body
-        (lc "x")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
-    (lc "make_pair")
-    (binop_thin_arrow
-      (lc "a")
-      (binop_thin_arrow
-        (lc "b")
-        (record_literal
-          (binop_colon
-            (lc "first")
-            (lc "a")
-          )
-          (binop_colon
-            (lc "second")
-            (lc "b")
-          )
         )
       )
     )
@@ -220,10 +218,12 @@ app { pf: "platform.roc" platform [main] }
 map_result : Result(a, e) -> (a -> b) -> Result(b, e)
 map_result = |result, transform| {
 	match result
-}
-identity : a -> a
-identity = |x| x
-make_pair : a -> b -> {first : a, second : b}
+,
+	identity : a -> a,
+	identity = |x| x,
+	make_pair : a,
+	b,
+} -> { first : a, second : b }
 make_pair = |x, y| { first : x, second : y }
 list_length : List _a -> U64
 list_length = |_lst| 42
@@ -235,10 +235,16 @@ main = |_| "done"
 NIL
 # PROBLEMS
 **Parse Error**
-at 7:19 to 7:19
+at 7:19 to 7:22
 
 **Parse Error**
-at 8:20 to 8:20
+at 8:20 to 8:23
+
+**Parse Error**
+at 6:18 to 13:1
+
+**Parse Error**
+at 5:34 to 17:18
 
 # CANONICALIZE
 ~~~clojure
@@ -259,36 +265,6 @@ at 8:20 to 8:20
   (Expr.binop_equals
     (Expr.lookup "map_result")
     (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "make_pair")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "first")
-            (Expr.lookup "a")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "second")
-            (Expr.lookup "b")
-          )
-        )
-      )
-    )
   )
   (Expr.binop_equals
     (Expr.lookup "make_pair")
@@ -329,7 +305,6 @@ at 8:20 to 8:20
 # TYPES
 ~~~roc
 map_result : _c
-identity : _c
 make_pair : _c
 list_length : _c
 wrap_in_result : _c

@@ -38,7 +38,10 @@ KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare 
 ~~~
 # FORMATTED
 ~~~roc
-hosted [a!, b!]
+hosted [
+	a!,
+	b!,
+]
 
 [
 	a!,

@@ -100,13 +100,13 @@ hasher,
 	module(hasher) | Hasher,
 Decode(a) : a where module(a).decode( # After method args open
 List(U8) -> ( # After method arg
- -> a))
+)  -> a))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 16:3 to 16:3
+at 16:3 to 16:5
 
 **Parse Error**
 at 14:9 to 16:9

@@ -28,7 +28,7 @@ OpenCurly LowerIdent OpColon String Comma OpColon Int Comma Comma LowerIdent OpC
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:18 to 1:18
+at 1:18 to 1:20
 
 **Parse Error**
 at 1:1 to 1:20

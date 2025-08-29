@@ -34,19 +34,19 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 f{
 	o,
 }
-foo = 
+foo = "onmo %
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:6 to 2:6
+at 2:6 to 4:1
 
 **Parse Error**
 at 1:3 to 4:1
 
 **Parse Error**
-at 6:5 to 6:5
+at 6:5 to 6:12
 
 # CANONICALIZE
 ~~~clojure

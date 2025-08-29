@@ -39,14 +39,14 @@ module [test]
 
 test = {
 	x = 42
-	(x)
+	dbg(x)
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 5:5 to 5:5
+at 5:5 to 5:8
 
 # CANONICALIZE
 ~~~clojure

@@ -117,7 +117,9 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 	noneTag : None,
 	okTag : Ok "hello",
 	errTag : Err "oops",
-	addOne : |x| (
+	addOne : |
+		x,
+	| (
 		(((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)],
 	),
 }
@@ -126,7 +128,7 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 NIL
 # PROBLEMS
 **Parse Error**
-at 10:1 to 10:1
+at 10:1 to 10:2
 
 **Parse Error**
 at 1:1 to 10:2

@@ -157,72 +157,70 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIde
     (lc "handleApi")
     (lambda
       (body
-        (block
-          (binop_equals
-            (lc "result")
-            (apply_anon
+        (binop_thin_arrow
+          (record_literal
+            (binop_equals
+              (lc "result")
+              (apply_anon
+                (binop_pipe
+                  (uc "Json")
+                  (dot_lc "decode")
+                )
+                (binop_pipe
+                  (lc "request")
+                  (dot_lc "body")
+                )
+              )
+            )
+            (match
+              (scrutinee                 (lc "result")
+))
+            (binop_colon
+              (lc "config")
               (binop_pipe
                 (uc "Json")
-                (dot_lc "decode")
+                (uc "Config")
+              )
+            )
+            (binop_equals
+              (lc "config")
+              (binop_pipe
+                (uc "Json")
+                (dot_lc "defaultConfig")
+              )
+            )
+            (binop_colon
+              (lc "advancedParser")
+              (binop_pipe
+                (binop_pipe
+                  (uc "Json")
+                  (uc "Parser")
+                )
+                (uc "Config")
+              )
+            )
+            (uc "Str")
+          )
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (binop_pipe
+                (uc "Json")
+                (uc "Value")
               )
               (binop_pipe
-                (lc "request")
-                (dot_lc "body")
+                (binop_pipe
+                  (uc "Json")
+                  (uc "Parser")
+                )
+                (uc "Error")
               )
             )
           )
-          (match
-            (scrutinee               (lc "result")
-))
         )
       )
       (args
         (lc "request")
-      )
-    )
-  )
-  (binop_colon
-    (lc "config")
-    (binop_pipe
-      (uc "Json")
-      (uc "Config")
-    )
-  )
-  (binop_equals
-    (lc "config")
-    (binop_pipe
-      (uc "Json")
-      (dot_lc "defaultConfig")
-    )
-  )
-  (binop_colon
-    (lc "advancedParser")
-    (binop_thin_arrow
-      (binop_pipe
-        (binop_pipe
-          (uc "Json")
-          (uc "Parser")
-        )
-        (uc "Config")
-      )
-      (binop_thin_arrow
-        (uc "Str")
-        (apply_uc
-          (uc "Result")
-          (tuple_literal
-            (binop_pipe
-              (uc "Json")
-              (uc "Value")
-            )
-            (binop_pipe
-              (binop_pipe
-                (uc "Json")
-                (uc "Parser")
-              )
-              (uc "Error")
-            )
-          )
-        )
       )
     )
   )
@@ -314,12 +312,14 @@ parseJson : Str -> Json.Value
 parseJson = |input| Json.parse(input)
 handleApi : Http.Request -> Result(Http.Response, Json.Error)
 handleApi = |request| {
-	result = Json.decode(request.body)
+	result = Json.decode(request.body),
 	match result
-}
-config : Json.Config
-config = Json.defaultConfig
-advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
+,
+	config : Json.Config,
+	config = Json.defaultConfig,
+	advancedParser : Json.Parser | Config,
+	Str,
+} -> Result((Json.Value, Json.Parser | Error))
 advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
 combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
 combineResults = |result1, result2| match result1
@@ -328,22 +328,34 @@ combineResults = |result1, result2| match result1
 NIL
 # PROBLEMS
 **Parse Error**
-at 17:18 to 17:18
+at 17:18 to 17:21
 
 **Parse Error**
-at 18:18 to 18:18
+at 18:18 to 18:21
 
 **Parse Error**
-at 33:20 to 33:20
+at 16:18 to 22:1
 
 **Parse Error**
-at 35:28 to 35:28
+at 14:23 to 26:42
 
 **Parse Error**
-at 36:26 to 36:26
+at 33:20 to 34:13
 
 **Parse Error**
-at 38:18 to 38:18
+at 35:28 to 35:31
+
+**Parse Error**
+at 36:26 to 36:29
+
+**Parse Error**
+at 34:28 to 38:12
+
+**Parse Error**
+at 38:18 to 38:21
+
+**Parse Error**
+at 32:19 to 39:6
 
 **Unsupported Node**
 at 3:1 to 3:56
@@ -429,27 +441,6 @@ at 27:44 to 27:51
     (Expr.lookup "handleApi")
     (Expr.lambda)
   )
-  (Expr.binop_colon
-    (Expr.lookup "config")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "config")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "advancedParser")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
   (Expr.binop_equals
     (Expr.lookup "advancedParser")
     (Expr.lambda)
@@ -479,7 +470,6 @@ at 27:44 to 27:51
 processRequest : _c
 parseJson : _c
 handleApi : _c
-config : _c
 advancedParser : _c
 combineResults : _c
 ~~~
