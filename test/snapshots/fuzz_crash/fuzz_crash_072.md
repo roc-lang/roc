@@ -153,7 +153,7 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
 ~~~
 # CANONICALIZE
 ~~~clojure

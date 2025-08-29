@@ -308,7 +308,28 @@ EndOfFile(24:1-24:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
+
+x = (
+	'a',
+	'é',
+	'🚀',
+	,
+	,
+	,
+	,
+	'\u(1F680)',
+	,
+	'\\',
+	'\'',
+	,
+	,
+	,
+)
+
+y = 
+
+# Test backslash before EOF
 ~~~
 # CANONICALIZE
 ~~~clojure

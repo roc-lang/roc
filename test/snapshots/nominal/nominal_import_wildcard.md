@@ -124,7 +124,19 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [red, green, blue]
+
+import Color
+
+
+red : Color
+red = Red
+
+blue : Color
+blue = Blue
+
+green : Color
+green = Green
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -152,7 +152,13 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+compose : (_b -> _c) -> (_a -> _b)
+
+compose = |f, g| |x| f(g(x))
+
+main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure

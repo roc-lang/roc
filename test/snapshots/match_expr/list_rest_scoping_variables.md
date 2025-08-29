@@ -166,7 +166,12 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+match data {
+	[.. as items] => 1
+	[first, .. as items] => first
+	[.. as items, last] => last
+	[first, .. as items, last] => first + last
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

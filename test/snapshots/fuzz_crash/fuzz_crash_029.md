@@ -439,7 +439,20 @@ EndOfFile(18:1-18:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+# Co		{	} #ose
+# ure
+# Ce
+# rd
+#
+# Cse
+# Cd
+# Cd
+# pen
+pkg : 
+# Cose
+# Cd
+# pen
+
 ~~~
 # CANONICALIZE
 ~~~clojure

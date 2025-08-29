@@ -513,7 +513,46 @@ EndOfFile(45:1-45:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+
+
+
+import Color
+import ModuleA
+
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified = TypeC.new
+
+# Using qualified type with generics
+resultType : Result.Result(I32, Str)
+resultType = Result.Ok(42)
+
+# Function returning qualified type
+getColor : {} -> Color.RGB
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+processColor = |color|
+	"Color processed"
+
+# Multiple qualified types in a function signature
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform = |result|
+	match result {
+		Result.Ok(rgb) => TypeC.fromColor(rgb)
+		Result.Err(err) => TypeC.default
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure

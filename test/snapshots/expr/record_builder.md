@@ -165,7 +165,14 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+{
+	Foo.Bar.baz
+	
+	x : 
+	
+	y : 
+	
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

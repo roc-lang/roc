@@ -90,7 +90,13 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+apply : (_a -> _b) -> _a
+
+apply = |fn, x| fn(x)
+
+main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure

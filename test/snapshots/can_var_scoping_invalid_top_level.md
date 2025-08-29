@@ -43,7 +43,10 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
+
+# This should cause an error - var not allowed at top level
+topLevelVar_ = 0
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -65,7 +65,9 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
+import u.R
+g : r -> R.a.E
 ~~~
 # CANONICALIZE
 ~~~clojure

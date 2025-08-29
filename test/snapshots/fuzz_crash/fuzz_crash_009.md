@@ -112,7 +112,12 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+
+
+
+foo = 
+
+	"onmo %"
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -185,7 +185,11 @@ EndOfFile(6:1-6:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+match items {
+	[first, .. as rest] => 0 # invalid rest pattern should error
+	[.. as rest, last] => 1 # invalid rest pattern should error
+	[x, .. as rest, y] => 2
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

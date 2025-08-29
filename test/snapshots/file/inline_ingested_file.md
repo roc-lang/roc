@@ -117,7 +117,12 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [foo]
+
+data : Str
+import Json
+
+foo = Json.parse(data)
 ~~~
 # CANONICALIZE
 ~~~clojure

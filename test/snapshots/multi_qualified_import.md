@@ -340,7 +340,21 @@ EndOfFile(15:1-15:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [json_encoder]
+
+import json.Core
+
+
+json_encoder : Encoder
+json_encoder = Json.Core.Utf8.defaultEncoder
+
+# Test with qualified type in annotation
+process : json.Core.Utf8.Encoder -> Str
+process = |encoder| "processing"
+
+# Test with multiple qualifiers
+data : json.Core.Utf8.EncodedData
+data = json
 ~~~
 # CANONICALIZE
 ~~~clojure

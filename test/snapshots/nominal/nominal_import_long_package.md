@@ -152,7 +152,13 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [red]
+
+import design.Styles
+
+
+red : CE
+red = ... # not implemented
 ~~~
 # CANONICALIZE
 ~~~clojure

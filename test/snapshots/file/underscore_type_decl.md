@@ -376,7 +376,12 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
+
+import Module exposing [Pair]
+
+
+
 ~~~
 # CANONICALIZE
 ~~~clojure

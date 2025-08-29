@@ -149,7 +149,22 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [LocalStatus, processColor]
+
+LocalStatus := [Pending, Complete]
+
+processColor : _ -> LocalStatus
+processColor = |color| {
+
+	# bring RGB into scope
+		Color.RGB
+
+	match color {
+		RGB.Red => LocalStatus.Pending
+		RGB.Green => LocalStatus.Complete
+		RGB.Blue => LocalStatus.Pending
+	}
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -304,7 +304,38 @@ EndOfFile(30:1-30:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+app [main] { pf: platform "../basic-cli/platform.roc" }
+
+# Basic empty list polymorphism
+my_empty_list = []
+
+# Empty list used in different contexts
+int_list = [1, 2, 3]
+str_list = ["hello", "world"]
+float_list = [1.1, 2.2, 3.3]
+
+# Append empty list (polymorphic use)
+all_int_list = int_list + 
+
+all_str_list = str_list + 
+
+all_float_list = float_list + 
+
+
+# Function returning empty list
+get_empty = |_| []
+
+# Used at different types
+empty_int_list = get_empty(42)
+empty_str_list = get_empty("test")
+
+main = |_| {
+	# Type inference should work correctly
+	len1 = List.len(all_int_list)
+	len2 = List.len(all_str_list)
+	len3 = List.len(all_float_list)
+	len1 + len2 + len3
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

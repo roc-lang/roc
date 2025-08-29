@@ -206,7 +206,10 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+#
+# Cd
+# pen
+
 ~~~
 # CANONICALIZE
 ~~~clojure

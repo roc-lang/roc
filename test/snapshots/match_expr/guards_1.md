@@ -385,7 +385,17 @@ EndOfFile(6:1-6:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+match value {
+	x => 
+	 => 
+	 => 
+	 => 
+	x => 
+	 => 
+	 => 
+	 => 
+	_ => "other"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -46,7 +46,9 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module []
+s : b -> c where module(a).t : c
+u : o
 ~~~
 # CANONICALIZE
 ~~~clojure

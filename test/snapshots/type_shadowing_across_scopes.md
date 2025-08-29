@@ -165,7 +165,17 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-MALFORMED INPUT
+module [Result, processData]
+
+Result(a, b) : [Ok(a), Err(b)]
+
+processData : Str -> Str
+processData = |data|
+	"processed"
+
+# In a nested module scope, redeclare Result
+InnerModule : 
+
 ~~~
 # CANONICALIZE
 ~~~clojure
