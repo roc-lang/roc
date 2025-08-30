@@ -12,18 +12,25 @@ if x > 5 "big" else "small"
 KwIf LowerIdent OpGreaterThan Int String KwElse String ~~~
 # PARSE
 ~~~clojure
-(if_else <2 branches>)
+(if_else
+  (condition     (binop_gt
+      (lc "x")
+      (num_literal_i32 5)
+    )
+)
+  (then     (str_literal_small "big")
+)
+  (else     (str_literal_big "small")
+))
 ~~~
 # FORMATTED
 ~~~roc
-if x > 5 "big" else "small"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:10
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

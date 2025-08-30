@@ -13,7 +13,23 @@ app # This comment is here
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../main.roc")
+        (block
+          (lc "main")
+        )
+      )
+    )
+
+    (binop_colon
+      (lc "somePkg")
+      (str_literal_big "../main.roc")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,4 +50,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

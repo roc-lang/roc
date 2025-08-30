@@ -14,20 +14,35 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly CloseCurly OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "person")
+)
+  (branch1     (binop_thick_arrow
+      (record_literal
+        (lc "name")
+        (binop_colon
+          (lc "address")
+          (record_literal
+            (lc "street")
+            (lc "city")
+            (lc "zipCode")
+          )
+        )
+      )
+      (str_literal_big "${name} lives on ${street} in ${city}")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match person
+	{name, address: {street, city, zipCode}} => "${name} lives on ${street} in ${city}"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:50 to 2:53
-
-**Parse Error**
-at 1:14 to 3:2
+**Unsupported Node**
+at 2:50 to 2:52
 
 # CANONICALIZE
 ~~~clojure

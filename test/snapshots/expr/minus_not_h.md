@@ -16,7 +16,7 @@ OpUnaryMinus OpBang LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
--!h
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

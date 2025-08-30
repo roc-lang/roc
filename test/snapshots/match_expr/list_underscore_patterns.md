@@ -19,18 +19,15 @@ match items {
 KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot CloseSquare OpFatArrow LowerIdent OpenSquare Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match items
+] 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:9 to 2:12
-
 **Parse Error**
 at 3:8 to 3:10
 
@@ -38,41 +35,23 @@ at 3:8 to 3:10
 at 3:5 to 3:10
 
 **Parse Error**
+at 3:5 to 3:14
+
+**Parse Error**
 at 3:14 to 3:16
 
-**Parse Error**
-at 3:16 to 3:19
-
-**Parse Error**
-at 4:15 to 4:17
-
-**Parse Error**
-at 4:5 to 4:17
-
-**Parse Error**
-at 4:17 to 4:20
-
-**Parse Error**
-at 5:19 to 5:22
-
-**Parse Error**
-at 6:18 to 6:21
-
-**Parse Error**
-at 7:8 to 7:11
-
-**Parse Error**
-at 1:13 to 8:2
+**Unsupported Node**
+at 3:14 to 3:16
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

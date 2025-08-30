@@ -13,23 +13,7 @@ module(a).h:s
 KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "r")
-    (binop_where
-      (lc "a")
-      (binop_colon
-        (binop_pipe
-          (apply_module
-            (lc "a")
-          )
-          (dot_lc "h")
-        )
-        (lc "s")
-      )
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

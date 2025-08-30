@@ -13,9 +13,7 @@ module[]{
 KwModule OpenSquare CloseSquare OpenCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (block)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

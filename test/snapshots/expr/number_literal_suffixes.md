@@ -45,21 +45,11 @@ type=expr
 OpenCurly LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(record_literal
-  (binop_colon
-    (lc "u8")
-    (num_literal_i32 123)
-  )
-  (lc "u8")
-  (binop_colon
-    (lc "u16")
-    (num_literal_i32 123)
-  )
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-{ u8 : 123, u8, u16 : 123 }
+u16
 ~~~
 # EXPECTED
 NIL
@@ -67,25 +57,21 @@ NIL
 **Parse Error**
 at 1:1 to 3:12
 
+**Parse Error**
+at 3:12 to 3:15
+
+**Unsupported Node**
+at 3:12 to 3:15
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "u8")
-    (Expr.num_literal_i32 123)
-  )
-  (Expr.lookup "u8")
-  (Expr.binop_colon
-    (Expr.lookup "u16")
-    (Expr.num_literal_i32 123)
-  )
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-{}
+# No expression found
 ~~~

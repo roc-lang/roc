@@ -14,13 +14,10 @@ nums : List U8
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "nums")
-    (uc "List")
-  )
-  (uc "U8")
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

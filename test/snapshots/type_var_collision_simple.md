@@ -34,102 +34,18 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "a")
-    (num_literal_i32 1)
-  )
-  (binop_equals
-    (lc "b")
-    (num_literal_i32 2)
-  )
-  (binop_equals
-    (lc "c")
-    (num_literal_i32 3)
-  )
-  (binop_equals
-    (lc "identity")
-    (lambda
-      (body
-        (lc "x")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_equals
-    (lc "identity2")
-    (lambda
-      (body
-        (lc "y")
-      )
-      (args
-        (lc "y")
-      )
-    )
-  )
-  (binop_equals
-    (lc "pair")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "first")
-          (lc "second")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "first")
-          (lc "second")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (binop_equals
-            (lc "result1")
-            (apply_lc
-              (lc "identity")
-              (num_literal_i32 42)
-            )
-          )
-          (binop_equals
-            (lc "result2")
-            (apply_lc
-              (lc "identity2")
-              (str_literal_big "hello")
-            )
-          )
-          (binop_equals
-            (lc "result3")
-            (apply_lc
-              (lc "pair")
-              (tuple_literal
-                (lc "result1")
-                (lc "result2")
-              )
-            )
-          )
-          (binop_plus
-            (binop_plus
-              (lc "a")
-              (lc "b")
-            )
-            (lc "c")
-          )
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

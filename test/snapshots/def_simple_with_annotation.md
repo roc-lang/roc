@@ -15,23 +15,14 @@ foo = "one"
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "foo")
-    (uc "Str")
-  )
-  (binop_equals
-    (lc "foo")
-    (str_literal_small "one")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
-
-foo : Str
-foo = "one"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

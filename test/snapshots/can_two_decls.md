@@ -15,19 +15,18 @@ b = a + 1
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign LowerIdent OpPlus Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "a")
-    (num_literal_i32 5)
-  )
-  (binop_equals
-    (lc "b")
-    (binop_plus
-      (lc "a")
-      (num_literal_i32 1)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
+        )
+      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

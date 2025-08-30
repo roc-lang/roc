@@ -74,18 +74,7 @@ OpenSquare UpperIdent OpenRound Int CloseRound Comma UpperIdent Comma UpperIdent
 ~~~
 # FORMATTED
 ~~~roc
-[
-	Some(42),
-	None,
-	Ok("hello"),
-	Err("oops"),
-	Just(100),
-	Nothing,
-	Left(1),
-	Right(2),
-	Some(Ok(Just(42))),
-	Result(Ok(Some(True))),
-]
+[Some(42), None, Ok("hello"), Err("oops"), Just(100), Nothing, Left(1), Right(2), Some(Ok(Just(42))), Result(Ok(Some(True)))]
 ~~~
 # EXPECTED
 NIL

@@ -15,26 +15,12 @@ b! : Str => Str
 KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (list_literal
+(hosted-header
+  (exposes
     (not_lc "a")
+
     (not_lc "b")
-  )
-  (binop_colon
-    (not_lc "a")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (binop_colon
-    (not_lc "b")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -68,11 +54,17 @@ at 4:6 to 4:9
   (Expr.list_literal)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
 )
 ~~~

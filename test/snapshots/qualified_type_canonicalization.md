@@ -55,232 +55,12 @@ transform = |result|
 KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent Comma UpperIdent Comma CloseSquare KwImport UpperIdent Dot UpperIdent KwImport UpperIdent KwImport UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare KwImport UpperIdent KwAs UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound Int CloseRound LowerIdent OpColon OpenCurly CloseCurly OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar Underscore OpBar UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound OpArrow UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-  (binop_pipe
-    (uc "ModuleB")
-    (uc "TypeC")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (uc "Result")
-  (malformed malformed:expr_unexpected_token)
-  (uc "ExternalModule")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (import
-    (binop_pipe
-      (uc "Basics")
-      (uc "Result")
-    )
-  )
-  (import
+(module-header
+  (exposes
     (uc "Color")
-  )
-  (import
-    (binop_exposing
-      (binop_pipe
-        (uc "ModuleA")
-        (uc "ModuleB")
-      )
-      (list_literal
-        (uc "TypeC")
-      )
-    )
-  )
-  (import
-    (binop_as
-      (uc "ExternalModule")
-      (uc "ExtMod")
-    )
-  )
-  (binop_colon
-    (lc "simpleQualified")
-    (binop_pipe
-      (uc "Color")
-      (uc "RGB")
-    )
-  )
-  (binop_equals
-    (lc "simpleQualified")
-    (apply_anon
-      (binop_pipe
-        (uc "Color")
-        (uc "RGB")
-      )
-      (record_literal
-        (binop_colon
-          (lc "r")
-          (num_literal_i32 255)
-        )
-        (binop_colon
-          (lc "g")
-          (num_literal_i32 0)
-        )
-        (binop_colon
-          (lc "b")
-          (num_literal_i32 0)
-        )
-      )
-    )
-  )
-  (binop_colon
-    (lc "aliasedQualified")
-    (binop_pipe
-      (uc "ExtMod")
-      (uc "DataType")
-    )
-  )
-  (binop_equals
-    (lc "aliasedQualified")
-    (binop_pipe
-      (binop_pipe
-        (uc "ExtMod")
-        (uc "DataType")
-      )
-      (uc "Default")
-    )
-  )
-  (binop_colon
-    (lc "multiLevelQualified")
-    (binop_pipe
-      (binop_pipe
-        (uc "ModuleA")
-        (uc "ModuleB")
-      )
-      (uc "TypeC")
-    )
-  )
-  (binop_equals
-    (lc "multiLevelQualified")
-    (binop_pipe
-      (uc "TypeC")
-      (dot_lc "new")
-    )
-  )
-  (binop_colon
-    (lc "resultType")
-    (apply_anon
-      (binop_pipe
-        (uc "Result")
-        (uc "Result")
-      )
-      (tuple_literal
-        (uc "I32")
-        (uc "Str")
-      )
-    )
-  )
-  (binop_equals
-    (lc "resultType")
-    (apply_anon
-      (binop_pipe
-        (uc "Result")
-        (uc "Ok")
-      )
-      (num_literal_i32 42)
-    )
-  )
-  (binop_colon
-    (lc "getColor")
-    (binop_thin_arrow
-      (record_literal)
-      (binop_pipe
-        (uc "Color")
-        (uc "RGB")
-      )
-    )
-  )
-  (binop_equals
-    (lc "getColor")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Color")
-            (uc "RGB")
-          )
-          (record_literal
-            (binop_colon
-              (lc "r")
-              (num_literal_i32 0)
-            )
-            (binop_colon
-              (lc "g")
-              (num_literal_i32 255)
-            )
-            (binop_colon
-              (lc "b")
-              (num_literal_i32 0)
-            )
-          )
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-  (binop_colon
-    (lc "processColor")
-    (binop_thin_arrow
-      (binop_pipe
-        (uc "Color")
-        (uc "RGB")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "processColor")
-    (lambda
-      (body
-        (str_literal_big "Color processed")
-      )
-      (args
-        (lc "color")
-      )
-    )
-  )
-  (binop_colon
-    (lc "transform")
-    (binop_thin_arrow
-      (apply_anon
-        (binop_pipe
-          (uc "Result")
-          (uc "Result")
-        )
-        (tuple_literal
-          (binop_pipe
-            (uc "Color")
-            (uc "RGB")
-          )
-          (binop_pipe
-            (uc "ExtMod")
-            (uc "Error")
-          )
-        )
-      )
-      (binop_pipe
-        (binop_pipe
-          (uc "ModuleA")
-          (uc "ModuleB")
-        )
-        (uc "TypeC")
-      )
-    )
-  )
-  (binop_equals
-    (lc "transform")
-    (lambda
-      (body
-        (match <0 branches>)
-      )
-      (args
-        (lc "result")
-      )
-    )
-  )
-)
+
+    (uc "ModuleA")
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -298,7 +78,7 @@ import ExternalModule as ExtMod
 simpleQualified : Color.RGB
 simpleQualified = Color.RGB({ r : 255, g : 0, b : 0 })
 aliasedQualified : ExtMod.DataType
-aliasedQualified = ExtMod.DataType | Default
+aliasedQualified = (ExtMod.DataType | Default)
 multiLevelQualified : ModuleA.ModuleB | TypeC
 multiLevelQualified = TypeC.new
 resultType : Result.Result((I32, Str))
@@ -309,6 +89,8 @@ processColor : Color.RGB -> Str
 processColor = |color| "Color processed"
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
 transform = |result| match result
+	Result.Ok(rgb) => TypeC.fromColor(rgb)
+	Result.Err(err) => TypeC.default
 ~~~
 # EXPECTED
 NIL
@@ -330,15 +112,6 @@ at 5:19 to 6:1
 
 **Parse Error**
 at 6:1 to 8:1
-
-**Parse Error**
-at 42:24 to 42:27
-
-**Parse Error**
-at 43:25 to 43:28
-
-**Parse Error**
-at 41:18 to 44:6
 
 **Unsupported Node**
 at 8:1 to 8:21
@@ -373,11 +146,23 @@ at 39:55 to 39:62
 **Unsupported Node**
 at 39:62 to 39:70
 
+**Unsupported Node**
+at 42:24 to 42:26
+
+**Unsupported Node**
+at 43:9 to 43:24
+
+**Unsupported Node**
+at 43:28 to 43:33
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.module_access)
+  (Expr.module_access
+    (Expr.malformed)
+    (Expr.malformed)
+  )
   (Expr.malformed)
   (Expr.apply_tag)
   (Expr.malformed)
@@ -390,7 +175,10 @@ at 39:62 to 39:70
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "simpleQualified")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "simpleQualified")
@@ -398,7 +186,10 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "aliasedQualified")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "aliasedQualified")
@@ -422,7 +213,14 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "getColor")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+      )
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getColor")
@@ -430,7 +228,13 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.module_access
+        (Expr.malformed)
+        (Expr.malformed)
+      )
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "processColor")
@@ -438,7 +242,10 @@ at 39:62 to 39:70
   )
   (Expr.binop_colon
     (Expr.lookup "transform")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_ident)
+      (Expr.lambda)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "transform")

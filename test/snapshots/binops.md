@@ -129,7 +129,77 @@ at 16:2 to 16:2
 
 # CANONICALIZE
 ~~~clojure
-(Expr.tuple_literal)
+(Expr.tuple_literal
+  (Expr.binop_plus
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_minus
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_star
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_slash
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_lt
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_gt
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_lte
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_gte
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_double_equals
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_not_equals
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_double_slash
+    (Expr.num_literal_i32 4)
+    (Expr.num_literal_i32 2)
+  )
+  (Expr.binop_and
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_or
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_double_question
+    (Expr.apply_tag)
+    (Expr.num_literal_i32 0)
+  )
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure

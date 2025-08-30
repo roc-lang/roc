@@ -20,45 +20,18 @@ main! = bad_function("This should fail")
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpColon UpperIdent OpArrow OpenCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
+(app-header
+  (packages
+    (binop_colon
       (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_colon
-    (lc "bad_function")
-    (binop_thin_arrow
-      (uc "Str")
-      (record_literal)
-    )
-  )
-  (binop_equals
-    (lc "bad_function")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Stdout")
-            (not_lc "line")
-          )
-          (lc "msg")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (lc "msg")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (apply_lc
-      (lc "bad_function")
-      (str_literal_big "This should fail")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -84,7 +57,11 @@ at 7:22 to 7:28
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "bad_function")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.record_literal
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "bad_function")

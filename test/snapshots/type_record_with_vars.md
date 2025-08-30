@@ -17,49 +17,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "getField")
-    (binop_thin_arrow
-      (record_literal
-        (binop_colon
-          (lc "field")
-          (lc "a")
-        )
-        (binop_colon
-          (lc "other")
-          (lc "_b")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (lc "a")
     )
-  )
-  (binop_equals
-    (lc "getField")
-    (lambda
-      (body
-        (binop_pipe
-          (lc "record")
-          (dot_lc "field")
-        )
-      )
-      (args
-        (lc "record")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,7 +47,19 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "getField")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "field")
+          (Expr.lookup "a")
+        )
+        (Expr.binop_colon
+          (Expr.lookup "other")
+          (Expr.lookup "_b")
+        )
+      )
+      (Expr.lookup "a")
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getField")

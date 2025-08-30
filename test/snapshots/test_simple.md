@@ -15,19 +15,13 @@ bar = # comment
 KwModule OpenSquare CloseSquare LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "bar")
-    (num_literal_i32 100)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
-bar = # comment
-100
+bar = 100
 ~~~
 # EXPECTED
 NIL

@@ -12,7 +12,8 @@ module
 KwModule ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(module-header
+  (exposes))
 ~~~
 # FORMATTED
 ~~~roc

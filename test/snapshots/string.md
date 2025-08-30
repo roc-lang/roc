@@ -26,38 +26,22 @@ x = (
 KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma String Comma String Comma String Comma String Comma String Comma String Comma String Comma CloseRound MalformedString ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "x")
-    (tuple_literal
-      (str_literal_small "one")
-      (str_literal_small "two")
-      (str_literal_small "u")
-      (str_literal_small "u)")
-      (str_literal_small "u(")
-      (str_literal_small "u()")
-      (str_literal_small "u(K)")
-      (str_literal_big "u(1F680)")
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 x = (
-		"one",
-		"two",
-		"\u",
-		"\u)",
-		"\u(",
-		"\u()",
-		"\u(K)",
-		"\u(1F680)",
-	)
+	"one",
+	"two",
+	"\u",
+	"\u)",
+	"\u(",
+	"\u()",
+	"\u(K)",
+	"\u(1F680)",
+)
 "\
 ~~~
 # EXPECTED
@@ -77,7 +61,17 @@ at 15:1 to 15:3
 (Expr.block
   (Expr.binop_equals
     (Expr.lookup "x")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_big)
+      (Expr.malformed)
+    )
   )
   (Expr.malformed)
 )

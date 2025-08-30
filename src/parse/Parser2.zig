@@ -76,6 +76,9 @@ scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 // Token-fed parsing state
 needs_token: bool = false, // Set to true when advance() needs a new token
+token_iterator: ?*tokenize_iter.TokenIterator = null, // Optional token iterator for parseExprFromSource
+// Lambda parsing context
+is_in_lambda_args: bool = false, // Track when we're parsing lambda parameters for record shorthand
 
 // State machine fields for stack-safe parsing
 state_stack: std.ArrayListUnmanaged(ParseState),
@@ -89,7 +92,7 @@ pub const ParseState = enum {
     file_header_done,
     file_stmt_loop,
     file_done,
-    
+
     // Headers
     header_check,
     header_app,
@@ -101,13 +104,17 @@ pub const ParseState = enum {
     header_hosted,
     header_parse_exposed_list,
     header_parse_packages,
-    
+
     // Statements
     stmt_start,
     stmt_check_colon,
     stmt_type_anno,
+    stmt_type_anno_complete,
     stmt_complete,
-    
+
+    // Type expressions
+    type_expr_start,
+
     // Expressions with precedence
     expr_start,
     expr_primary,
@@ -117,7 +124,7 @@ pub const ParseState = enum {
     expr_combine,
     expr_done,
     expr_unary_complete,
-    
+
     // Primary expressions
     primary_ident,
     primary_number,
@@ -127,23 +134,51 @@ pub const ParseState = enum {
     primary_if,
     primary_match,
     primary_lambda,
-    
+
     // Lambda parsing
     lambda_args,
     lambda_body,
     lambda_complete,
-    
+
     // If expression parsing
     if_arrow,
     if_then_branch,
     if_else_branch,
     if_complete,
-    
-    // When/match expression parsing
-    when_is,
-    when_branches,
-    when_complete,
-    
+
+    // Match expression parsing
+    match_branches,
+    match_branch_start,
+    pattern_start,
+    pattern_tag_payload_close,
+    match_branch_arrow,
+    match_branch_complete,
+    match_branches_cont,
+    match_complete,
+
+    // Loop parsing
+    while_body,
+    while_complete,
+    for_in,
+    for_body,
+    for_complete,
+
+    // Return/Crash
+    return_complete,
+    crash_complete,
+
+    // List parsing
+    list_elements,
+    list_elements_cont,
+    list_complete,
+
+    // Record parsing
+    record_fields,
+    record_field_start,
+    record_field_value,
+    record_fields_cont,
+    record_complete,
+
     // Utilities
     done,
     parse_error,
@@ -189,54 +224,67 @@ pub fn parseAndCollectTokens(
     // Initialize the parser in token-fed mode
     var parser = try initStateMachine(allocator, source, ast, byte_slices);
     defer parser.deinit();
-    
+
     // Create tokenizer
     var token_iter = try tokenize_iter.TokenIterator.init(env, allocator, source, messages, byte_slices);
     defer token_iter.deinit(allocator);
-    
-    // Collect all tokens as we parse
+
+    // Collect all tokens including comments
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
-    
-    // Get first two tokens to start
-    const first = try token_iter.next(allocator) orelse return .{ .tokens = tokens, .root = null };
-    try tokens.append(first);
-    
-    const second = try token_iter.next(allocator);
-    if (second) |s| try tokens.append(s);
-    
+
+    // Helper to get next non-comment token while saving all tokens
+    const getNextNonComment = struct {
+        fn next(iter: *tokenize_iter.TokenIterator, alloc: std.mem.Allocator, token_list: *std.ArrayList(Token)) !?Token {
+            while (true) {
+                const token = try iter.next(alloc) orelse return null;
+                try token_list.append(token);
+
+                switch (token.tag) {
+                    .LineComment, .DocComment => continue, // Skip comments for parsing
+                    else => return token,
+                }
+            }
+        }
+    }.next;
+
+    // Get first two NON-COMMENT tokens to start
+    const first = try getNextNonComment(&token_iter, allocator, &tokens) orelse
+        return .{ .tokens = tokens, .root = null };
+
+    const second = try getNextNonComment(&token_iter, allocator, &tokens);
+
     var current = first;
     var lookahead = second;
-    
+
     // Simple driver loop: feed current+lookahead, advance, repeat
     while (true) {
-        // Feed current and lookahead to parser
+        // Feed current and lookahead to parser (only non-comment tokens)
         const needs_more = try parser.chompToken(current, lookahead);
-        
+
         if (!needs_more) {
             // Parsing complete
             break;
         }
-        
+
         // Check if we're at EOF
         if (lookahead == null or lookahead.?.tag == .EndOfFile) {
             // Feed EOF one more time to complete parsing
             _ = try parser.chompToken(current, lookahead);
             break;
         }
-        
-        // Advance: current becomes lookahead, get new lookahead
+
+        // Advance: current becomes lookahead, get new non-comment lookahead
         current = lookahead.?;
-        lookahead = try token_iter.next(allocator);
-        if (lookahead) |l| try tokens.append(l);
+        lookahead = try getNextNonComment(&token_iter, allocator, &tokens);
     }
-    
+
     // Get the root node from the value stack (if any)
     const root = if (parser.value_stack.items.len > 0)
         parser.value_stack.items[parser.value_stack.items.len - 1]
     else
         null;
-    
+
     return .{ .tokens = tokens, .root = root };
 }
 
@@ -255,6 +303,27 @@ pub fn init(
     return initStateMachine(allocator, source, ast, byte_slices);
 }
 
+// Helper functions for type conversions
+inline fn nodeIdxToInt(idx: Node.Idx) i32 {
+    return @intFromEnum(idx);
+}
+
+inline fn intToNodeIdx(val: i32) Node.Idx {
+    return @enumFromInt(val);
+}
+
+inline fn nodeSlicesIdxFromInt(val: u32) collections.NodeSlices(Node.Idx).Idx {
+    return @enumFromInt(val);
+}
+
+inline fn positionToInt(pos: Position) i32 {
+    return @intCast(pos.offset);
+}
+
+inline fn intToPosition(val: i32) Position {
+    return Position{ .offset = @intCast(val) };
+}
+
 // OLD processToken - commented out while refactoring to new state machine
 // pub fn processToken(self: *Parser, token: Token) !enum { need_more, complete, parse_error } {
 //     ...
@@ -267,7 +336,7 @@ fn handleInitial(self: *Parser) !void {
 
 fn handleExpectHeaderOrStmt(self: *Parser) !void {
     const curr = self.current.?;
-    
+
     switch (curr.tag) {
         .KwApp => {
             _ = self.state_stack.pop();
@@ -381,22 +450,22 @@ fn handleParsingExportsList(self: *Parser) !void {
         _ = self.state_stack.pop();
         return;
     }
-    
+
     self.advance(); // consume [
-    
+
     // Collect exports
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
             const ident = self.currentIdent();
             const region = self.currentRegion();
             self.advance();
-            
+
             // Check for ! suffix
             const is_effectful = self.peek() == .OpBang;
             if (is_effectful) {
                 self.advance();
             }
-            
+
             // Create node for export
             if (ident) |id| {
                 const tag: Node.Tag = if (is_effectful) .not_lc else .lc;
@@ -404,18 +473,18 @@ fn handleParsingExportsList(self: *Parser) !void {
                 try self.scratch_nodes.append(self.gpa, node);
             }
         }
-        
+
         if (self.peek() == .Comma) {
             self.advance();
         } else {
             break;
         }
     }
-    
+
     if (self.peek() == .CloseSquare) {
         self.advance();
     }
-    
+
     _ = self.state_stack.pop();
 }
 
@@ -425,33 +494,33 @@ fn handleParsingPackagesRecord(self: *Parser) !void {
         _ = self.state_stack.pop();
         return;
     }
-    
+
     self.advance(); // consume {
-    
+
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Parse field name
         if (self.peek() == .LowerIdent) {
             self.advance();
-            
+
             if (self.peek() == .OpColon) {
                 self.advance();
-                
+
                 // Parse field value
                 try self.state_stack.append(self.gpa, .parsing_expr);
             }
         }
-        
+
         if (self.peek() == .Comma) {
             self.advance();
         } else {
             break;
         }
     }
-    
+
     if (self.peek() == .CloseCurly) {
         self.advance();
     }
-    
+
     _ = self.state_stack.pop();
     // After packages, parse statements
     try self.state_stack.append(self.gpa, .parsing_stmt);
@@ -463,7 +532,7 @@ fn handleParsingStmt(self: *Parser) !void {
         try self.state_stack.append(self.gpa, .done);
         return;
     }
-    
+
     // Parse a statement by parsing an expression
     try self.state_stack.append(self.gpa, .parsing_expr);
 }
@@ -505,9 +574,9 @@ fn handleParsingLambda(self: *Parser) !void {
     _ = self.state_stack.pop();
 }
 
-/// Peek at current token tag (for compatibility with existing code)
-pub fn peek(self: *Parser) Token.Tag {
-    if (self.lookahead) |token| {
+/// Peek at current token tag (internal use only)
+fn peek(self: *Parser) Token.Tag {
+    if (self.current) |token| {
         return token.tag;
     }
     return .EndOfFile;
@@ -517,14 +586,21 @@ pub fn peek(self: *Parser) Token.Tag {
 /// In state machine mode, this clears lookahead to signal we need a new token
 fn advance(self: *Parser) void {
     // Save the position of the token we're consuming
-    if (self.lookahead) |token| {
+    if (self.current) |token| {
         self.last_position = token.region.end;
         self.last_region = token.region;
     }
-    
-    // Move lookahead to current, clear lookahead
+
+    // Move lookahead to current
     self.current = self.lookahead;
-    self.lookahead = null;
+
+    // If we have a token iterator, fetch the next token
+    if (self.token_iterator) |iter| {
+        self.lookahead = iter.next(self.gpa) catch null;
+    } else {
+        // In state machine mode, clear lookahead to signal we need a new token
+        self.lookahead = null;
+    }
 }
 
 pub fn deinit(parser: *Parser) void {
@@ -570,6 +646,7 @@ fn getScratchNodesSince(self: *const Parser, marker: usize) []const Node.Idx {
 /// Parse an expression with specific operator precedence
 /// This is the core expression parser that handles all operators and precedence
 pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
+
     // Save current scratch position for cleanup
     const scratch_op_start = self.scratch_op_stack.items.len;
     defer {
@@ -644,8 +721,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                 .KwIf => try self.parseIf(),
                 .KwMatch => try self.parseMatch(),
                 .OpBar => blk: {
-                    // This should be called when we see | in expression context
-                    // If we're not getting here, something is wrong
+                    // Lambda expression starting with |
                     const result = try self.parseLambda();
                     break :blk result;
                 },
@@ -797,10 +873,11 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
             // Check for infix operators
             const op_tag = self.peek();
 
-            // If we're inside lambda args and see |, treat it as a delimiter, not an operator
-            // TODO: handle lambda args context
-            if (false and op_tag == .OpBar) {
-                // Stop parsing - we've hit the closing | of the lambda parameters
+            // In Roc, | is ONLY valid in lambda syntax, never as an infix operator
+            // If we see OpBar here, it must be starting a lambda (since we're in expression context)
+            // The lambda parser will handle the | delimiters
+            if (op_tag == .OpBar) {
+                // This is not an operator, stop trying to parse it as one
                 break :parse;
             }
 
@@ -890,6 +967,7 @@ pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx
                     continue :parse .check_operators;
                 },
                 else => {
+                    // No more operators at this level
                     // No more operators at this level
                     // Check if we need to combine with a stacked operator
                     if (self.scratch_op_stack.items.len > scratch_op_start) {
@@ -1002,26 +1080,26 @@ pub fn chompToken(self: *Parser, current: Token, lookahead: ?Token) !bool {
     // Update token state
     self.current = current;
     self.lookahead = lookahead;
-    
+
     // If we haven't started, initialize
     if (self.state_stack.items.len == 0) {
         try self.state_stack.append(self.gpa, .file_start);
     }
-    
+
     // Process states until we need a new token or are done
     while (self.state_stack.items.len > 0) {
         const state = self.state_stack.items[self.state_stack.items.len - 1];
-        
+
         // Process current state
         const action = try self.processState(state);
-        
+
         switch (action) {
             .need_token => return true, // Need more tokens
             .continue_processing => {}, // Keep processing states
             .complete => return false, // Parsing complete
         }
     }
-    
+
     return false; // No more states, parsing complete
 }
 
@@ -1041,7 +1119,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             try self.state_stack.append(self.gpa, .header_check);
             return .continue_processing;
         },
-        
+
         .header_check => {
             // Check for header keywords
             switch (self.peek()) {
@@ -1077,7 +1155,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 },
             }
         },
-        
+
         .file_stmt_loop => {
             // Parse statements until EOF
             if (self.peek() == .EndOfFile) {
@@ -1085,7 +1163,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 try self.state_stack.append(self.gpa, .file_done);
                 return .continue_processing;
             }
-            
+
             // Parse a statement - pop and push back to continue loop after stmt
             _ = self.state_stack.pop();
             try self.state_stack.append(self.gpa, .file_stmt_loop);
@@ -1093,18 +1171,18 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             try self.state_stack.append(self.gpa, .stmt_start);
             return .continue_processing;
         },
-        
+
         .stmt_start => {
             // Start parsing a statement
             _ = self.state_stack.pop();
-            
+
             // First parse as expression
             try self.state_stack.append(self.gpa, .stmt_check_colon);
             try self.state_stack.append(self.gpa, .expr_start);
             try self.min_bp_stack.append(self.gpa, 3); // Stop at colons
             return .continue_processing;
         },
-        
+
         .expr_start => {
             // Start expression parsing with precedence
             _ = self.state_stack.pop();
@@ -1112,17 +1190,17 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             try self.state_stack.append(self.gpa, .expr_primary);
             return .continue_processing;
         },
-        
+
         .expr_primary => {
             // Parse primary expression based on current token
             _ = self.state_stack.pop();
-            
+
             switch (self.peek()) {
                 .LowerIdent => {
                     const ident = self.currentIdent();
                     const region = self.currentRegion();
                     self.advance();
-                    
+
                     // Check for ! suffix
                     const is_effectful = self.peek() == .OpBang;
                     var final_region = region;
@@ -1131,7 +1209,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         self.advance();
                         return .need_token; // Need next token after consuming !
                     }
-                    
+
                     if (ident) |id| {
                         const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
                         const node = try self.ast.appendNode(self.gpa, final_region, node_tag, .{ .ident = id });
@@ -1139,35 +1217,35 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     }
                     return .continue_processing;
                 },
-                
+
                 .UpperIdent => {
                     const ident = self.currentIdent();
                     const region = self.currentRegion();
                     self.advance();
-                    
+
                     if (ident) |id| {
                         const node = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
                         try self.value_stack.append(self.gpa, node);
                     }
                     return .continue_processing;
                 },
-                
+
                 .Int, .IntBase, .Float => {
                     const region = self.currentRegion();
                     const extra = self.currentExtra();
                     self.advance();
-                    
+
                     // Extract the appropriate value from the Extra union
                     const payload = switch (extra) {
                         .num_literal_i32 => |val| Node.Payload{ .num_literal_i32 = val },
                         .frac_literal_small => |val| Node.Payload{ .frac_literal_small = .{
                             .numerator = val.numerator,
                             .denominator_power_of_ten = val.denominator_power_of_ten,
-                        }},
+                        } },
                         .bytes_idx => |idx| Node.Payload{ .num_literal_big = idx },
                         else => Node.Payload{ .num_literal_i32 = 0 }, // Default fallback
                     };
-                    
+
                     // Determine node tag based on extra type
                     const node_tag: Node.Tag = switch (extra) {
                         .num_literal_i32 => .num_literal_i32,
@@ -1175,96 +1253,103 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         .bytes_idx => .num_literal_big,
                         else => .num_literal_i32,
                     };
-                    
+
                     const node = try self.ast.appendNode(self.gpa, region, node_tag, payload);
                     try self.value_stack.append(self.gpa, node);
                     return .continue_processing;
                 },
-                
+
                 .String, .MultilineString => {
                     const region = self.currentRegion();
                     const extra = self.currentExtra();
                     self.advance();
-                    
+
                     // Extract string from Extra union
                     const payload = switch (extra) {
                         .bytes_idx => |idx| Node.Payload{ .str_literal_big = idx },
                         else => Node.Payload{ .str_literal_big = @enumFromInt(0) }, // Default fallback
                     };
-                    
+
                     const node = try self.ast.appendNode(self.gpa, region, .str_literal_big, payload);
                     try self.value_stack.append(self.gpa, node);
                     return .continue_processing;
                 },
-                
+
                 .OpenRound => {
                     // Could be tuple or parenthesized expression
                     self.advance();
-                    
+
                     // For now, create malformed node as placeholder
                     const region = self.currentRegion();
                     const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
                     try self.value_stack.append(self.gpa, node);
                     return .need_token;
                 },
-                
+
                 .OpenSquare => {
                     // List literal
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    const list_start = self.currentRegion();
+                    self.advance(); // consume [
+
+                    // Save list start position
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(list_start.start.offset))));
+
+                    // Push states to parse list
+                    try self.state_stack.append(self.gpa, .list_complete);
+                    try self.state_stack.append(self.gpa, .list_elements);
+
+                    return .continue_processing;
                 },
-                
+
                 .KwIf => {
                     // Start parsing if expression
                     const if_region = self.currentRegion();
                     self.advance(); // consume 'if'
-                    
+
                     // Save if start position for later
                     try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(if_region.start.offset))));
-                    
+
                     // Push states: after condition, parse arrow, then branch, else branch
                     try self.state_stack.append(self.gpa, .if_complete);
                     try self.state_stack.append(self.gpa, .if_else_branch);
                     try self.state_stack.append(self.gpa, .if_then_branch);
                     try self.state_stack.append(self.gpa, .if_arrow);
                     try self.state_stack.append(self.gpa, .expr_start); // Parse condition
-                    
+
                     return .continue_processing;
                 },
-                
-                .KwWhen => {
-                    // Start parsing when/match expression
-                    const when_region = self.currentRegion();
-                    self.advance(); // consume 'when'
-                    
-                    // Save when start position for later
-                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(when_region.start.offset))));
-                    
-                    // Push states to parse when expression
-                    try self.state_stack.append(self.gpa, .when_complete);
-                    try self.state_stack.append(self.gpa, .when_branches);
-                    try self.state_stack.append(self.gpa, .when_is);
-                    try self.state_stack.append(self.gpa, .expr_start); // Parse scrutinee
-                    
+
+                .KwMatch => {
+                    // Start parsing match expression
+                    const match_region = self.currentRegion();
+                    self.advance(); // consume 'match'
+
+                    // Save match start position for later
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(match_region.start.offset))));
+
+                    // Push states to parse match expression
+                    try self.state_stack.append(self.gpa, .match_complete);
+                    try self.state_stack.append(self.gpa, .match_branches);
+                    try self.state_stack.append(self.gpa, .expr_start); // Parse scrutinee directly (no 'is' keyword)
+
                     return .continue_processing;
                 },
-                
+
                 .OpenCurly => {
                     // Record literal or block
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    const record_start = self.currentRegion();
+                    self.advance(); // consume {
+
+                    // Save record start position
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(record_start.start.offset))));
+
+                    // Push states to parse record
+                    try self.state_stack.append(self.gpa, .record_complete);
+                    try self.state_stack.append(self.gpa, .record_fields);
+
+                    return .continue_processing;
                 },
-                
+
                 .OpBar => {
                     // Lambda - push states to parse it
                     _ = self.state_stack.pop(); // Remove expr_primary
@@ -1273,49 +1358,70 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     try self.state_stack.append(self.gpa, .lambda_args);
                     return .continue_processing;
                 },
-                
+
                 .OpBang => {
                     // Unary not
+                    const op_region = self.currentRegion();
                     self.advance();
-                    
+
+                    // Save operator info on value stack (as position to identify operator type)
+                    try self.value_stack.append(self.gpa, @enumFromInt(op_region.start.offset)); // Use start offset as marker for OpBang
+
                     // Parse the operand
                     try self.state_stack.append(self.gpa, .expr_unary_complete);
                     try self.state_stack.append(self.gpa, .expr_primary);
                     return .continue_processing;
                 },
-                
+
                 .OpUnaryMinus, .OpBinaryMinus => {
                     // Unary negation (OpBinaryMinus can also be unary at start of expression)
+                    const op_region = self.currentRegion();
                     self.advance();
-                    
+
+                    // Save operator info on value stack (as position + 1 to identify operator type)
+                    try self.value_stack.append(self.gpa, @enumFromInt(op_region.start.offset + 1)); // Use start offset + 1 as marker for minus
+
                     // Parse the operand
                     try self.state_stack.append(self.gpa, .expr_unary_complete);
                     try self.state_stack.append(self.gpa, .expr_primary);
                     return .continue_processing;
                 },
-                
+
                 .KwWhile => {
-                    // While loop
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    // While loop - parse condition and body
+                    const while_region = self.currentRegion();
+                    self.advance(); // consume 'while'
+
+                    // Push states to parse condition then body
+                    try self.state_stack.append(self.gpa, .while_complete);
+                    try self.state_stack.append(self.gpa, .while_body);
+                    try self.state_stack.append(self.gpa, .expr_start);
+
+                    // Save the while region for later
+                    const region_idx = @as(Node.Idx, @enumFromInt(@as(i32, @intCast(while_region.start.offset))));
+                    try self.value_stack.append(self.gpa, region_idx);
+
+                    return .continue_processing;
                 },
-                
+
                 .KwFor => {
-                    // For loop
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    // For loop - parse pattern, iterator, and body
+                    const for_region = self.currentRegion();
+                    self.advance(); // consume 'for'
+
+                    // Push states to parse pattern, then 'in', then iterator, then body
+                    try self.state_stack.append(self.gpa, .for_complete);
+                    try self.state_stack.append(self.gpa, .for_body);
+                    try self.state_stack.append(self.gpa, .for_in);
+                    try self.state_stack.append(self.gpa, .expr_start); // pattern
+
+                    // Save the for region for later
+                    const region_idx = @as(Node.Idx, @enumFromInt(@as(i32, @intCast(for_region.start.offset))));
+                    try self.value_stack.append(self.gpa, region_idx);
+
+                    return .continue_processing;
                 },
-                
+
                 .Underscore => {
                     // Underscore pattern
                     const region = self.currentRegion();
@@ -1324,18 +1430,18 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     try self.value_stack.append(self.gpa, node);
                     return .continue_processing;
                 },
-                
+
                 .KwVar => {
                     // var keyword
                     const var_region = self.currentRegion();
                     self.advance();
-                    
+
                     // Expect a lowercase identifier after var
                     if (self.peek() == .LowerIdent) {
                         const ident = self.currentIdent();
                         const ident_region = self.currentRegion();
                         self.advance();
-                        
+
                         if (ident) |id| {
                             const full_region = makeRegion(var_region.start, ident_region.end);
                             const node = try self.ast.appendNode(self.gpa, full_region, .var_lc, .{ .ident = id });
@@ -1348,29 +1454,39 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     }
                     return .continue_processing;
                 },
-                
+
                 .KwReturn => {
                     // Return statement
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    const return_region = self.currentRegion();
+                    self.advance(); // consume 'return'
+
+                    // Push states to parse the expression to return
+                    try self.state_stack.append(self.gpa, .return_complete);
+                    try self.state_stack.append(self.gpa, .expr_start);
+
+                    // Save the return region for later
+                    const region_idx = @as(Node.Idx, @enumFromInt(@as(i32, @intCast(return_region.start.offset))));
+                    try self.value_stack.append(self.gpa, region_idx);
+
+                    return .continue_processing;
                 },
-                
+
                 .KwCrash => {
                     // Crash statement
-                    self.advance();
-                    
-                    // For now, create malformed node as placeholder
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    const crash_region = self.currentRegion();
+                    self.advance(); // consume 'crash'
+
+                    // Push states to parse the expression to crash with
+                    try self.state_stack.append(self.gpa, .crash_complete);
+                    try self.state_stack.append(self.gpa, .expr_start);
+
+                    // Save the crash region for later
+                    const region_idx = @as(Node.Idx, @enumFromInt(@as(i32, @intCast(crash_region.start.offset))));
+                    try self.value_stack.append(self.gpa, region_idx);
+
+                    return .continue_processing;
                 },
-                
+
                 else => {
                     // Unknown token - create malformed node
                     const region = self.currentRegion();
@@ -1381,32 +1497,32 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 },
             }
         },
-        
+
         .expr_check_binop => {
             // Check if there's a binary operator to handle
             _ = self.state_stack.pop();
-            
+
             // Get the current minimum binding power (precedence)
-            const min_bp = if (self.min_bp_stack.items.len > 0) 
+            const min_bp = if (self.min_bp_stack.items.len > 0)
                 self.min_bp_stack.items[self.min_bp_stack.items.len - 1]
-            else 
+            else
                 0;
-            
+
             // Check if current token is a binary operator
             const bp = getBindingPower(self.peek());
-            
+
             if (bp.left > min_bp) {
                 // We have a binary operator to parse
                 // Save the operator info
                 const op_token = self.peek();
                 const op_region = self.currentRegion();
-                
+
                 // Get LHS from value stack
                 const lhs = if (self.value_stack.items.len > 0)
                     self.value_stack.items[self.value_stack.items.len - 1]
                 else
                     return .continue_processing; // No LHS, can't parse binop
-                
+
                 // Store operator info
                 try self.scratch_op_stack.append(self.gpa, .{
                     .left = lhs,
@@ -1414,13 +1530,13 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     .op_region = op_region,
                     .min_bp = bp.right,
                 });
-                
+
                 self.advance();
-                
+
                 // Push states to parse RHS then combine
                 try self.state_stack.append(self.gpa, .expr_binop_combine);
                 try self.state_stack.append(self.gpa, .expr_binop_rhs);
-                
+
                 return .need_token;
             } else {
                 // No operator or lower precedence - done with this expression
@@ -1428,7 +1544,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 return .continue_processing;
             }
         },
-        
+
         .expr_done => {
             // Expression parsing complete
             _ = self.state_stack.pop();
@@ -1437,40 +1553,106 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             }
             return .continue_processing;
         },
-        
+
         .expr_unary_complete => {
             // Unary expression complete - combine operator with operand
             _ = self.state_stack.pop();
-            
+
             // Pop the operand from value stack
             if (self.value_stack.items.len > 0) {
-                const operand = self.value_stack.items[self.value_stack.items.len - 1];
-                _ = self.value_stack.pop();
-                
-                // Create unary node (for now, just push operand back as placeholder)
-                // TODO: Create proper unary node
-                try self.value_stack.append(self.gpa, operand);
+                const operand = self.value_stack.pop().?;
+
+                // Pop the operator marker from value stack
+                const op_marker = if (self.value_stack.items.len > 0)
+                    self.value_stack.pop().?
+                else
+                    null;
+
+                if (op_marker) |marker| {
+                    // Determine operator type based on marker
+                    const marker_val = @intFromEnum(marker);
+                    const is_negation = (marker_val & 1) == 1; // Odd means negation
+
+                    // Create nodes slice with operand
+                    const operand_slice = try self.gpa.alloc(Node.Idx, 1);
+                    operand_slice[0] = operand;
+                    const nodes_idx = try self.ast.node_slices.append(self.gpa, operand_slice);
+
+                    // Calculate region from operator position to operand end
+                    const op_start_offset = if (is_negation) marker_val - 1 else marker_val;
+                    const op_start = Position{ .offset = @intCast(op_start_offset) };
+                    const operand_region = self.ast.getRegion(operand);
+                    const full_region = makeRegion(op_start, operand_region.end);
+
+                    // Create unary node with appropriate tag
+                    const node_tag: Node.Tag = if (is_negation) .unary_neg else .unary_not;
+                    const unary_node = try self.ast.appendNode(self.gpa, full_region, node_tag, .{ .nodes = nodes_idx });
+
+                    try self.value_stack.append(self.gpa, unary_node);
+                } else {
+                    // No operator marker, just push operand back
+                    try self.value_stack.append(self.gpa, operand);
+                }
             }
             return .continue_processing;
         },
-        
+
         .stmt_check_colon => {
             // Check if statement has type annotation
             _ = self.state_stack.pop();
-            
-            if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
-                // TODO: Handle type annotation parsing
-                self.advance();
-                return .need_token;
+
+            if (self.peek() == .OpColon) {
+                // Has type annotation
+                self.advance(); // consume :
+                try self.state_stack.append(self.gpa, .stmt_type_anno);
+                return .continue_processing;
+            } else if (self.peek() == .OpColonEqual) {
+                // := syntax (type inference)
+                self.advance(); // consume :=
+                // Continue with value expression
+                try self.state_stack.append(self.gpa, .expr_start);
+                return .continue_processing;
             }
             // Statement is just an expression, value is already on stack
             return .continue_processing;
         },
-        
+
+        .stmt_type_anno => {
+            // Parse type annotation after :
+            _ = self.state_stack.pop();
+
+            // Parse the type expression
+            // For now, we'll parse it as a regular expression and mark it as a type
+            try self.state_stack.append(self.gpa, .stmt_type_anno_complete);
+            try self.state_stack.append(self.gpa, .type_expr_start);
+
+            return .continue_processing;
+        },
+
+        .stmt_type_anno_complete => {
+            // Complete statement with type annotation
+            _ = self.state_stack.pop();
+
+            // Pop the type from value stack
+            const type_expr = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            // Pop the name/pattern from value stack
+            const name_expr = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+
+            if (type_expr != null and name_expr != null) {
+                // Create type annotation node
+                const binop_idx = try self.ast.appendBinOp(self.gpa, name_expr.?, type_expr.?);
+                const region = makeRegion(self.ast.getRegion(name_expr.?).start, self.ast.getRegion(type_expr.?).end);
+                const anno_node = try self.ast.appendNode(self.gpa, region, .binop_colon, .{ .binop = binop_idx });
+                try self.value_stack.append(self.gpa, anno_node);
+            }
+
+            return .continue_processing;
+        },
+
         .stmt_complete => {
             // Statement parsing complete, add to scratch_nodes
             _ = self.state_stack.pop();
-            
+
             // Pop the statement from value stack and add to scratch_nodes
             if (self.value_stack.items.len > 0) {
                 const stmt = self.value_stack.items[self.value_stack.items.len - 1];
@@ -1479,13 +1661,21 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             }
             return .continue_processing;
         },
-        
+
         .file_done => {
             // Create block node with all statements
             _ = self.state_stack.pop();
-            
+
             const statements = self.getScratchNodesSince(0);
             if (statements.len > 0) {
+                // Check if the first statement index is valid
+                const first_stmt_idx = @intFromEnum(statements[0]);
+                const nodes_len = self.ast.nodes.len();
+                if (first_stmt_idx >= nodes_len) {
+                    // Invalid index - return without creating block
+                    return .complete;
+                }
+
                 const first_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(statements[0]))));
                 const region = makeRegion(
                     first_region.start,
@@ -1497,14 +1687,14 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             }
             return .complete;
         },
-        
+
         .header_module => {
             // Parse module header
             _ = self.state_stack.pop();
-            
+
             const start_region = self.currentRegion();
             self.advance(); // consume 'module'
-            
+
             // Expect [exposes]
             if (self.peek() != .OpenSquare) {
                 // Malformed header - still create it with empty exposes
@@ -1513,29 +1703,29 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 self.ast.header = .{ .module = .{
                     .exposes = exposes_idx,
                     .region = start_region.start,
-                }};
+                } };
                 return .need_token;
             }
-            
+
             self.advance(); // consume [
-            
+
             // Parse exposed items
             const scratch_marker = self.markScratchNodes();
             defer self.restoreScratchNodes(scratch_marker);
-            
+
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 switch (self.peek()) {
                     .LowerIdent => {
                         const ident = self.currentIdent();
                         const region = self.currentRegion();
                         self.advance();
-                        
+
                         // Check for ! suffix
                         const is_effectful = self.peek() == .OpBang;
                         if (is_effectful) {
                             self.advance();
                         }
-                        
+
                         if (ident) |id| {
                             const node_tag: Node.Tag = if (is_effectful) .not_lc else .lc;
                             const node = try self.ast.appendNode(self.gpa, region, node_tag, .{ .ident = id });
@@ -1546,7 +1736,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         const ident = self.currentIdent();
                         const region = self.currentRegion();
                         self.advance();
-                        
+
                         if (ident) |id| {
                             const node = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
                             try self.scratch_nodes.append(self.gpa, node);
@@ -1554,140 +1744,164 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     },
                     else => break,
                 }
-                
+
                 if (self.peek() == .Comma) {
                     self.advance();
                 } else if (self.peek() != .CloseSquare) {
                     break;
                 }
             }
-            
+
             // Expect ]
             if (self.peek() == .CloseSquare) {
                 self.advance();
             }
-            
+
             // Create header with exposed items
             const exposes = self.getScratchNodesSince(scratch_marker);
             const exposes_idx = try self.ast.node_slices.append(self.gpa, exposes);
-            
+
             self.ast.header = .{ .module = .{
                 .exposes = exposes_idx,
                 .region = start_region.start,
-            }};
-            
+            } };
+
             return .need_token;
         },
-        
+
         .header_app => {
             // Start parsing app header
             _ = self.state_stack.pop();
-            
+
             const start_region = self.currentRegion();
             self.advance(); // consume 'app'
-            
+
             // Push state to parse exposed list
             try self.state_stack.append(self.gpa, .header_app_after_exposes);
             try self.state_stack.append(self.gpa, .header_parse_exposed_list);
-            
+
             // Save start position for later
             try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(start_region.start.offset))));
-            
+
             return .continue_processing;
         },
-        
+
         .header_app_after_exposes => {
             // After parsing exposed list, now parse packages
             _ = self.state_stack.pop();
-            
+
             // Get exposed list from value stack
             const exposes_idx_val = self.value_stack.pop();
-            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(exposes_idx_val orelse unreachable))));
-            
+            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = if (exposes_idx_val) |val| blk: {
+                const int_val = nodeIdxToInt(val);
+                if (int_val < 0) {
+                    break :blk nodeSlicesIdxFromInt(0);
+                }
+                break :blk nodeSlicesIdxFromInt(@intCast(int_val));
+            } else nodeSlicesIdxFromInt(0);
+
             // Get start position
             const start_pos_val = self.value_stack.pop();
-            const start_pos = Position{ .offset = @as(u32, @intCast(@intFromEnum(start_pos_val orelse unreachable))) };
-            
+            const start_pos = if (start_pos_val) |val|
+                intToPosition(nodeIdxToInt(val))
+            else
+                self.currentPosition();
+
             // Now parse packages if present
             if (self.peek() == .OpenCurly) {
                 self.advance(); // consume {
-                
+
                 // Push state to finish app header after packages
                 try self.state_stack.append(self.gpa, .header_app_finish);
                 try self.state_stack.append(self.gpa, .header_parse_packages);
-                
+
                 // Save exposes and start pos for finish
                 try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(exposes_idx)));
                 try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(start_pos.offset))));
-                
+
                 return .continue_processing;
             } else {
                 // No packages, create header now
                 const empty_slice: []const Node.Idx = &.{};
                 const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-                
+
                 self.ast.header = .{ .app = .{
                     .exposes = exposes_idx,
                     .packages = packages_idx,
                     .region = start_pos,
-                }};
+                } };
                 return .continue_processing;
             }
         },
-        
+
         .header_app_finish => {
             // Finish app header after parsing packages
             _ = self.state_stack.pop();
-            
+
             // Get packages from value stack
             const packages_idx_val = self.value_stack.pop();
-            const packages_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(packages_idx_val orelse unreachable))));
-            
+            const packages_idx: collections.NodeSlices(Node.Idx).Idx = if (packages_idx_val) |val| blk: {
+                const int_val = nodeIdxToInt(val);
+                if (int_val < 0) {
+                    break :blk nodeSlicesIdxFromInt(0);
+                }
+                break :blk nodeSlicesIdxFromInt(@intCast(int_val));
+            } else nodeSlicesIdxFromInt(0);
+
             // Get start position
             const start_pos_val = self.value_stack.pop();
-            const start_pos = Position{ .offset = @as(u32, @intCast(@intFromEnum(start_pos_val orelse unreachable))) };
-            
+            const start_pos = if (start_pos_val) |val|
+                intToPosition(nodeIdxToInt(val))
+            else
+                self.currentPosition();
+
             // Get exposes
             const exposes_idx_val = self.value_stack.pop();
-            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(@as(u32, @intCast(@intFromEnum(exposes_idx_val orelse unreachable))));
-            
+            const exposes_idx: collections.NodeSlices(Node.Idx).Idx = if (exposes_idx_val) |val| blk: {
+                const int_val = nodeIdxToInt(val);
+                if (int_val < 0) {
+                    break :blk nodeSlicesIdxFromInt(0);
+                }
+                break :blk nodeSlicesIdxFromInt(@intCast(int_val));
+            } else nodeSlicesIdxFromInt(0);
+
             self.ast.header = .{ .app = .{
                 .exposes = exposes_idx,
                 .packages = packages_idx,
                 .region = start_pos,
-            }};
-            
+            } };
+
             if (self.peek() == .CloseCurly) {
                 self.advance(); // consume }
             }
-            
+
             return .continue_processing;
         },
-        
+
         .header_package => {
             // Parse package header - placeholder implementation
             _ = self.state_stack.pop();
-            
+
             const region = self.currentRegion();
             self.advance(); // consume 'package'
-            
+
             // Create empty header for now
             const empty_slice: []const Node.Idx = &.{};
             const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
             const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            
+
             self.ast.header = .{ .package = .{
                 .exposes = exposes_idx,
                 .packages = packages_idx,
                 .region = region.start,
-            }};
+            } };
             return .need_token;
         },
-        
+
         .header_parse_exposed_list => {
             // Parse exposed list [a, b!, c]
             _ = self.state_stack.pop();
-            
+
             if (!self.eat(.OpenSquare)) {
                 // Error: expected [
                 // Push empty list
@@ -1696,22 +1910,22 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
                 return .continue_processing;
             }
-            
+
             // Start collecting exposed items
             try self.scratch_nodes.resize(self.gpa, 0);
-            
+
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 const is_lower = self.peek() == .LowerIdent;
                 const is_upper = self.peek() == .UpperIdent;
-                
+
                 if (is_lower or is_upper) {
-                    const ident_token = self.currentToken() orelse unreachable;
-                    const ident_region = self.currentRegion();
+                    const ident_token = self.currentToken() orelse continue;
+                    _ = self.currentRegion();
                     self.advance();
-                    
+
                     // Check for effectful suffix
                     const effectful = self.eat(.OpBang);
-                    
+
                     const ident_idx: base.Ident.Idx = switch (ident_token.extra) {
                         .interned => |idx| blk: {
                             // Update attributes if effectful
@@ -1736,146 +1950,120 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         },
                         else => .{ .attributes = .{ .effectful = effectful, .ignored = false, .reassignable = false }, .idx = 0 },
                     };
-                    
-                    const node_idx = try self.ast.nodes.add(self.gpa, .{
-                        .tag = if (is_lower) .ident else .tag,
-                        .main_token = 0,
-                        .data = .{ .ident = ident_idx },
-                    });
-                    
+
+                    const node_idx = try self.ast.appendNode(
+                        self.gpa,
+                        self.currentRegion(),
+                        if (is_lower) .lc else .uc,
+                        .{ .ident = ident_idx },
+                    );
+
                     try self.scratch_nodes.append(self.gpa, node_idx);
                 }
-                
+
                 // Skip commas
                 _ = self.eat(.Comma);
             }
-            
+
             if (!self.eat(.CloseSquare)) {
                 // Error: expected ]
             }
-            
+
             // Create slice from scratch nodes
             const exposed_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
             @memcpy(exposed_slice, self.scratch_nodes.items);
             const idx = try self.ast.node_slices.append(self.gpa, exposed_slice);
             try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
-            
+
             return .continue_processing;
         },
-        
+
         .header_parse_packages => {
             // Parse packages {pf: platform "../basic-cli/main.roc", a: "a"}
             _ = self.state_stack.pop();
-            
+
             // Start collecting package nodes
             try self.scratch_nodes.resize(self.gpa, 0);
-            
+
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 // Parse package name
                 if (self.peek() == .LowerIdent) {
-                    const pkg_name_token = self.currentToken() orelse unreachable;
+                    const pkg_name_token = self.currentToken() orelse continue;
                     const pkg_region = self.currentRegion();
                     self.advance();
-                    
-                    if (!self.eat(.Colon)) {
+
+                    if (!self.eat(.OpColon)) {
                         // Error: expected :
                         continue;
                     }
-                    
+
                     // Check for 'platform' keyword
-                    _ = self.eat(.Platform);
-                    
+                    _ = self.eat(.KwPlatform);
+
                     // Parse package path (string literal)
                     if (self.peek() == .String) {
-                        const path_token = self.currentToken() orelse unreachable;
+                        const path_token = self.currentToken() orelse continue;
                         _ = self.currentRegion();
                         self.advance();
-                        
+
                         // Create string node for path
                         const str_val = switch (path_token.extra) {
                             .bytes_idx => |idx| idx,
                             else => @as(collections.ByteSlices.Idx, @enumFromInt(0)),
                         };
-                        
-                        const path_node = try self.ast.nodes.add(self.gpa, .{
-                            .tag = .string,
-                            .main_token = 0,
-                            .data = .{ .str_literal = str_val },
-                        });
-                        
+
+                        const path_region = self.currentRegion();
+                        const path_node = try self.ast.appendNode(self.gpa, path_region, .str_literal_big, .{ .str_literal_big = str_val });
+
                         // Create package field node
-                        const pkg_ident_val: base.Ident.Idx = switch (pkg_name_token.extra) {
+                        const pkg_ident_idx: base.Ident.Idx = switch (pkg_name_token.extra) {
                             .interned => |idx| idx,
                             .ident_with_flags => |iwf| iwf.ident,
                             else => .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
                         };
-                        
-                        const pkg_ident = Ident{
-                            .value = pkg_ident_val,
-                            .region = pkg_region.start,
-                        };
-                        
-                        const pkg_ident_idx = try self.ast.idents.put(self.gpa, pkg_ident, .{
-                            .effectful = false,
-                            .ignored = false,
-                            .reassignable = false,
-                        });
-                        
-                        const pkg_field_node = try self.ast.nodes.add(self.gpa, .{
-                            .tag = .ident,
-                            .main_token = 0,
-                            .data = .{ .ident = pkg_ident_idx },
-                        });
-                        
+
+                        const pkg_field_node = try self.ast.appendNode(self.gpa, pkg_region, .lc, .{ .ident = pkg_ident_idx });
+
                         // Create binop for field: name
-                        const binop_idx = try self.ast.binops.add(self.gpa, .{
-                            .left = pkg_field_node,
-                            .right = path_node,
-                        });
-                        
-                        const field_node = try self.ast.nodes.add(self.gpa, .{
-                            .tag = .binop_colon,
-                            .main_token = 0,
-                            .data = .{ .binop = binop_idx },
-                        });
-                        
+                        const binop_idx = try self.ast.appendBinOp(self.gpa, pkg_field_node, path_node);
+
+                        const field_region = makeRegion(pkg_region.start, path_region.end);
+                        const field_node = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = binop_idx });
+
                         try self.scratch_nodes.append(self.gpa, field_node);
                     }
                 }
-                
+
                 // Skip commas
                 _ = self.eat(.Comma);
             }
-            
+
             // Create slice from scratch nodes
             const packages_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
             @memcpy(packages_slice, self.scratch_nodes.items);
             const idx = try self.ast.node_slices.append(self.gpa, packages_slice);
             try self.value_stack.append(self.gpa, @enumFromInt(@intFromEnum(idx)));
-            
+
             return .continue_processing;
         },
-        
+
         .header_platform => {
             // Parse platform header - placeholder implementation
             _ = self.state_stack.pop();
-            
+
             const region = self.currentRegion();
             self.advance(); // consume 'platform'
-            
+
             // Create empty header for now - platform needs a dummy name node
             const empty_slice: []const Node.Idx = &.{};
-            const dummy_ident = Ident.Idx{ 
-                .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, 
-                .idx = 0 
-            };
+            const dummy_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
             const name_node = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = dummy_ident });
             const empty_node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
             const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
             const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
             const provides_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
             const rigids_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            
+
             self.ast.header = .{ .platform = .{
                 .name = name_node,
                 .requires_rigids = rigids_idx,
@@ -1884,90 +2072,87 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 .packages = packages_idx,
                 .provides = provides_idx,
                 .region = region.start,
-            }};
+            } };
             return .need_token;
         },
-        
+
         .header_hosted => {
             // Parse hosted header - placeholder implementation
             _ = self.state_stack.pop();
-            
+
             const region = self.currentRegion();
             self.advance(); // consume 'hosted'
-            
+
             // Create empty header for now
             const empty_slice: []const Node.Idx = &.{};
             const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            
+
             self.ast.header = .{ .hosted = .{
                 .exposes = exposes_idx,
                 .region = region.start,
-            }};
+            } };
             return .need_token;
         },
-        
+
         .expr_binop_rhs => {
             // Parse the RHS of a binary operator
             _ = self.state_stack.pop();
-            
+
             // Get the operator's right binding power
             const op_info = if (self.scratch_op_stack.items.len > 0)
                 self.scratch_op_stack.items[self.scratch_op_stack.items.len - 1]
             else
                 return .continue_processing;
-            
+
             // Pop the LHS from value stack (it's stored in op_info)
             if (self.value_stack.items.len > 0) {
                 _ = self.value_stack.pop();
             }
-            
+
             // Parse RHS with the operator's right binding power
             try self.min_bp_stack.append(self.gpa, op_info.min_bp);
             try self.state_stack.append(self.gpa, .expr_start);
             return .continue_processing;
         },
-        
+
         .expr_binop_combine => {
             // Combine LHS, operator, and RHS into a binop node
             _ = self.state_stack.pop();
-            
+
             // Get operator info
             const op_info = if (self.scratch_op_stack.items.len > 0) blk: {
                 const info = self.scratch_op_stack.items[self.scratch_op_stack.items.len - 1];
                 _ = self.scratch_op_stack.pop();
                 break :blk info;
             } else return .continue_processing;
-            
+
             // Get RHS from value stack
             const rhs = if (self.value_stack.items.len > 0)
                 self.value_stack.items[self.value_stack.items.len - 1]
             else
                 return .continue_processing;
             _ = self.value_stack.pop();
-            
+
             // Convert token to binop tag
             const binop_tag = tokenToBinOpTag(op_info.op_tag) orelse .binop_equals;
-            
+
             // Create binop node
             const binop_idx = try self.ast.appendBinOp(self.gpa, op_info.left.?, rhs);
-            const full_region = makeRegion(
-                self.ast.start(op_info.left.?),
-                self.ast.getRegion(rhs).end
-            );
+            const full_region = makeRegion(self.ast.start(op_info.left.?), self.ast.getRegion(rhs).end);
             const binop_node = try self.ast.appendNode(self.gpa, full_region, binop_tag, .{ .binop = binop_idx });
-            
+
             // Push result back on value stack
             try self.value_stack.append(self.gpa, binop_node);
-            
+
             // Continue checking for more operators
             try self.state_stack.append(self.gpa, .expr_check_binop);
             return .continue_processing;
         },
-        
+
         .lambda_args => {
             // Parse lambda arguments between | |
             _ = self.state_stack.pop();
-            
+
             // Expect opening |
             if (self.peek() != .OpBar) {
                 // Malformed lambda
@@ -1977,12 +2162,12 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 try self.state_stack.append(self.gpa, .expr_done);
                 return .continue_processing;
             }
-            
+
             self.advance(); // consume |
-            
+
             // Collect arguments
             const scratch_marker = self.markScratchNodes();
-            
+
             while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
                 // For now, just parse identifiers and underscores as args
                 switch (self.peek()) {
@@ -2003,14 +2188,14 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     },
                     else => break,
                 }
-                
+
                 if (self.peek() == .Comma) {
                     self.advance();
                 } else if (self.peek() != .OpBar) {
                     break;
                 }
             }
-            
+
             // Expect closing |
             if (self.peek() != .OpBar) {
                 // Malformed lambda
@@ -2021,153 +2206,733 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 try self.state_stack.append(self.gpa, .expr_done);
                 return .continue_processing;
             }
-            
+
             self.advance(); // consume closing |
-            
+
             // Store args in scratch_nodes (they're already there)
             // The lambda_body state will collect them
-            
+
             return .need_token;
         },
-        
+
         .lambda_body => {
             // Parse lambda body
             _ = self.state_stack.pop();
-            
+
             // Parse body as expression
             try self.state_stack.append(self.gpa, .expr_start);
             return .continue_processing;
         },
-        
+
         .if_arrow => {
             // After parsing condition, expect arrow
             _ = self.state_stack.pop();
-            
+
             if (self.peek() != .OpArrow) {
                 // Error: expected arrow after if condition
                 // But continue parsing anyway
             } else {
                 self.advance(); // consume arrow
             }
-            
+
             return .continue_processing;
         },
-        
+
         .if_then_branch => {
             // Parse then branch expression
             _ = self.state_stack.pop();
-            
+
             // Parse the then expression
             try self.state_stack.append(self.gpa, .expr_start);
-            
+
             return .continue_processing;
         },
-        
+
         .if_else_branch => {
             // Check for else keyword and parse else branch
             _ = self.state_stack.pop();
-            
+
             if (self.peek() == .KwElse) {
                 self.advance(); // consume 'else'
-                
+
                 // Parse else expression
                 try self.state_stack.append(self.gpa, .expr_start);
             }
             // If no else, we'll create if without else branch
-            
+
             return .continue_processing;
         },
-        
+
         .if_complete => {
             // Complete if expression - combine all parts
             _ = self.state_stack.pop();
-            
+
             // Pop else branch (if present)
             const else_branch = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
-            
+
             // Pop then branch
             const then_branch = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
-            
+
             // Pop condition
             const condition = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
-            
+
             // Pop start position
             const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
-            const start_pos = if (start_pos_val) |val| Position{ .offset = @as(u32, @intCast(@intFromEnum(val))) } else Position{ .offset = 0 };
-            
+            const start_pos = if (start_pos_val) |val| intToPosition(nodeIdxToInt(val)) else Position{ .offset = 0 };
+
             // Build if expression node
             var nodes = std.ArrayList(Node.Idx).init(self.gpa);
             defer nodes.deinit();
-            
+
             if (condition) |c| try nodes.append(c);
             if (then_branch) |t| try nodes.append(t);
             if (else_branch) |e| try nodes.append(e);
-            
+
             const nodes_slice = try self.gpa.alloc(Node.Idx, nodes.items.len);
             @memcpy(nodes_slice, nodes.items);
             const nodes_idx = try self.ast.node_slices.append(self.gpa, nodes_slice);
-            
+
             // Determine end position
-            const end_pos = if (else_branch) |e| 
+            const end_pos = if (else_branch) |e|
                 self.ast.getRegion(e).end
             else if (then_branch) |t|
                 self.ast.getRegion(t).end
             else
                 self.currentPosition();
-            
+
             const region = makeRegion(start_pos, end_pos);
-            const if_node = try self.ast.nodes.add(self.gpa, .{
-                .tag = if (else_branch != null) .if_else else .if_no_else,
-                .main_token = 0,
-                .data = .{ .nodes = nodes_idx },
-            });
-            
+            const if_node = try self.ast.appendNode(self.gpa, region, if (else_branch != null) .if_else else .if_without_else, .{ .nodes = nodes_idx });
+
             try self.value_stack.append(self.gpa, if_node);
-            
+
             return .continue_processing;
         },
-        
-        .when_is => {
-            // After parsing scrutinee, expect 'is'
+
+        .match_branches => {
+            // Parse match branches (pattern -> expr)
             _ = self.state_stack.pop();
-            
-            if (self.peek() != .KwIs) {
-                // Error: expected 'is' after when scrutinee
-                // But continue parsing anyway
-            } else {
-                self.advance(); // consume 'is'
+
+            // Start parsing the first branch
+            try self.state_stack.append(self.gpa, .match_branch_start);
+
+            return .continue_processing;
+        },
+
+        .match_branch_start => {
+            // Parse a single match branch (pattern -> expr)
+            _ = self.state_stack.pop();
+
+            // Push states to parse pattern first
+            try self.state_stack.append(self.gpa, .match_branch_arrow);
+            try self.state_stack.append(self.gpa, .pattern_start);
+
+            return .continue_processing;
+        },
+
+        .pattern_start => {
+            // Parse different pattern types
+            const token = self.currentToken() orelse return .need_token;
+
+            _ = self.state_stack.pop();
+
+            switch (token.tag) {
+                .LowerIdent => {
+                    // Variable pattern - create identifier pattern
+                    const ident = self.currentIdent();
+                    const region = self.currentRegion();
+                    self.advance();
+                    if (ident) |id| {
+                        const node = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = id });
+                        try self.value_stack.append(self.gpa, node);
+                    } else {
+                        const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                        try self.value_stack.append(self.gpa, node);
+                    }
+                },
+                .UpperIdent => {
+                    // Tag pattern - could be Tag or Tag(payload)
+                    const ident = self.currentIdent();
+                    const region = self.currentRegion();
+                    self.advance();
+                    if (ident) |id| {
+                        const node = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+                        try self.value_stack.append(self.gpa, node);
+
+                        // Check if this is a tag with payload pattern like Ok(value) or Some(x)
+                        if (self.peek() == .OpenRound) {
+                            self.advance(); // consume (
+
+                            // We need to parse the inner pattern and then create an apply node
+                            // Push state to handle the closing paren and apply creation after parsing inner pattern
+                            try self.state_stack.append(self.gpa, .pattern_tag_payload_close);
+                            try self.state_stack.append(self.gpa, .pattern_start);
+                        }
+                    } else {
+                        const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                        try self.value_stack.append(self.gpa, node);
+                    }
+                },
+                .Underscore => {
+                    // Wildcard pattern - use underscore node type
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
+                    try self.value_stack.append(self.gpa, node);
+                    self.advance();
+                },
+                .Int, .Float, .String => {
+                    // Literal pattern
+                    const start_pos = self.currentPosition();
+                    const region = self.currentRegion();
+                    const node = switch (token.tag) {
+                        .Int => try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = @intCast(start_pos.offset) }),
+                        .Float => try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = .{ .numerator = 0, .denominator_power_of_ten = 0 } }), // placeholder
+                        .String => try self.ast.appendNode(self.gpa, region, .str_literal_small, .{ .str_literal_small = [4]u8{ 0, 0, 0, 0 } }), // placeholder
+                        else => unreachable,
+                    };
+                    try self.value_stack.append(self.gpa, node);
+                    self.advance();
+                },
+                else => {
+                    // Invalid pattern token - create error node
+                    const region = self.currentRegion();
+                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                    try self.value_stack.append(self.gpa, node);
+                },
             }
-            
+
             return .continue_processing;
         },
-        
-        .when_branches => {
-            // Parse when branches (pattern -> expr)
+
+        .pattern_tag_payload_close => {
+            // Handle closing parenthesis after tag payload pattern
             _ = self.state_stack.pop();
-            
-            // For now, create placeholder
-            // TODO: implement proper pattern and branch parsing
-            const region = self.currentRegion();
-            const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-            try self.value_stack.append(self.gpa, node);
-            
+
+            // We should have the payload pattern on the value stack
+            const payload = self.value_stack.pop() orelse {
+                // Stack underflow - should not happen
+                const malformed = try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
+                try self.value_stack.append(self.gpa, malformed);
+                return .continue_processing;
+            };
+
+            // Expect closing paren
+            if (self.peek() != .CloseRound) {
+                try self.pushDiagnostic(.expected_close_round, self.currentPosition(), self.currentPosition());
+                const malformed = try self.pushMalformed(.expected_close_round, self.currentPosition());
+                try self.value_stack.append(self.gpa, malformed);
+            } else {
+                self.advance(); // consume )
+
+                // The tag should be second on the stack (pushed before we started parsing payload)
+                const tag_node = self.value_stack.pop() orelse {
+                    // Stack underflow - should not happen
+                    const malformed = try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
+                    try self.value_stack.append(self.gpa, malformed);
+                    return .continue_processing;
+                };
+
+                // Create an apply node for the tag with payload
+                // Get the region of the tag node
+                const tag_node_idx_val = @intFromEnum(tag_node);
+                const tag_node_u32_idx = @as(u32, @intCast(tag_node_idx_val));
+                const tag_node_multilist_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(tag_node_u32_idx));
+                const tag_node_data = self.ast.nodes.get(tag_node_multilist_idx);
+                const apply_region = makeRegion(tag_node_data.region.start, self.last_position);
+                const apply_node = try self.ast.appendNode(self.gpa, apply_region, .apply_uc, .{ .binop = try self.ast.appendBinOp(self.gpa, tag_node, payload) });
+                try self.value_stack.append(self.gpa, apply_node);
+            }
+
             return .continue_processing;
         },
-        
-        .when_complete => {
-            // Complete when expression
+
+        .match_branch_arrow => {
+            // Expect arrow token between pattern and expression
+            const token = self.currentToken() orelse return .need_token;
+
             _ = self.state_stack.pop();
-            
-            // For now, just keep the placeholder from when_branches
-            // TODO: properly combine scrutinee and branches
-            
+
+            if (token.tag == .OpArrow) {
+                self.advance();
+                // Push state to parse the branch expression
+                try self.state_stack.append(self.gpa, .match_branch_complete);
+                try self.state_stack.append(self.gpa, .expr_start);
+            } else {
+                // Missing arrow - create error
+                const region = self.currentRegion();
+                const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                try self.value_stack.append(self.gpa, node);
+            }
+
             return .continue_processing;
         },
-        
+
+        .match_branch_complete => {
+            // Combine pattern and expression into a branch
+            _ = self.state_stack.pop();
+
+            if (self.value_stack.items.len >= 2) {
+                const expr = self.value_stack.items[self.value_stack.items.len - 1];
+                const pattern = self.value_stack.items[self.value_stack.items.len - 2];
+                self.value_stack.items.len -= 2; // Remove both items
+
+                // Create branch node combining pattern and expression
+                // For now, just use current region as a placeholder
+                const region = self.currentRegion();
+
+                // Create a tuple literal to represent the match branch (pattern, expr)
+                const nodes = [_]Node.Idx{ pattern, expr };
+                const slice_idx = try self.ast.node_slices.append(self.gpa, &nodes);
+                const node = try self.ast.appendNode(self.gpa, region, .tuple_literal, .{ .nodes = slice_idx });
+                try self.value_stack.append(self.gpa, node);
+            } else {
+                // Not enough values on stack - create error
+                const region = self.currentRegion();
+                const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                try self.value_stack.append(self.gpa, node);
+            }
+
+            // Check if there are more branches (separated by newlines/commas)
+            if (self.currentToken()) |next_token| {
+                if (next_token.tag == .Comma) {
+                    self.advance();
+                    try self.state_stack.append(self.gpa, .match_branches_cont);
+                }
+            }
+
+            return .continue_processing;
+        },
+
+        .match_branches_cont => {
+            // Continue parsing additional match branches
+            const token = self.currentToken() orelse return .need_token;
+
+            _ = self.state_stack.pop();
+
+            // Check if we have another pattern to parse
+            switch (token.tag) {
+                .LowerIdent, .UpperIdent, .Underscore, .Int, .Float, .String => {
+                    // Start parsing another branch
+                    try self.state_stack.append(self.gpa, .match_branch_start);
+                },
+                else => {
+                    // No more branches - we're done
+                    // The branches are already on the value stack
+                },
+            }
+
+            return .continue_processing;
+        },
+
+        .while_body => {
+            // Parse the body of the while loop
+            _ = self.state_stack.pop();
+
+            // We should have the condition on the value stack
+            // Push state to parse the body expression
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
+        .while_complete => {
+            // Complete the while loop
+            _ = self.state_stack.pop();
+
+            // We should have: region marker, condition, body on the stack
+            if (self.value_stack.items.len >= 3) {
+                const body = self.value_stack.pop() orelse return .continue_processing;
+                const condition = self.value_stack.pop() orelse return .continue_processing;
+                const region_marker = self.value_stack.pop() orelse return .continue_processing;
+
+                // Reconstruct the region from the marker
+                const start_offset = @as(u32, @intCast(@intFromEnum(region_marker)));
+                const start_pos = Position{ .offset = start_offset };
+                const body_region = self.ast.getRegion(body);
+                const full_region = makeRegion(start_pos, body_region.end);
+
+                // Create while node
+                const nodes = [_]Node.Idx{ condition, body };
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &nodes);
+                const while_node = try self.ast.appendNode(self.gpa, full_region, .while_loop, .{ .nodes = nodes_idx });
+                try self.value_stack.append(self.gpa, while_node);
+            }
+
+            return .continue_processing;
+        },
+
+        .for_in => {
+            // Expect 'in' keyword
+            _ = self.state_stack.pop();
+
+            const token = self.currentToken() orelse return .need_token;
+
+            if (token.tag != .KwIn) {
+                try self.pushDiagnostic(.for_expected_in, self.currentPosition(), self.currentPosition());
+                const malformed = try self.pushMalformed(.for_expected_in, self.currentPosition());
+                try self.value_stack.append(self.gpa, malformed);
+                return .continue_processing;
+            }
+
+            self.advance(); // consume 'in'
+
+            // Push state to parse the iterator expression
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
+        .for_body => {
+            // Parse the body of the for loop
+            _ = self.state_stack.pop();
+
+            // Push state to parse the body expression
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
+        .for_complete => {
+            // Complete the for loop
+            _ = self.state_stack.pop();
+
+            // We should have: region marker, pattern, iterator, body on the stack
+            if (self.value_stack.items.len >= 4) {
+                const body = self.value_stack.pop() orelse return .continue_processing;
+                const iterator = self.value_stack.pop() orelse return .continue_processing;
+                const pattern = self.value_stack.pop() orelse return .continue_processing;
+                const region_marker = self.value_stack.pop() orelse return .continue_processing;
+
+                // Reconstruct the region from the marker
+                const start_offset = @as(u32, @intCast(@intFromEnum(region_marker)));
+                const start_pos = Position{ .offset = start_offset };
+                const body_region = self.ast.getRegion(body);
+                const full_region = makeRegion(start_pos, body_region.end);
+
+                // Create for node
+                const nodes = [_]Node.Idx{ pattern, iterator, body };
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &nodes);
+                const for_node = try self.ast.appendNode(self.gpa, full_region, .for_loop, .{ .nodes = nodes_idx });
+                try self.value_stack.append(self.gpa, for_node);
+            }
+
+            return .continue_processing;
+        },
+
+        .return_complete => {
+            // Complete the return statement
+            _ = self.state_stack.pop();
+
+            // We should have: region marker, expression on the stack
+            if (self.value_stack.items.len >= 2) {
+                const expr = self.value_stack.pop() orelse return .continue_processing;
+                const region_marker = self.value_stack.pop() orelse return .continue_processing;
+
+                // Reconstruct the region from the marker
+                const start_offset = @as(u32, @intCast(@intFromEnum(region_marker)));
+                const start_pos = Position{ .offset = start_offset };
+                const expr_region = self.ast.getRegion(expr);
+                const full_region = makeRegion(start_pos, expr_region.end);
+
+                // Create return node
+                const nodes = [_]Node.Idx{expr};
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &nodes);
+                const return_node = try self.ast.appendNode(self.gpa, full_region, .ret, .{ .nodes = nodes_idx });
+                try self.value_stack.append(self.gpa, return_node);
+            }
+
+            return .continue_processing;
+        },
+
+        .crash_complete => {
+            // Complete the crash statement
+            _ = self.state_stack.pop();
+
+            // We should have: region marker, expression on the stack
+            if (self.value_stack.items.len >= 2) {
+                const expr = self.value_stack.pop() orelse return .continue_processing;
+                const region_marker = self.value_stack.pop() orelse return .continue_processing;
+
+                // Reconstruct the region from the marker
+                const start_offset = @as(u32, @intCast(@intFromEnum(region_marker)));
+                const start_pos = Position{ .offset = start_offset };
+                const expr_region = self.ast.getRegion(expr);
+                const full_region = makeRegion(start_pos, expr_region.end);
+
+                // Create crash node
+                const nodes = [_]Node.Idx{expr};
+                const nodes_idx = try self.ast.appendNodeSlice(self.gpa, &nodes);
+                const crash_node = try self.ast.appendNode(self.gpa, full_region, .crash, .{ .nodes = nodes_idx });
+                try self.value_stack.append(self.gpa, crash_node);
+            }
+
+            return .continue_processing;
+        },
+
+        .list_elements => {
+            // Parse list elements
+            _ = self.state_stack.pop();
+
+            // Clear scratch for collecting elements
+            try self.scratch_nodes.resize(self.gpa, 0);
+
+            // Check if empty list
+            if (self.peek() == .CloseSquare) {
+                // Empty list - continue to list_complete
+                return .continue_processing;
+            }
+
+            // Parse first element, then check for more
+            try self.state_stack.append(self.gpa, .list_elements_cont);
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
+        .list_elements_cont => {
+            // Continue parsing list elements after first one
+            _ = self.state_stack.pop();
+
+            // Pop the element we just parsed and add to scratch
+            if (self.value_stack.items.len > 0) {
+                const elem = self.value_stack.pop().?;
+                try self.scratch_nodes.append(self.gpa, elem);
+            }
+
+            // Check for comma (more elements) or close square (done)
+            if (self.peek() == .Comma) {
+                self.advance(); // consume comma
+
+                // Check if trailing comma before close
+                if (self.peek() == .CloseSquare) {
+                    // Trailing comma is fine, we're done
+                    return .continue_processing;
+                }
+
+                // Parse next element
+                try self.state_stack.append(self.gpa, .list_elements_cont);
+                try self.state_stack.append(self.gpa, .expr_start);
+                return .continue_processing;
+            } else if (self.peek() == .CloseSquare) {
+                // Done with elements
+                return .continue_processing;
+            } else {
+                // Missing comma or close - error but continue
+                // Try to parse another element anyway
+                try self.state_stack.append(self.gpa, .list_elements_cont);
+                try self.state_stack.append(self.gpa, .expr_start);
+                return .continue_processing;
+            }
+        },
+
+        .list_complete => {
+            // Complete list literal
+            _ = self.state_stack.pop();
+
+            // Get start position
+            const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            const start_pos = if (start_pos_val) |val| intToPosition(nodeIdxToInt(val)) else self.currentPosition();
+
+            // Expect closing ]
+            const end_pos = if (self.peek() == .CloseSquare) blk: {
+                const r = self.currentRegion();
+                self.advance();
+                break :blk r.end;
+            } else self.currentPosition();
+
+            // Create list node
+            const elements_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
+            @memcpy(elements_slice, self.scratch_nodes.items);
+            const nodes_idx = try self.ast.node_slices.append(self.gpa, elements_slice);
+
+            // Ensure end is at least as far as start to avoid assertion failure
+            const safe_end_pos = if (end_pos.offset < start_pos.offset) start_pos else end_pos;
+            const region = makeRegion(start_pos, safe_end_pos);
+            const list_node = try self.ast.appendNode(self.gpa, region, .list_literal, .{ .nodes = nodes_idx });
+
+            try self.value_stack.append(self.gpa, list_node);
+
+            return .continue_processing;
+        },
+
+        .record_fields => {
+            // Parse record fields
+            _ = self.state_stack.pop();
+
+            // Clear scratch for collecting fields
+            try self.scratch_nodes.resize(self.gpa, 0);
+
+            // Check if empty record
+            if (self.peek() == .CloseCurly) {
+                // Empty record - continue to record_complete
+                return .continue_processing;
+            }
+
+            // Parse first field, then check for more
+            try self.state_stack.append(self.gpa, .record_fields_cont);
+            try self.state_stack.append(self.gpa, .record_field_start);
+
+            return .continue_processing;
+        },
+
+        .record_field_start => {
+            // Parse a record field name
+            _ = self.state_stack.pop();
+
+            if (self.peek() == .LowerIdent) {
+                const ident = self.currentIdent();
+                const region = self.currentRegion();
+                self.advance();
+
+                if (ident) |id| {
+                    const field_name = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = id });
+
+                    // Check for colon (field with value) or comma/close (shorthand)
+                    if (self.peek() == .OpColon) {
+                        self.advance(); // consume colon
+
+                        // Parse field value expression
+                        try self.value_stack.append(self.gpa, field_name); // Save field name
+                        try self.state_stack.append(self.gpa, .record_field_value);
+                        try self.state_stack.append(self.gpa, .expr_start);
+                    } else {
+                        // Shorthand field (name only)
+                        try self.scratch_nodes.append(self.gpa, field_name);
+                    }
+                }
+            } else {
+                // Unexpected token in field position - skip it
+                self.advance();
+            }
+
+            return .continue_processing;
+        },
+
+        .record_field_value => {
+            // Complete a field with colon and value
+            _ = self.state_stack.pop();
+
+            // Get the value we just parsed
+            const value = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            // Get the field name we saved
+            const field_name = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+
+            if (value != null and field_name != null) {
+                // Create binop for field: value
+                const binop_idx = try self.ast.appendBinOp(self.gpa, field_name.?, value.?);
+                const field_region = makeRegion(self.ast.getRegion(field_name.?).start, self.ast.getRegion(value.?).end);
+                const field_node = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = binop_idx });
+                try self.scratch_nodes.append(self.gpa, field_node);
+            }
+
+            return .continue_processing;
+        },
+
+        .record_fields_cont => {
+            // Continue parsing record fields after first one
+            _ = self.state_stack.pop();
+
+            // Check for comma (more fields) or close curly (done)
+            if (self.peek() == .Comma) {
+                self.advance(); // consume comma
+
+                // Check if trailing comma before close
+                if (self.peek() == .CloseCurly) {
+                    // Trailing comma is fine, we're done
+                    return .continue_processing;
+                }
+
+                // Parse next field
+                try self.state_stack.append(self.gpa, .record_fields_cont);
+                try self.state_stack.append(self.gpa, .record_field_start);
+                return .continue_processing;
+            } else if (self.peek() == .CloseCurly) {
+                // Done with fields
+                return .continue_processing;
+            } else {
+                // Missing comma or close - error but continue
+                // Try to parse another field anyway
+                try self.state_stack.append(self.gpa, .record_fields_cont);
+                try self.state_stack.append(self.gpa, .record_field_start);
+                return .continue_processing;
+            }
+        },
+
+        .record_complete => {
+            // Complete record literal
+            _ = self.state_stack.pop();
+
+            // Get start position
+            const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
+            const start_pos = if (start_pos_val) |val| intToPosition(nodeIdxToInt(val)) else self.currentPosition();
+
+            // Expect closing }
+            const end_pos = if (self.peek() == .CloseCurly) blk: {
+                const r = self.currentRegion();
+                self.advance();
+                break :blk r.end;
+            } else self.currentPosition();
+
+            // Create record node
+            const fields_slice = try self.gpa.alloc(Node.Idx, self.scratch_nodes.items.len);
+            @memcpy(fields_slice, self.scratch_nodes.items);
+            const nodes_idx = try self.ast.node_slices.append(self.gpa, fields_slice);
+
+            // Ensure end is at least as far as start to avoid assertion failure
+            const safe_end_pos = if (end_pos.offset < start_pos.offset) start_pos else end_pos;
+            const region = makeRegion(start_pos, safe_end_pos);
+            const record_node = try self.ast.appendNode(self.gpa, region, .record_literal, .{ .nodes = nodes_idx });
+
+            try self.value_stack.append(self.gpa, record_node);
+
+            return .continue_processing;
+        },
+
+        .match_complete => {
+            // Complete match expression by combining scrutinee and branches
+            _ = self.state_stack.pop();
+
+            // We should have branches on the value stack and the match start position marker
+            if (self.value_stack.items.len >= 2) {
+                const branches = self.value_stack.items[self.value_stack.items.len - 1];
+                const scrutinee = self.value_stack.items[self.value_stack.items.len - 2];
+
+                // The first item should be the match start position marker (pushed as a node)
+                if (self.value_stack.items.len >= 3) {
+                    self.value_stack.items.len -= 3; // Remove all three items
+
+                    // Create the complete match expression
+                    // We'll represent it as a tuple of (scrutinee, branches) for now
+                    const match_nodes = [_]Node.Idx{ scrutinee, branches };
+                    const slice_idx = try self.ast.node_slices.append(self.gpa, &match_nodes);
+
+                    // Create match node using current region
+                    const region = self.currentRegion();
+                    const match_node = try self.ast.appendNode(self.gpa, region, .match, .{ .nodes = slice_idx });
+                    try self.value_stack.append(self.gpa, match_node);
+                } else {
+                    // Fallback: just combine scrutinee and branches
+                    self.value_stack.items.len -= 2;
+                    const match_nodes = [_]Node.Idx{ scrutinee, branches };
+                    const slice_idx = try self.ast.node_slices.append(self.gpa, &match_nodes);
+
+                    const region = self.currentRegion();
+                    const match_node = try self.ast.appendNode(self.gpa, region, .match, .{ .nodes = slice_idx });
+                    try self.value_stack.append(self.gpa, match_node);
+                }
+            } else {
+                // Not enough values - create error node
+                const region = self.currentRegion();
+                const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+                try self.value_stack.append(self.gpa, node);
+            }
+
+            return .continue_processing;
+        },
+
         .lambda_complete => {
             // Combine args and body into lambda node
             _ = self.state_stack.pop();
-            
+
             // Get body from value stack
             const body = if (self.value_stack.items.len > 0)
                 self.value_stack.items[self.value_stack.items.len - 1]
@@ -2177,31 +2942,61 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 break :blk try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
             };
             _ = self.value_stack.pop();
-            
+
             // Get args from scratch_nodes
             const args = self.getScratchNodesSince(0);
-            
+
             // Build body_then_args array
             var temp_nodes = std.ArrayList(Node.Idx).init(self.gpa);
             defer temp_nodes.deinit();
             try temp_nodes.append(body);
             try temp_nodes.appendSlice(args);
-            
+
             const nodes_idx = try self.ast.appendNodeSlice(self.gpa, temp_nodes.items);
-            const region = self.currentRegion(); // TODO: Get proper region
+
+            // Calculate region from args (first |) to body end
+            const start_pos = if (args.len > 0)
+                self.ast.getRegion(args[0]).start
+            else
+                self.currentPosition();
+            const end_pos = self.ast.getRegion(body).end;
+            const region = makeRegion(start_pos, end_pos);
+
             const lambda_node = try self.ast.appendNode(self.gpa, region, .lambda, .{ .body_then_args = nodes_idx });
-            
+
             // Push lambda node to value stack
             try self.value_stack.append(self.gpa, lambda_node);
-            
+
             // Continue with expression parsing
             try self.state_stack.append(self.gpa, .expr_check_binop);
             return .continue_processing;
         },
-        
+
+        .type_expr_start => {
+            // Parse type expression
+            _ = self.state_stack.pop();
+
+            // For now, parse type as a regular expression
+            // In the future, this should handle type-specific syntax like
+            // function types (a -> b), record types, etc.
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
         else => {
-            std.debug.print("PANIC: State not implemented: {s}\n", .{@tagName(state)});
-            std.debug.panic("State not implemented: {s}\n", .{@tagName(state)});
+            // Log unimplemented state for debugging, but don't crash
+            std.debug.print("WARNING: State not implemented: {s}\n", .{@tagName(state)});
+
+            // Pop the unimplemented state and continue
+            _ = self.state_stack.pop();
+
+            // Create a malformed node to indicate the error
+            const region = self.currentRegion();
+            const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .state_not_implemented });
+            try self.value_stack.append(self.gpa, node);
+
+            return .continue_processing;
         },
     }
 }
@@ -2227,7 +3022,7 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
 
 /// Get the current token (if available)
 fn currentToken(self: *Parser) ?Token {
-    return self.lookahead;
+    return self.current;
 }
 
 /// Get the current token's extra data
@@ -2252,7 +3047,9 @@ fn currentRegion(self: *Parser) base.Region {
     if (self.currentToken()) |token| {
         return token.region;
     }
-    return base.Region.from_raw_offsets(0, 0);
+    // Return a region at the current position when no token is available
+    const pos = self.currentPosition();
+    return base.Region.from_raw_offsets(pos.offset, pos.offset);
 }
 
 /// For backwards compatibility with code that used self.pos for error tracking
@@ -2294,14 +3091,14 @@ fn currentIdent(self: *Parser) ?Ident.Idx {
 }
 
 /// add a diagnostic error
-pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position, end_pos: Position) Error!void {
+fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position, end_pos: Position) Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
         try self.diagnostics.append(self.gpa, .{ .tag = tag, .region = .{ .start = start_pos, .end = end_pos } });
     }
 }
 
 /// add a malformed node
-pub fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position) Error!Node.Idx {
+fn pushMalformed(self: *Parser, tag: AST.Diagnostic.Tag, start_pos: Position) Error!Node.Idx {
     // Use current token position for the error if the provided start_pos is invalid
     const actual_start_pos = if (start_pos.offset == 0) blk: {
         if (self.currentPosition().offset > 0) {
@@ -2337,8 +3134,53 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Parse the header if present
-    try self.parseHeader();
+    // Check if already tokenized
+    const already_tokenized = self.current != null;
+
+    // Initialize tokenizer if not already initialized
+    var env: ?base.CommonEnv = null;
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
+    var token_iter: ?tokenize_iter.TokenIterator = null;
+
+    if (!already_tokenized) {
+        env = try base.CommonEnv.init(self.gpa, self.source);
+        try env.?.calcLineStarts(self.gpa);
+
+        // Create tokenizer
+        token_iter = try tokenize_iter.TokenIterator.init(&env.?, self.gpa, self.source, &messages, self.byte_slices);
+
+        // Get first two tokens to start
+        const first = try token_iter.?.next(self.gpa) orelse {
+            // No tokens at all - empty file
+            if (env) |*e| e.deinit(self.gpa);
+            if (token_iter) |*t| t.deinit(self.gpa);
+            return null;
+        };
+        const second = try token_iter.?.next(self.gpa);
+
+        self.current = first;
+        self.lookahead = second;
+
+        // Store the token iterator so advance() can fetch new tokens
+        self.token_iterator = &token_iter.?;
+    }
+
+    defer {
+        if (!already_tokenized) {
+            self.token_iterator = null;
+            if (token_iter) |*t| t.deinit(self.gpa);
+            if (env) |*e| e.deinit(self.gpa);
+        }
+    }
+
+    // Parse the header if present (it will check for header keywords)
+    // Check if the current token is a header keyword
+    switch (self.peek()) {
+        .KwApp, .KwModule, .KwPackage, .KwPlatform, .KwHosted, .KwInterface => {
+            try self.parseHeaderFromCurrentToken();
+        },
+        else => {},
+    }
 
     // Parse top-level statements
     const scratch_marker = self.markScratchNodes();
@@ -2364,8 +3206,71 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
     return null; // No statements in file
 }
 
+/// Parse header from already-tokenized input (used by parseFile)
+fn parseHeaderFromCurrentToken(self: *Parser) Error!void {
+    const start_pos = self.currentPosition();
+
+    switch (self.peek()) {
+        .KwApp => {
+            self.advance();
+            self.ast.header = try self.parseAppHeader(start_pos);
+        },
+        .KwModule => {
+            self.advance();
+            self.ast.header = try self.parseModuleHeader(start_pos);
+        },
+        .KwPackage => {
+            self.advance();
+            self.ast.header = try self.parsePackageHeader(start_pos);
+        },
+        .KwPlatform => {
+            self.advance();
+            self.ast.header = try self.parsePlatformHeader(start_pos);
+        },
+        .KwHosted => {
+            self.advance();
+            self.ast.header = try self.parseHostedHeader(start_pos);
+        },
+        .KwInterface => {
+            // Interface is an obsolete keyword - we now just use 'module'
+            // Treat it as an error
+            try self.pushDiagnostic(.obsolete_interface_keyword, start_pos, self.currentPosition());
+            _ = try self.pushMalformed(.obsolete_interface_keyword, start_pos);
+            return;
+        },
+        else => {
+            // No header - that's fine
+        },
+    }
+}
+
 /// Parse module header
 pub fn parseHeader(self: *Parser) Error!void {
+    // Create a temporary environment for tokenizing
+    var env = try base.CommonEnv.init(self.gpa, self.source);
+    defer env.deinit(self.gpa);
+    try env.calcLineStarts(self.gpa);
+
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
+
+    // Create tokenizer
+    var token_iter = try tokenize_iter.TokenIterator.init(&env, self.gpa, self.source, &messages, self.byte_slices);
+    defer token_iter.deinit(self.gpa);
+
+    // Get first two tokens to start
+    const first = try token_iter.next(self.gpa) orelse {
+        // No tokens at all - no header
+        return;
+    };
+    const second = try token_iter.next(self.gpa);
+
+    self.current = first;
+    self.lookahead = second;
+
+    // Store the token iterator so advance() can fetch new tokens
+    self.token_iterator = &token_iter;
+    defer self.token_iterator = null;
+
     const start_pos = self.currentPosition();
 
     switch (self.peek()) {
@@ -2413,7 +3318,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
         try self.pushDiagnostic(.expected_package_platform_open_curly, start_pos, self.currentPosition());
         return AST.Header{ .app = .{
             .exposes = exports_idx,
-            .packages = @enumFromInt(0),
+            .packages = nodeSlicesIdxFromInt(0),
             .region = start_pos,
         } };
     };
@@ -2499,7 +3404,7 @@ fn parseAppHeader(self: *Parser, start_pos: Position) Error!AST.Header {
 
                 // Create the provides list node (use block as a container for the exposed items)
                 // The region for the provides list spans from the start to the last exposed item
-                const provides_region = if (provides_idx != @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(0))) blk: {
+                const provides_region = if (provides_idx != @as(collections.NodeSlices(Node.Idx).Idx, nodeSlicesIdxFromInt(0))) blk: {
                     // Get the region of the provides list (should have items)
                     var iter = self.ast.node_slices.nodes(&provides_idx);
                     var last_item: ?Node.Idx = null;
@@ -2582,7 +3487,7 @@ fn parseModuleHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     self.expect(.OpenSquare) catch {
         try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
         return AST.Header{ .module = .{
-            .exposes = @enumFromInt(0),
+            .exposes = nodeSlicesIdxFromInt(0),
             .region = start_pos,
         } };
     };
@@ -2603,8 +3508,8 @@ fn parsePackageHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     self.expect(.OpenSquare) catch {
         try self.pushDiagnostic(.header_expected_open_square, start_pos, self.currentPosition());
         return AST.Header{ .package = .{
-            .exposes = @enumFromInt(0),
-            .packages = @enumFromInt(0),
+            .exposes = nodeSlicesIdxFromInt(0),
+            .packages = nodeSlicesIdxFromInt(0),
             .region = start_pos,
         } };
     };
@@ -2733,7 +3638,7 @@ fn parseHostedHeader(self: *Parser, start_pos: Position) Error!AST.Header {
     self.expect(.KwExposes) catch {
         try self.pushDiagnostic(.expected_exposes, start_pos, self.currentPosition());
         return AST.Header{ .hosted = .{
-            .exposes = @enumFromInt(0),
+            .exposes = nodeSlicesIdxFromInt(0),
             .region = start_pos,
         } };
     };
@@ -2966,11 +3871,13 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
             // Colons have bp=3, so we use min_bp=3 to stop at them
             const lhs = try self.parseExprWithPrecedence(3);
 
-            // Check if this is followed by : or := (making it a type annotation/declaration)
-            if (self.peek() == .OpColon or self.peek() == .OpColonEqual) {
-                const is_nominal = self.peek() == .OpColonEqual;
-                const colon_region = self.currentRegion();
-                self.advance(); // consume : or :=
+            // Check if this is followed by : or := or = (making it a type annotation/declaration/assignment)
+            if (self.peek() == .OpColon or self.peek() == .OpColonEqual or self.peek() == .OpAssign) {
+                const op_tag = self.peek();
+                const is_nominal = op_tag == .OpColonEqual;
+                const is_assignment = op_tag == .OpAssign;
+                const op_region = self.currentRegion();
+                self.advance(); // consume : or := or =
 
                 // Parse the right-hand side
                 // If we're in a potential record, use higher precedence to stop at commas
@@ -2997,10 +3904,15 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
                     rhs = try self.ast.appendNode(self.gpa, arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
                 }
 
-                // Create type annotation/declaration node
-                const tag: AST.Node.Tag = if (is_nominal) .binop_colon_equals else .binop_colon;
+                // Create type annotation/declaration/assignment node
+                const tag: AST.Node.Tag = if (is_nominal)
+                    .binop_colon_equals
+                else if (is_assignment)
+                    .binop_equals
+                else
+                    .binop_colon;
                 const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, rhs);
-                return try self.ast.appendNode(self.gpa, colon_region, tag, .{ .binop = binop_idx });
+                return try self.ast.appendNode(self.gpa, op_region, tag, .{ .binop = binop_idx });
             }
 
             // Otherwise, it's just a regular expression/statement
@@ -3221,8 +4133,55 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
 }
 
 /// Parse an expression
+/// This function expects tokens to be already set up (current and lookahead)
+/// Use parseExprFromSource for parsing from source text
 pub fn parseExpr(self: *Parser) Error!Node.Idx {
-    return self.parseExprWithPrecedence(0);
+    // If we don't have current token, we need to get one
+    if (self.current == null) {
+        // This means we're being called without tokens set up
+        // This should not happen in normal flow - the caller should have set up tokens
+        return try self.pushMalformed(.expr_unexpected_token, self.currentPosition());
+    }
+
+    // Parse the expression using precedence parser with minimum precedence 0
+    return try self.parseExprWithPrecedence(0);
+}
+
+/// Parse an expression from source text (sets up tokenizer)
+/// The env parameter must be provided by the caller
+pub fn parseExprFromSource(self: *Parser, env: *base.CommonEnv, messages: []tokenize_iter.Diagnostic) Error!Node.Idx {
+    // Create tokenizer
+    var token_iter = try tokenize_iter.TokenIterator.init(env, self.gpa, self.source, messages, self.byte_slices);
+    defer token_iter.deinit(self.gpa);
+
+    // Get first two tokens to start
+    const first = try token_iter.next(self.gpa) orelse return @enumFromInt(0);
+    const second = try token_iter.next(self.gpa);
+
+    self.current = first;
+    self.lookahead = second;
+
+    // Store the token iterator so advance() can fetch new tokens
+    self.token_iterator = &token_iter;
+
+    // Parse the expression
+    const result = try self.parseExpr();
+
+    // Check if we have unconsumed tokens (shouldn't happen for valid expressions)
+    // Do this before clearing the token iterator
+    if (self.peek() != .EndOfFile) {
+        // Clear the token iterator reference
+        self.token_iterator = null;
+        // There are unconsumed tokens - this might indicate a parsing issue
+        // Return an error instead of a partial parse
+        const pos = self.currentPosition();
+        return self.pushMalformed(.expr_unexpected_token, pos);
+    }
+
+    // Clear the token iterator reference
+    self.token_iterator = null;
+
+    return result;
 }
 
 fn parseNumLiteral(self: *Parser) Error!Node.Idx {
@@ -3238,6 +4197,7 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
             // Integer literals (base-10 or other bases)
             switch (extra) {
                 .num_literal_i32 => |value| {
+                    // Small integer that fits in i32
                     // Small integer that fits in i32
                     return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = value });
                 },
@@ -3255,6 +4215,7 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
         },
         .Float => {
             // Floating point literals
+            // Floating point literals
             switch (extra) {
                 .frac_literal_small => |small_dec| {
                     // Small fraction that fits in SmallDec - convert from Token.SmallDec to AST.SmallDec
@@ -3265,6 +4226,7 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
                     return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = ast_small_dec });
                 },
                 .bytes_idx => |idx| {
+                    // Big fraction stored in ByteSlices
                     // Big fraction stored in ByteSlices
                     return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
                 },
@@ -3576,15 +4538,23 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
             } else blk: {
                 // Parse as statement but be careful with colons in case this is a record
                 // We pass true to indicate we're in a potential record context
+                const before_pos = self.currentPosition();
                 const stmt = try self.parseStmtOrRecordField(true);
+                const after_pos = self.currentPosition();
+
+                // Check if we actually advanced - if not, we're stuck
+                if (before_pos.offset == after_pos.offset and stmt != null) {
+                    // We got a statement but didn't advance - this shouldn't happen
+                    // Break to avoid infinite loop
+                    break :blk stmt;
+                }
                 break :blk stmt;
             };
 
             if (elem_opt) |elem| {
                 // In lambda args, { a, b } is shorthand for { a: a, b: b }
                 // If we're in lambda args and have a bare identifier, convert it
-                // TODO: handle lambda args context
-                const final_elem = if (false and self.ast.tag(elem) == .lc) blk: {
+                const final_elem = if (self.is_in_lambda_args and self.ast.tag(elem) == .lc) blk: {
                     // Convert bare identifier to field: identifier
                     const elem_region = self.ast.getRegion(elem);
                     const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
@@ -3593,12 +4563,13 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
 
                 try self.scratch_nodes.append(self.gpa, final_elem);
 
-                // Check for comma - if we see one, this is a record!
+                // Check for comma (records) or continue parsing (blocks)
                 if (self.peek() == .Comma) {
                     is_record = true;
                     self.advance();
                 } else if (!is_record) {
                     // In block mode, keep parsing statements
+                    // They're separated by newlines in the source
                     continue;
                 } else {
                     // In record mode, stop at non-comma
@@ -3740,8 +4711,86 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     return try self.ast.appendNode(self.gpa, full_region, tag, .{ .nodes = nodes_idx });
 }
 
+fn parseExprStoppingAtElse(self: *Parser) Error!Node.Idx {
+    // Parse an expression but stop if we see 'else' keyword
+    // This is like parseExpr but with a custom termination condition
+
+    // Start with a primary expression
+    var expr = try self.parsePrimaryExpr();
+
+    // Keep parsing operators while we can
+    while (true) {
+        // Check for 'else' keyword - stop if we see it
+        if (self.peek() == .KwElse) {
+            break;
+        }
+
+        // Check for operators
+        const bp = getBindingPower(self.peek());
+        if (bp.left == 0) {
+            // No operator or not an operator token
+            break;
+        }
+
+        // We have an operator - parse it as a binary operation
+        const op_tag = self.peek();
+        const op_region = self.currentRegion();
+        self.advance();
+
+        // Parse the right-hand side with appropriate precedence
+        const rhs = if (self.peek() == .KwElse)
+            // If the next token is 'else', we have a missing RHS
+            try self.pushMalformed(.expr_unexpected_token, op_region.end)
+        else
+            try self.parseExprWithPrecedence(bp.right);
+
+        // Create the binary operation node
+        const binop_tag = tokenToBinOpTag(op_tag) orelse .binop_pipe;
+        const binop_idx = try self.ast.appendBinOp(self.gpa, expr, rhs);
+        const full_region = makeRegion(self.ast.start(expr), self.ast.getRegion(rhs).end);
+        expr = try self.ast.appendNode(self.gpa, full_region, binop_tag, .{ .binop = binop_idx });
+    }
+
+    return expr;
+}
+
+fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
+    // Parse a single primary expression (no binary operators)
+    switch (self.peek()) {
+        .LowerIdent => {
+            const ident = self.currentIdent();
+            const region = self.currentRegion();
+            self.advance();
+
+            if (ident) |id| {
+                return try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = id });
+            } else {
+                return try self.pushMalformed(.expr_unexpected_token, region.start);
+            }
+        },
+        .UpperIdent => {
+            const ident = self.currentIdent();
+            const region = self.currentRegion();
+            self.advance();
+            if (ident) |id| {
+                return try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+            } else {
+                return try self.pushMalformed(.expr_unexpected_token, region.start);
+            }
+        },
+        .Int, .Float, .IntBase => return self.parseNumLiteral(),
+        .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
+        .OpenSquare => return self.parseListLiteral(),
+        .OpenCurly => return self.parseBlockOrRecord(),
+        .OpenRound => return self.parseTupleOrParenthesized(),
+        else => {
+            const pos = self.currentPosition();
+            return self.pushMalformed(.expr_unexpected_token, pos);
+        },
+    }
+}
+
 fn parseIf(self: *Parser) Error!Node.Idx {
-    const start_pos = self.currentPosition();
     const if_region = self.currentRegion();
     self.advance(); // consume if
 
@@ -3749,15 +4798,26 @@ fn parseIf(self: *Parser) Error!Node.Idx {
     defer self.restoreScratchNodes(scratch_marker);
 
     // Parse condition
+    // In Roc: if condition then_expr else else_expr
+    // Parse the condition as a full expression
+    // This will naturally stop at low-precedence boundaries
     const cond = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, cond);
 
-    self.expect(.OpArrow) catch {
-        try self.pushDiagnostic(.expected_arrow, start_pos, self.currentPosition());
-    };
+    // Parse the then branch - parse until we hit 'else' or EOF
+    // We need to be careful here to not consume the else keyword
+    const then_start_pos = self.currentPosition();
+    var then_branch: Node.Idx = undefined;
 
-    // Parse then branch
-    const then_branch = try self.parseExpr();
+    // Check if next token is 'else' - if so, we have an empty then branch (error)
+    if (self.peek() == .KwElse) {
+        then_branch = try self.pushMalformed(.expr_unexpected_token, then_start_pos);
+    } else {
+        // Parse expression with custom stopping condition for 'else'
+        // We can't use precedence alone since 'else' has no precedence
+        // So we parse a primary expression, then check for operators
+        then_branch = try self.parseExprStoppingAtElse();
+    }
     try self.scratch_nodes.append(self.gpa, then_branch);
 
     // Check for else
@@ -3792,11 +4852,13 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
     const scrutinee = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, scrutinee);
 
-    // No arrow or curly braces after scrutinee in Roc's match syntax
-    // Branches follow on indented lines
+    // Check if we have curly braces for block-style match
+    const has_braces = self.peek() == .OpenCurly;
+    if (has_braces) {
+        self.advance(); // consume {
+    }
 
     // Parse branches - each branch is pattern => body
-    // In Roc, match branches are indentation-based, not separated by commas or bars
     var branch_count: u32 = 0;
 
     // We need to parse pattern => body pairs as single expressions
@@ -3805,6 +4867,12 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
     // may not be fully captured in the body. This is a known limitation that needs
     // fixing in the expression parser's handling of line continuations.
     while (self.peek() != .EndOfFile) {
+        // Check for closing brace if we have braces
+        if (has_braces and self.peek() == .CloseCurly) {
+            self.advance(); // consume }
+            break;
+        }
+
         // Parse the entire branch (pattern => body) as one expression
         // This will naturally create a binop_thick_arrow node
         const branch = try self.parseExpr();
@@ -3826,14 +4894,17 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
         branch_count += 1;
 
         // Check if we should continue parsing branches
-        const next_token = self.peek();
-        const could_be_pattern = switch (next_token) {
-            .UpperIdent, .LowerIdent, .Underscore, .OpenSquare, .OpenCurly, .OpenRound => true,
-            else => false,
-        };
+        if (!has_braces) {
+            // Without braces, check if next line could be a pattern
+            const next_token = self.peek();
+            const could_be_pattern = switch (next_token) {
+                .UpperIdent, .LowerIdent, .Underscore, .OpenSquare, .OpenCurly, .OpenRound => true,
+                else => false,
+            };
 
-        if (!could_be_pattern) {
-            break;
+            if (!could_be_pattern) {
+                break;
+            }
         }
     }
 
@@ -3859,17 +4930,17 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
-    // Set flag to treat | as a closing delimiter while parsing parameters
-    // TODO: track lambda args context
-    // self.is_in_lambda_args = true;
-    // defer self.is_in_lambda_args = false;
+    // Set flag to enable record shorthand in lambda parameters
+    // In lambda args, { a, b } is shorthand for { a: a, b: b }
+    self.is_in_lambda_args = true;
+    defer self.is_in_lambda_args = false;
 
     // Parse parameters (as expressions since we don't distinguish patterns)
     while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
-        // Parse as a full expression - the | will act as a delimiter
-        const param = try self.parseExpr();
+        // Parse parameter with precedence to stop at commas and bars
+        // Comma has bp=4, bar has bp=10, so we need min_bp > 10 to stop at bars
+        const param = try self.parseExprWithPrecedence(11);
         try self.scratch_nodes.append(self.gpa, param);
-
         if (self.peek() == .Comma) {
             self.advance();
         } else if (self.peek() != .OpBar) {
@@ -3881,6 +4952,8 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
 
     self.expect(.OpBar) catch {
         try self.pushDiagnostic(.expected_expr_bar, start_pos, self.currentPosition());
+        // Return a malformed node if we can't find the closing bar
+        return self.pushMalformed(.expr_unexpected_token, self.currentPosition());
     };
 
     // Parse body (flag is already reset by defer)
@@ -4027,7 +5100,9 @@ pub const BindingPower = struct {
 
 pub fn getBindingPower(tag: Token.Tag) BindingPower {
     return switch (tag) {
-        .OpBar => .{ .left = 10, .right = 11 },
+        // OpBar (|) is not an operator in Roc - it's only used in lambda syntax
+        // It should never have binding power for operator precedence
+        .OpBar => .{ .left = 0, .right = 0 },
         .OpOr => .{ .left = 20, .right = 21 },
         .OpAnd => .{ .left = 30, .right = 31 },
         .OpEquals, .OpNotEquals => .{ .left = 40, .right = 41 },
@@ -4046,7 +5121,7 @@ pub fn getBindingPower(tag: Token.Tag) BindingPower {
     };
 }
 
-pub fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
+fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
     return switch (tag) {
         .OpAssign => .binop_equals,
         .OpEquals => .binop_double_equals,
@@ -4073,4 +5148,3 @@ pub fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         else => null,
     };
 }
-

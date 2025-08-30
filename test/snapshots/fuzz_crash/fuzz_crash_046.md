@@ -12,12 +12,16 @@ app[]{f:platform""}import fS
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (lc "f")
-  )
-  (uc "S")
-)
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

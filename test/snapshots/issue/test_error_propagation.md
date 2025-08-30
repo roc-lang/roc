@@ -19,24 +19,7 @@ value = "test"
 KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent OpColonEqual UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (uc "BadBase")
-    (underscore)
-  )
-  (binop_colon_equals
-    (uc "GoodAlias")
-    (uc "BadBase")
-  )
-  (binop_colon
-    (lc "value")
-    (uc "GoodAlias")
-  )
-  (binop_equals
-    (lc "value")
-    (str_literal_small "test")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

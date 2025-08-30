@@ -14,15 +14,11 @@ match numbers {
 KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleDot CloseSquare OpFatArrow TripleDot CloseCurly ~~~
 # PARSE
 ~~~clojure
-(binop_thick_arrow
-  (match <0 branches>)
-  (ellipsis)
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match numbers
- => ... # error, multiple rest patterns not allowed
+}
 ~~~
 # EXPECTED
 NIL
@@ -34,13 +30,16 @@ at 2:8 to 2:10
 at 2:5 to 2:10
 
 **Parse Error**
-at 1:15 to 2:20
+at 2:5 to 2:16
 
 **Parse Error**
-at 1:15 to 2:22
+at 2:20 to 2:22
+
+**Parse Error**
+at 3:1 to 3:2
 
 **Unsupported Node**
-at 2:22 to 2:24
+at 3:1 to 3:2
 
 # CANONICALIZE
 ~~~clojure

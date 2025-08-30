@@ -12,9 +12,7 @@ module[]!0.t
 KwModule OpenSquare CloseSquare OpBang Int Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (unary_not <unary>)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

@@ -35,11 +35,9 @@ OpenRound OpBar LowerIdent Comma LowerIdent Comma LowerIdent OpBar OpBar LowerId
         )
       )
       (args
-        (tuple_literal
-          (lc "a")
-          (lc "b")
-          (lc "c")
-        )
+        (lc "a")
+        (lc "b")
+        (lc "c")
       )
     )
     (tuple_literal

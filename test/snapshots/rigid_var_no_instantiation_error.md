@@ -35,96 +35,18 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound OpenRound Int Comma String CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound UpperIdent Dot LowerIdent Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound CloseRound LowerIdent OpAssign LowerIdent OpenRound OpenRound String Comma String CloseRound CloseRound OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "swap")
-    (binop_thin_arrow
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-      (tuple_literal
-        (lc "b")
-        (lc "a")
-      )
-    )
-  )
-  (binop_equals
-    (lc "swap")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
         (block
-          (binop_equals
-            (tuple_literal
-              (lc "x")
-              (lc "y")
-            )
-            (apply_lc
-              (lc "pair")
-              (tuple_literal
-                (lc "y")
-                (lc "x")
-              )
-            )
-          )
+          (lc "main")
         )
       )
-      (args
-        (lc "pair")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (block
-          (binop_equals
-            (lc "result1")
-            (apply_lc
-              (lc "swap")
-              (tuple_literal
-                (num_literal_i32 42)
-                (str_literal_big "hello")
-              )
-            )
-          )
-          (binop_equals
-            (lc "result2")
-            (apply_lc
-              (lc "swap")
-              (tuple_literal
-                (binop_pipe
-                  (uc "Bool")
-                  (dot_lc "true")
-                )
-                (list_literal
-                  (num_literal_i32 1)
-                  (num_literal_i32 2)
-                  (num_literal_i32 3)
-                )
-              )
-            )
-          )
-          (binop_equals
-            (lc "result3")
-            (apply_lc
-              (lc "swap")
-              (tuple_literal
-                (str_literal_small "foo")
-                (str_literal_small "bar")
-              )
-            )
-          )
-          (record_literal)
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -136,8 +58,7 @@ swap = |pair| {
 	(x, y) = pair((y, x))
 }
 main! = |_| {
-		# First use: swap (Int, Str)
-result1 = swap((42, "hello"))
+	result1 = swap((42, "hello"))
 	result2 = swap((Bool.true, [1, 2, 3]))
 	result3 = swap(("foo", "bar"))
 	{  }
@@ -154,7 +75,16 @@ at 17:21 to 17:25
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "swap")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "b")
+        (Expr.lookup "a")
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "swap")

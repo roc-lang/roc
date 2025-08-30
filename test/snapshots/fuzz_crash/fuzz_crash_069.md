@@ -12,7 +12,14 @@ package[]{d:{0}}
 KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly Int CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (packages
+    (lc "d")
+
+    (block
+      (num_literal_i32 0)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

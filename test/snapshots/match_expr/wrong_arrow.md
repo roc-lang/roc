@@ -15,42 +15,33 @@ match l {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpArrow UpperIdent OpenRound UpperIdent CloseRound OpenSquare DoubleDot Comma LowerIdent CloseSquare OpArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match l
+..
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:8 to 2:11
+at 2:8 to 3:6
 
 **Parse Error**
-at 3:8 to 3:10
+at 3:6 to 3:8
 
-**Parse Error**
-at 3:5 to 3:10
-
-**Parse Error**
-at 3:11 to 3:13
-
-**Parse Error**
-at 3:13 to 3:16
-
-**Parse Error**
-at 1:9 to 4:2
+**Unsupported Node**
+at 3:6 to 3:8
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

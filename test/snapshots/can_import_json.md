@@ -16,21 +16,7 @@ main = Json.utf8
 KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
-      (lc "json")
-      (uc "Json")
-    )
-  )
-  (binop_equals
-    (lc "main")
-    (binop_pipe
-      (uc "Json")
-      (dot_lc "utf8")
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

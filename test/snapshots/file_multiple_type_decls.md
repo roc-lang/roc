@@ -16,23 +16,7 @@ ThirdType : List(U8)
 KwModule OpenSquare CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent OpenRound UpperIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (uc "FirstType")
-    (uc "U64")
-  )
-  (binop_colon
-    (uc "SecondType")
-    (uc "Str")
-  )
-  (binop_colon
-    (uc "ThirdType")
-    (apply_uc
-      (uc "List")
-      (uc "U8")
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

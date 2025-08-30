@@ -12,10 +12,7 @@ module[]0 f
 KwModule OpenSquare CloseSquare Int LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (num_literal_i32 0)
-  (lc "f")
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

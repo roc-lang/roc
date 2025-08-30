@@ -49,154 +49,18 @@ Complex : {
 KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent CloseRound CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound Comma UpperIdent OpenRound LowerIdent CloseRound CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound CloseCurly UpperIdent OpColon UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent OpenRound UpperIdent CloseRound UpperIdent OpColon UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound Comma LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (uc "MyU64")
-    (uc "U64")
-  )
-  (binop_colon
-    (uc "MyString")
-    (uc "Str")
-  )
-  (binop_colon
-    (uc "MyBool")
-    (uc "Bool")
-  )
-  (binop_colon
+
     (uc "Person")
-    (record_literal
-      (binop_colon
-        (lc "name")
-        (uc "Str")
-      )
-      (binop_colon
-        (lc "age")
-        (uc "U64")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Result")
-      (tuple_literal
-        (lc "ok")
-        (lc "err")
-      )
-    )
-    (list_literal
-      (apply_uc
-        (uc "Ok")
-        (lc "ok")
-      )
-      (apply_uc
-        (uc "Err")
-        (lc "err")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Tree")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Branch")
-        (apply_uc
-          (uc "Node")
-          (lc "a")
-        )
-      )
-      (apply_uc
-        (uc "Leaf")
-        (lc "a")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Node")
-      (lc "a")
-    )
-    (record_literal
-      (binop_colon
-        (lc "value")
-        (lc "a")
-      )
-      (binop_colon
-        (lc "children")
-        (apply_uc
-          (uc "List")
-          (apply_uc
-            (uc "Tree")
-            (lc "a")
-          )
-        )
-      )
-    )
-  )
-  (binop_colon
-    (uc "MyResult")
-    (apply_uc
-      (uc "Result")
-      (tuple_literal
-        (uc "Str")
-        (uc "U64")
-      )
-    )
-  )
-  (binop_colon
-    (uc "Person")
-    (uc "U64")
-  )
-  (binop_colon
-    (uc "BadType")
-    (uc "SomeUndeclaredType")
-  )
-  (binop_colon
-    (uc "MyList")
-    (apply_uc
-      (uc "List")
-      (uc "Str")
-    )
-  )
-  (binop_colon
-    (uc "MyDict")
-    (apply_uc
-      (uc "Dict")
-      (tuple_literal
-        (uc "Str")
-        (uc "U64")
-      )
-    )
-  )
-  (binop_colon
-    (uc "Complex")
-    (record_literal
-      (binop_colon
-        (lc "person")
-        (uc "Person")
-      )
-      (binop_colon
-        (lc "result")
-        (apply_uc
-          (uc "Result")
-          (tuple_literal
-            (uc "Bool")
-            (uc "Str")
-          )
-        )
-      )
-      (binop_colon
-        (lc "tree")
-        (apply_uc
-          (uc "Tree")
-          (uc "U64")
-        )
-      )
-    )
-  )
-)
+
+    (uc "Result")
+
+    (uc "Tree")
+
+    (uc "Node")
+))
 ~~~
 # FORMATTED
 ~~~roc

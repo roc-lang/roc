@@ -17,43 +17,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "pair")
-    (binop_thin_arrow
-      (lc "a")
-      (tuple_literal
-        (lc "a")
-        (lc "a")
-      )
-    )
-  )
-  (binop_equals
-    (lc "pair")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "x")
-          (lc "x")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (lc "x")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -72,7 +47,13 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "pair")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "a")
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "pair")

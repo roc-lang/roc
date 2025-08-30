@@ -15,23 +15,11 @@ x = 500
 KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "x")
-    (uc "U8")
-  )
-  (binop_equals
-    (lc "x")
-    (num_literal_i32 500)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x : U8
-x = 500
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

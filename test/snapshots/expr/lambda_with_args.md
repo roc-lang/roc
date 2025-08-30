@@ -20,16 +20,14 @@ OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
     )
   )
   (args
-    (tuple_literal
-      (lc "x")
-      (lc "y")
-    )
+    (lc "x")
+    (lc "y")
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-|x, y| x + y
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

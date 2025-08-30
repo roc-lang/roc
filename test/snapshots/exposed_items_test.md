@@ -16,24 +16,10 @@ main = 42
 KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "pf")
-        (uc "Stdout")
-      )
-      (list_literal
-        (lc "line")
-        (lc "write")
-      )
-    )
-  )
-  (binop_equals
+(module-header
+  (exposes
     (lc "main")
-    (num_literal_i32 42)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

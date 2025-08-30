@@ -15,23 +15,11 @@ x = -1
 KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign OpUnaryMinus Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "x")
-    (uc "U8")
-  )
-  (binop_equals
-    (lc "x")
-    (unary_neg <unary>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x : U8
-x = -1
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

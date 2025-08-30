@@ -12,7 +12,22 @@ package[]{d:{{d:{0}?}}}
 KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurly LowerIdent OpColon OpenCurly Int CloseCurly OpQuestion CloseCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (packages
+    (lc "d")
+
+    (block
+      (block
+        (binop_colon
+          (lc "d")
+          (block
+            (num_literal_i32 0)
+          )
+        )
+        (malformed malformed:expr_unexpected_token)
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

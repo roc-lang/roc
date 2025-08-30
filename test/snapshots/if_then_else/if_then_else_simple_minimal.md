@@ -12,18 +12,22 @@ if bool 1 else 2
 KwIf LowerIdent Int KwElse Int ~~~
 # PARSE
 ~~~clojure
-(if_else <0 branches>)
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (num_literal_i32 1)
+)
+  (else     (num_literal_i32 2)
+))
 ~~~
 # FORMATTED
 ~~~roc
-if bool 1 else 2
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

@@ -17,64 +17,12 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "person")
-    (record_literal
-      (binop_colon
-        (lc "name")
-        (str_literal_big "Alice")
-      )
-      (binop_colon
-        (lc "age")
-        (num_literal_i32 30)
-      )
-      (binop_colon
-        (lc "city")
-        (str_literal_big "Boston")
-      )
-    )
-  )
-  (binop_equals
-    (lc "updated_one")
-    (record_literal
-      (double_dot_lc "person")
-    )
-  )
-  (binop_colon
-    (lc "age")
-    (num_literal_i32 31)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (binop_equals
-    (lc "updated2")
-    (record_literal
-      (double_dot_lc "updated_one")
-    )
-  )
-  (binop_colon
-    (lc "city")
-    (str_literal_big "New York")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (binop_equals
+
     (lc "final")
-    (record_literal
-      (double_dot_lc "updated2")
-    )
-  )
-  (binop_colon
-    (lc "name")
-    (binop_colon
-      (tuple_literal
-        (str_literal_big "Alice Smith")
-        (lc "age")
-      )
-      (num_literal_i32 32)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -163,7 +111,10 @@ at 6:52 to 6:53
   (Expr.binop_colon
     (Expr.lookup "name")
     (Expr.binop_colon
-      (Expr.tuple_literal)
+      (Expr.tuple_literal
+        (Expr.str_literal_big)
+        (Expr.lookup "age")
+      )
       (Expr.num_literal_i32 32)
     )
   )

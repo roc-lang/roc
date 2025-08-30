@@ -23,14 +23,13 @@ const Formatter = struct {
     ast: *const AST2,
     source: []const u8,
     ident_store: *const Ident.Store,
-    tokens: []const Token, // Now uses pre-collected tokens from parser
+    tokens: []const Token, // Now includes comment tokens!
     output: std.ArrayList(u8),
 
-    // Formatting state - matches original formatter
+    // Formatting state
     curr_indent_level: u32 = 0,
     has_newline: bool = true, // Starts true since beginning of file is considered a newline
-    last_formatted_pos: usize = 0, // Current position in source being formatted
-    last_comment_end: usize = 0, // Track last comment position to avoid duplicates
+    token_cursor: usize = 0, // Current position in tokens array for efficient traversal
 
     fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, tokens: []const Token) !Formatter {
         return Formatter{
@@ -38,10 +37,9 @@ const Formatter = struct {
             .ast = ast,
             .source = source,
             .ident_store = ident_store,
-            .tokens = tokens, // Use pre-collected tokens
+            .tokens = tokens, // Use pre-collected tokens including comments
             .output = std.ArrayList(u8).init(allocator),
-            .last_formatted_pos = 0,
-            .last_comment_end = 0,
+            .token_cursor = 0,
         };
     }
 
@@ -90,67 +88,58 @@ const Formatter = struct {
 
     /// Convert u32 payload to NodeSlices.Idx
     inline fn payloadToNodeSlicesIdx(payload_u32: u32) collections.NodeSlices(Node.Idx).Idx {
+        // The payload is already the index value (possibly bit-cast in parser)
         return @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(payload_u32));
     }
 
-    fn tokenizeSource(self: *Formatter) !void {
-        var env = try CommonEnv.init(self.allocator, self.source);
-        defer env.deinit(self.allocator);
+    /// Flush any comment tokens before the given position
+    fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
+        var found_any = false;
 
-        var byte_slices = ByteSlices{ .entries = .{} };
-        defer byte_slices.entries.deinit(self.allocator);
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
 
-        var messages = std.ArrayList(tokenize_iter.Diagnostic).init(self.allocator);
-        defer messages.deinit();
-        // Pre-allocate reasonable capacity to avoid reallocations
-        try messages.ensureTotalCapacity(256);
-
-        var iter = try tokenize_iter.TokenIterator.init(&env, self.allocator, self.source, messages.items, &byte_slices);
-        while (try iter.next(self.allocator)) |token| {
-            try self.tokens.append(token);
-
-            // Store the region for this token
-            try self.token_regions.append(token.region);
-        }
-    }
-
-    /// Find the token index that contains or is after the given position
-    fn findTokenAtPosition(self: *const Formatter, pos: Position) ?usize {
-        for (self.tokens, 0..) |token, i| {
+            // Stop if we've reached or passed the position
             if (token.region.start.offset >= pos.offset) {
-                return i;
-            }
-        }
-        return null;
-    }
-
-    /// Find the token index that is before the given position
-    fn findTokenBeforePosition(self: *const Formatter, pos: Position) ?usize {
-        var result: ?usize = null;
-        for (self.tokens, 0..) |token, i| {
-            if (token.region.end.offset <= pos.offset) {
-                result = i;
-            } else {
                 break;
             }
+
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    // Output the comment text
+                    const comment_text = self.source[token.region.start.offset..token.region.end.offset];
+
+                    // Preserve indentation for inline comments
+                    if (!self.has_newline) {
+                        try self.pushAll(" ");
+                    } else {
+                        try self.pushIndent();
+                    }
+
+                    try self.pushAll(comment_text);
+                    try self.newline();
+                    found_any = true;
+                },
+                else => {}, // Skip non-comment tokens
+            }
+
+            self.token_cursor += 1;
         }
-        return result;
+
+        return found_any;
     }
 
     fn formatHeader(self: *Formatter, header: AST2.Header) !void {
         switch (header) {
             .module => |m| {
-                _ = try self.flushCommentsBeforeToken(m.region);
+                _ = try self.flushCommentsBeforePosition(m.region);
                 try self.pushAll("module");
-
-                // Check for inline comment after module keyword
-                _ = try self.flushCommentsAfterToken(m.region);
 
                 // Format the exposed list
                 try self.formatExposedList(m.exposes);
             },
             .app => |a| {
-                _ = try self.flushCommentsBeforeToken(a.region);
+                _ = try self.flushCommentsBeforePosition(a.region);
                 try self.pushAll("app");
 
                 // Format exports list BEFORE packages
@@ -185,13 +174,32 @@ const Formatter = struct {
                         prev_end = pkg_node.region.end.offset;
                     }
 
-                    // Also check for trailing comma after last package
-                    if (!needs_multiline and prev_end > 0 and prev_end < self.source.len) {
-                        // Look for comma after the last package
-                        var i = prev_end;
-                        while (i < self.source.len and (self.source[i] == ' ' or self.source[i] == '\t')) : (i += 1) {}
-                        if (i < self.source.len and self.source[i] == ',') {
-                            needs_multiline = true;
+                    // Also check for trailing comma after last package using tokens
+                    if (!needs_multiline and prev_end > 0) {
+                        // Binary search to find tokens after the last package
+                        var cursor: usize = 0;
+                        var search_end = self.tokens.len;
+                        while (cursor < search_end) {
+                            const mid = cursor + (search_end - cursor) / 2;
+                            if (self.tokens[mid].region.start.offset < prev_end) {
+                                cursor = mid + 1;
+                            } else {
+                                search_end = mid;
+                            }
+                        }
+
+                        // Look for a comma token after the last package
+                        while (cursor < self.tokens.len) : (cursor += 1) {
+                            const token = self.tokens[cursor];
+                            switch (token.tag) {
+                                .Comma => {
+                                    needs_multiline = true;
+                                    break;
+                                },
+                                .CloseCurly => break, // Found the closing brace
+                                .LineComment, .DocComment => continue, // Skip comments
+                                else => break, // Any other token means no trailing comma
+                            }
                         }
                     }
                 }
@@ -199,15 +207,7 @@ const Formatter = struct {
                 if (needs_multiline) {
                     // Multiline format with proper comment preservation
 
-                    // Check for comments after "app" keyword
-                    // The comment would be between the "app" token and the opening brace token
-                    // Since we don't have the exact position of the brace, check after current position
-                    const app_end_pos = Position{ .offset = @intCast(a.region.offset + 3) }; // "app" is 3 chars
-                    const comment_after_app = try self.flushCommentsAfterToken(app_end_pos);
-
-                    if (comment_after_app) {
-                        // If there was a comment, it's already on its own line
-                    }
+                    // Comments after "app" keyword will be handled when we flush before the next token
 
                     try self.ensureNewline();
                     try self.pushIndent();
@@ -221,7 +221,7 @@ const Formatter = struct {
                             const pkg_node = self.getNode(pkg);
 
                             // Flush any comments before this package
-                            _ = try self.flushCommentsBeforeToken(pkg_node.region.start);
+                            _ = try self.flushCommentsBeforePosition(pkg_node.region.start);
 
                             try self.pushIndent();
 
@@ -290,11 +290,10 @@ const Formatter = struct {
                 }
             },
             .package => |p| {
-                _ = try self.flushCommentsBeforeToken(p.region);
+                _ = try self.flushCommentsBeforePosition(p.region);
                 try self.pushAll("package");
 
-                // Check for comment after package keyword
-                _ = try self.flushCommentsAfterToken(p.region);
+                // Comments after package keyword will be handled when we flush before the next token
 
                 // Format exposes
                 try self.formatExposedList(p.exposes);
@@ -315,11 +314,10 @@ const Formatter = struct {
                 }
             },
             .platform => |p| {
-                _ = try self.flushCommentsBeforeToken(p.region);
+                _ = try self.flushCommentsBeforePosition(p.region);
                 try self.pushAll("platform");
 
-                // Check for comment after platform keyword
-                _ = try self.flushCommentsAfterToken(p.region);
+                // Comments after platform keyword will be handled when we flush before the next token
 
                 // Format name
                 try self.pushAll(" ");
@@ -367,21 +365,21 @@ const Formatter = struct {
                 }
             },
             .hosted => |h| {
-                _ = try self.flushCommentsBeforeToken(h.region);
+                _ = try self.flushCommentsBeforePosition(h.region);
                 try self.pushAll("hosted");
 
                 // Format exposes
                 try self.formatExposedList(h.exposes);
             },
             .interface => |i| {
-                _ = try self.flushCommentsBeforeToken(i.region);
+                _ = try self.flushCommentsBeforePosition(i.region);
                 try self.pushAll("interface");
 
                 // Format exposes
                 try self.formatExposedList(i.exposes);
             },
             .malformed => |m| {
-                _ = try self.flushCommentsBeforeToken(m.region);
+                _ = try self.flushCommentsBeforePosition(m.region);
                 // Malformed headers just get flushed as-is
             },
         }
@@ -403,20 +401,37 @@ const Formatter = struct {
         var has_comments = false;
         var iter = self.ast.node_slices.nodes(&exposes_idx);
 
+        // Get the first node to check for comments before it
+        var first_node_idx: ?Node.Idx = null;
+
         // First pass: count and check for complexity
         while (iter.next()) |node_idx| {
             item_count += 1;
+            if (first_node_idx == null) {
+                first_node_idx = node_idx;
+            }
             const node = self.getNode(node_idx);
 
             // Check if there are comments before this node
-            if (self.hasCommentBetween(self.last_formatted_pos, node.region.start.offset)) {
-                has_comments = true;
+            // Save current cursor position and check ahead
+            const saved_cursor = self.token_cursor;
+            var check_cursor = self.token_cursor;
+            while (check_cursor < self.tokens.len) : (check_cursor += 1) {
+                const token = self.tokens[check_cursor];
+                if (token.region.start.offset >= node.region.start.offset) break;
+                switch (token.tag) {
+                    .LineComment, .DocComment => {
+                        has_comments = true;
+                        break;
+                    },
+                    else => {},
+                }
             }
+            self.token_cursor = saved_cursor;
         }
 
-        // Use multiline if there are comments
-        // We can't use collectionIsMultiline here because exposes_idx is a NodeSlices index, not a node
-        // Check for trailing comma by looking at the source after the last item
+        // Use multiline if there are comments or trailing comma
+        // Check for trailing comma using tokens
         var has_trailing_comma = false;
         if (item_count > 0) {
             // Reset iterator to find last item
@@ -426,11 +441,31 @@ const Formatter = struct {
                 last_node_idx = n;
             }
             const last_node = self.getNode(last_node_idx);
-            // Check for comma after last item
-            var i = last_node.region.end.offset;
-            while (i < self.source.len and (self.source[i] == ' ' or self.source[i] == '\t')) : (i += 1) {}
-            if (i < self.source.len and self.source[i] == ',') {
-                has_trailing_comma = true;
+
+            // Use binary search to find tokens after the last node
+            var cursor: usize = 0;
+            var search_end = self.tokens.len;
+            while (cursor < search_end) {
+                const mid = cursor + (search_end - cursor) / 2;
+                if (self.tokens[mid].region.start.offset < last_node.region.end.offset) {
+                    cursor = mid + 1;
+                } else {
+                    search_end = mid;
+                }
+            }
+
+            // Look for a comma token immediately after the last node
+            while (cursor < self.tokens.len) : (cursor += 1) {
+                const token = self.tokens[cursor];
+                switch (token.tag) {
+                    .Comma => {
+                        has_trailing_comma = true;
+                        break;
+                    },
+                    .CloseSquare => break, // Found the closing bracket, no trailing comma
+                    .LineComment, .DocComment => continue, // Skip comments
+                    else => break, // Any other token means no trailing comma
+                }
             }
         }
 
@@ -438,6 +473,11 @@ const Formatter = struct {
 
         if (multiline) {
             self.curr_indent_level += 1;
+            // Check for comments after the opening bracket before newline
+            if (first_node_idx) |first_idx| {
+                const first_node = self.getNode(first_idx);
+                _ = try self.flushCommentsBeforePosition(first_node.region.start);
+            }
             try self.ensureNewline();
         }
 
@@ -447,9 +487,11 @@ const Formatter = struct {
 
         while (iter.next()) |node_idx| {
             if (multiline) {
-                // Check for comments before this item
-                const node = self.getNode(node_idx);
-                _ = try self.flushCommentsBeforeToken(node.region.start);
+                // For items after the first, check for comments
+                if (!first) {
+                    const node = self.getNode(node_idx);
+                    _ = try self.flushCommentsBeforePosition(node.region.start);
+                }
                 try self.pushIndent();
             } else {
                 if (!first) try self.pushAll(", ");
@@ -477,7 +519,7 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         // Flush any comments before this node
-        _ = try self.flushCommentsBeforeToken(node.region.start);
+        _ = try self.flushCommentsBeforePosition(node.region.start);
 
         switch (node.tag) {
             // Binary operations
@@ -663,22 +705,17 @@ const Formatter = struct {
                 if (end <= self.source.len) {
                     const source_text = self.source[start..end];
                     try self.pushAll(source_text);
-                    self.last_formatted_pos = end;
+                    // Update token cursor to skip past this malformed region
+                    while (self.token_cursor < self.tokens.len and
+                        self.tokens[self.token_cursor].region.start.offset < end)
+                    {
+                        self.token_cursor += 1;
+                    }
                 }
             },
         }
 
-        // Update position to past this node
-        const node_end = node.region.end.offset;
-        if (node_end > self.last_formatted_pos) {
-            // Check for inline comments after this node
-            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(node.region.end.offset) });
-
-            // If no inline comment was found, update position
-            if (self.last_formatted_pos < node_end) {
-                self.last_formatted_pos = node_end;
-            }
-        }
+        // Comments after nodes will be handled when we flush before the next token
     }
 
     fn formatBinOp(self: *Formatter, node_idx: Node.Idx, op_str: []const u8) !void {
@@ -750,7 +787,7 @@ const Formatter = struct {
             if ((lhs_node.tag == .uc or lhs_node.tag == .lc) and
                 (rhs_node.tag == .uc or rhs_node.tag == .lc or rhs_node.tag == .dot_lc or rhs_node.tag == .not_lc))
             {
-                // This is actually field access or a qualified name, not a pipe operator
+                // This is field access or a qualified name (Roc doesn't have a pipe operator)
                 try self.formatNode(lhs);
                 try self.push('.');
 
@@ -804,24 +841,20 @@ const Formatter = struct {
             try self.formatNode(lhs);
             if (needs_lhs_parens) try self.push(')');
 
-            // Check for comments between LHS and equals using token-based approach
-            const lhs_node = self.getNode(lhs);
-            const has_comment_after_lhs = try self.flushCommentsAfterToken(lhs_node.region.end);
-
             try self.pushAll(" = ");
 
-            // Check for comments after equals before RHS using token-based approach
+            // Check for comments before RHS
             const rhs_node = self.getNode(rhs);
-            const comment_after_equals = try self.flushCommentsBeforeToken(rhs_node.region.start);
+            const has_comments = try self.flushCommentsBeforePosition(rhs_node.region.start);
 
-            if (has_comment_after_lhs or comment_after_equals) {
+            if (has_comments) {
                 // Force multiline if we found any comments
                 multiline = true;
             }
 
             if (multiline) {
                 self.curr_indent_level += 1;
-                if (!comment_after_equals) {
+                if (!has_comments) {
                     // Only add blank line if there wasn't a comment (which already added newline)
                     try self.ensureBlankLine();
                     try self.pushIndent();
@@ -844,15 +877,13 @@ const Formatter = struct {
             try self.formatNode(lhs);
             if (needs_lhs_parens) try self.push(')');
 
-            // Check for comments before operator using token-based approach
-            const lhs_node = self.getNode(lhs);
-            _ = try self.flushCommentsAfterToken(lhs_node.region.end);
+            // Comments around operators will be handled when we flush before the RHS
 
             try self.pushAll(op_str);
 
             // Check for comments after operator using token-based approach
             const rhs_node = self.getNode(rhs);
-            _ = try self.flushCommentsBeforeToken(rhs_node.region.start);
+            _ = try self.flushCommentsBeforePosition(rhs_node.region.start);
 
             if (needs_rhs_parens) try self.push('(');
             try self.formatNode(rhs);
@@ -1310,9 +1341,9 @@ const Formatter = struct {
             if (multiline) {
                 if (!first_elem) {
                     try self.push(',');
-                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                    // Comments after comma will be handled when we flush before the next element
                 }
-                _ = try self.flushCommentsBeforeToken(elem_node.region.start);
+                _ = try self.flushCommentsBeforePosition(elem_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1324,17 +1355,17 @@ const Formatter = struct {
             try self.formatNode(elem);
 
             if (multiline) {
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             }
         }
 
         if (multiline) {
             if (self.hasTrailingComma(node_idx)) {
                 try self.push(',');
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             }
             self.curr_indent_level -= 1;
-            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1365,10 +1396,10 @@ const Formatter = struct {
                 if (!first_elem) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                    // Comments after comma will be handled when we flush before the next element
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBeforeToken(elem_node.region.start);
+                _ = try self.flushCommentsBeforePosition(elem_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1381,7 +1412,7 @@ const Formatter = struct {
 
             // After formatting the element, check for inline comments
             if (multiline) {
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             }
         }
 
@@ -1389,10 +1420,10 @@ const Formatter = struct {
             // Always add trailing comma in multiline mode
             try self.push(',');
             // Check for comment after trailing comma
-            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+            // Comments will be handled when we flush before the closing bracket
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing bracket
-            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
             try self.ensureNewline();
             try self.pushIndent();
         }
@@ -1442,10 +1473,10 @@ const Formatter = struct {
                 if (!first_field) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                    // Comments after comma will be handled when we flush before the next element
                 }
                 // Flush any comments before this field
-                _ = try self.flushCommentsBeforeToken(field_node.region.start);
+                _ = try self.flushCommentsBeforePosition(field_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1458,7 +1489,7 @@ const Formatter = struct {
 
             // After formatting the field, check for inline comments
             if (multiline) {
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             }
         }
 
@@ -1466,10 +1497,10 @@ const Formatter = struct {
             // Always add trailing comma in multiline mode
             try self.push(',');
             // Check for comment after trailing comma
-            _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+            // Comments will be handled when we flush before the closing bracket
             self.curr_indent_level -= 1;
             // Flush any remaining comments before the closing brace
-            _ = try self.flushCommentsBeforeToken(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
             try self.ensureNewline();
             try self.pushIndent();
             try self.pushAll("}");
@@ -1540,10 +1571,10 @@ const Formatter = struct {
                 if (!first) {
                     try self.push(',');
                     // Check for inline comments after the comma
-                    _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                    // Comments after comma will be handled when we flush before the next element
                 }
                 // Flush any comments before this element
-                _ = try self.flushCommentsBeforeToken(child_node.region.start);
+                _ = try self.flushCommentsBeforePosition(child_node.region.start);
                 try self.ensureNewline();
                 try self.pushIndent();
             } else {
@@ -1555,7 +1586,7 @@ const Formatter = struct {
 
             // After formatting the element, check for inline comments
             if (multiline) {
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             }
             first = false;
         }
@@ -1578,7 +1609,7 @@ const Formatter = struct {
         const nodes_idx = node.payload.nodes;
         var iter = self.ast.node_slices.nodes(&nodes_idx);
 
-        var prev_stmt_end: usize = self.last_formatted_pos;
+        var prev_stmt_end: usize = 0;
         var first = true;
 
         while (iter.next()) |stmt_idx| {
@@ -1610,7 +1641,7 @@ const Formatter = struct {
             try self.formatNode(stmt_idx);
 
             // Check for trailing comment on the same line as this statement
-            _ = try self.flushCommentsAfterToken(stmt_node.region.end);
+            // Comments after statements will be handled when we flush before the next statement
 
             prev_stmt_end = stmt_node.region.end.offset;
             first = false;
@@ -1769,7 +1800,7 @@ const Formatter = struct {
             const branch_node = self.getNode(branch_idx);
 
             // Flush any comments before this branch
-            _ = try self.flushCommentsBeforeToken(branch_node.region.start);
+            _ = try self.flushCommentsBeforePosition(branch_node.region.start);
 
             try self.pushIndent();
 
@@ -1808,7 +1839,7 @@ const Formatter = struct {
                 }
 
                 // Check for inline comments after the body
-                _ = try self.flushCommentsAfterToken(Position{ .offset = @intCast(self.last_formatted_pos) });
+                // Comments will be handled when we flush before the next token
             } else {
                 // Shouldn't happen - branches should always be thick arrows
                 // But handle gracefully by formatting the node as-is
@@ -2641,75 +2672,71 @@ const Formatter = struct {
 
     fn hasTrailingComma(self: *const Formatter, node_idx: Node.Idx) bool {
         const node = self.getNode(node_idx);
-
-        // Look for a comma before the closing delimiter
         const start = node.region.start.offset;
         const end = node.region.end.offset;
 
         if (end <= start or end > self.source.len) {
-            // For tuples, if the region is incomplete, try to find the closing paren
-            if (node.tag == .tuple_literal and start < self.source.len) {
-                // Scan forward from the end of the known region to find the closing paren
-                var scan_pos = if (end <= self.source.len) end else start;
-                var depth: i32 = 0;
-
-                while (scan_pos < self.source.len) {
-                    const c = self.source[scan_pos];
-                    if (c == '(') {
-                        depth += 1;
-                    } else if (c == ')') {
-                        if (depth == 0) {
-                            // Found the closing paren
-                            // Now check backward for a comma
-                            var i = scan_pos;
-                            while (i > start) {
-                                i -= 1;
-                                const prev_c = self.source[i];
-                                if (prev_c == ',') {
-                                    return true;
-                                } else if (prev_c != ' ' and prev_c != '\t' and prev_c != '\n' and prev_c != '\r') {
-                                    // Found non-whitespace that's not a comma
-                                    return false;
-                                }
-                            }
-                            return false;
-                        }
-                        depth -= 1;
-                    }
-                    scan_pos += 1;
-                }
-            }
             return false;
         }
 
-        // Single backward scan to find both delimiter and comma
-        var i = end;
-        var found_delimiter = false;
+        // Use binary search to find tokens within the node's region
+        var left: usize = 0;
+        var right: usize = self.tokens.len;
 
-        // For tuples, if we haven't found a closing paren at the end, there's a parser error
-        if (node.tag == .tuple_literal and i < self.source.len and self.source[i - 1] != ')') {
-            // The parser should have given us the correct end position
-            // If it didn't, that's a parser bug that should be fixed in the parser
-            return false;
-        }
-
-        while (i > start) {
-            i -= 1;
-            const c = self.source[i];
-
-            if (!found_delimiter) {
-                if (c == ']' or c == '}' or c == ')') {
-                    found_delimiter = true;
-                }
+        // Binary search for first token with offset >= start
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < start) {
+                left = mid + 1;
             } else {
-                // We've found the delimiter, now looking for comma
-                if (c == ',') {
-                    return true;
-                } else if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
-                    // Found non-whitespace that's not a comma
-                    return false;
-                }
+                right = mid;
             }
+        }
+
+        // Find the last token before the closing delimiter
+        var last_content_token: ?Token = null;
+        var found_closing_delimiter = false;
+
+        // Scan tokens within the node's region
+        var cursor = left;
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+
+            // Stop if we're past the node's region
+            if (token.region.start.offset >= end) break;
+
+            switch (token.tag) {
+                // Skip comments and whitespace
+                .LineComment, .DocComment => continue,
+
+                // Check for closing delimiters
+                .CloseSquare, .CloseCurly, .CloseRound => {
+                    // If this delimiter is within our node's region, it's our closing delimiter
+                    if (token.region.start.offset < end) {
+                        found_closing_delimiter = true;
+                        // Check if the previous non-comment token was a comma
+                        if (last_content_token) |last| {
+                            return last.tag == .Comma;
+                        }
+                        return false;
+                    }
+                },
+
+                // Track the last non-comment, non-delimiter token
+                .Comma, .LowerIdent, .UpperIdent, .String, .Int, .Float, .IntBase, .SingleQuote, .MultilineString, .OpenCurly, .OpenSquare, .OpenRound, .Dot, .OpUnaryMinus, .OpBinaryMinus, .OpBang => {
+                    last_content_token = token;
+                },
+
+                else => {
+                    // Track any other token as potential content
+                    last_content_token = token;
+                },
+            }
+        }
+
+        // If we found a closing delimiter and the last token was a comma, we have a trailing comma
+        if (found_closing_delimiter and last_content_token != null) {
+            return last_content_token.?.tag == .Comma;
         }
 
         return false;
@@ -2810,63 +2837,6 @@ const Formatter = struct {
         return false;
     }
 
-    /// Flush comments and blank lines before a position
-    /// Flush comments and blank lines, preserving formatting
-    /// Returns true if there was at least one newline
-    fn flushComments(self: *Formatter, between_text: []const u8) !bool {
-        var found_comment = false;
-        var newline_count: usize = 0;
-        var i: usize = 0;
-
-        while (i < between_text.len) {
-            if (between_text[i] == '#') {
-                // Found a comment - extract it
-                const comment_start = i + 1; // Skip the #
-                var comment_end = comment_start;
-                while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
-                    comment_end += 1;
-                }
-
-                // Output the comment with proper indentation
-                try self.pushIndent();
-                try self.push('#');
-                const comment_text = between_text[comment_start..comment_end];
-                if (comment_text.len > 0 and comment_text[0] != ' ') {
-                    try self.push(' ');
-                }
-                try self.pushAll(comment_text);
-                found_comment = true;
-
-                try self.ensureNewline();
-                newline_count = 1; // Reset to avoid excessive newlines
-                i = comment_end;
-                if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
-                    i += 1; // Skip any additional newlines
-                }
-            } else if (between_text[i] == '\n') {
-                // Count newlines but don't output them immediately
-                newline_count += 1;
-                i += 1;
-            } else if (between_text[i] == '\r') {
-                // Handle carriage returns
-                i += 1;
-                if (i < between_text.len and between_text[i] == '\n') {
-                    i += 1;
-                }
-                newline_count += 1;
-            } else if (between_text[i] == ' ' or between_text[i] == '\t') {
-                // Skip whitespace
-                i += 1;
-            } else {
-                // Unexpected character between tokens
-                i += 1;
-            }
-        }
-
-        // Return true if there was at least one newline
-        return newline_count > 0;
-    }
-
     fn push(self: *Formatter, c: u8) !void {
         self.has_newline = c == '\n';
         try self.output.append(c);
@@ -2900,12 +2870,17 @@ const Formatter = struct {
             return;
         }
         // Use TABS for indentation, not spaces!
-        // Batch the indentation to avoid multiple allocations
+        // OPTIMIZATION: Pre-allocated string of 32 tabs for common cases.
+        // This avoids dynamic allocation for indentation levels 1-32 (covers 99.9% of real code).
+        // For levels 1-32: Single pushAll() with a slice = one memcpy operation
+        // For levels >32: Still handled correctly with the fallback loop below
+        // This is NOT a limitation - just an optimization for the common case!
         const tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
         const indent_level = @min(self.curr_indent_level, tabs.len);
         try self.pushAll(tabs[0..indent_level]);
 
         // Handle very deep indentation (unlikely but possible)
+        // This ensures there's no maximum indentation limit
         if (self.curr_indent_level > tabs.len) {
             for (tabs.len..self.curr_indent_level) |_| {
                 try self.push('\t');
@@ -2913,144 +2888,53 @@ const Formatter = struct {
         }
     }
 
-    /// Flush comments before a given position using token positions
-    fn flushCommentsBeforeToken(self: *Formatter, pos: Position) !bool {
-        // Find the token at or after this position
-        const token_idx = self.findTokenAtPosition(pos) orelse return false;
-        if (token_idx == 0) return false;
+    /// Check if there are comment tokens between two positions
+    fn hasCommentBetween(self: *const Formatter, start: usize, end: usize) bool {
+        // Use binary search to find the first token that could be in range
+        var left: usize = 0;
+        var right: usize = self.tokens.len;
 
-        // Get the region between previous token and this position
-        const prev_token_end = self.tokens[token_idx - 1].region.end.offset;
-        const end_offset = pos.offset;
-
-        if (end_offset <= prev_token_end) return false;
-
-        return self.flushCommentsInRange(self.source[prev_token_end..end_offset]);
-    }
-
-    /// Flush comments after a given position using token positions
-    fn flushCommentsAfterToken(self: *Formatter, pos: Position) !bool {
-        // Find the token before this position
-        const token_idx = self.findTokenBeforePosition(pos) orelse return false;
-        if (token_idx >= self.tokens.len - 1) return false;
-
-        // Get the region between this position and next token
-        const start_offset = pos.offset;
-        const next_token_start = self.tokens[token_idx + 1].region.start.offset;
-
-        if (next_token_start <= start_offset) return false;
-
-        return self.flushCommentsInRange(self.source[start_offset..next_token_start]);
-    }
-
-    /// Core comment flushing logic for a range of text
-    fn flushCommentsInRange(self: *Formatter, text: []const u8) !bool {
-        // Calculate absolute offset of this text in source
-        const text_start = @intFromPtr(text.ptr) - @intFromPtr(self.source.ptr);
-
-        // Skip if we've already processed this region
-        if (text_start < self.last_comment_end) {
-            // Find where we need to start from
-            const skip_bytes = self.last_comment_end - text_start;
-            if (skip_bytes >= text.len) return false;
-            return self.flushCommentsInRangeInternal(text[skip_bytes..]);
-        }
-
-        return self.flushCommentsInRangeInternal(text);
-    }
-
-    fn flushCommentsInRangeInternal(self: *Formatter, text: []const u8) !bool {
-        var found_comment = false;
-        var newline_count: usize = 0;
-        var i: usize = 0;
-
-        while (i < text.len) {
-            if (text[i] == '#') {
-                // If we've seen 2+ newlines (blank line) before this comment,
-                // it's a standalone comment for the next statement - don't attach it
-                if (newline_count >= 2 and !found_comment) {
-                    // This is a standalone comment, leave it for the next statement
-                    break;
-                }
-
-                // Found a comment to attach
-                const comment_start = i + 1; // Skip the #
-                var comment_end = comment_start;
-                while (comment_end < text.len and text[comment_end] != '\n' and text[comment_end] != '\r') {
-                    comment_end += 1;
-                }
-
-                // Output appropriate spacing before comment
-                if (found_comment or newline_count > 0) {
-                    try self.pushIndent();
-                } else if (!self.has_newline) {
-                    // Check if we already have a trailing space
-                    const output_len = self.output.items.len;
-                    const has_trailing_space = output_len > 0 and self.output.items[output_len - 1] == ' ';
-                    if (!has_trailing_space) {
-                        try self.pushAll(" ");
-                    }
-                }
-
-                // Output the comment
-                try self.push('#');
-                if (comment_end > comment_start) {
-                    try self.output.appendSlice(text[comment_start..comment_end]);
-                }
-
-                // Move to after the comment
-                i = comment_end;
-
-                // Handle newline after comment
-                if (i < text.len and (text[i] == '\n' or text[i] == '\r')) {
-                    try self.ensureNewline();
-                    if (text[i] == '\r') i += 1;
-                    if (i < text.len and text[i] == '\n') i += 1;
-                    newline_count = 1;
-                } else {
-                    i += 1;
-                }
-
-                // Update position to track we've processed this comment
-                const text_start = @intFromPtr(text.ptr) - @intFromPtr(self.source.ptr);
-                self.last_comment_end = text_start + i;
-
-                found_comment = true;
-            } else if (text[i] == '\n') {
-                newline_count += 1;
-                // Preserve blank lines
-                if (newline_count > 1 and found_comment) {
-                    try self.ensureBlankLine();
-                }
-                i += 1;
-            } else if (text[i] == '\r') {
-                i += 1;
-            } else if (text[i] == ' ' or text[i] == '\t') {
-                i += 1;
+        // Binary search for first token with offset >= start
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < start) {
+                left = mid + 1;
             } else {
-                // Non-whitespace, non-comment - stop scanning
-                break;
+                right = mid;
             }
         }
 
-        return found_comment or newline_count > 0;
-    }
-
-    /// Flush trailing comments at end of file using token positions
-    fn hasCommentBetween(self: *Formatter, start: usize, end: usize) bool {
-        if (start >= end or end > self.source.len) return false;
-        const text = self.source[start..end];
-        return std.mem.indexOf(u8, text, "#") != null;
+        // Now scan from this position until we reach end
+        var cursor = left;
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+            if (token.region.start.offset >= end) break;
+            switch (token.tag) {
+                .LineComment, .DocComment => return true,
+                else => {},
+            }
+        }
+        return false;
     }
 
     fn flushTrailingComments(self: *Formatter) !bool {
-        if (self.tokens.len == 0) return false;
-
-        const last_token_end = self.tokens[self.tokens.len - 1].region.end.offset;
-        if (last_token_end >= self.source.len) return false;
-
-        const remaining = self.source[last_token_end..];
-        return self.flushCommentsInRange(remaining);
+        // Flush all remaining comment tokens
+        var found_any = false;
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    const comment_text = self.source[token.region.start.offset..token.region.end.offset];
+                    try self.pushIndent();
+                    try self.pushAll(comment_text);
+                    try self.newline();
+                    found_any = true;
+                },
+                else => {},
+            }
+            self.token_cursor += 1;
+        }
+        return found_any;
     }
 };
 
@@ -3062,41 +2946,37 @@ pub fn formatAst(
     ident_store: *const Ident.Store,
     root_node: ?Node.Idx,
 ) ![]u8 {
-    // Parse and collect tokens using the new token-fed architecture
+    // Just tokenize - we don't need to parse since we already have an AST
     var env = try CommonEnv.init(allocator, source);
     defer env.deinit(allocator);
-    
+
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
-    
+
     var messages: [256]tokenize_iter.Diagnostic = undefined;
-    
-    // Create a temporary AST for parsing (we'll use the provided one for formatting)
-    var parse_ast = try AST2.initCapacity(allocator, 1024);
-    defer parse_ast.deinit(allocator);
-    
-    // Parse and collect tokens
-    const parse_result = try Parser2.parseAndCollectTokens(
-        &env,
-        allocator,
-        source,
-        &messages,
-        &parse_ast,
-        &byte_slices,
-    );
-    var tokens = parse_result.tokens;
+
+    // Tokenize without parsing
+    var tokens = std.ArrayList(tokenize_iter.Token).init(allocator);
     defer tokens.deinit();
-    
+
+    var token_iter = try tokenize_iter.TokenIterator.init(&env, allocator, source, &messages, &byte_slices);
+    defer token_iter.deinit(allocator);
+
+    // Collect all tokens
+    while (try token_iter.next(allocator)) |token| {
+        try tokens.append(token);
+        if (token.tag == .EndOfFile) break;
+    }
+
     var formatter = try Formatter.init(allocator, ast, source, ident_store, tokens.items);
     defer formatter.deinit();
 
     try formatter.format(root_node);
 
-    // Transfer ownership to caller
-    const output = try allocator.dupe(u8, formatter.output.items);
+    // Transfer ownership to caller by moving the items
+    const output = try formatter.output.toOwnedSlice();
 
     return output;
 }
-
 
 // Keep the old interface for compatibility

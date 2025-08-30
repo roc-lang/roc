@@ -14,23 +14,28 @@ if bool { # Comment after then open
 KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse UpperIdent ~~~
 # PARSE
 ~~~clojure
-(if_else <0 branches>)
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (block
+      (uc "A")
+    )
+)
+  (else     (uc "B")
+))
 ~~~
 # FORMATTED
 ~~~roc
 if bool
 	{
-		 # Comment after then open
-A # Comment after expr
+		A
 	}
 else B
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

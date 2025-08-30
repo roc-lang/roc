@@ -16,7 +16,7 @@ String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-"abc\qdef"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

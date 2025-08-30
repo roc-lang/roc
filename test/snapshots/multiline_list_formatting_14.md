@@ -28,13 +28,9 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-[ # Open
-	1, # First
-
-	# A comment in the middle
-
-	2, # Second
-	# This comment has no blanks around it
+[
+	1,
+	2,
 	3,
 ]
 ~~~

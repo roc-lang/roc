@@ -14,25 +14,30 @@ when x is
 LowerIdent LowerIdent LowerIdent UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
-(lc "when")
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-when
+x 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 1:6 to 1:8
+
+**Unsupported Node**
+at 1:6 to 1:8
+
 # CANONICALIZE
 ~~~clojure
-(Expr.lookup "when")
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lookup :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

@@ -21,67 +21,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly OpFatArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent Dot LowerIdent CloseRound LowerIdent Dot LowerIdent CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
+(app-header
+  (packages
+    (binop_colon
       (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_colon
-    (lc "printName")
-    (binop_thick_arrow
-      (record_literal
-        (binop_colon
-          (lc "name")
-          (uc "Str")
-        )
-        (binop_colon
-          (lc "age")
-          (uc "U64")
-        )
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "printName")
-    (lambda
-      (body
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (apply_anon
-            (binop_pipe
-              (uc "Stdout")
-              (not_lc "line")
-            )
-            (binop_pipe
-              (lc "person")
-              (dot_lc "name")
-            )
-          )
-          (binop_pipe
-            (lc "person")
-            (dot_lc "name")
-          )
+          (lc "main")
         )
       )
-      (args
-        (lc "person")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -113,7 +64,10 @@ at 7:5 to 7:11
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "printName")
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "printName")

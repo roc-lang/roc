@@ -14,18 +14,7 @@ import json.Json [foo, BAR]
 KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent OpenSquare LowerIdent Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
-      (lc "json")
-      (uc "Json")
-    )
-  )
-  (list_literal
-    (lc "foo")
-    (uc "BAR")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

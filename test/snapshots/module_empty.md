@@ -12,7 +12,7 @@ module []
 KwModule OpenSquare CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

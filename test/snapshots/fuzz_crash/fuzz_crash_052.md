@@ -14,12 +14,7 @@ S
 KwModule OpenSquare CloseSquare KwImport UpperIdent Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (uc "S")
-  )
-  (num_literal_i32 0)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

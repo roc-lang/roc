@@ -20,19 +20,35 @@ package # Comment after keyword
 KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+)
+  (packages
+    (lc "somePkg")
+
+    (tuple_literal
+      (binop_colon
+        (tuple_literal
+          (str_literal_big "../main.roc")
+          (lc "other")
+        )
+        (str_literal_big "../../other/main.roc")
+      )
+      (malformed malformed:expr_unexpected_token)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 package [
-# Comment after exposes open
 	something,
-# Comment after exposed item
 	SomeType,
-] packages { # Comment after packages open
-somePkg, (
+] packages {somePkg, (
 	(
-		"../main.roc", # Comment after package
+		"../main.roc",
 		other,
 	) : "../../other/main.roc",
 )}

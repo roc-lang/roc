@@ -12,12 +12,7 @@ module[]({})(!{0})
 KwModule OpenSquare CloseSquare OpenRound OpenCurly CloseCurly CloseRound OpenRound OpBang OpenCurly Int CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (apply_anon
-    (record_literal)
-    (unary_not <unary>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

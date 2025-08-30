@@ -18,56 +18,18 @@ main = |_, _| helper(5)
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Int LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore Comma Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "helper")
-    (binop_thin_arrow
-      (uc "I64")
-      (uc "I64")
-    )
-  )
-  (binop_equals
-    (lc "helper")
-    (lambda
-      (body
-        (binop_star
-          (lc "n")
-          (num_literal_i32 2)
-        )
-      )
-      (args
-        (lc "n")
-      )
-    )
-  )
-  (binop_colon
-    (lc "main")
-    (binop_thin_arrow
-      (uc "I64")
-      (binop_thin_arrow
-        (uc "I64")
-        (uc "I64")
-      )
-    )
-  )
-  (binop_equals
-    (lc "main")
-    (lambda
-      (body
-        (apply_lc
-          (lc "helper")
-          (num_literal_i32 5)
-        )
-      )
-      (args
-        (tuple_literal
-          (underscore)
-          (underscore)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "platform/main.roc")
+        (block
+          (lc "main")
         )
       )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,7 +49,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "helper")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "helper")
@@ -95,7 +60,13 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "main")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "main")

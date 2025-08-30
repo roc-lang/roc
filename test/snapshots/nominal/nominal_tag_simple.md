@@ -20,38 +20,12 @@ yellow = Color.Yellow
 KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
+(module-header
+  (exposes
     (uc "Color")
-    (list_literal
-      (uc "Red")
-      (uc "Green")
-      (uc "Blue")
-    )
-  )
-  (binop_colon
+
     (lc "blue")
-    (uc "Color")
-  )
-  (binop_equals
-    (lc "blue")
-    (binop_pipe
-      (uc "Color")
-      (uc "Blue")
-    )
-  )
-  (binop_colon
-    (lc "yellow")
-    (uc "Color")
-  )
-  (binop_equals
-    (lc "yellow")
-    (binop_pipe
-      (uc "Color")
-      (uc "Yellow")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -80,7 +54,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "blue")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "yellow")
@@ -88,7 +65,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "yellow")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

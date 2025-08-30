@@ -27,61 +27,7 @@ MultiType(_, _, c) : c
 KwModule OpenSquare CloseSquare UpperIdent OpenRound Underscore CloseRound OpColon UpperIdent UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon LowerIdent UpperIdent OpenRound LowerIdent Comma Underscore CloseRound OpColon LowerIdent UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound Underscore Comma Underscore Comma LowerIdent CloseRound OpColon LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "MyType")
-      (underscore)
-    )
-    (uc "Str")
-  )
-  (binop_colon
-    (apply_uc
-      (uc "MyType2")
-      (tuple_literal
-        (underscore)
-        (lc "b")
-      )
-    )
-    (lc "b")
-  )
-  (binop_colon
-    (apply_uc
-      (uc "MyType3")
-      (tuple_literal
-        (lc "a")
-        (underscore)
-      )
-    )
-    (lc "a")
-  )
-  (binop_colon
-    (apply_uc
-      (uc "ComplexType")
-      (tuple_literal
-        (underscore)
-        (lc "b")
-      )
-    )
-    (block
-      (binop_colon
-        (lc "field")
-        (lc "b")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "MultiType")
-      (tuple_literal
-        (underscore)
-        (underscore)
-        (lc "c")
-      )
-    )
-    (lc "c")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

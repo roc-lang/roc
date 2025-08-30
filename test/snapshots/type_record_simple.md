@@ -17,49 +17,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "get_name")
-    (binop_thin_arrow
-      (record_literal
-        (binop_colon
-          (lc "name")
-          (uc "Str")
-        )
-        (binop_colon
-          (lc "age")
-          (uc "U64")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (uc "Str")
     )
-  )
-  (binop_equals
-    (lc "get_name")
-    (lambda
-      (body
-        (binop_pipe
-          (lc "person")
-          (dot_lc "name")
-        )
-      )
-      (args
-        (lc "person")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,7 +47,19 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "get_name")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "name")
+          (Expr.apply_tag)
+        )
+        (Expr.binop_colon
+          (Expr.lookup "age")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "get_name")

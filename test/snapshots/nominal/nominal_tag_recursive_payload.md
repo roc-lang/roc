@@ -17,38 +17,12 @@ empty = ConsList.Nil
 KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColonEqual OpenSquare UpperIdent Comma UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound CloseSquare LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (apply_uc
-      (uc "ConsList")
-      (lc "a")
-    )
-    (list_literal
-      (uc "Nil")
-      (apply_uc
-        (uc "Node")
-        (apply_uc
-          (uc "ConsList")
-          (lc "a")
-        )
-      )
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
+    (uc "ConsList")
+
     (lc "empty")
-    (apply_uc
-      (uc "ConsList")
-      (lc "_a")
-    )
-  )
-  (binop_equals
-    (lc "empty")
-    (binop_pipe
-      (uc "ConsList")
-      (uc "Nil")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -75,7 +49,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "empty")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

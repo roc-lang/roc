@@ -21,20 +21,20 @@ MyType : [A, B, C]
 KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIdent Comma LowerIdent Comma UpperIdent CloseSquare LowerIdent OpAssign Int UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (num_literal_i32 42)
-  )
-  (binop_colon
+
+    (lc "bar")
+
     (uc "MyType")
-    (list_literal
-      (uc "A")
-      (uc "B")
-      (uc "C")
-    )
-  )
-)
+
+    (uc "OtherType")
+
+    (lc "foo")
+
+    (uc "MyType")
+))
 ~~~
 # FORMATTED
 ~~~roc

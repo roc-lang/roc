@@ -12,13 +12,11 @@ type=expr
 OpenSquare Int LowerIdent Comma Int LowerIdent Comma Int CloseSquare ~~~
 # PARSE
 ~~~clojure
-(list_literal
-  (num_literal_i32 1)
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-[1]
+u8
 ~~~
 # EXPECTED
 NIL
@@ -26,15 +24,21 @@ NIL
 **Parse Error**
 at 1:1 to 1:3
 
+**Parse Error**
+at 1:3 to 1:5
+
+**Unsupported Node**
+at 1:3 to 1:5
+
 # CANONICALIZE
 ~~~clojure
-(Expr.list_literal)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag list_literal :type "List(_elem)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-List(_elem)
+# No expression found
 ~~~

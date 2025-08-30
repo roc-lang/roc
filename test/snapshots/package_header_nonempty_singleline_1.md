@@ -12,7 +12,23 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+)
+  (packages
+    (lc "somePkg")
+
+    (binop_colon
+      (tuple_literal
+        (str_literal_big "../main.roc")
+        (lc "other")
+      )
+      (str_literal_big "../../other/main.roc")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

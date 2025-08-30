@@ -12,17 +12,11 @@ type=expr
 OpenCurly LowerIdent OpColon String Comma OpColon Int Comma Comma LowerIdent OpColon Comma LowerIdent UpperIdent Dot LowerIdent Comma String OpColon LowerIdent Comma Int OpColon String Comma OpColon CloseCurly ~~~
 # PARSE
 ~~~clojure
-(record_literal
-  (binop_colon
-    (lc "name")
-    (str_literal_big "Alice")
-  )
-  (malformed malformed:expr_unexpected_token)
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-{ name : "Alice" }
+30
 ~~~
 # EXPECTED
 NIL
@@ -33,21 +27,21 @@ at 1:18 to 1:20
 **Parse Error**
 at 1:1 to 1:20
 
+**Parse Error**
+at 1:20 to 1:22
+
+**Unsupported Node**
+at 1:20 to 1:22
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.malformed)
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-{}
+# No expression found
 ~~~

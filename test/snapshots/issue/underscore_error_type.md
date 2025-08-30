@@ -37,109 +37,7 @@ quux = ("hello", 42)
 KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign Int UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly UpperIdent OpColonEqual Underscore OpArrow Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent CloseRound LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenRound String Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (uc "BadType")
-    (underscore)
-  )
-  (binop_colon
-    (lc "foo")
-    (uc "BadType")
-  )
-  (binop_equals
-    (lc "foo")
-    (num_literal_i32 42)
-  )
-  (binop_colon_equals
-    (uc "BadList")
-    (apply_uc
-      (uc "List")
-      (underscore)
-    )
-  )
-  (binop_colon
-    (lc "bar")
-    (uc "BadList")
-  )
-  (binop_equals
-    (lc "bar")
-    (list_literal
-      (num_literal_i32 1)
-      (num_literal_i32 2)
-      (num_literal_i32 3)
-    )
-  )
-  (binop_colon_equals
-    (uc "BadRecord")
-    (record_literal
-      (binop_colon
-        (lc "field")
-        (underscore)
-      )
-      (binop_colon
-        (lc "other")
-        (uc "U32")
-      )
-    )
-  )
-  (binop_colon
-    (lc "baz")
-    (uc "BadRecord")
-  )
-  (binop_equals
-    (lc "baz")
-    (record_literal
-      (binop_colon
-        (lc "field")
-        (str_literal_small "hi")
-      )
-      (binop_colon
-        (lc "other")
-        (num_literal_i32 5)
-      )
-    )
-  )
-  (binop_colon_equals
-    (uc "BadFunction")
-    (binop_thin_arrow
-      (underscore)
-      (underscore)
-    )
-  )
-  (binop_colon
-    (lc "qux")
-    (uc "BadFunction")
-  )
-  (binop_equals
-    (lc "qux")
-    (lambda
-      (body
-        (lc "x")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon_equals
-    (uc "BadTuple")
-    (tuple_literal
-      (underscore)
-      (uc "U32")
-    )
-  )
-  (binop_colon
-    (lc "quux")
-    (uc "BadTuple")
-  )
-  (binop_equals
-    (lc "quux")
-    (tuple_literal
-      (str_literal_big "hello")
-      (num_literal_i32 42)
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -241,7 +139,10 @@ at 23:14 to 23:15
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "qux")
@@ -253,7 +154,10 @@ at 23:14 to 23:15
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "quux")
@@ -261,7 +165,10 @@ at 23:14 to 23:15
   )
   (Expr.binop_equals
     (Expr.lookup "quux")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.str_literal_big)
+      (Expr.num_literal_i32 42)
+    )
   )
 )
 ~~~

@@ -14,18 +14,11 @@ x = 0xFF
 KwModule OpenSquare CloseSquare LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "x")
-    (num_literal_big big:<idx:0>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x = 0xFF
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

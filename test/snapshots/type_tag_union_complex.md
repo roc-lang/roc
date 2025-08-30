@@ -35,119 +35,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon OpenSquare UpperIdent OpenRound UpperIdent CloseRound Comma UpperIdent OpenRound UpperIdent CloseRound Comma UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound CloseSquare UpperIdent OpColon OpenSquare UpperIdent OpenRound UpperIdent CloseRound Comma UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon OpenSquare UpperIdent OpenRound UpperIdent CloseRound Comma UpperIdent Comma UpperIdent OpenRound UpperIdent CloseRound CloseSquare UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent OpenRound UpperIdent CloseRound CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (uc "Status")
-    (list_literal
-      (uc "Loading")
-      (uc "Complete")
-      (uc "Failed")
-    )
-  )
-  (binop_colon
-    (uc "Result")
-    (list_literal
-      (apply_uc
-        (uc "Success")
-        (uc "Str")
-      )
-      (apply_uc
-        (uc "Error")
-        (uc "Str")
-      )
-      (apply_uc
-        (uc "Warning")
-        (tuple_literal
-          (uc "Str")
-          (uc "I32")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
     )
-  )
-  (binop_colon
-    (uc "Response")
-    (list_literal
-      (apply_uc
-        (uc "Ok")
-        (uc "Result")
-      )
-      (uc "NetworkError")
-      (uc "ParseError")
-    )
-  )
-  (binop_colon
-    (uc "UserState")
-    (list_literal
-      (apply_uc
-        (uc "Active")
-        (uc "Str")
-      )
-      (uc "Inactive")
-      (apply_uc
-        (uc "Suspended")
-        (uc "Str")
-      )
-    )
-  )
-  (binop_colon
-    (uc "ConnectionState")
-    (list_literal
-      (uc "Active")
-      (uc "Disconnected")
-      (apply_uc
-        (uc "Connecting")
-        (uc "Str")
-      )
-    )
-  )
-  (binop_colon
-    (lc "processResult")
-    (binop_thin_arrow
-      (uc "Result")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "processResult")
-    (lambda
-      (body
-        (str_literal_big "processed")
-      )
-      (args
-        (lc "_result")
-      )
-    )
-  )
-  (binop_colon
-    (lc "handleResponse")
-    (binop_thin_arrow
-      (uc "Response")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "handleResponse")
-    (lambda
-      (body
-        (str_literal_big "handled")
-      )
-      (args
-        (lc "_response")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -193,7 +92,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "processResult")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "processResult")
@@ -201,7 +103,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "handleResponse")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "handleResponse")

@@ -129,10 +129,22 @@ h == foo
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent Comma OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound CloseRound OpColon UpperIdent OpenRound CloseRound Comma OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpColon OpenRound CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly Int KwIf LowerIdent OpenCurly KwDbg LowerIdent LowerIdent CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma UpperIdent Comma OpBar KwMatch LowerIdent OpenCurly LowerIdent OpenCurly LowerIdent CloseCurly UpperIdent OpFatArrow OpenCurly LowerIdent CloseCurly LowerIdent Int String OpFatArrow Int OpenSquare Int Comma CloseSquare LowerIdent OpenSquare Int Comma Int Comma Int Comma LowerIdent CloseSquare Int OpenSquare CloseSquare Int Float Int Float OpBar Float OpFatArrow Int OpenRound Int Comma CloseRound OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound Int OpenCurly CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent LowerIdent OpBang OpColon UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound KwCrash LowerIdent String LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound LowerIdent Comma CloseRound Comma Int Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly LowerIdent OpBang OpenRound String CloseRound LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpDoubleQuestion Int OpGreaterThan Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent OpBang OpenRound MalformedString LowerIdent OpenRound LowerIdent CloseRound CloseCurly MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpEquals Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
+LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent Comma OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound CloseRound OpColon UpperIdent OpenRound CloseRound Comma OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpColon OpenRound CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly Int KwIf LowerIdent OpenCurly KwDbg LowerIdent LowerIdent CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma UpperIdent Comma OpBar KwMatch LowerIdent OpenCurly LowerIdent OpenCurly LowerIdent CloseCurly UpperIdent OpFatArrow OpenCurly LowerIdent CloseCurly LowerIdent Int String OpFatArrow Int OpenSquare Int Comma CloseSquare LowerIdent OpenSquare Int Comma Int Comma Int Comma LowerIdent CloseSquare Int OpenSquare CloseSquare Int Float Int Float OpBar Float OpFatArrow Int OpenRound Int Comma CloseRound OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound Int OpenCurly CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent LowerIdent OpBang OpColon UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound KwCrash LowerIdent String LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound LowerIdent Comma CloseRound Comma Int Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly LowerIdent OpBang OpenRound String CloseRound LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpDoubleQuestion Int OpGreaterThan Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent OpBang OpenRound MalformedString LowerIdent OpenRound LowerIdent CloseRound CloseCurly MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpEquals Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
+  (malformed malformed:expr_unexpected_token)
+  (malformed malformed:expr_unexpected_token)
+  (block
+    (binop_colon
+      (lc "pf")
+      (str_literal_small "c")
+    )
+    (malformed malformed:expr_unexpected_token)
+    (list_literal
+      (not_lc "main")
+    )
+  )
   (import
     (binop_exposing
       (binop_pipe
@@ -248,7 +260,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
     (lc "ane")
     (lambda
       (body
-        (if_else <58 branches>)
+        (if_else
+          (condition             (lc "num")
+)
+          (then             (num_literal_i32 2)
+)
+          (else             (num_literal_i32 5)
+))
       )
       (args
         (lc "num")
@@ -265,7 +283,30 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (body
         (block
           (num_literal_i32 1)
-          (if_else <79 branches>)
+          (if_else
+            (condition               (lc "num")
+)
+            (then               (block
+                (malformed malformed:expr_unexpected_token)
+                (binop_colon
+                  (lc "s")
+                  (lc "s")
+                )
+                (binop_colon
+                  (lc "exp0")
+                  (lc "exp0")
+                )
+              )
+)
+            (else               (block
+                (malformed malformed:expr_unexpected_token)
+                (num_literal_i32 123)
+                (binop_colon
+                  (lc "r")
+                  (lc "r")
+                )
+              )
+))
         )
       )
       (args
@@ -275,14 +316,86 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
   )
   (binop_equals
     (lc "me")
-    (malformed malformed:expr_unexpected_token)
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "a")
+))
+      )
+      (args
+        (lc "a")
+        (uc "Tb")
+      )
+    )
   )
-  (unary_not <unary>)
+  (lc "x")
+  (malformed malformed:expr_unexpected_token)
+  (uc "Blue")
+  (malformed malformed:expr_unexpected_token)
+  (block
+    (lc "x")
+  )
+  (lc "er")
+  (num_literal_i32 1)
+  (str_literal_small "for")
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 20)
+  (list_literal
+    (num_literal_i32 1)
+  )
+  (lc "ment")
+  (list_literal
+    (num_literal_i32 1)
+    (num_literal_i32 2)
+    (num_literal_i32 3)
+    (lc "est")
+  )
+  (num_literal_i32 123)
+  (list_literal)
+  (num_literal_i32 23)
+  (frac_literal_small 3.1)
+  (num_literal_i32 314)
+  (frac_literal_small 3.14)
+  (malformed malformed:expr_unexpected_token)
+  (apply_anon
+    (num_literal_i32 314)
+    (binop_thick_arrow
+      (num_literal_i32 1)
+      (binop_thick_arrow
+        (malformed malformed:expr_unexpected_token)
+        (apply_anon
+          (num_literal_i32 123)
+          (tuple_literal
+            (num_literal_i32 1)
+            (num_literal_i32 2)
+            (num_literal_i32 3)
+          )
+        )
+      )
+    )
+  )
+  (num_literal_i32 123)
+  (record_literal)
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
   (apply_uc
-    (uc "Listlt")
-    (tuple_literal
-      (record_literal)
-      (underscore)
+    (uc "Ok")
+    (num_literal_i32 123)
+  )
+  (malformed malformed:expr_unexpected_token)
+  (num_literal_i32 12)
+  (malformed malformed:expr_unexpected_token)
+  (expect
+    (lc "nt")
+  )
+  (binop_colon
+    (not_lc "main")
+    (apply_uc
+      (uc "Listlt")
+      (tuple_literal
+        (record_literal)
+        (underscore)
+      )
     )
   )
   (binop_equals
@@ -516,24 +629,23 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "c" platform [main] }
+# Thnt!
 
+app {
+	pf : "c"
+	platform 
+	[main!]
+}
 import pf.Stdout exposing [line]
-import Stdot exposing [ #tem
+import Stdot exposing [
 	Cust,
 ]
 import Bae as Gooe
 import Ba
 Map((a, b)) : Lis -> ab -> List b
-# Ag
-MapML(,
-) : # Aon
-List -> ab -> # row
-List b
-#z)
-
+MapML() : List -> ab -> List b
 line : (,
-) # Co
+)
 Som : {foo : O, bar : g}
 Ml(a) :
 	{
@@ -541,11 +653,9 @@ Ml(a) :
 Soine(a) :
 	{
 	}
-#
 Maybe(a) : [Somne]
 Mayine(a) : [,
-] #)
-
+]
 ane = |num| if num 2 else 5
 one : U6
 add = |num| {
@@ -554,8 +664,7 @@ add = |num| {
 		{
 			dbg # bug
 			
-			 # bug
-s : s
+			s : s
 			exp0 : exp0
 		}
 	else {
@@ -564,29 +673,61 @@ s : s
 		r : r
 	}
 }
-me = main
-!: 
-Listlt(({  }, _))
-ma = |_| {
+me = |a, Tb| match a
+x
+}
+		Blue=> {
+	x
+}
+er
+1
+"for"
+=> 20[
+	1,
+]
+ment
+[1, 2, 3, est]123
+[]
+23
+3.1
+314
+3.14
+=> 314(
+	1 => ()  => 123((1, 2, 3))),
+)123
+{  }
+=> 12
+Ok(123)
+=> 12
+}
+
+expect nt
+main! : Listlt({}, _)
+ma = |
+	_,
+| {
 	e : e
 	w = "d"
 	var er = 123
 	expect blaue
-	return #d
-tag
+	return tag
 	...
-	me((
-		...,
-	))
+	me(
+		(
+			...,
+		),
+	)
 	crash ke
-	"Unr!" #)
+	"Unr!"
 	i = "H, ${d}"
 	t = [
-		one((
-			er,
-			456, # two
-			9,
-		)),
+		one(
+			(
+				er,
+				456,
+				9,
+			),
+		),
 	]
 	for n in list {
 		{
@@ -596,16 +737,14 @@ tag
 	}
 	rd = { foo : 123, bar : "H", baz : tag, qux : Ok world, ned : ned }
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-	m(
-		(
-			123,
-			"World",
-			ag1,
-			O,
-			(ne, tuple),
-			[1, 2, 3],
-		),
-	)
+	m((
+		123,
+		"World",
+		ag1,
+		O,
+		(ne, tuple),
+		[1, 2, 3],
+	))
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
 	? | .od()
@@ -616,13 +755,11 @@ tag
 	Stdo
 	!"Ho${ #
 			
-	r(nu) # xpr
+	r(nu)
 }
 ",
 	)
 } # Cocl
-
-# Cocl
 
 y : {}
 e = {  }
@@ -636,10 +773,13 @@ expect {
 NIL
 # PROBLEMS
 **Parse Error**
-at 35:13 to 35:20
+at 1:8 to 2:1
 
 **Parse Error**
-at 40:2 to 40:9
+at 2:1 to 2:5
+
+**Parse Error**
+at 2:15 to 2:24
 
 **Parse Error**
 at 41:3 to 42:4
@@ -648,10 +788,19 @@ at 41:3 to 42:4
 at 44:3 to 44:7
 
 **Parse Error**
+at 52:11 to 53:2
+
+**Parse Error**
+at 54:3 to 55:3
+
+**Parse Error**
 at 55:7 to 55:10
 
 **Parse Error**
 at 58:12 to 58:15
+
+**Parse Error**
+at 64:15 to 64:18
 
 **Parse Error**
 at 65:7 to 65:9
@@ -660,25 +809,13 @@ at 65:7 to 65:9
 at 64:18 to 66:12
 
 **Parse Error**
-at 66:12 to 67:3
-
-**Parse Error**
 at 67:8 to 67:11
 
 **Parse Error**
 at 68:11 to 68:14
 
 **Parse Error**
-at 52:10 to 72:2
-
-**Parse Error**
-at 72:2 to 74:1
-
-**Parse Error**
-at 74:1 to 74:5
-
-**Parse Error**
-at 74:7 to 74:9
+at 69:2 to 71:1
 
 **Parse Error**
 at 86:2 to 86:3
@@ -743,6 +880,12 @@ at 10:1 to 10:19
 **Unsupported Node**
 at 11:1 to 12:4
 
+**Unsupported Node**
+at 50:5 to 50:7
+
+**Unsupported Node**
+at 65:7 to 65:9
+
 **Pattern in Expression Context**
 at 74:20 to 74:21
 
@@ -760,19 +903,42 @@ at 105:78 to 105:79
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
+  (Expr.block
+    (Expr.binop_colon
+      (Expr.lookup "pf")
+      (Expr.str_literal_small)
+    )
+    (Expr.malformed)
+    (Expr.list_literal)
+  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "ab")
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "ab")
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "line")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -819,10 +985,45 @@ at 105:78 to 105:79
   )
   (Expr.binop_equals
     (Expr.lookup "me")
-    (Expr.malformed)
+    (Expr.lambda)
   )
-  (Expr.unary_not)
+  (Expr.lookup "x")
+  (Expr.malformed)
   (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.lookup "x")
+  )
+  (Expr.lookup "er")
+  (Expr.num_literal_i32 1)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.num_literal_i32 20)
+  (Expr.list_literal)
+  (Expr.lookup "ment")
+  (Expr.list_literal)
+  (Expr.num_literal_i32 123)
+  (Expr.list_literal)
+  (Expr.num_literal_i32 23)
+  (Expr.frac_literal_small 3.1)
+  (Expr.num_literal_i32 314)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.apply_tag)
+  )
   (Expr.binop_equals
     (Expr.lookup "ma")
     (Expr.lambda)
@@ -855,7 +1056,7 @@ at 105:78 to 105:79
 ~~~roc
 ane : _d
 add : _d
-me : Error
+me : _d
 ma : _d
 e : {}
 ~~~

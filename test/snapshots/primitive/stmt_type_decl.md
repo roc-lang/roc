@@ -14,23 +14,10 @@ Foo(a,b) : (a,b,Str,U64)
 KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon OpenRound LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "Foo")
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-    )
-    (tuple_literal
-      (lc "a")
-      (lc "b")
-      (uc "Str")
-      (uc "U64")
-    )
-  )
-)
+(module-header
+  (exposes
+    (uc "Foo")
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,7 +34,12 @@ NIL
 (Expr.record_literal
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
 )
 ~~~

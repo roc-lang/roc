@@ -15,23 +15,42 @@ match list {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "list")
+)
+  (branch1     (binop_thick_arrow
+      (list_literal
+        (lc "first")
+      )
+      (lc "first")
+    )
+)
+  (branch2     (binop_thick_arrow
+      (list_literal
+        (lc "first")
+        (lc "second")
+      )
+      (binop_plus
+        (lc "first")
+        (lc "second")
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match list
+	[first] => first
+	[first, second] => first + second
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:13 to 2:16
+**Unsupported Node**
+at 2:13 to 2:15
 
-**Parse Error**
-at 3:21 to 3:24
-
-**Parse Error**
-at 1:12 to 4:2
+**Unsupported Node**
+at 3:5 to 3:20
 
 # CANONICALIZE
 ~~~clojure

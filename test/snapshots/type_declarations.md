@@ -26,102 +26,22 @@ MyType2 : Module.Thingy
 KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma LowerIdent Comma LowerIdent OpBang CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "Map")
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-    )
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "a")
-      )
-      (binop_thin_arrow
-        (binop_thin_arrow
-          (lc "a")
-          (lc "b")
-        )
-        (apply_uc
-          (uc "List")
-          (lc "b")
-        )
-      )
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
+    (uc "Map")
+
     (uc "Foo")
-    (tuple_literal
-      (uc "Bar")
-      (uc "Baz")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Some")
-      (lc "a")
-    )
-    (record_literal
-      (binop_colon
-        (lc "foo")
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-      )
-      (binop_colon
-        (lc "bar")
-        (uc "Something")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Maybe")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "SomeFunc")
-      (lc "a")
-    )
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Maybe")
-        (lc "a")
-      )
-      (binop_thin_arrow
-        (lc "a")
-        (apply_uc
-          (uc "Maybe")
-          (lc "a")
-        )
-      )
-    )
-  )
-  (binop_colon
-    (uc "MyType")
-    (uc "U64")
-  )
-  (binop_colon
-    (uc "MyType2")
-    (binop_pipe
-      (uc "Module")
-      (uc "Thingy")
-    )
-  )
-)
+
+    (uc "Some")
+
+    (uc "Maybe")
+
+    (uc "SomeFunc")
+
+    (lc "add_one")
+
+    (lc "main")
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -144,11 +64,23 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -169,7 +101,13 @@ NIL
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
@@ -177,7 +115,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

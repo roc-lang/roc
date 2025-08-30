@@ -17,23 +17,11 @@ type=expr
 OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpenRound Int Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(binop_thin_arrow
-  (record_literal
-    (binop_colon
-      (lc "pair")
-      (lc "a")
-    )
-    (lc "a")
-  )
-  (tuple_literal
-    (lc "a")
-    (lc "a")
-  )
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-{ pair : a, a } -> (a, a)
+pair 
 ~~~
 # EXPECTED
 NIL
@@ -41,8 +29,11 @@ NIL
 **Parse Error**
 at 1:1 to 2:17
 
+**Parse Error**
+at 3:5 to 3:10
+
 **Unsupported Node**
-at 2:17 to 2:19
+at 3:5 to 3:10
 
 # CANONICALIZE
 ~~~clojure

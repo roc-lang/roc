@@ -12,7 +12,20 @@ package[]{d:if 0 0 else{{}}}
 KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwIf Int Int KwElse OpenCurly OpenCurly CloseCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (packages
+    (lc "d")
+
+    (if_else
+      (condition         (num_literal_i32 0)
+)
+      (then         (num_literal_i32 0)
+)
+      (else         (block
+          (record_literal)
+        )
+))
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +39,7 @@ else {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:13 to 1:18
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

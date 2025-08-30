@@ -13,15 +13,16 @@ o:0}0
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly OpenCurly LowerIdent OpColon Int CloseCurly Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
+(app-header
+  (packages
     (binop_colon
-      (lc "o")
-      (num_literal_i32 0)
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
     )
-  )
-  (num_literal_i32 0)
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

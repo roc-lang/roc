@@ -1149,7 +1149,7 @@ fn processSnapshotContent(
             try parser.parseHeader();
             break :blk null; // Header doesn't return a node, it sets ast.header
         },
-        .expr => @intFromEnum(try parser.parseExpr()),
+        .expr => @intFromEnum(try parser.parseExprFromSource(&env, &messages)),
         .statement => if (try parser.parseStmt()) |stmt| @intFromEnum(stmt) else null,
         .package => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .platform => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
@@ -2303,12 +2303,12 @@ fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST
     try output.begin_code_block("clojure");
 
     // Output AST2 structure as S-expressions
-    if (parse_result) |node_idx_int| {
+    // Always check for header first - headers are the primary content for header types
+    if (ast.header) |header| {
+        try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
+    } else if (parse_result) |node_idx_int| {
         const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
         try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
-    } else if (ast.header) |_| {
-        // We have a header but no root node
-        try output.md_writer.writeAll("(header-only)\n");
     } else {
         try output.md_writer.writeAll("(empty)\n");
     }
@@ -2317,6 +2317,186 @@ fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST
 
     try output.end_code_block();
     try output.end_section();
+}
+
+/// Helper to output header as S-expression
+fn outputHeaderAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, header: AST.Header, indent: usize) !void {
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output header based on type
+    switch (header) {
+        .app => |app| {
+            try writer.writeAll("(app-header");
+
+            // Output exposes if present
+            if (!app.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&app.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!app.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&app.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .module => |mod| {
+            try writer.writeAll("(module-header");
+
+            // Output exposes
+            if (!mod.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&mod.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .package => |pkg| {
+            try writer.writeAll("(package-header");
+
+            // Output exposes
+            if (!pkg.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&pkg.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!pkg.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&pkg.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .platform => |plat| {
+            try writer.writeAll("(platform-header");
+
+            // Output exposes
+            if (!plat.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&plat.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!plat.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&plat.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .hosted => |host| {
+            try writer.writeAll("(hosted-header");
+
+            // Output exposes
+            if (!host.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&host.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .interface => |iface| {
+            try writer.writeAll("(interface-header");
+
+            // Output exposes
+            if (!iface.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&iface.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .malformed => {
+            try writer.writeAll("(malformed-header)\n");
+        },
+    }
 }
 
 /// Helper to output AST2 node as S-expression
@@ -2588,8 +2768,50 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
         // If/match/when expressions with branches
         .if_else, .if_without_else => {
-            // if expressions store branch count, not nodes
-            try writer.print(" <{} branches>", .{node.payload.if_branches});
+            // if expressions store nodes in the if_branches field (bit-cast as u32)
+            const nodes_idx_val = @as(u32, @bitCast(node.payload.if_branches));
+            const nodes_idx = @as(collections.NodeSlices(parse.AST2.Node.Idx).Idx, @enumFromInt(nodes_idx_val));
+
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var count: usize = 0;
+                while (iter.next()) |_| : (count += 1) {}
+
+                // Reset iterator
+                iter = ast.node_slices.nodes(&nodes_idx);
+
+                // For if_else: condition, then_branch, else_branch
+                // For if_without_else: condition, then_branch
+                if (iter.next()) |cond_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(condition ");
+                    try outputASTNodeAsSExpr(writer, ast, env, cond_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                if (iter.next()) |then_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(then ");
+                    try outputASTNodeAsSExpr(writer, ast, env, then_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                if (iter.next()) |else_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(else ");
+                    try outputASTNodeAsSExpr(writer, ast, env, else_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+            }
         },
         .match => {
             // Match nodes store nodes in the nodes payload field

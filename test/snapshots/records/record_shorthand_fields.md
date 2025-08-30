@@ -21,7 +21,7 @@ OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseCur
 ~~~
 # FORMATTED
 ~~~roc
-{ name, age, email, active }
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

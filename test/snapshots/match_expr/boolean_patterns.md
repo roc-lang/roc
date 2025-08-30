@@ -15,23 +15,34 @@ match isReady {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "isReady")
+)
+  (branch1     (binop_thick_arrow
+      (uc "True")
+      (str_literal_big "ready to go!")
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "False")
+      (str_literal_big "not ready yet")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match isReady
+	True => "ready to go!"
+	False => "not ready yet"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:7 to 2:10
+**Unsupported Node**
+at 2:7 to 2:9
 
-**Parse Error**
-at 3:8 to 3:11
-
-**Parse Error**
-at 1:15 to 4:2
+**Unsupported Node**
+at 3:2 to 3:7
 
 # CANONICALIZE
 ~~~clojure

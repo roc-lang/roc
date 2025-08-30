@@ -14,20 +14,28 @@ match value {
 KwMatch LowerIdent OpenCurly LowerIdent OpFatArrow LowerIdent OpPlus Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "value")
+)
+  (branch1     (binop_thick_arrow
+      (lc "x")
+      (binop_plus
+        (lc "x")
+        (num_literal_i32 1)
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match value
+	x => x + 1
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:7 to 2:10
-
-**Parse Error**
-at 1:13 to 3:2
+**Unsupported Node**
+at 2:7 to 2:9
 
 # CANONICALIZE
 ~~~clojure

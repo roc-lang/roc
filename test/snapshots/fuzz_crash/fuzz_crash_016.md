@@ -13,26 +13,28 @@ Int OpBar ~~~
 # PARSE
 ~~~clojure
 (block
-  (binop_pipe
-    (num_literal_i32 0)
-    (malformed malformed:expr_unexpected_token)
-  )
+  (num_literal_i32 0)
+  (malformed malformed:expr_unexpected_token)
 )
 ~~~
 # FORMATTED
 ~~~roc
-0 | 
+0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
+**Parse Error**
+at 1:2 to 1:3
+
 **Parse Error**
 at 1:3 to 1:3
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.num_literal_i32 0)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -13,14 +13,17 @@ as s|||0
 KwModule OpenSquare CloseCurly OpBar Int KwAs LowerIdent OpOr OpBar Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-)
+(module-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [}]
 
+as 
+s || 
 ~~~
 # EXPECTED
 NIL
@@ -32,7 +35,7 @@ at 1:8 to 1:9
 at 1:1 to 1:9
 
 **Parse Error**
-at 2:9 to 2:9
+at 2:1 to 2:4
 
 **Parse Error**
 at 2:9 to 2:9
@@ -41,6 +44,10 @@ at 2:9 to 2:9
 ~~~clojure
 (Expr.block
   (Expr.malformed)
+  (Expr.binop_or
+    (Expr.lookup "s")
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

@@ -18,17 +18,31 @@ app # Comment after keyword
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang Comma CloseSquare Comma LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../main.roc")
+        (block
+          (lc "main")
+        )
+      )
+    )
+
+    (binop_colon
+      (lc "other")
+      (str_literal_big "../../other/main.roc")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-app # Comment after keyword
+app
 {
-# Comment after packages open
-	pf: "../main.roc" platform [ # Comment after provides open
+	pf: "../main.roc" platform [
 		main
 	],
-# Comment after platform
 	other: "../../other/main.roc",
 }
 
@@ -47,4 +61,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

@@ -12,11 +12,7 @@ module[]{R}
 KwModule OpenSquare CloseSquare OpenCurly UpperIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
-    (uc "R")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

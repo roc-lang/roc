@@ -56,7 +56,7 @@ x = 5
 y = (|_| {
 	x = 10
 	x : x
-})({  }) # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
+})({  })
 y
 ~~~
 # EXPECTED

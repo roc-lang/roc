@@ -16,36 +16,33 @@ match color {
 KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match color
+Green 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 2:24 to 2:27
+at 2:5 to 2:12
 
 **Parse Error**
-at 3:11 to 3:14
+at 2:12 to 2:18
 
-**Parse Error**
-at 4:11 to 4:14
-
-**Parse Error**
-at 1:13 to 5:2
+**Unsupported Node**
+at 2:12 to 2:18
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

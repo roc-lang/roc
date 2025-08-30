@@ -23,36 +23,14 @@ green = Green
 KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwImport UpperIdent Dot OpStar LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (uc "Color")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
+(module-header
+  (exposes
     (lc "red")
-    (uc "Color")
-  )
-  (binop_equals
-    (lc "red")
-    (uc "Red")
-  )
-  (binop_colon
-    (lc "blue")
-    (uc "Color")
-  )
-  (binop_equals
-    (lc "blue")
-    (uc "Blue")
-  )
-  (binop_colon
+
     (lc "green")
-    (uc "Color")
-  )
-  (binop_equals
-    (lc "green")
-    (uc "Green")
-  )
-)
+
+    (lc "blue")
+))
 ~~~
 # FORMATTED
 ~~~roc

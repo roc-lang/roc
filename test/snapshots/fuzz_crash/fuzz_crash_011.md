@@ -12,11 +12,14 @@ module P]F
 KwModule UpperIdent CloseSquare UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (uc "P")
-  (malformed malformed:expr_unexpected_token)
-  (uc "F")
-)
+(module-header
+  (exposes
+    (uc "P")
+
+    (malformed malformed:expr_unexpected_token)
+
+    (uc "F")
+))
 ~~~
 # FORMATTED
 ~~~roc

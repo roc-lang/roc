@@ -20,7 +20,7 @@ OpenRound Int Comma String Comma UpperIdent CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(1, "hello", True)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -28,7 +28,11 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.tuple_literal)
+(Expr.tuple_literal
+  (Expr.num_literal_i32 1)
+  (Expr.str_literal_big)
+  (Expr.apply_tag)
+)
 ~~~
 # SOLVED
 ~~~clojure

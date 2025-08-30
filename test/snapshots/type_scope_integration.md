@@ -24,24 +24,12 @@ Baz : Foo
 KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (uc "Foo")
-    (uc "U64")
-  )
-  (binop_colon
-    (uc "Foo")
-    (uc "Str")
-  )
-  (binop_colon
+
     (uc "Bar")
-    (uc "SomeUndeclaredType")
-  )
-  (binop_colon
-    (uc "Baz")
-    (uc "Foo")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

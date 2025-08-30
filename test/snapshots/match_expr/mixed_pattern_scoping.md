@@ -17,29 +17,81 @@ match data {
 KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenSquare LowerIdent Comma LowerIdent CloseSquare CloseRound OpFatArrow LowerIdent OpPlus LowerIdent UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpBinaryMinus Int UpperIdent OpenRound OpenSquare LowerIdent CloseSquare CloseRound OpFatArrow LowerIdent OpStar Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpSlash Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "data")
+)
+  (branch1     (binop_thick_arrow
+      (apply_uc
+        (uc "Ok")
+        (list_literal
+          (lc "x")
+          (lc "y")
+        )
+      )
+      (binop_plus
+        (lc "x")
+        (lc "y")
+      )
+    )
+)
+  (branch2     (binop_thick_arrow
+      (apply_uc
+        (uc "Err")
+        (lc "x")
+      )
+      (binop_minus
+        (lc "x")
+        (num_literal_i32 1)
+      )
+    )
+)
+  (branch3     (binop_thick_arrow
+      (apply_uc
+        (uc "Ok")
+        (list_literal
+          (lc "x")
+        )
+      )
+      (binop_star
+        (lc "x")
+        (num_literal_i32 2)
+      )
+    )
+)
+  (branch4     (binop_thick_arrow
+      (apply_uc
+        (uc "Err")
+        (lc "y")
+      )
+      (binop_slash
+        (lc "y")
+        (num_literal_i32 2)
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match data
+	Ok([x, y]) => x + y
+	Err(x) => x - 1
+	Ok([x]) => x * 2
+	Err(y) => y / 2
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:16 to 2:19
+**Unsupported Node**
+at 2:16 to 2:18
 
-**Parse Error**
-at 3:12 to 3:15
+**Unsupported Node**
+at 3:5 to 3:11
 
-**Parse Error**
-at 4:13 to 4:16
+**Unsupported Node**
+at 4:13 to 4:15
 
-**Parse Error**
-at 5:12 to 5:15
-
-**Parse Error**
-at 1:12 to 6:2
+**Unsupported Node**
+at 5:5 to 5:11
 
 # CANONICALIZE
 ~~~clojure

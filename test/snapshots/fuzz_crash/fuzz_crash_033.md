@@ -12,14 +12,11 @@ type=expr
 OpenCurly LowerIdent Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(record_literal
-  (lc "i")
-  (uc "Complete")
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-{ i, Complete }
+]
 ~~~
 # EXPECTED
 NIL
@@ -27,18 +24,21 @@ NIL
 **Parse Error**
 at 1:1 to 1:14
 
+**Parse Error**
+at 1:14 to 1:15
+
+**Unsupported Node**
+at 1:14 to 1:15
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.lookup "i")
-  (Expr.apply_tag)
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-{}
+# No expression found
 ~~~

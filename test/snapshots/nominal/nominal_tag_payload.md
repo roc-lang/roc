@@ -24,86 +24,18 @@ none2 = Maybe.None
 KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColonEqual OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (apply_uc
-      (uc "Maybe")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
+    (uc "Maybe")
+
     (lc "some1")
-    (binop_thin_arrow
-      (lc "a")
-      (apply_uc
-        (uc "Maybe")
-        (lc "a")
-      )
-    )
-  )
-  (binop_equals
-    (lc "some1")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Maybe")
-            (uc "Some")
-          )
-          (lc "a")
-        )
-      )
-      (args
-        (lc "a")
-      )
-    )
-  )
-  (binop_colon
+
     (lc "none1")
-    (apply_uc
-      (uc "Maybe")
-      (lc "_a")
-    )
-  )
-  (binop_equals
-    (lc "none1")
-    (binop_pipe
-      (uc "Maybe")
-      (uc "None")
-    )
-  )
-  (binop_equals
+
     (lc "some2")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Maybe")
-            (uc "Some")
-          )
-          (lc "a")
-        )
-      )
-      (args
-        (lc "a")
-      )
-    )
-  )
-  (binop_equals
+
     (lc "none2")
-    (binop_pipe
-      (uc "Maybe")
-      (uc "None")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -130,7 +62,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "some1")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "some1")
@@ -142,7 +77,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "none1")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "some2")
@@ -150,7 +88,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "none2")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

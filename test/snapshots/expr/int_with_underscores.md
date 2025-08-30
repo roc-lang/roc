@@ -12,25 +12,30 @@ type=expr
 Int Underscore Int Underscore Int ~~~
 # PARSE
 ~~~clojure
-(num_literal_i32 1)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-1_000_000
+_
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 1:2 to 1:3
+
+**Unsupported Node**
+at 1:2 to 1:3
+
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_i32 1)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag num_literal_i32 :type "Num(_a)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Num(_a)
+# No expression found
 ~~~

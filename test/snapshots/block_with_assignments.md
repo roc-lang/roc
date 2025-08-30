@@ -52,10 +52,8 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign
         )
       )
       (args
-        (tuple_literal
-          (lc "a")
-          (lc "b")
-        )
+        (lc "a")
+        (lc "b")
       )
     )
   )
@@ -139,7 +137,10 @@ at 5:16 to 5:20
   )
   (Expr.binop_equals
     (Expr.lookup "pair")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.str_literal_big)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "record")

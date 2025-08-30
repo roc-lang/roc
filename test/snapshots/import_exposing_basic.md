@@ -21,53 +21,10 @@ main = {
 KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "json")
-        (uc "Json")
-      )
-      (list_literal
-        (lc "decode")
-        (lc "encode")
-      )
-    )
-  )
-  (binop_equals
+(module-header
+  (exposes
     (lc "main")
-    (block
-      (binop_equals
-        (lc "data")
-        (record_literal
-          (binop_colon
-            (lc "name")
-            (str_literal_big "Alice")
-          )
-          (binop_colon
-            (lc "age")
-            (num_literal_i32 30)
-          )
-        )
-      )
-      (binop_equals
-        (lc "encoded")
-        (apply_lc
-          (lc "encode")
-          (lc "data")
-        )
-      )
-      (binop_equals
-        (lc "decoded")
-        (apply_lc
-          (lc "decode")
-          (lc "encoded")
-        )
-      )
-      (lc "decoded")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

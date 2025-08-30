@@ -22,78 +22,18 @@ main! = add(1, 2)
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly Dot LowerIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "add")
-    (binop_thin_arrow
-      (uc "I32")
-      (binop_thin_arrow
-        (uc "I32")
-        (uc "I32")
-      )
-    )
-  )
-  (binop_equals
-    (lc "add")
-    (lambda
-      (body
-        (binop_pipe
-          (record_literal
-            (binop_colon
-              (lc "x")
-              (lc "x")
-            )
-            (binop_colon
-              (lc "y")
-              (lc "y")
-            )
-          )
-          (dot_lc "x")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "x")
-          (lc "y")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
     )
-  )
-  (binop_colon
-    (lc "double")
-    (binop_thin_arrow
-      (uc "I32")
-      (uc "I32")
-    )
-  )
-  (binop_equals
-    (lc "double")
-    (lambda
-      (body
-        (apply_lc
-          (lc "add")
-          (tuple_literal
-            (lc "x")
-            (lc "x")
-          )
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (apply_lc
-      (lc "add")
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -116,7 +56,13 @@ at 5:14 to 5:28
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "add")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "add")
@@ -124,7 +70,10 @@ at 5:14 to 5:28
   )
   (Expr.binop_colon
     (Expr.lookup "double")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "double")

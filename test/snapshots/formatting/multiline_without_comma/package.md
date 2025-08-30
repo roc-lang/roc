@@ -23,22 +23,23 @@ b! : Str => Str
 KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (not_lc "a")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (binop_colon
-    (not_lc "b")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
+(package-header
+  (exposes
+    (lc "a")
+
+    (lc "b")
 )
+  (packages
+    (lc "a")
+
+    (binop_colon
+      (tuple_literal
+        (str_literal_small "a")
+        (lc "b")
+      )
+      (str_literal_small "b")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,11 +62,17 @@ at 12:6 to 12:9
 (Expr.block
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
 )
 ~~~

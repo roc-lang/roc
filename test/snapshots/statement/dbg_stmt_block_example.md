@@ -20,39 +20,17 @@ foo = |num| {
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly KwDbg LowerIdent Dot LowerIdent OpenRound CloseRound KwDbg OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (lambda
-      (body
-        (block
-          (malformed malformed:expr_unexpected_token)
-          (apply_anon
-            (binop_pipe
-              (lc "num")
-              (dot_lc "to_str")
-            )
-          )
-          (apply_anon
-            (malformed malformed:expr_unexpected_token)
-            (lc "num")
-          )
-        )
-      )
-      (args
-        (lc "num")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [foo]
 
 foo = |num| {
-		# statement - prints out the value of num convertert to a string
-dbg 
+	dbg 
 	num.to_str()
 	dbg(num)
 }

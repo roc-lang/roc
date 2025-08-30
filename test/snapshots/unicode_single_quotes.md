@@ -34,64 +34,7 @@ y = 'u
 KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence Comma MalformedSingleQuoteInvalidEscapeSequence CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound Int UpperIdent CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound UpperIdent CloseRound MalformedSingleQuoteUnclosed SingleQuote Comma SingleQuote Comma MalformedSingleQuoteEmpty Comma MalformedSingleQuoteUnclosed LowerIdent MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed Comma CloseRound LowerIdent OpAssign MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "x")
-    (tuple_literal
-      (str_literal_small "a")
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-    (malformed malformed:expr_unexpected_token)
-  )
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-    (num_literal_i32 1)
-  )
-  (uc "F680")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (malformed malformed:expr_unexpected_token)
-    (uc "K")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (str_literal_small "\")
-  (malformed malformed:expr_unexpected_token)
-  (str_literal_small "'")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (lc "ong")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (binop_equals
-    (lc "y")
-    (malformed malformed:expr_unexpected_token)
-  )
-  (malformed malformed:expr_unexpected_token)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -272,7 +215,10 @@ at 23:1 to 23:3
 (Expr.block
   (Expr.binop_equals
     (Expr.lookup "x")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.malformed)
+    )
   )
   (Expr.malformed)
   (Expr.malformed)

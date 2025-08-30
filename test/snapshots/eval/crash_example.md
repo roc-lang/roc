@@ -32,7 +32,9 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.crash)
+  (Expr.crash
+    (Expr.str_literal_big)
+  )
   (Expr.record_literal
   )
 )

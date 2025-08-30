@@ -17,16 +17,14 @@ OpBar Underscore Comma Underscore OpBar Int ~~~
     (num_literal_i32 42)
   )
   (args
-    (tuple_literal
-      (underscore)
-      (underscore)
-    )
+    (underscore)
+    (underscore)
   )
 )
 ~~~
 # FORMATTED
 ~~~roc
-|_, _| 42
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

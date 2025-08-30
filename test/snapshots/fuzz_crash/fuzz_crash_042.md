@@ -12,28 +12,7 @@ module[]import u.R}g:r->R.a.E
 KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly LowerIdent OpColon LowerIdent OpArrow UpperIdent Dot LowerIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
-      (lc "u")
-      (uc "R")
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
-    (lc "g")
-    (binop_thin_arrow
-      (lc "r")
-      (binop_pipe
-        (binop_pipe
-          (uc "R")
-          (dot_lc "a")
-        )
-        (uc "E")
-      )
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -64,7 +43,10 @@ at 1:26 to 1:28
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "g")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "r")
+      (Expr.lambda)
+    )
   )
 )
 ~~~

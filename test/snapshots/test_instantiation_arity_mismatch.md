@@ -67,7 +67,16 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "identity")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "identity")

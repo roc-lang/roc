@@ -14,25 +14,30 @@ type=expr
 Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(num_literal_i32 4)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-4
+!
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 2:1 to 3:1
+
+**Unsupported Node**
+at 2:1 to 3:1
+
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_i32 4)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag num_literal_i32 :type "Num(_size)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+# No expression found
 ~~~

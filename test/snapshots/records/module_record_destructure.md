@@ -19,64 +19,10 @@ extract_age = |person| {
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenCurly LowerIdent CloseCurly OpAssign LowerIdent OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent OpPlus LowerIdent OpBinaryMinus OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "extract_age")
-    (binop_thin_arrow
-      (block
-        (binop_colon
-          (lc "age")
-          (uc "U64")
-        )
-      )
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "extract_age")
-    (lambda
-      (body
-        (block
-          (binop_equals
-            (block
-              (binop_colon
-                (lc "age")
-                (lc "age")
-              )
-            )
-            (lc "person")
-          )
-          (binop_minus
-            (binop_plus
-              (binop_pipe
-                (block
-                  (binop_colon
-                    (lc "a")
-                    (num_literal_i32 0)
-                  )
-                )
-                (dot_lc "a")
-              )
-              (lc "age")
-            )
-            (binop_pipe
-              (block
-                (binop_colon
-                  (lc "a")
-                  (num_literal_i32 0)
-                )
-              )
-              (dot_lc "a")
-            )
-          )
-        )
-      )
-      (args
-        (lc "person")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -110,7 +56,15 @@ at 7:21 to 7:29
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "extract_age")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "age")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "extract_age")

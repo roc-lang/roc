@@ -13,12 +13,10 @@ foo = FortyTwo
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (uc "FortyTwo")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

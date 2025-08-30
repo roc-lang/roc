@@ -14,15 +14,10 @@ add2 = x +      2
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign LowerIdent OpPlus Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "add2")
-    (binop_plus
-      (lc "x")
-      (num_literal_i32 2)
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

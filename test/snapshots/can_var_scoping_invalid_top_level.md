@@ -15,12 +15,7 @@ var topLevelVar_ = 0
 KwModule OpenSquare CloseSquare KwVar LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (var_lc "topLevelVar_")
-    (num_literal_i32 0)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

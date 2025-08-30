@@ -12,26 +12,19 @@ expect Bool.True
 KwExpect UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(expect
-  (binop_pipe
-    (uc "Bool")
-    (uc "True")
-  )
-)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-expect Bool.True
+
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:17
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

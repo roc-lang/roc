@@ -40,96 +40,18 @@ main = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Float LowerIdent OpAssign LowerIdent LowerIdent OpAssign LowerIdent LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent OpAssign LowerIdent OpStar Int LowerIdent OpAssign LowerIdent OpPlus Float LowerIdent OpAssign LowerIdent OpStar Float LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Int LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Float CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "num")
-    (num_literal_i32 42)
-  )
-  (binop_equals
-    (lc "frac")
-    (frac_literal_small 4.2)
-  )
-  (binop_equals
-    (lc "int_use")
-    (lc "num")
-  )
-  (binop_equals
-    (lc "float_use")
-    (lc "frac")
-  )
-  (binop_equals
-    (lc "int_add")
-    (binop_plus
-      (lc "num")
-      (num_literal_i32 10)
-    )
-  )
-  (binop_equals
-    (lc "int_multiply")
-    (binop_star
-      (lc "num")
-      (num_literal_i32 2)
-    )
-  )
-  (binop_equals
-    (lc "float_add")
-    (binop_plus
-      (lc "num")
-      (frac_literal_small 3.14)
-    )
-  )
-  (binop_equals
-    (lc "float_multiply")
-    (binop_star
-      (lc "num")
-      (frac_literal_small 2.5)
-    )
-  )
-  (binop_equals
-    (lc "double")
-    (lambda
-      (body
-        (binop_star
-          (lc "x")
-          (num_literal_i32 2)
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_equals
-    (lc "int_doubled")
-    (apply_lc
-      (lc "double")
-      (num_literal_i32 5)
-    )
-  )
-  (binop_equals
-    (lc "float_doubled")
-    (apply_lc
-      (lc "double")
-      (frac_literal_small 2.5)
-    )
-  )
-  (binop_equals
-    (lc "main")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
         (block
-          (binop_plus
-            (lc "int_add")
-            (lc "int_multiply")
-          )
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -147,8 +69,7 @@ double = |x| x * 2
 int_doubled = double(5)
 float_doubled = double(2.5)
 main = |_| {
-		# Combine results
-int_add + int_multiply
+	int_add + int_multiply
 }
 ~~~
 # EXPECTED

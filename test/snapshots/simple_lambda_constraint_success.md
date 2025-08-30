@@ -20,50 +20,12 @@ addTwoF64 = |x| x + 2.0
 KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Float ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "addTwo")
-    (binop_thin_arrow
-      (uc "I64")
-      (uc "I64")
-    )
-  )
-  (binop_equals
-    (lc "addTwo")
-    (lambda
-      (body
-        (binop_plus
-          (lc "x")
-          (num_literal_i32 2)
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
+
     (lc "addTwoF64")
-    (binop_thin_arrow
-      (uc "F64")
-      (uc "F64")
-    )
-  )
-  (binop_equals
-    (lc "addTwoF64")
-    (lambda
-      (body
-        (binop_plus
-          (lc "x")
-          (frac_literal_small 2)
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -83,7 +45,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "addTwo")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "addTwo")
@@ -91,7 +56,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "addTwoF64")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "addTwoF64")

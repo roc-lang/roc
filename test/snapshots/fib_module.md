@@ -14,32 +14,19 @@ fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent OpLessThanOrEq Int LowerIdent KwElse LowerIdent OpenRound LowerIdent OpBinaryMinus Int CloseRound OpPlus LowerIdent OpenRound LowerIdent OpBinaryMinus Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "fib")
-    (lambda
-      (body
-        (if_else <12 branches>)
-      )
-      (args
-        (lc "n")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
-module [fib]
-
-fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:11 to 3:21
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

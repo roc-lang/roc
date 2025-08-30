@@ -36,117 +36,18 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "identity")
-    (lambda
-      (body
-        (lc "x")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
-    (lc "combine")
-    (binop_thin_arrow
-      (lc "a")
-      (binop_thin_arrow
-        (lc "b")
-        (tuple_literal
-          (lc "a")
-          (lc "b")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "combine")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "first")
-          (lc "second")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "first")
-          (lc "second")
-        )
-      )
-    )
-  )
-  (binop_colon
-    (lc "addOne")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "addOne")
-    (lambda
-      (body
-        (binop_plus
-          (lc "n")
-          (num_literal_i32 1)
-        )
-      )
-      (args
-        (lc "n")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (binop_equals
-            (lc "num")
-            (apply_lc
-              (lc "identity")
-              (num_literal_i32 42)
-            )
-          )
-          (binop_equals
-            (lc "text")
-            (apply_lc
-              (lc "identity")
-              (str_literal_big "hello")
-            )
-          )
-          (binop_equals
-            (lc "pair")
-            (apply_lc
-              (lc "combine")
-              (tuple_literal
-                (lc "num")
-                (lc "text")
-              )
-            )
-          )
-          (binop_equals
-            (lc "result")
-            (apply_lc
-              (lc "addOne")
-              (num_literal_i32 5)
-            )
-          )
-          (binop_colon
-            (lc "result")
-            (lc "result")
-          )
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -158,8 +59,7 @@ combine = |first, second| (first, second)
 addOne : U64 -> U64
 addOne = |n| n + 1
 main! = |_| {
-		# Test identity with different types
-num = identity(42)
+	num = identity(42)
 	text = identity("hello")
 	pair = combine((num, text))
 	result = addOne(5)
@@ -179,7 +79,16 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "combine")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.tuple_literal
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "combine")
@@ -187,7 +96,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "addOne")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "addOne")

@@ -12,44 +12,19 @@ formatUser = |{ name, age, email }| "User: ${name} (${age.toStr()} years old) - 
 LowerIdent OpAssign OpBar OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 # PARSE
 ~~~clojure
-(binop_equals
-  (lc "formatUser")
-  (lambda
-    (body
-      (str_literal_big "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}")
-    )
-    (args
-      (record_literal
-        (binop_colon
-          (lc "name")
-          (lc "name")
-        )
-        (binop_colon
-          (lc "age")
-          (lc "age")
-        )
-        (binop_colon
-          (lc "email")
-          (lc "email")
-        )
-      )
-    )
-  )
-)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-formatUser = |{ name : name, age : age, email : email }| "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
+
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:15 to 1:35
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.assign)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

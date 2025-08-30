@@ -26,7 +26,7 @@ OpBar LowerIdent OpBar LowerIdent OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-|x| x + 1
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

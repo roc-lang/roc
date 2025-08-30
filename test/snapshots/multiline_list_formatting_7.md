@@ -26,7 +26,7 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 ~~~roc
 [
 	1,
-	2, # Foo
+	2,
 	3,
 ]
 ~~~

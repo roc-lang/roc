@@ -16,11 +16,11 @@ match value {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare KwIf UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpGreaterThan Int OpFatArrow String OpenSquare LowerIdent Comma LowerIdent CloseSquare KwIf LowerIdent OpEquals LowerIdent OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match value
+] 
 ~~~
 # EXPECTED
 NIL
@@ -32,26 +32,23 @@ at 2:16 to 2:19
 at 2:5 to 2:19
 
 **Parse Error**
+at 2:5 to 2:23
+
+**Parse Error**
 at 2:23 to 2:25
 
-**Parse Error**
-at 2:25 to 3:5
-
-**Parse Error**
-at 3:12 to 4:5
-
-**Parse Error**
-at 1:13 to 5:2
+**Unsupported Node**
+at 2:23 to 2:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

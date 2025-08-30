@@ -27,41 +27,12 @@ processColor = |color| {
 KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare LowerIdent OpColon Underscore OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly KwImport UpperIdent Dot UpperIdent KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
+(module-header
+  (exposes
     (uc "LocalStatus")
-    (list_literal
-      (uc "Pending")
-      (uc "Complete")
-    )
-  )
-  (binop_colon
+
     (lc "processColor")
-    (binop_thin_arrow
-      (underscore)
-      (uc "LocalStatus")
-    )
-  )
-  (binop_equals
-    (lc "processColor")
-    (lambda
-      (body
-        (block
-          (import
-            (binop_pipe
-              (uc "Color")
-              (uc "RGB")
-            )
-          )
-          (match <0 branches>)
-        )
-      )
-      (args
-        (lc "color")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -72,31 +43,28 @@ processColor : _ -> LocalStatus
 processColor = |color| {
 	import Color.RGB
 	match color
+		RGB | Red => LocalStatus.Pending
+		RGB | Green => LocalStatus.Complete
+		RGB | Blue => LocalStatus.Pending
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 12:17 to 12:20
-
-**Parse Error**
-at 13:19 to 13:22
-
-**Parse Error**
-at 14:18 to 14:21
-
-**Parse Error**
-at 11:17 to 16:2
-
-**Parse Error**
-at 6:24 to 16:2
-
 **Pattern in Expression Context**
 at 5:16 to 5:17
 
 **Unsupported Node**
 at 9:5 to 9:21
+
+**Unsupported Node**
+at 12:17 to 12:19
+
+**Unsupported Node**
+at 13:9 to 13:18
+
+**Unsupported Node**
+at 14:18 to 14:20
 
 # CANONICALIZE
 ~~~clojure
@@ -107,7 +75,10 @@ at 9:5 to 9:21
   )
   (Expr.binop_colon
     (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "processColor")

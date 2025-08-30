@@ -16,24 +16,10 @@ expect foo != Bool.False
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign UpperIdent Dot UpperIdent KwExpect LowerIdent OpNotEquals UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (binop_pipe
-      (uc "Bool")
-      (uc "True")
-    )
-  )
-  (expect
-    (binop_not_equals
-      (lc "foo")
-      (binop_pipe
-        (uc "Bool")
-        (uc "False")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,7 +37,10 @@ NIL
 (Expr.block
   (Expr.binop_equals
     (Expr.lookup "foo")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.malformed)
 )

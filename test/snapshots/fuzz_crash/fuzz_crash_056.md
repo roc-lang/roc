@@ -12,7 +12,26 @@ app[]{f:platform"",r:"",o:""}
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
+    )
+
+    (binop_colon
+      (lc "r")
+      (str_literal_small "")
+    )
+
+    (binop_colon
+      (lc "o")
+      (str_literal_small "")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

@@ -12,7 +12,24 @@ app { pf: "../basic-cli/main.roc" platform [a1!, a2!,], a: "a", }
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare Comma LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "a1")
+          (lc "a2")
+        )
+      )
+    )
+
+    (binop_colon
+      (lc "a")
+      (str_literal_small "a")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

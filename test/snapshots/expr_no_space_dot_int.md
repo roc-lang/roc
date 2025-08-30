@@ -14,21 +14,13 @@ foo = asd.0
 KwModule OpenSquare CloseSquare LowerIdent OpAssign LowerIdent Dot Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "foo")
-    (binop_pipe
-      (lc "asd")
-      (num_literal_i32 0)
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
-foo = asd | 0
+foo = (asd | 0)
 ~~~
 # EXPECTED
 NIL

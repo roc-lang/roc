@@ -17,7 +17,7 @@ MalformedString LowerIdent CloseRound CloseCurly LowerIdent LowerIdent LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-
+b
 ~~~
 # EXPECTED
 NIL
@@ -25,8 +25,11 @@ NIL
 **Parse Error**
 at 1:57 to 2:1
 
+**Parse Error**
+at 2:1 to 2:2
+
 **Unsupported Node**
-at 1:57 to 2:1
+at 2:1 to 2:2
 
 # CANONICALIZE
 ~~~clojure

@@ -27,31 +27,26 @@ ar,
 KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma CloseCurly KwExposes OpenSquare Dot CloseSquare KwPackages OpenCurly LowerIdent OpColon Int String Comma LowerIdent CloseCurly KwProvides OpenSquare LowerIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (list_literal
-    (lc "ar")
-  )
+(platform-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
 )
+  (packages
+    (lc "pkg")
+
+    (num_literal_i32 77)
+))
 ~~~
 # FORMATTED
 ~~~roc
-platform # Cd
-"foo" # Ce
- requires (
+platform "foo" requires (
 	n! : List Str => {  },
-) exposes  [
-	.
-		,
-] packages { # pen
-pkg, 77}
+) exposes  [.
+		] packages {pkg, 77}
 
 } #
-	 #
-provides # Cd
-		 # Cd
-[ # pen
+	provides # Cd
+		[
 	ar,
 ]
 ~~~

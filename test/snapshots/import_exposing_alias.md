@@ -21,59 +21,10 @@ main = {
 KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma LowerIdent KwAs LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "json")
-        (uc "Json")
-      )
-      (list_literal
-        (lc "decode")
-      )
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (lc "fromJson")
-  (malformed malformed:expr_unexpected_token)
-  (lc "encode")
-  (malformed malformed:expr_unexpected_token)
-  (lc "toJson")
-  (malformed malformed:expr_unexpected_token)
-  (binop_equals
+(module-header
+  (exposes
     (lc "main")
-    (block
-      (binop_equals
-        (lc "data")
-        (record_literal
-          (binop_colon
-            (lc "name")
-            (str_literal_small "Bob")
-          )
-          (binop_colon
-            (lc "age")
-            (num_literal_i32 25)
-          )
-        )
-      )
-      (binop_equals
-        (lc "encoded")
-        (apply_lc
-          (lc "toJson")
-          (lc "data")
-        )
-      )
-      (binop_equals
-        (lc "decoded")
-        (apply_lc
-          (lc "fromJson")
-          (lc "encoded")
-        )
-      )
-      (lc "decoded")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

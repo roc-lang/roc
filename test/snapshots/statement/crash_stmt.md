@@ -12,11 +12,11 @@ crash "some message"
 KwCrash String ~~~
 # PARSE
 ~~~clojure
-(crash <statement>)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-crash "some message"
+
 ~~~
 # EXPECTED
 NIL
@@ -24,7 +24,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.crash)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

@@ -21,39 +21,12 @@ AnotherType : SomeModule.MissingType
 KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly String CloseCurly UpperIdent OpColon UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (uc "MyType")
-    (uc "UnknownType")
-  )
-  (binop_colon
+
     (lc "processValue")
-    (binop_thin_arrow
-      (uc "UndeclaredResult")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "processValue")
-    (lambda
-      (body
-        (block
-          (str_literal_big "processed")
-        )
-      )
-      (args
-        (lc "value")
-      )
-    )
-  )
-  (binop_colon
-    (uc "AnotherType")
-    (binop_pipe
-      (uc "SomeModule")
-      (uc "MissingType")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -79,7 +52,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "processValue")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "processValue")
@@ -87,7 +63,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

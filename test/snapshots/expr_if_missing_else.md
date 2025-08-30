@@ -14,25 +14,16 @@ foo = if tru 0
 KwModule OpenSquare CloseSquare LowerIdent OpAssign KwIf LowerIdent Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "foo")
-    (if_without_else <0 branches>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-foo = if tru 0
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:7 to 3:14
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

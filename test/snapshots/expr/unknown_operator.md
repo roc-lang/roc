@@ -12,14 +12,11 @@ type=expr
 Int OpPlus OpPlus Int ~~~
 # PARSE
 ~~~clojure
-(binop_plus
-  (num_literal_i32 1)
-  (malformed malformed:expr_unexpected_token)
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-1 + + 
+2
 ~~~
 # EXPECTED
 NIL
@@ -27,18 +24,21 @@ NIL
 **Parse Error**
 at 1:4 to 1:6
 
+**Parse Error**
+at 1:6 to 1:7
+
+**Unsupported Node**
+at 1:6 to 1:7
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.num_literal_i32 1)
-  (Expr.malformed)
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_plus :type "Num(_a)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Num(_a)
+# No expression found
 ~~~

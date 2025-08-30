@@ -28,7 +28,7 @@ OpenSquare OpenSquare Int Comma Int CloseSquare Comma OpenSquare Int Comma Int C
 ~~~
 # FORMATTED
 ~~~roc
-[[1, 2], [3, 4], [5]]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

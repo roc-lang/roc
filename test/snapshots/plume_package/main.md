@@ -14,7 +14,10 @@ package [
 KwPackage OpenSquare UpperIdent Comma CloseSquare OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (exposes
+    (uc "Color")
+))
 ~~~
 # FORMATTED
 ~~~roc

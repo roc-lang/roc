@@ -13,19 +13,16 @@ f]
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (uc "S")
-      (list_literal
-        (lc "c")
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
       )
     )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (lc "f")
-  (malformed malformed:expr_unexpected_token)
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

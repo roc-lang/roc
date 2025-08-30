@@ -36,136 +36,18 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Int LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "add")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "add")
-    (lambda
-      (body
-        (num_literal_i32 42)
-      )
-      (args
-        (lc "unused")
-      )
-    )
-  )
-  (binop_colon
-    (lc "multiply")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "multiply")
-    (lambda
-      (body
-        (binop_star
-          (lc "_factor")
-          (num_literal_i32 2)
-        )
-      )
-      (args
-        (lc "_factor")
-      )
-    )
-  )
-  (binop_colon
-    (lc "process")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "process")
-    (lambda
-      (body
-        (num_literal_i32 100)
-      )
-      (args
-        (lc "_input")
-      )
-    )
-  )
-  (binop_colon
-    (lc "double")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "double")
-    (lambda
-      (body
-        (binop_star
-          (lc "value")
-          (num_literal_i32 2)
-        )
-      )
-      (args
-        (lc "value")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (binop_equals
-            (lc "result1")
-            (apply_lc
-              (lc "add")
-              (num_literal_i32 5)
-            )
-          )
-          (binop_equals
-            (lc "result2")
-            (apply_lc
-              (lc "multiply")
-              (num_literal_i32 3)
-            )
-          )
-          (binop_equals
-            (lc "result3")
-            (apply_lc
-              (lc "process")
-              (num_literal_i32 7)
-            )
-          )
-          (binop_equals
-            (lc "result4")
-            (apply_lc
-              (lc "double")
-              (num_literal_i32 4)
-            )
-          )
-          (binop_plus
-            (binop_plus
-              (binop_plus
-                (lc "result1")
-                (lc "result2")
-              )
-              (lc "result3")
-            )
-            (lc "result4")
-          )
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -196,7 +78,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "add")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "add")
@@ -204,7 +89,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "multiply")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "multiply")
@@ -212,7 +100,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "process")
@@ -220,7 +111,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "double")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "double")

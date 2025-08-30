@@ -13,9 +13,10 @@ requires{}{n:0[import S	exposing[
 KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon Int OpenSquare KwImport UpperIdent KwExposing OpenSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (list_literal)
-)
+(platform-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
+))
 ~~~
 # FORMATTED
 ~~~roc

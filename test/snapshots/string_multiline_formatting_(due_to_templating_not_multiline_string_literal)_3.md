@@ -21,8 +21,7 @@ MalformedString LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRoun
 ~~~
 # FORMATTED
 ~~~roc
-
-	
+some_func
 ~~~
 # EXPECTED
 NIL
@@ -30,8 +29,11 @@ NIL
 **Parse Error**
 at 1:26 to 2:2
 
+**Parse Error**
+at 2:2 to 2:11
+
 **Unsupported Node**
-at 1:26 to 2:2
+at 2:2 to 2:11
 
 # CANONICALIZE
 ~~~clojure

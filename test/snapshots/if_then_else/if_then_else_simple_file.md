@@ -18,12 +18,10 @@ foo = if 1 A
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign KwIf Int UpperIdent KwElse OpenCurly String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (if_else <0 branches>)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,9 +36,7 @@ else {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:7 to 3:12
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -17,30 +17,10 @@ foo = Json.parse(data)
 KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpColon UpperIdent KwImport UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_as
-      (str_literal_big "users.json")
-      (binop_colon
-        (lc "data")
-        (uc "Str")
-      )
-    )
-  )
-  (import
-    (uc "Json")
-  )
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (apply_anon
-      (binop_pipe
-        (uc "Json")
-        (dot_lc "parse")
-      )
-      (lc "data")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

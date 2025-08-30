@@ -12,33 +12,7 @@ module[]s:b->c where module(a).t:c,u:o...
 KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent TripleDot ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "s")
-    (binop_colon
-      (tuple_literal
-        (binop_where
-          (binop_thin_arrow
-            (lc "b")
-            (lc "c")
-          )
-          (binop_colon
-            (binop_pipe
-              (apply_module
-                (lc "a")
-              )
-              (dot_lc "t")
-            )
-            (lc "c")
-          )
-        )
-        (lc "u")
-      )
-      (lc "o")
-    )
-  )
-  (ellipsis)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -59,7 +33,19 @@ at 1:28 to 1:31
   (Expr.binop_colon
     (Expr.lookup "s")
     (Expr.binop_colon
-      (Expr.tuple_literal)
+      (Expr.tuple_literal
+        (Expr.binop_colon
+          (Expr.binop_thin_arrow
+            (Expr.lookup "b")
+            (Expr.lookup "c")
+          )
+          (Expr.binop_colon
+            (Expr.lambda)
+            (Expr.lookup "c")
+          )
+        )
+        (Expr.lookup "u")
+      )
       (Expr.lookup "o")
     )
   )

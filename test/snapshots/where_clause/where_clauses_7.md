@@ -27,80 +27,19 @@ Decode(a) : a
 KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound Comma CloseRound OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "Hash")
-      (tuple_literal
-        (lc "a")
-        (lc "hasher")
-      )
-    )
-    (tuple_literal
-      (binop_thin_arrow
-        (binop_where
-          (lc "a")
-          (binop_colon
-            (binop_pipe
-              (apply_module
-                (lc "a")
-              )
-              (dot_lc "hash")
-            )
-            (lc "hasher")
-          )
-        )
-        (lc "hasher")
-      )
-      (binop_pipe
-        (apply_module
-          (lc "hasher")
-        )
-        (uc "Hasher")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Decode")
-      (lc "a")
-    )
-    (binop_where
-      (lc "a")
-      (apply_anon
-        (binop_pipe
-          (apply_module
-            (lc "a")
-          )
-          (dot_lc "decode")
-        )
-        (binop_thin_arrow
-          (apply_uc
-            (uc "List")
-            (uc "U8")
-          )
-          (binop_thin_arrow
-            (malformed malformed:expr_unexpected_token)
-            (lc "a")
-          )
-        )
-      )
-    )
-  )
-)
+(module-header
+  (exposes
+    (uc "Hash")
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [Hash]
 
-# After header
-Hash((a, hasher)) : # After method
-	(a where module(a).hash : hasher) -> # After arrow
-hasher,
+Hash((a, hasher)) : 
+	(a where module(a).hash : hasher) -> hasher,
 	module(hasher) | Hasher,
-Decode(a) : a where module(a).decode( # After method args open
-List(U8) -> ( # After method arg
-)  -> a))
+Decode(a) : a where module(a).decode(List(U8) -> ()  -> a))
 ~~~
 # EXPECTED
 NIL
@@ -125,7 +64,19 @@ at 14:9 to 14:12
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.binop_thin_arrow
+        (Expr.binop_colon
+          (Expr.lookup "a")
+          (Expr.binop_colon
+            (Expr.lambda)
+            (Expr.lookup "hasher")
+          )
+        )
+        (Expr.lookup "hasher")
+      )
+      (Expr.lambda)
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)

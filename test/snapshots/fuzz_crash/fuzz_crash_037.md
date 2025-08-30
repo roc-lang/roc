@@ -12,9 +12,7 @@ module[]"\
 KwModule OpenSquare CloseSquare MalformedString ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

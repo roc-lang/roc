@@ -25,7 +25,7 @@ OpenSquare OpenSquare Int Comma String CloseSquare Comma OpenSquare Int Comma In
 ~~~
 # FORMATTED
 ~~~roc
-[[1, "hello"], [2, 3]]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

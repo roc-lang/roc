@@ -112,17 +112,7 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{
-	someTag : Some 42,
-	noneTag : None,
-	okTag : Ok "hello",
-	errTag : Err "oops",
-	addOne : |
-		x,
-	| (
-		(((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)],
-	),
-}
+{ someTag : Some 42, noneTag : None, okTag : Ok "hello", errTag : Err "oops", addOne : |x| ((((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)]) }
 ~~~
 # EXPECTED
 NIL

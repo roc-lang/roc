@@ -15,23 +15,11 @@ x = 123.456
 KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "x")
-    (uc "Dec")
-  )
-  (binop_equals
-    (lc "x")
-    (frac_literal_big big:<idx:0>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x : Dec
-x = 123.456
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

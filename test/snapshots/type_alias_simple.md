@@ -19,44 +19,18 @@ main! = |_| getUser(100)
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly UpperIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwIf OpenRound LowerIdent OpGreaterThan Int CloseRound String KwElse String LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (uc "UserId")
-    (uc "U64")
-  )
-  (binop_colon
-    (lc "getUser")
-    (binop_thin_arrow
-      (uc "UserId")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "getUser")
-    (lambda
-      (body
-        (if_else <12 branches>)
-      )
-      (args
-        (lc "id")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (apply_lc
-          (lc "getUser")
-          (num_literal_i32 100)
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -70,9 +44,7 @@ main! = |_| getUser(100)
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 6:16 to 6:29
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -82,7 +54,10 @@ at 6:16 to 6:29
   )
   (Expr.binop_colon
     (Expr.lookup "getUser")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getUser")

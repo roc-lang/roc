@@ -26,61 +26,7 @@ TagType := [Some(_), None]
 KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColonEqual Underscore UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpColonEqual Underscore OpArrow Underscore UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent Comma Underscore CloseRound UpperIdent OpColonEqual OpenSquare UpperIdent OpenRound Underscore CloseRound Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (uc "MyType")
-    (underscore)
-  )
-  (binop_colon_equals
-    (uc "OtherType")
-    (underscore)
-  )
-  (binop_colon_equals
-    (uc "ComplexType")
-    (apply_uc
-      (uc "List")
-      (underscore)
-    )
-  )
-  (binop_colon_equals
-    (uc "RecordType")
-    (record_literal
-      (binop_colon
-        (lc "field")
-        (underscore)
-      )
-      (binop_colon
-        (lc "other")
-        (uc "U32")
-      )
-    )
-  )
-  (binop_colon_equals
-    (uc "FunctionType")
-    (binop_thin_arrow
-      (underscore)
-      (underscore)
-    )
-  )
-  (binop_colon_equals
-    (uc "TupleType")
-    (tuple_literal
-      (underscore)
-      (uc "U32")
-      (underscore)
-    )
-  )
-  (binop_colon_equals
-    (uc "TagType")
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (underscore)
-      )
-      (uc "None")
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -154,11 +100,18 @@ at 15:18 to 15:19
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.malformed)
+      (Expr.apply_tag)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.apply_tag)

@@ -33,7 +33,7 @@ OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-|x| |y| x + z
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

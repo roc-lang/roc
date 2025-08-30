@@ -15,11 +15,11 @@ match numbers {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow OpenSquare CloseSquare CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match numbers
+] 
 ~~~
 # EXPECTED
 NIL
@@ -31,26 +31,23 @@ at 2:16 to 2:19
 at 2:5 to 2:19
 
 **Parse Error**
+at 2:5 to 2:27
+
+**Parse Error**
 at 2:27 to 2:29
 
-**Parse Error**
-at 2:29 to 2:32
-
-**Parse Error**
-at 3:8 to 3:11
-
-**Parse Error**
-at 1:15 to 4:2
+**Unsupported Node**
+at 2:27 to 2:29
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

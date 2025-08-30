@@ -32,62 +32,28 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign Int LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (binop_equals
-            (lc "unused_var")
-            (num_literal_i32 42)
-          )
-          (binop_equals
-            (lc "used_var")
-            (num_literal_i32 100)
-          )
-          (binop_equals
-            (lc "another_unused")
-            (str_literal_big "hello")
-          )
-          (binop_equals
-            (lc "_ignored")
-            (num_literal_i32 999)
-          )
-          (binop_equals
-            (lc "result")
-            (binop_plus
-              (lc "used_var")
-              (num_literal_i32 10)
-            )
-          )
-          (binop_colon
-            (lc "result")
-            (lc "result")
-          )
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main] }
 
 main! = |_| {
-		# Regular unused variable - should warn
-unused_var = 42
+	unused_var = 42
 	used_var = 100
 	another_unused = "hello"
-	 # Comment 1
-_ignored = # Comment 2
-999 # Comment 3
-
-		# Use only the used_var
+	_ignored = 999
 	result = used_var + 10
 	result : result
 }

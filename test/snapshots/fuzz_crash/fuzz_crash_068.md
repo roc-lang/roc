@@ -12,11 +12,7 @@ module[]({0})
 KwModule OpenSquare CloseSquare OpenRound OpenCurly Int CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
-    (num_literal_i32 0)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

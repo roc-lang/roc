@@ -13,12 +13,10 @@ foo = 12.34
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (frac_literal_small 12.34)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

@@ -17,28 +17,10 @@ red = Color.RGB.Red
 KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (uc "Color")
-  )
-  (binop_colon
+(module-header
+  (exposes
     (lc "red")
-    (binop_pipe
-      (uc "Color")
-      (uc "RGB")
-    )
-  )
-  (binop_equals
-    (lc "red")
-    (binop_pipe
-      (binop_pipe
-        (uc "Color")
-        (uc "RGB")
-      )
-      (uc "Red")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -46,7 +28,7 @@ module [red]
 
 import Color
 red : Color.RGB
-red = Color.RGB | Red
+red = (Color.RGB | Red)
 ~~~
 # EXPECTED
 NIL
@@ -66,7 +48,10 @@ at 6:12 to 6:16
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "red")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "red")

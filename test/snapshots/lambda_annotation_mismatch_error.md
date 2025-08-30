@@ -20,50 +20,12 @@ wrong_type_function = |x| x * 3.14
 KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Float ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "string_function")
-    (binop_thin_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "string_function")
-    (lambda
-      (body
-        (binop_plus
-          (lc "x")
-          (num_literal_i32 42)
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
+
     (lc "wrong_type_function")
-    (binop_thin_arrow
-      (uc "I64")
-      (uc "I64")
-    )
-  )
-  (binop_equals
-    (lc "wrong_type_function")
-    (lambda
-      (body
-        (binop_star
-          (lc "x")
-          (frac_literal_small 3.14)
-        )
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -83,7 +45,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "string_function")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "string_function")
@@ -91,7 +56,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "wrong_type_function")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "wrong_type_function")

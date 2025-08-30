@@ -13,15 +13,13 @@ LowerIdent OpBar MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
 (block
-  (binop_pipe
-    (lc "mo")
-    (malformed malformed:expr_unexpected_token)
-  )
+  (lc "mo")
+  (malformed malformed:expr_unexpected_token)
 )
 ~~~
 # FORMATTED
 ~~~roc
-mo | %
+mo
 ~~~
 # EXPECTED
 NIL
@@ -29,10 +27,14 @@ NIL
 **Parse Error**
 at 1:4 to 1:5
 
+**Parse Error**
+at 1:5 to 1:5
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.lookup "mo")
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

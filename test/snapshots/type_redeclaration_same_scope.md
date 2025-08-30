@@ -15,41 +15,14 @@ Maybe(a) : [Ok(a), Err]
 KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "Maybe")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Maybe")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Ok")
-        (lc "a")
-      )
-      (uc "Err")
-    )
-  )
-)
+(module-header
+  (exposes
+    (uc "Maybe")
+))
 ~~~
 # FORMATTED
 ~~~roc
-module [Maybe]
-
-Maybe(a) : [Some(a), None]
-Maybe(a) : [Ok(a), Err]
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

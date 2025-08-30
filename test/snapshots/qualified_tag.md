@@ -16,22 +16,10 @@ test = Color.Red
 KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
+(module-header
+  (exposes
     (uc "Color")
-    (list_literal
-      (uc "Red")
-      (uc "Blue")
-    )
-  )
-  (binop_equals
-    (lc "test")
-    (binop_pipe
-      (uc "Color")
-      (uc "Red")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,7 +41,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "test")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

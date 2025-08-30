@@ -15,29 +15,35 @@ b! : Str => Str
 KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma CloseCurly LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (not_lc "a")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (binop_colon
-    (not_lc "b")
-    (binop_thick_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
+(package-header
+  (exposes
+    (lc "a")
+
+    (lc "b")
 )
+  (packages
+    (lc "a")
+
+    (tuple_literal
+      (binop_colon
+        (tuple_literal
+          (str_literal_small "a")
+          (lc "b")
+        )
+        (str_literal_small "b")
+      )
+      (malformed malformed:expr_unexpected_token)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 package [
 	a,
 	b,
-] packages {a, (("a", b) : "b")}
+] packages {a, (
+	("a", b) : "b",
+)}
 
 a! : Str => Str
 b! : Str => Str
@@ -62,11 +68,17 @@ at 4:6 to 4:9
 (Expr.block
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
 )
 ~~~

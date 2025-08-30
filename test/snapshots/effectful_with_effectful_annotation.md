@@ -20,45 +20,18 @@ main! = print_msg!("Hello, world!")
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow OpenCurly CloseCurly LowerIdent OpBang OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign LowerIdent OpBang OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
+(app-header
+  (packages
+    (binop_colon
       (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_colon
-    (not_lc "print_msg")
-    (binop_thick_arrow
-      (uc "Str")
-      (record_literal)
-    )
-  )
-  (binop_equals
-    (not_lc "print_msg")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Stdout")
-            (not_lc "line")
-          )
-          (lc "msg")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (lc "msg")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (apply_anon
-      (not_lc "print_msg")
-      (str_literal_big "Hello, world!")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,7 +60,11 @@ at 7:20 to 7:26
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.not_lookup)
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.record_literal
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.not_lookup)

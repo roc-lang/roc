@@ -13,16 +13,16 @@ G	if 0{}else||0
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport UpperIdent KwAs UpperIdent KwIf Int OpenCurly CloseCurly KwElse OpOr Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_as
-      (uc "B")
-      (uc "G")
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
     )
-  )
-  (if_else <6 branches>)
-  (num_literal_i32 0)
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,9 +34,6 @@ if 0 {  } else ||0
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:3 to 2:7
-
 **Parse Error**
 at 2:13 to 2:15
 

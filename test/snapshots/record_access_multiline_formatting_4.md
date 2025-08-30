@@ -15,28 +15,31 @@ some_fn(arg1)? # Comment 1
 LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion ~~~
 # PARSE
 ~~~clojure
-(apply_lc
-  (lc "some_fn")
-  (lc "arg1")
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-some_fn(arg1)
+? # Comment 1
+	
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 1:14 to 2:2
+
+**Unsupported Node**
+at 1:14 to 2:2
+
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag apply_ident :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

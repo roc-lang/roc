@@ -19,7 +19,7 @@ Int OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-1 + 2
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -14,18 +14,11 @@ BadType := _
 KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (uc "BadType")
-    (underscore)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-BadType := _
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

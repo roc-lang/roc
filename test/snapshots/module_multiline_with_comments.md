@@ -16,14 +16,17 @@ module # Comment after module keyword
 KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(module-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [
-# Comment After exposes open
 	something,
-# Comment after exposed item
 	SomeType,
 ]
 

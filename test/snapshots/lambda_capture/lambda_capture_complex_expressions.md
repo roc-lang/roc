@@ -12,47 +12,36 @@ type=expr
 OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar KwIf LowerIdent OpGreaterThan Int OpenRound LowerIdent OpPlus LowerIdent CloseRound KwElse LowerIdent CloseRound OpenRound Int CloseRound OpenRound OpUnaryMinus Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(lambda
-  (body
-    (lambda
-      (body
-        (if_without_else <6 branches>)
-      )
-      (args
-        (lc "inner")
-      )
-    )
-  )
-  (args
-    (lc "outer")
-  )
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-|outer| |inner| if outer > 0(outer + inner) else 
+inner
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:18 to 1:47
-
 **Parse Error**
 at 1:47 to 1:52
 
 **Parse Error**
 at 1:52 to 1:52
 
+**Parse Error**
+at 1:52 to 1:57
+
+**Unsupported Node**
+at 1:52 to 1:57
+
 # CANONICALIZE
 ~~~clojure
-(Expr.lambda)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lambda :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

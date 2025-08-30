@@ -39,7 +39,7 @@ OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerI
 ~~~
 # FORMATTED
 ~~~roc
-(|x| |y| x + y)(1)(2)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

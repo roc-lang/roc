@@ -16,32 +16,12 @@ updated = { ..person,
 KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "person")
-    (record_literal
-      (binop_colon
-        (lc "name")
-        (str_literal_big "Alice")
-      )
-      (binop_colon
-        (lc "age")
-        (num_literal_i32 30)
-      )
-    )
-  )
-  (binop_equals
+
     (lc "updated")
-    (record_literal
-      (double_dot_lc "person")
-    )
-  )
-  (binop_colon
-    (lc "age")
-    (num_literal_i32 31)
-  )
-  (malformed malformed:expr_unexpected_token)
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

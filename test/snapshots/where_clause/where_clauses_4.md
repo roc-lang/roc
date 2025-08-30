@@ -18,44 +18,10 @@ decodeThings = ...
 KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (uc "Decode")
-      (list_literal
-        (uc "Decode")
-      )
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
     (lc "decodeThings")
-    (binop_where
-      (binop_thin_arrow
-        (apply_uc
-          (uc "List")
-          (apply_uc
-            (uc "List")
-            (uc "U8")
-          )
-        )
-        (apply_uc
-          (uc "List")
-          (lc "a")
-        )
-      )
-      (binop_pipe
-        (apply_module
-          (lc "a")
-        )
-        (uc "Decode")
-      )
-    )
-  )
-  (binop_equals
-    (lc "decodeThings")
-    (ellipsis)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,7 +47,10 @@ at 6:14 to 6:17
   (Expr.binop_colon
     (Expr.lookup "decodeThings")
     (Expr.binop_colon
-      (Expr.binop_thin_arrow)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
       (Expr.lambda)
     )
   )

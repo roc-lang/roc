@@ -17,14 +17,10 @@ foo = ...
 KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-  (str_literal_small "foo")
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (ellipsis)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

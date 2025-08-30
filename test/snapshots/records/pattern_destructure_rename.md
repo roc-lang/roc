@@ -14,20 +14,34 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent CloseCurly OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "person")
+)
+  (branch1     (binop_thick_arrow
+      (record_literal
+        (binop_colon
+          (lc "name")
+          (lc "userName")
+        )
+        (binop_colon
+          (lc "age")
+          (lc "userAge")
+        )
+      )
+      (str_literal_big "User ${userName} is ${userAge.to_str()} years old")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match person
+	{name: userName, age: userAge} => "User ${userName} is ${userAge.to_str()} years old"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:38 to 2:41
-
-**Parse Error**
-at 1:14 to 3:2
+**Unsupported Node**
+at 2:38 to 2:40
 
 # CANONICALIZE
 ~~~clojure

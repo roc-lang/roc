@@ -18,16 +18,12 @@ b = 'a'
 KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign SingleQuote LowerIdent OpAssign SingleQuote ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "a")
-    (str_literal_small "a")
-  )
-  (binop_equals
+
     (lc "b")
-    (str_literal_small "a")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

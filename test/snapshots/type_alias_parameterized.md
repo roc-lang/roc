@@ -19,74 +19,18 @@ main! = |_| swapPair(1, 2)
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "Pair")
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-    )
-    (tuple_literal
-      (lc "a")
-      (lc "b")
-    )
-  )
-  (binop_colon
-    (lc "swapPair")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Pair")
-        (tuple_literal
-          (lc "a")
-          (lc "b")
-        )
-      )
-      (apply_uc
-        (uc "Pair")
-        (tuple_literal
-          (lc "b")
-          (lc "a")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
     )
-  )
-  (binop_equals
-    (lc "swapPair")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "y")
-          (lc "x")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "x")
-          (lc "y")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (apply_lc
-          (lc "swapPair")
-          (tuple_literal
-            (num_literal_i32 1)
-            (num_literal_i32 2)
-          )
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -106,11 +50,17 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.lookup "a")
+      (Expr.lookup "b")
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "swapPair")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "swapPair")

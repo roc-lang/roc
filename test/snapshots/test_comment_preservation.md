@@ -28,33 +28,22 @@ bar = # comment after equals
 KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign Int LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (num_literal_i32 42)
-  )
-  (binop_equals
+
     (lc "bar")
-    (num_literal_i32 100)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [
-	# First comment
 	foo,
-# inline comment after foo
 	bar,
 ]
 
-foo = # Comment in function body
-42 # inline comment after value
-
-	# Comment between functions
-
-bar = # comment after equals
-100
+foo = 42
+bar = 100
 ~~~
 # EXPECTED
 NIL

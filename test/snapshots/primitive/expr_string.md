@@ -14,16 +14,10 @@ foo = "hello ${name}"
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign String LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "name")
-    (str_literal_small "luc")
-  )
-  (binop_equals
+(module-header
+  (exposes
     (lc "foo")
-    (str_literal_big "hello ${name}")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

@@ -16,26 +16,55 @@ match ... {
 KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow TripleDot OpenSquare SingleQuote Comma SingleQuote CloseSquare OpFatArrow TripleDot Underscore OpFatArrow TripleDot CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (ellipsis)
+)
+  (branch1     (binop_thick_arrow
+      (list_literal
+        (str_literal_small "#")
+      )
+      (ellipsis)
+    )
+)
+  (branch2     (binop_thick_arrow
+      (list_literal
+        (str_literal_small "a")
+        (str_literal_small "b")
+      )
+      (ellipsis)
+    )
+)
+  (branch3     (binop_thick_arrow
+      (underscore)
+      (ellipsis)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match ...
+	['#'] => ...
+	['a', 'b'] => ...
+	_ => ...
+}] => ...
+	['a', 'b'] => ...
+	_ => ...
+}, 'b'] => ...
+	_ => ...
+}] => ...
+	_ => ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:8 to 2:11
+**Unsupported Node**
+at 2:8 to 2:10
 
-**Parse Error**
-at 3:13 to 3:16
+**Unsupported Node**
+at 3:2 to 3:12
 
-**Parse Error**
-at 4:4 to 4:7
-
-**Parse Error**
-at 1:11 to 5:2
+**Unsupported Node**
+at 4:4 to 4:6
 
 # CANONICALIZE
 ~~~clojure

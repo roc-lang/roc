@@ -22,43 +22,10 @@ foo = |num| {
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent OpenRound UpperIdent Comma OpenSquare UpperIdent CloseSquare CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign KwIf OpenRound LowerIdent OpGreaterThan Int CloseRound OpenCurly KwReturn UpperIdent OpenRound UpperIdent CloseRound CloseCurly KwElse OpenCurly String CloseCurly UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "foo")
-    (binop_thin_arrow
-      (uc "U64")
-      (apply_uc
-        (uc "Result")
-        (tuple_literal
-          (uc "Str")
-          (list_literal
-            (uc "TooBig")
-          )
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "foo")
-    (lambda
-      (body
-        (block
-          (binop_equals
-            (lc "str")
-            (if_else <12 branches>)
-          )
-          (apply_uc
-            (uc "Ok")
-            (lc "str")
-          )
-        )
-      )
-      (args
-        (lc "num")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -79,15 +46,16 @@ foo = |num| {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:11 to 5:25
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "foo")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "foo")

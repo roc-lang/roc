@@ -14,22 +14,11 @@ module []
 KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly OpAssign LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (record_literal
-      (lc "name")
-      (lc "age")
-      (lc "email")
-    )
-    (lc "person")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-{ name, age, email } = person
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

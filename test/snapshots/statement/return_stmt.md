@@ -12,11 +12,11 @@ return Bool.True
 KwReturn UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(ret <statement>)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-return Bool.True
+
 ~~~
 # EXPECTED
 NIL
@@ -24,7 +24,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.ret)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

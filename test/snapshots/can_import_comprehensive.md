@@ -46,106 +46,7 @@ main = {
 KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwAs UpperIdent KwExposing OpenSquare LowerIdent Comma LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpAssign OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign LowerIdent LowerIdent OpAssign LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
-      (lc "json")
-      (uc "Json")
-    )
-  )
-  (import
-    (binop_exposing
-      (binop_as
-        (binop_pipe
-          (lc "http")
-          (uc "Client")
-        )
-        (uc "Http")
-      )
-      (list_literal
-        (lc "get")
-        (lc "post")
-      )
-    )
-  )
-  (import
-    (binop_as
-      (binop_pipe
-        (lc "utils")
-        (uc "String")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "main")
-    (block
-      (binop_equals
-        (lc "client")
-        (binop_pipe
-          (uc "Http")
-          (dot_lc "get")
-        )
-      )
-      (binop_equals
-        (lc "parser")
-        (binop_pipe
-          (uc "Json")
-          (dot_lc "utf8")
-        )
-      )
-      (binop_equals
-        (lc "helper")
-        (binop_pipe
-          (uc "Str")
-          (dot_lc "trim")
-        )
-      )
-      (binop_equals
-        (lc "result1")
-        (binop_pipe
-          (uc "Json")
-          (dot_lc "parse")
-        )
-      )
-      (binop_equals
-        (lc "result2")
-        (binop_pipe
-          (uc "Http")
-          (dot_lc "post")
-        )
-      )
-      (binop_equals
-        (lc "result3")
-        (lc "get")
-      )
-      (binop_equals
-        (lc "result4")
-        (lc "post")
-      )
-      (binop_equals
-        (lc "combined")
-        (apply_anon
-          (binop_pipe
-            (uc "Str")
-            (dot_lc "concat")
-          )
-          (tuple_literal
-            (lc "client")
-            (lc "parser")
-            (lc "helper")
-            (lc "result1")
-            (lc "result2")
-            (lc "result3")
-            (lc "result4")
-            (lc "combined")
-            (malformed malformed:expr_unexpected_token)
-          )
-        )
-      )
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -162,7 +63,18 @@ main = {
 	result2 = Http.post
 	result3 = get
 	result4 = post
-	combined = Str.concat((client, parser, helper, result1, result2, result3, result4, combined))
+	combined = Str.concat(
+		(
+			client,
+			parser,
+			helper,
+			result1,
+			result2,
+			result3,
+			result4,
+			combined,
+		),
+	)
 }
 ~~~
 # EXPECTED

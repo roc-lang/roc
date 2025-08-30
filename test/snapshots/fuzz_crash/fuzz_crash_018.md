@@ -39,7 +39,10 @@ NIL
   (Expr.num_literal_i32 0)
   (Expr.binop_colon
     (Expr.lookup "b")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

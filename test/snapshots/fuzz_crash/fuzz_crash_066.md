@@ -14,14 +14,7 @@ C:[0]
 KwModule OpenSquare CloseSquare UpperIdent OpColon OpenSquare Int CloseSquare ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (uc "C")
-    (list_literal
-      (num_literal_i32 0)
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

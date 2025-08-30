@@ -12,7 +12,7 @@ package [] {}
 KwPackage OpenSquare CloseSquare OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header)
 ~~~
 # FORMATTED
 ~~~roc

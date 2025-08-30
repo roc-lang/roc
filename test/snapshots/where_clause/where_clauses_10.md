@@ -20,49 +20,17 @@ decodeThings # After member name
 KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (uc "Decode")
-      (list_literal
-        (uc "Decode")
-      )
-    )
-  )
-  (binop_colon
-    (lc "decodeThings")
-    (binop_where
-      (binop_thin_arrow
-        (apply_uc
-          (uc "List")
-          (apply_uc
-            (uc "List")
-            (uc "U8")
-          )
-        )
-        (apply_uc
-          (uc "List")
-          (lc "a")
-        )
-      )
-      (binop_pipe
-        (apply_module
-          (lc "a")
-        )
-        (uc "Decode")
-      )
-    )
-  )
-)
+(module-header
+  (exposes
+    (lc "decode")
+))
 ~~~
 # FORMATTED
 ~~~roc
 module [decode]
 
 import Decode exposing [Decode]
-# After member name
-decodeThings : # After anno
-List List U8 -> List a where module(a) | Decode
+decodeThings : List List U8 -> List a where module(a) | Decode
 ~~~
 # EXPECTED
 NIL
@@ -80,7 +48,10 @@ at 9:11 to 9:14
   (Expr.binop_colon
     (Expr.lookup "decodeThings")
     (Expr.binop_colon
-      (Expr.binop_thin_arrow)
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
       (Expr.lambda)
     )
   )

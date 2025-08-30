@@ -16,26 +16,43 @@ match value {
 KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "value")
+)
+  (branch1     (binop_thick_arrow
+      (uc "Answer")
+      (str_literal_big "the answer")
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "Zero")
+      (str_literal_small "zero")
+    )
+)
+  (branch3     (binop_thick_arrow
+      (lc "other")
+      (str_literal_big "something else")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match value
+	Answer => "the answer"
+	Zero => "zero"
+	other => "something else"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:12 to 2:15
+**Unsupported Node**
+at 2:12 to 2:14
 
-**Parse Error**
-at 3:10 to 3:13
+**Unsupported Node**
+at 3:5 to 3:9
 
-**Parse Error**
-at 4:11 to 4:14
-
-**Parse Error**
-at 1:13 to 5:2
+**Unsupported Node**
+at 4:11 to 4:13
 
 # CANONICALIZE
 ~~~clojure

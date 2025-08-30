@@ -38,15 +38,10 @@ OpenSquare OpenSquare Int CloseSquare Comma OpenSquare Int CloseSquare Comma Ope
 ~~~
 # FORMATTED
 ~~~roc
-[
-	[1],
-	[2],
-	[
-		3,
-		4,
-	],
-	[5],
-]
+[[1], [2], [
+	3,
+	4,
+], [5]]
 ~~~
 # EXPECTED
 NIL

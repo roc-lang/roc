@@ -12,24 +12,19 @@ dbg Bool.True
 KwDbg UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
- 
+
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:4 to 1:5
-
-**Unsupported Node**
-at 1:4 to 1:5
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

@@ -14,23 +14,34 @@ match (1, 2) {
 KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound KwAs LowerIdent OpFatArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (tuple_literal
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+    )
+)
+  (branch1     (binop_thick_arrow
+      (binop_as
+        (tuple_literal
+          (lc "x")
+          (lc "y")
+        )
+        (lc "point")
+      )
+      (lc "point")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match (1, 2)
+	(x, y) as point => point
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:12 to 2:15
-
-**Parse Error**
-at 2:21 to 2:24
-
-**Parse Error**
-at 1:14 to 3:2
+**Unsupported Node**
+at 2:21 to 2:23
 
 # CANONICALIZE
 ~~~clojure

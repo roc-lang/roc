@@ -13,25 +13,30 @@ type=expr
 MultilineString UpperIdent LowerIdent LowerIdent LowerIdent MultilineString UpperIdent LowerIdent LowerIdent ~~~
 # PARSE
 ~~~clojure
-(str_literal_small "")
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-""
+This 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**Parse Error**
+at 1:4 to 1:9
+
+**Unsupported Node**
+at 1:4 to 1:9
+
 # CANONICALIZE
 ~~~clojure
-(Expr.str_literal_small)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag str_literal_small :type "Str")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Str
+# No expression found
 ~~~

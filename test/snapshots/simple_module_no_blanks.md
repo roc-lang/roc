@@ -15,28 +15,12 @@ world = "World"
 KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
-      (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_equals
-    (not_lc "hello")
-    (apply_anon
-      (binop_pipe
-        (uc "Stdout")
-        (not_lc "line")
-      )
-      (str_literal_big "Hello")
-    )
-  )
-  (binop_equals
+(module-header
+  (exposes
+    (lc "hello")
+
     (lc "world")
-    (str_literal_big "World")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

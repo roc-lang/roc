@@ -12,11 +12,11 @@ type=expr
 OpenRound Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comma Int Underscore Int Comma Int Underscore Int Underscore Int Comma Float Comma OpUnaryMinus Float Comma Float Comma Float Comma OpUnaryMinus Float CloseRound ~~~
 # PARSE
 ~~~clojure
-(num_literal_i32 1)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-1
+u8
 ~~~
 # EXPECTED
 NIL
@@ -24,15 +24,21 @@ NIL
 **Parse Error**
 at 1:3 to 1:3
 
+**Parse Error**
+at 1:3 to 1:5
+
+**Unsupported Node**
+at 1:3 to 1:5
+
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_i32 1)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag num_literal_i32 :type "Num(_size)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Num(_size)
+# No expression found
 ~~~

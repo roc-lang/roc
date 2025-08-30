@@ -12,13 +12,11 @@ type=expr
 OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent OpColon UpperIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(record_literal
-  (double_dot_lc "person")
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-{ ..person }
+age
 ~~~
 # EXPECTED
 NIL
@@ -26,17 +24,21 @@ NIL
 **Parse Error**
 at 1:1 to 1:13
 
+**Parse Error**
+at 1:13 to 1:16
+
+**Unsupported Node**
+at 1:13 to 1:16
+
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.unary_double_dot)
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-{}
+# No expression found
 ~~~

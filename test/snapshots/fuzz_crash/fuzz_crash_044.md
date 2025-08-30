@@ -15,14 +15,16 @@ app[]{f:platform""}{{0
 KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly OpenCurly OpenCurly Int CloseCurly CloseCurly String ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
-    (block
-      (num_literal_i32 0)
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
     )
-  )
-  (str_literal_small "")
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

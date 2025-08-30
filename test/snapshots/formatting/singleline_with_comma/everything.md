@@ -42,211 +42,7 @@ h = |x, y,| {
 KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent Comma UpperIdent KwAs UpperIdent Comma CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma CloseCurly Comma CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign OpenRound LowerIdent Comma LowerIdent Comma CloseRound KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenCurly LowerIdent Comma LowerIdent Comma CloseCurly CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare CloseRound OpFatArrow LowerIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (uc "I1")
-      (list_literal
-        (uc "I11")
-        (uc "I12")
-      )
-    )
-  )
-  (import
-    (binop_exposing
-      (uc "I2")
-      (list_literal
-        (uc "I21")
-      )
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (uc "Ias1")
-  (malformed malformed:expr_unexpected_token)
-  (uc "I22")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Ias2")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
-    (apply_uc
-      (uc "A")
-      (lc "a")
-    )
-    (binop_where
-      (lc "a")
-      (binop_colon
-        (binop_pipe
-          (apply_module
-            (lc "a")
-          )
-          (dot_lc "a1")
-        )
-        (binop_thin_arrow
-          (lc "a")
-          (binop_thin_arrow
-            (lc "a")
-            (binop_thin_arrow
-              (malformed malformed:expr_unexpected_token)
-              (binop_colon
-                (tuple_literal
-                  (uc "Str")
-                  (binop_pipe
-                    (apply_module
-                      (lc "a")
-                    )
-                    (dot_lc "a2")
-                  )
-                )
-                (binop_thin_arrow
-                  (lc "a")
-                  (binop_thin_arrow
-                    (lc "a")
-                    (binop_thin_arrow
-                      (malformed malformed:expr_unexpected_token)
-                      (binop_where
-                        (binop_colon
-                          (tuple_literal
-                            (uc "Str")
-                            (apply_uc
-                              (uc "B")
-                              (lc "b")
-                            )
-                          )
-                          (lc "b")
-                        )
-                        (binop_colon
-                          (binop_pipe
-                            (apply_module
-                              (lc "b")
-                            )
-                            (dot_lc "b1")
-                          )
-                          (binop_thin_arrow
-                            (lc "b")
-                            (binop_thin_arrow
-                              (lc "b")
-                              (binop_thin_arrow
-                                (malformed malformed:expr_unexpected_token)
-                                (binop_colon
-                                  (tuple_literal
-                                    (uc "Str")
-                                    (binop_pipe
-                                      (apply_module
-                                        (lc "b")
-                                      )
-                                      (dot_lc "b2")
-                                    )
-                                  )
-                                  (binop_thin_arrow
-                                    (lc "b")
-                                    (binop_thin_arrow
-                                      (lc "b")
-                                      (binop_thin_arrow
-                                        (malformed malformed:expr_unexpected_token)
-                                        (tuple_literal
-                                          (uc "Str")
-                                          (apply_uc
-                                            (uc "C")
-                                            (binop_colon
-                                              (tuple_literal
-                                                (lc "a")
-                                                (lc "b")
-                                                (malformed malformed:expr_unexpected_token)
-                                              )
-                                              (tuple_literal
-                                                (lc "a")
-                                                (lc "b")
-                                                (malformed malformed:expr_unexpected_token)
-                                              )
-                                            )
-                                          )
-                                        )
-                                      )
-                                    )
-                                  )
-                                )
-                              )
-                            )
-                          )
-                        )
-                      )
-                    )
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-  (apply_uc
-    (uc "D")
-    (binop_colon
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-        (malformed malformed:expr_unexpected_token)
-      )
-      (apply_uc
-        (uc "C")
-        (tuple_literal
-          (lc "a")
-          (lc "b")
-          (malformed malformed:expr_unexpected_token)
-        )
-      )
-    )
-  )
-  (binop_colon
-    (uc "E")
-    (record_literal
-      (binop_colon
-        (lc "a")
-        (uc "Str")
-      )
-      (binop_colon
-        (lc "b")
-        (uc "Str")
-      )
-    )
-  )
-  (binop_colon
-    (uc "F")
-    (list_literal
-      (uc "A")
-      (uc "B")
-    )
-  )
-  (binop_colon
-    (lc "g")
-    (binop_equals
-      (tuple_literal
-        (binop_where
-          (binop_thin_arrow
-            (lc "e")
-            (lc "e")
-          )
-          (binop_pipe
-            (apply_module
-              (lc "e")
-            )
-            (uc "A")
-          )
-        )
-        (binop_pipe
-          (apply_module
-            (lc "e")
-          )
-          (uc "B")
-        )
-        (lc "h")
-      )
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -261,11 +57,23 @@ as Ias1, I22
 as Ias2,]
 
 # Where constraint
-A(a) : a where module(a).a1 : a -> a -> )  -> Str, module(a).a2 : a -> a -> )  -> (Str, B(b)) : b where module(b).b1 : b -> b -> )  -> Str, module(b).b2 : b -> b -> )  -> (Str, C(
-	(a, b) : (a, b),
-))
+A(a) : a where module(a).a1 : a -> a -> )  -> Str, module(a).a2 : a -> a -> )  -> (Str, B(b)) : b where module(b).b1 : b -> b -> )  -> Str, module(b).b2 : b -> b -> )  -> (
+	Str,
+	C(
+		(
+			a,
+			b,
+		) : (
+			a,
+			b,
+		),
+	),
+)
 D(
-	(a, b) :
+	(
+		a,
+		b,
+	) :
 		C(a, b, )
 ),
 )
@@ -278,7 +86,61 @@ F : [
 	A,
 	B,
 ]
-g : e -> e where module(e) | A, module(e) | B, h = 
+g : e -> e where module(e) | A, module(e) | B, h = |
+	x,
+	y,
+| {
+	h1 = {
+		h11 : x,
+		h12 : x,
+		h13 :
+			{
+				h131 : x,
+				h132 : y,
+			},
+	}
+	h2 = h(
+		(
+			x,
+			y,
+		),
+	)
+	h3 = A(
+		(
+			x,
+			y,
+		),
+	)
+	h4 = [
+		x,
+		y,
+	]
+	h5 = (
+		x,
+		y,
+	)
+	match x
+(
+		a => (b => ()  => a)),
+	)
+	Z3(
+		{
+			a : a,
+			b : b,
+		},
+	)
+	=> 
+	a : a
+	Z4(
+		[
+			a,
+			b,
+		],
+	)
+	=> 
+	a : a
+}
+}
 ~~~
 # EXPECTED
 NIL
@@ -371,10 +233,13 @@ at 26:12 to 26:13
 at 26:3 to 27:3
 
 **Parse Error**
+at 26:3 to 27:5
+
+**Parse Error**
 at 27:11 to 27:13
 
 **Parse Error**
-at 27:3 to 28:3
+at 25:2 to 28:3
 
 **Parse Error**
 at 28:17 to 28:20
@@ -383,16 +248,7 @@ at 28:17 to 28:20
 at 29:15 to 29:18
 
 **Parse Error**
-at 25:10 to 31:2
-
-**Parse Error**
-at 18:13 to 31:2
-
-**Parse Error**
-at 31:2 to 31:2
-
-**Parse Error**
-at 31:2 to 31:2
+at 31:1 to 31:2
 
 **Unsupported Node**
 at 4:1 to 4:31
@@ -418,6 +274,9 @@ at 16:24 to 16:27
 **Unsupported Node**
 at 16:37 to 16:40
 
+**Unsupported Node**
+at 27:11 to 27:13
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -437,7 +296,70 @@ at 16:37 to 16:40
       (Expr.lookup "a")
       (Expr.binop_colon
         (Expr.lambda)
-        (Expr.binop_thin_arrow)
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.binop_thin_arrow
+            (Expr.lookup "a")
+            (Expr.binop_thin_arrow
+              (Expr.malformed)
+              (Expr.binop_colon
+                (Expr.tuple_literal
+                  (Expr.apply_tag)
+                  (Expr.lambda)
+                )
+                (Expr.binop_thin_arrow
+                  (Expr.lookup "a")
+                  (Expr.binop_thin_arrow
+                    (Expr.lookup "a")
+                    (Expr.binop_thin_arrow
+                      (Expr.malformed)
+                      (Expr.binop_colon
+                        (Expr.binop_colon
+                          (Expr.tuple_literal
+                            (Expr.apply_tag)
+                            (Expr.apply_tag)
+                          )
+                          (Expr.lookup "b")
+                        )
+                        (Expr.binop_colon
+                          (Expr.lambda)
+                          (Expr.binop_thin_arrow
+                            (Expr.lookup "b")
+                            (Expr.binop_thin_arrow
+                              (Expr.lookup "b")
+                              (Expr.binop_thin_arrow
+                                (Expr.malformed)
+                                (Expr.binop_colon
+                                  (Expr.tuple_literal
+                                    (Expr.apply_tag)
+                                    (Expr.lambda)
+                                  )
+                                  (Expr.binop_thin_arrow
+                                    (Expr.lookup "b")
+                                    (Expr.binop_thin_arrow
+                                      (Expr.lookup "b")
+                                      (Expr.binop_thin_arrow
+                                        (Expr.malformed)
+                                        (Expr.tuple_literal
+                                          (Expr.apply_tag)
+                                          (Expr.apply_tag)
+                                        )
+                                      )
+                                    )
+                                  )
+                                )
+                              )
+                            )
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
       )
     )
   )
@@ -462,10 +384,21 @@ at 16:37 to 16:40
   (Expr.binop_colon
     (Expr.lookup "g")
     (Expr.binop_equals
-      (Expr.tuple_literal)
-      (Expr.malformed)
+      (Expr.tuple_literal
+        (Expr.binop_colon
+          (Expr.binop_thin_arrow
+            (Expr.lookup "e")
+            (Expr.lookup "e")
+          )
+          (Expr.lambda)
+        )
+        (Expr.lambda)
+        (Expr.lookup "h")
+      )
+      (Expr.lambda)
     )
   )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

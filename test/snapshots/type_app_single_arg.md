@@ -17,51 +17,18 @@ main! = |_| processList(["one","two"])
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare String Comma String CloseSquare CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "processList")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (uc "Str")
-      )
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "processList")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (lc "list")
-            (dot_lc "len")
-          )
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (lc "list")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (apply_lc
-          (lc "processList")
-          (list_literal
-            (str_literal_small "one")
-            (str_literal_small "two")
-          )
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -80,7 +47,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "processList")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "processList")

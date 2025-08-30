@@ -15,23 +15,11 @@ x = "hello"
 KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "x")
-    (uc "Str")
-  )
-  (binop_equals
-    (lc "x")
-    (str_literal_big "hello")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x : Str
-x = "hello"
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

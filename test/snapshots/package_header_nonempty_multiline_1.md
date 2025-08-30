@@ -14,14 +14,21 @@ package # This comment is here
 KwPackage OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCurly LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+)
+  (packages
+    (lc "somePkg")
+
+    (str_literal_big "../main.roc")
+))
 ~~~
 # FORMATTED
 ~~~roc
-package [
-	something,
-	SomeType,
-] packages {somePkg, "../main.roc"}
+package [something, SomeType] packages {somePkg, "../main.roc"}
 
 ~~~
 # EXPECTED

@@ -12,13 +12,7 @@ module[]()0     .t
 KwModule OpenSquare CloseSquare OpenRound CloseRound Int Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (tuple_literal)
-  (binop_pipe
-    (num_literal_i32 0)
-    (dot_lc "t")
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,7 +27,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.tuple_literal)
+  (Expr.tuple_literal
+  )
   (Expr.lambda)
 )
 ~~~

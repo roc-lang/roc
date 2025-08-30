@@ -17,21 +17,10 @@ test = {
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpAssign Int KwDbg OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
+(module-header
+  (exposes
     (lc "test")
-    (block
-      (binop_equals
-        (lc "x")
-        (num_literal_i32 42)
-      )
-      (apply_anon
-        (malformed malformed:expr_unexpected_token)
-        (lc "x")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc

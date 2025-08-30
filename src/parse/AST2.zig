@@ -291,31 +291,6 @@ fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).
 }
 
 /// Given the idx to a lambda, return the region of just its args (the `| ... |` including the pipes)
-fn lambdaArgsRegion(self: *const Ast, idx: Node.Idx) Region {
-    // This function returns the region of lambda args
-    // Since we now store complete regions, just return the lambda's region
-    // This function isn't actually used anywhere in the codebase
-    return self.getRegion(idx);
-}
-
-/// Given the idx to a BinOp, return the region of just its symbol (e.g. "*" or "==") etc.
-fn binOpSymbolRegion(self: *const Ast, idx: Node.Idx) Region {
-    const binop = self.binOp(idx);
-
-    // To find the binop symbol itself, we scan from lhs_end to either rhs_start or first whitespace.
-    const lhs_end: usize = self.getRegion(binop.lhs).end.offset;
-    const rhs_start: usize = self.getRegion(binop.rhs).start.offset;
-
-    // These relationships should always be true. If not, there is a bug in some earlier step!
-    std.debug.assert(lhs_end < rhs_start);
-
-    // For now, return a simplified region between lhs and rhs
-    // This function isn't actually used anywhere
-    return .{
-        .start = Position{ .offset = @as(u32, @intCast(lhs_end)) },
-        .end = Position{ .offset = @as(u32, @intCast(rhs_start)) },
-    };
-}
 pub const Node = struct {
     tag: Node.Tag, // u8 discriminant
     region: Region, // Region spans from start of first token to end of last token in this AST node
@@ -603,13 +578,16 @@ pub const Diagnostic = struct {
         // Expression errors
         expr_unexpected_token,
         expr_no_space_dot_int,
+        state_not_implemented,
         no_else,
         expected_expr_bar,
         backslash_not_valid_lambda_syntax,
+        obsolete_interface_keyword,
         expected_expr_close_curly_or_comma,
         expected_expr_close_round_or_comma,
         expected_expr_close_square_or_comma,
         expected_close_curly_at_end_of_match,
+        expected_close_round,
         expected_open_curly_after_match,
         expected_expr_record_field_name,
         expected_expr_apply_close_round,
@@ -789,6 +767,7 @@ pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diag
         .expected_exposes => "EXPECTED EXPOSES",
         .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .state_not_implemented => "PARSER STATE NOT IMPLEMENTED",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .statement_unexpected_token => "UNEXPECTED TOKEN",
@@ -866,6 +845,13 @@ pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diag
             try report.document.addReflowingText("I was expecting a valid expression, but I found something that doesn't belong here.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("This could be a missing operator, incorrect syntax, or a token in the wrong place.");
+        },
+        .state_not_implemented => {
+            try report.document.addText("Parser encountered an unimplemented state.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is a limitation in the current parser implementation. The feature you're trying to use may not be fully implemented yet.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Please report this issue with your code example to help improve the parser.");
         },
         else => {
             // Generic parse error message

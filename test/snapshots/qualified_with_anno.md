@@ -17,26 +17,10 @@ value = MyType.TagA
 KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (uc "MyType")
-    (list_literal
-      (uc "TagA")
-      (uc "TagB")
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
     (lc "value")
-    (uc "MyType")
-  )
-  (binop_equals
-    (lc "value")
-    (binop_pipe
-      (uc "MyType")
-      (uc "TagA")
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -63,7 +47,10 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "value")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

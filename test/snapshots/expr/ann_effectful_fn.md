@@ -68,7 +68,10 @@ at 3:23 to 3:25
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "launchTheNukes")
-    (Expr.binop_thick_arrow)
+    (Expr.binop_thick_arrow
+      (Expr.malformed)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "launchTheNukes")

@@ -12,11 +12,11 @@ crash 42
 KwCrash Int ~~~
 # PARSE
 ~~~clojure
-(crash <statement>)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-crash 42
+
 ~~~
 # EXPECTED
 NIL
@@ -24,7 +24,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.crash)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

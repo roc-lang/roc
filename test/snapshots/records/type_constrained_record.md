@@ -12,37 +12,19 @@ process_user! : { name : Str, age : U32, ..a } => Str
 LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma DoubleDot LowerIdent CloseCurly OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(binop_colon
-  (not_lc "process_user")
-  (binop_thick_arrow
-    (record_literal
-      (binop_colon
-        (lc "name")
-        (uc "Str")
-      )
-      (binop_colon
-        (lc "age")
-        (uc "U32")
-      )
-      (double_dot_lc "a")
-    )
-    (uc "Str")
-  )
-)
+(empty)
 ~~~
 # FORMATTED
 ~~~roc
-process_user! : { name : Str, age : U32, ..a } => Str
+
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:17 to 1:47
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.type_anno)
+(empty)
 ~~~
 # SOLVED
 ~~~clojure

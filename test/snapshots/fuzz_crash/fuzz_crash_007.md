@@ -24,7 +24,7 @@ LowerIdent Dot Int Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-(ff8 | 8.d) | .d
+ff8 | 8.d | .d
 ~~~
 # EXPECTED
 NIL

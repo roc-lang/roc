@@ -129,7 +129,10 @@ NIL
       (Expr.binop_equals
         (Expr.binop_equals
           (Expr.binop_equals
-            (Expr.tuple_literal)
+            (Expr.tuple_literal
+              (Expr.lookup "x")
+              (Expr.lookup "y")
+            )
             (Expr.apply_ident)
           )
           (Expr.apply_ident)
@@ -138,7 +141,10 @@ NIL
       )
       (Expr.apply_ident)
     )
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.list_literal)
+      (Expr.str_literal_big)
+    )
   )
   (Expr.record_literal
   )

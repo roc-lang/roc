@@ -12,7 +12,7 @@ platform "foo" requires {} {} exposes [] packages {} provides []
 KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes OpenSquare CloseSquare KwPackages OpenCurly CloseCurly KwProvides OpenSquare CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(platform-header)
 ~~~
 # FORMATTED
 ~~~roc

@@ -35,100 +35,18 @@ main! = |_| {
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar TripleDot LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwCrash String CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound OpenSquare CloseSquare CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "testEllipsis")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "testEllipsis")
-    (lambda
-      (body
-        (ellipsis)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-  (binop_colon
-    (lc "testCrash")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "testCrash")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
         (block
-          (crash <statement>)
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-  (binop_colon
-    (lc "testCrashSimple")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "testCrashSimple")
-    (lambda
-      (body
-        (block
-          (crash <statement>)
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (block
-          (binop_equals
-            (lc "result1")
-            (apply_lc
-              (lc "testEllipsis")
-              (num_literal_i32 42)
-            )
-          )
-          (binop_equals
-            (lc "result2")
-            (apply_lc
-              (lc "testCrash")
-              (num_literal_i32 42)
-            )
-          )
-          (binop_equals
-            (lc "result3")
-            (apply_lc
-              (lc "testCrashSimple")
-              (num_literal_i32 42)
-            )
-          )
-          (list_literal)
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -160,7 +78,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "testEllipsis")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "testEllipsis")
@@ -168,7 +89,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "testCrash")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "testCrash")
@@ -176,7 +100,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "testCrashSimple")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "testCrashSimple")

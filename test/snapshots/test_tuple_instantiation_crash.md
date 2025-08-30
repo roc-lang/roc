@@ -20,48 +20,18 @@ main = swap(1, 2)
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar OpenRound LowerIdent Comma LowerIdent CloseRound OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "swap")
-    (binop_thin_arrow
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-      (tuple_literal
-        (lc "b")
-        (lc "a")
-      )
-    )
-  )
-  (binop_equals
-    (lc "swap")
-    (lambda
-      (body
-        (tuple_literal
-          (lc "y")
-          (lc "x")
-        )
-      )
-      (args
-        (tuple_literal
-          (lc "x")
-          (lc "y")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
     )
-  )
-  (binop_equals
-    (lc "main")
-    (apply_lc
-      (lc "swap")
-      (tuple_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,7 +51,16 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "swap")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "b")
+        (Expr.lookup "a")
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "swap")

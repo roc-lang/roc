@@ -12,7 +12,12 @@ module [something, SomeType]
 KwModule OpenSquare LowerIdent Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(module-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+))
 ~~~
 # FORMATTED
 ~~~roc

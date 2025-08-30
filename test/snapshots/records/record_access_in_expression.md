@@ -22,7 +22,7 @@ LowerIdent Dot LowerIdent OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-person.age + 5
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

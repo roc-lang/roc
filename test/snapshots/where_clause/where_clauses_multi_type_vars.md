@@ -15,60 +15,10 @@ process = |_, _| ...
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar Underscore Comma Underscore OpBar TripleDot ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "process")
-    (binop_thin_arrow
-      (lc "a")
-      (binop_thin_arrow
-        (lc "b")
-        (binop_thin_arrow
-          (binop_colon
-            (tuple_literal
-              (binop_thin_arrow
-                (binop_where
-                  (lc "c")
-                  (binop_colon
-                    (binop_pipe
-                      (apply_module
-                        (lc "a")
-                      )
-                      (dot_lc "convert")
-                    )
-                    (lc "a")
-                  )
-                )
-                (lc "c")
-              )
-              (binop_pipe
-                (apply_module
-                  (lc "b")
-                )
-                (dot_lc "transform")
-              )
-            )
-            (lc "b")
-          )
-          (lc "c")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "process")
-    (lambda
-      (body
-        (ellipsis)
-      )
-      (args
-        (tuple_literal
-          (underscore)
-          (underscore)
-        )
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,7 +41,31 @@ at 3:61 to 3:64
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.binop_thin_arrow
+        (Expr.lookup "b")
+        (Expr.binop_thin_arrow
+          (Expr.binop_colon
+            (Expr.tuple_literal
+              (Expr.binop_thin_arrow
+                (Expr.binop_colon
+                  (Expr.lookup "c")
+                  (Expr.binop_colon
+                    (Expr.lambda)
+                    (Expr.lookup "a")
+                  )
+                )
+                (Expr.lookup "c")
+              )
+              (Expr.lambda)
+            )
+            (Expr.lookup "b")
+          )
+          (Expr.lookup "c")
+        )
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "process")

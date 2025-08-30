@@ -16,7 +16,7 @@ Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-42
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

@@ -12,13 +12,10 @@ module[}0}.a
 KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (num_literal_i32 0)
-  (binop_pipe
-    (malformed malformed:expr_unexpected_token)
-    (dot_lc "a")
-  )
-)
+(module-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
+))
 ~~~
 # FORMATTED
 ~~~roc

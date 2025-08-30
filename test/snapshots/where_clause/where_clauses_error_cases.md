@@ -26,56 +26,14 @@ broken_fn3 : a -> b
 KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpArrow LowerIdent LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "broken_fn1")
-    (binop_thin_arrow
-      (binop_where
-        (binop_thin_arrow
-          (lc "a")
-          (lc "b")
-        )
-        (binop_pipe
-          (apply_module
-            (lc "a")
-          )
-          (dot_lc "method")
-        )
-      )
-      (lc "b")
-    )
-  )
-  (binop_colon
+
     (lc "broken_fn2")
-    (binop_thin_arrow
-      (binop_where
-        (binop_thin_arrow
-          (binop_where
-            (binop_thin_arrow
-              (lc "a")
-              (lc "b")
-            )
-            (binop_colon
-              (lc "broken_fn3")
-              (lc "a")
-            )
-          )
-          (lc "b")
-        )
-        (binop_colon
-          (binop_pipe
-            (apply_module
-              (lc "c")
-            )
-            (dot_lc "method")
-          )
-          (lc "c")
-        )
-      )
-      (lc "d")
-    )
-  )
-)
+
+    (lc "broken_fn3")
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -98,11 +56,41 @@ at 15:11 to 15:14
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "broken_fn1")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.lambda)
+      )
+      (Expr.lookup "b")
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "broken_fn2")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.binop_colon
+            (Expr.binop_thin_arrow
+              (Expr.lookup "a")
+              (Expr.lookup "b")
+            )
+            (Expr.binop_colon
+              (Expr.lookup "broken_fn3")
+              (Expr.lookup "a")
+            )
+          )
+          (Expr.lookup "b")
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.lookup "c")
+        )
+      )
+      (Expr.lookup "d")
+    )
   )
 )
 ~~~

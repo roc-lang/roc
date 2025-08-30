@@ -31,117 +31,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent CloseRound CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar Int LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (apply_uc
-      (uc "MyResult")
-      (tuple_literal
-        (lc "ok")
-        (lc "err")
-      )
-    )
-    (list_literal
-      (apply_uc
-        (uc "Good")
-        (lc "ok")
-      )
-      (apply_uc
-        (uc "Bad")
-        (lc "err")
-      )
-    )
-  )
-  (binop_colon
-    (lc "process")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "MyResult")
-        (tuple_literal
-          (uc "Str")
-          (uc "I32")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (uc "Str")
     )
-  )
-  (binop_equals
-    (lc "process")
-    (lambda
-      (body
-        (str_literal_big "processed")
-      )
-      (args
-        (lc "_result")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Option")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
-    (lc "getString")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Option")
-        (uc "Str")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "getString")
-    (lambda
-      (body
-        (str_literal_big "default")
-      )
-      (args
-        (lc "_opt")
-      )
-    )
-  )
-  (binop_colon
-    (lc "getNumber")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Option")
-        (uc "I32")
-      )
-      (uc "I32")
-    )
-  )
-  (binop_equals
-    (lc "getNumber")
-    (lambda
-      (body
-        (num_literal_i32 0)
-      )
-      (args
-        (lc "_opt")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -170,7 +71,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "process")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "process")
@@ -182,7 +86,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "getString")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getString")
@@ -190,7 +97,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "getNumber")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getNumber")

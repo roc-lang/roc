@@ -14,15 +14,7 @@ module[]_0={
 KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (underscore)
-  (binop_equals
-    (num_literal_i32 0)
-    (block
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

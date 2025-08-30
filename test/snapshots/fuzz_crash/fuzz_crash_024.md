@@ -18,23 +18,10 @@ var t= 0
 KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform MalformedString KwVar LowerIdent OpAssign CloseSquare KwVar LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
-    (binop_colon
-      (lc "pf")
-      (malformed malformed:expr_unexpected_token)
-    )
-    (malformed malformed:expr_unexpected_token)
-    (binop_equals
-      (var_lc "t")
-      (malformed malformed:expr_unexpected_token)
-    )
-    (binop_equals
-      (var_lc "t")
-      (num_literal_i32 0)
-    )
-  )
-)
+(module-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
+))
 ~~~
 # FORMATTED
 ~~~roc

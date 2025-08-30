@@ -19,41 +19,10 @@ blue = CC.Color.RGB(0,0,255)
 KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent OpenRound Int Comma Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_as
-      (binop_pipe
-        (lc "styles")
-        (uc "Color")
-      )
-      (uc "CC")
-    )
-  )
-  (binop_colon
+(module-header
+  (exposes
     (lc "blue")
-    (binop_pipe
-      (uc "CC")
-      (uc "Color")
-    )
-  )
-  (binop_equals
-    (lc "blue")
-    (apply_anon
-      (binop_pipe
-        (binop_pipe
-          (uc "CC")
-          (uc "Color")
-        )
-        (uc "RGB")
-      )
-      (tuple_literal
-        (num_literal_i32 0)
-        (num_literal_i32 0)
-        (num_literal_i32 255)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,7 +50,10 @@ at 8:10 to 8:16
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "blue")
-    (Expr.module_access)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "blue")

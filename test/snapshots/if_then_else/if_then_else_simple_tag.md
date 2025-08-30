@@ -12,27 +12,30 @@ if Bool.True Ok(0) else Err(1)
 KwIf UpperIdent Dot UpperIdent UpperIdent OpenRound Int CloseRound KwElse UpperIdent OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(if_else <6 branches>)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-if Bool.True Ok(0) else Err(1)
+else 
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
 **Parse Error**
-at 1:1 to 1:14
+at 1:20 to 1:25
+
+**Unsupported Node**
+at 1:20 to 1:25
 
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag if_else :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

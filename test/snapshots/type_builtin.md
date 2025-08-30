@@ -15,23 +15,16 @@ MyString : Str
 KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (uc "MyNumber")
-    (uc "U64")
-  )
-  (binop_colon
+
     (uc "MyString")
-    (uc "Str")
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
-module [MyNumber, MyString]
-
-MyNumber : U64
-MyString : Str
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

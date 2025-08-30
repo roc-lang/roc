@@ -17,58 +17,18 @@ main! = |_| getName({name: "luke", age:21})
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "getName")
-    (binop_thin_arrow
-      (record_literal
-        (binop_colon
-          (lc "name")
-          (uc "Str")
-        )
-        (binop_colon
-          (lc "age")
-          (uc "U64")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block
+          (lc "main")
         )
       )
-      (uc "Str")
     )
-  )
-  (binop_equals
-    (lc "getName")
-    (lambda
-      (body
-        (str_literal_big "hello")
-      )
-      (args
-        (lc "_person")
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (apply_lc
-          (lc "getName")
-          (record_literal
-            (binop_colon
-              (lc "name")
-              (str_literal_small "luke")
-            )
-            (binop_colon
-              (lc "age")
-              (num_literal_i32 21)
-            )
-          )
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,7 +47,19 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "getName")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.record_literal
+        (Expr.binop_colon
+          (Expr.lookup "name")
+          (Expr.apply_tag)
+        )
+        (Expr.binop_colon
+          (Expr.lookup "age")
+          (Expr.apply_tag)
+        )
+      )
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "getName")

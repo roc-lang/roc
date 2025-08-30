@@ -33,126 +33,18 @@ main = |x| "done"
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "single_use")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "elem")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "single_use")
-    (lambda
-      (body
-        (str_literal_big "hello")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
-    (lc "ending_underscore")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "elem_")
-      )
-      (lc "elem_")
-    )
-  )
-  (binop_equals
-    (lc "ending_underscore")
-    (lambda
-      (body
-        (str_literal_big "default")
-      )
-      (args
-        (lc "list")
-      )
-    )
-  )
-  (binop_colon
-    (lc "combo_single")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "bad_")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "combo_single")
-    (lambda
-      (body
-        (str_literal_big "combo")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
-    (lc "valid_single")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "_elem")
-      )
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "valid_single")
-    (lambda
-      (body
-        (str_literal_big "valid")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-  (binop_colon
-    (lc "valid_multi")
-    (binop_thin_arrow
-      (lc "elem")
-      (apply_uc
-        (uc "List")
-        (lc "elem")
-      )
-    )
-  )
-  (binop_equals
-    (lc "valid_multi")
-    (lambda
-      (body
-        (list_literal
-          (lc "x")
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (lc "x")
-      )
     )
-  )
-  (binop_equals
-    (lc "main")
-    (lambda
-      (body
-        (str_literal_small "done")
-      )
-      (args
-        (lc "x")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -179,7 +71,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "single_use")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "single_use")
@@ -187,7 +82,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "ending_underscore")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.lookup "elem_")
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "ending_underscore")
@@ -195,7 +93,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "combo_single")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "combo_single")
@@ -203,7 +104,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "valid_single")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "valid_single")
@@ -211,7 +115,10 @@ NIL
   )
   (Expr.binop_colon
     (Expr.lookup "valid_multi")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "elem")
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "valid_multi")

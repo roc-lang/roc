@@ -32,23 +32,28 @@ platform # Comment after platform keyword
 KwPlatform String KwRequires OpenCurly UpperIdent Comma CloseCurly OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma CloseCurly KwExposes OpenSquare LowerIdent Comma CloseSquare KwPackages OpenCurly LowerIdent OpColon String Comma CloseCurly KwProvides OpenSquare LowerIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(platform-header
+  (exposes
+    (lc "foo")
+)
+  (packages
+    (lc "some_pkg")
+
+    (tuple_literal
+      (str_literal_big "../some_pkg.roc")
+      (malformed malformed:expr_unexpected_token)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-platform # Comment after platform keyword
-"foo" # Comment after name
- requires { # Comment after rigids open
-(
+platform "foo" requires {(
 	Main,
 )} (
-	 # Comment after signatures open
-main! : List Str => {  },
+	main! : List Str => {  },
 ) exposes  [
-# Comment after exposes open
 	foo,
-] packages { # Comment after packages open
-some_pkg, (
+] packages {some_pkg, (
 	"../some_pkg.roc",
 )}
 

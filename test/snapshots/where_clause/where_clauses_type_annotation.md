@@ -15,52 +15,14 @@ convert = |a| a.to_b()
 KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
+(module-header
+  (exposes
     (lc "convert")
-    (binop_thin_arrow
-      (binop_where
-        (binop_thin_arrow
-          (lc "a")
-          (lc "b")
-        )
-        (binop_colon
-          (binop_pipe
-            (apply_module
-              (lc "a")
-            )
-            (dot_lc "to_b")
-          )
-          (lc "a")
-        )
-      )
-      (lc "b")
-    )
-  )
-  (binop_equals
-    (lc "convert")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (lc "a")
-            (dot_lc "to_b")
-          )
-        )
-      )
-      (args
-        (lc "a")
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
-module [convert]
-
-convert : a -> b where module(a).to_b : a -> b
-convert = |a| a.to_b()
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -73,7 +35,19 @@ at 3:30 to 3:33
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "convert")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.binop_colon
+          (Expr.lambda)
+          (Expr.lookup "a")
+        )
+      )
+      (Expr.lookup "b")
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "convert")

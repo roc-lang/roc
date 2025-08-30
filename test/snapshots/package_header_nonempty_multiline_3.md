@@ -14,7 +14,20 @@ package
 KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(package-header
+  (exposes
+    (lc "something")
+
+    (uc "SomeType")
+)
+  (packages
+    (lc "somePkg")
+
+    (tuple_literal
+      (str_literal_big "../main.roc")
+      (malformed malformed:expr_unexpected_token)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

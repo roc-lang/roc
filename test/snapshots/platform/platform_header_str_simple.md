@@ -19,19 +19,7 @@ entrypoint = main
 KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent CloseCurly KwExposes OpenSquare CloseSquare KwPackages OpenCurly CloseCurly KwProvides OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "entrypoint")
-    (binop_thin_arrow
-      (uc "Str")
-      (uc "Str")
-    )
-  )
-  (binop_equals
-    (lc "entrypoint")
-    (lc "main")
-  )
-)
+(platform-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +37,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "entrypoint")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "entrypoint")

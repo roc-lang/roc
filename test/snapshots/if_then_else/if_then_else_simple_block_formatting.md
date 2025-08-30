@@ -14,7 +14,15 @@ if bool {
 KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse Int ~~~
 # PARSE
 ~~~clojure
-(if_else <0 branches>)
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (block
+      (uc "A")
+    )
+)
+  (else     (num_literal_i32 2)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -27,9 +35,7 @@ else 2
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:9
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

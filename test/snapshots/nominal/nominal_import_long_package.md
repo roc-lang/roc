@@ -17,33 +17,10 @@ red = ... # not implemented
 KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_exposing
-      (binop_pipe
-        (binop_pipe
-          (lc "design")
-          (uc "Styles")
-        )
-        (uc "Color")
-      )
-      (list_literal
-        (uc "Encoder")
-      )
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (uc "CE")
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
+(module-header
+  (exposes
     (lc "red")
-    (uc "CE")
-  )
-  (binop_equals
-    (lc "red")
-    (ellipsis)
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,7 +30,7 @@ import design.Styles | Color exposing [Encoder]
 as CE]
 
 red : CE
-red = ... # not implemented
+red = ...
 ~~~
 # EXPECTED
 NIL

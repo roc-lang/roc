@@ -17,7 +17,23 @@ platform "pf"
 KwPlatform String KwRequires OpenCurly UpperIdent Comma UpperIdent CloseCurly OpenCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent Comma LowerIdent OpColon UpperIdent OpArrow UpperIdent CloseCurly KwExposes OpenSquare UpperIdent Comma UpperIdent CloseSquare KwPackages OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly KwProvides OpenSquare LowerIdent Comma LowerIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(platform-header
+  (exposes
+    (uc "E1")
+
+    (uc "E2")
+)
+  (packages
+    (lc "pa1")
+
+    (binop_colon
+      (tuple_literal
+        (str_literal_small "pa1")
+        (lc "pa2")
+      )
+      (str_literal_small "pa2")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

@@ -12,16 +12,10 @@ module[}{0      0)(0}
 KwModule OpenSquare CloseCurly OpenCurly Int Int CloseRound OpenRound Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (block
-    (num_literal_i32 0)
-    (num_literal_i32 0)
-    (apply_anon
-      (malformed malformed:expr_unexpected_token)
-      (num_literal_i32 0)
-    )
-  )
-)
+(module-header
+  (exposes
+    (malformed malformed:exposed_item_unexpected_token)
+))
 ~~~
 # FORMATTED
 ~~~roc

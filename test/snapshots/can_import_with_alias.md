@@ -16,24 +16,7 @@ main = MyJson.decode
 KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_as
-      (binop_pipe
-        (lc "json")
-        (uc "Json")
-      )
-      (uc "MyJson")
-    )
-  )
-  (binop_equals
-    (lc "main")
-    (binop_pipe
-      (uc "MyJson")
-      (dot_lc "decode")
-    )
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

@@ -18,7 +18,26 @@ app [
 KwApp OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
-(header-only)
+(app-header
+  (exposes
+    (lc "a1")
+
+    (lc "a2")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+
+    (binop_colon
+      (lc "a")
+      (str_literal_small "a")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc

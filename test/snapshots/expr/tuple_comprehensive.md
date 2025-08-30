@@ -135,7 +135,6 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
 ~~~
 # FORMATTED
 ~~~roc
-# define these to avoid runtime errors
 add_one = |_| {  }
 x = 10
 y = 20
@@ -175,7 +174,8 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "empty")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "single")
@@ -183,23 +183,47 @@ NIL
   )
   (Expr.binop_equals
     (Expr.lookup "pair")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.num_literal_i32 2)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "triple")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.str_literal_big)
+      (Expr.apply_tag)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "nested")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.tuple_literal
+        (Expr.num_literal_i32 1)
+        (Expr.num_literal_i32 2)
+      )
+      (Expr.tuple_literal
+        (Expr.num_literal_i32 3)
+        (Expr.num_literal_i32 4)
+      )
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "mixed")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.apply_ident)
+      (Expr.str_literal_big)
+      (Expr.list_literal)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "with_vars")
-    (Expr.tuple_literal)
+    (Expr.tuple_literal
+      (Expr.lookup "x")
+      (Expr.lookup "y")
+      (Expr.lookup "z")
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "with_lambda")

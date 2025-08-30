@@ -17,20 +17,7 @@ foo = 42
 KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon_equals
-    (uc "BadType")
-    (underscore)
-  )
-  (binop_colon
-    (lc "foo")
-    (uc "BadType")
-  )
-  (binop_equals
-    (lc "foo")
-    (num_literal_i32 42)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc

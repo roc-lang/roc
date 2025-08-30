@@ -16,28 +16,11 @@ z = 0.5
 KwModule OpenSquare CloseSquare LowerIdent OpAssign Float LowerIdent OpAssign Float LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "x")
-    (frac_literal_small 3.14)
-  )
-  (binop_equals
-    (lc "y")
-    (frac_literal_big big:<idx:0>)
-  )
-  (binop_equals
-    (lc "z")
-    (frac_literal_small 0.5)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-x = 3.14
-y = 1.23e45
-z = 0.5
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

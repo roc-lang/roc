@@ -16,15 +16,7 @@ f = || {
 KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_equals
-    (lc "f")
-    (malformed malformed:expr_unexpected_token)
-  )
-  (block
-    (crash <statement>)
-  )
-)
+(module-header)
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +41,9 @@ at 3:5 to 3:8
     (Expr.malformed)
   )
   (Expr.block
-    (Expr.crash)
+    (Expr.crash
+      (Expr.num_literal_i32 1)
+    )
   )
 )
 ~~~

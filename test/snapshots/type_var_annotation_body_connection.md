@@ -21,50 +21,18 @@ main! = |_| {}
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent LowerIdent OpAssign LowerIdent LowerIdent CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (binop_colon
-    (lc "identity")
-    (binop_thin_arrow
-      (lc "a")
-      (lc "a")
-    )
-  )
-  (binop_equals
-    (lc "identity")
-    (lambda
-      (body
+(app-header
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
         (block
-          (binop_colon
-            (lc "thing")
-            (lc "a")
-          )
-          (binop_equals
-            (lc "thing")
-            (lc "x")
-          )
-          (binop_colon
-            (lc "thing")
-            (lc "thing")
-          )
+          (lc "main")
         )
       )
-      (args
-        (lc "x")
-      )
     )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal)
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
@@ -72,8 +40,8 @@ app { pf: "../basic-cli/main.roc" platform [main] }
 
 identity : a -> a
 identity = |x| {
-	thing : a # refers to the type var introduced in function type annotation
-	thing = x # refers to the value from the function parameter
+	thing : a
+	thing = x
 	thing : thing
 }
 main! = |_| {  }
@@ -87,7 +55,10 @@ NIL
 (Expr.block
   (Expr.binop_colon
     (Expr.lookup "identity")
-    (Expr.binop_thin_arrow)
+    (Expr.binop_thin_arrow
+      (Expr.lookup "a")
+      (Expr.lookup "a")
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "identity")

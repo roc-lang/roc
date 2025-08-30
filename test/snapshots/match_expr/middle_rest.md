@@ -17,24 +17,11 @@ match items {
 KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(binop_thick_arrow
-  (match <0 branches>)
-  (binop_plus
-    (binop_plus
-      (binop_plus
-        (lc "a")
-        (lc "b")
-      )
-      (lc "x")
-    )
-    (lc "y")
-  )
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match items
- => ((a + b) + x) + y
+] 
 ~~~
 # EXPECTED
 NIL
@@ -46,25 +33,13 @@ at 2:15 to 2:17
 at 2:5 to 2:17
 
 **Parse Error**
+at 2:5 to 2:21
+
+**Parse Error**
 at 2:21 to 2:23
 
-**Parse Error**
-at 2:23 to 2:26
-
-**Parse Error**
-at 3:15 to 3:18
-
-**Parse Error**
-at 3:5 to 3:18
-
-**Parse Error**
-at 1:13 to 3:30
-
-**Parse Error**
-at 1:13 to 3:32
-
 **Unsupported Node**
-at 3:32 to 3:34
+at 2:21 to 2:23
 
 # CANONICALIZE
 ~~~clojure

@@ -16,7 +16,7 @@ OpUnaryMinus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
--2147483648
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

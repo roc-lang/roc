@@ -18,15 +18,23 @@ if # Comment after if
 KwIf LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(if_else <0 branches>)
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (block
+      (num_literal_i32 1)
+    )
+)
+  (else     (block
+      (num_literal_i32 2)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-if # Comment after if
-bool # Comment after cond
+if bool
 	{
-		 # Comment after then open
-1
+		1
 	}
 else {
 	2
@@ -35,9 +43,7 @@ else {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 3:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

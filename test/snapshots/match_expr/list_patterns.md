@@ -15,23 +15,37 @@ match numbers {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match <0 branches>)
+(match
+  (scrutinee     (lc "numbers")
+)
+  (branch1     (binop_thick_arrow
+      (list_literal)
+      (lc "acc")
+    )
+)
+  (branch2     (binop_thick_arrow
+      (list_literal
+        (lc "first")
+        (unary_double_dot <unary>)
+      )
+      (num_literal_i32 0)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
 match numbers
+	[] => acc
+	[first, ..] => 0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:8 to 2:11
+**Unsupported Node**
+at 2:8 to 2:10
 
-**Parse Error**
-at 3:21 to 3:24
-
-**Parse Error**
-at 1:15 to 4:2
+**Unsupported Node**
+at 3:5 to 3:20
 
 # CANONICALIZE
 ~~~clojure

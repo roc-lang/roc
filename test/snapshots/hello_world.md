@@ -16,31 +16,18 @@ main! = |_| Stdout.line!("Hello, world!")
 KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
-(block
-  (import
-    (binop_pipe
+(app-header
+  (packages
+    (binop_colon
       (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (apply_anon
-          (binop_pipe
-            (uc "Stdout")
-            (not_lc "line")
-          )
-          (str_literal_big "Hello, world!")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block
+          (lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
