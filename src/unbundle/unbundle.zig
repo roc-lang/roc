@@ -95,13 +95,13 @@ pub const ExtractWriter = struct {
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    open_files: std.ArrayList(std.fs.File),
+    open_files: std.array_list.Managed(std.fs.File),
 
     pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
-            .open_files = std.ArrayList(std.fs.File).init(allocator),
+            .open_files = std.array_list.Managed(std.fs.File).init(allocator),
         };
     }
 
@@ -170,15 +170,15 @@ pub const DirExtractWriter = struct {
 /// Buffer-based extract writer for in-memory extraction
 pub const BufferExtractWriter = struct {
     allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.ArrayList(u8)),
-    directories: std.ArrayList([]u8),
-    current_file: ?*std.ArrayList(u8) = null,
+    files: std.StringHashMap(std.array_list.Managed(u8)),
+    directories: std.array_list.Managed([]u8),
+    current_file: ?*std.array_list.Managed(u8) = null,
 
     pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
-            .directories = std.ArrayList([]u8).init(allocator),
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+            .directories = std.array_list.Managed([]u8).init(allocator),
         };
     }
 
@@ -220,7 +220,7 @@ pub const BufferExtractWriter = struct {
             self.allocator.free(key);
             result.value_ptr.clearRetainingCapacity();
         } else {
-            result.value_ptr.* = std.ArrayList(u8).init(self.allocator);
+            result.value_ptr.* = std.array_list.Managed(u8).init(self.allocator);
         }
 
         self.current_file = result.value_ptr;
@@ -231,7 +231,7 @@ pub const BufferExtractWriter = struct {
     }
 
     fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const list: *std.ArrayList(u8) = @ptrCast(@alignCast(@constCast(context)));
+        const list: *std.array_list.Managed(u8) = @ptrCast(@alignCast(@constCast(context)));
         try list.appendSlice(bytes);
         return bytes.len;
     }

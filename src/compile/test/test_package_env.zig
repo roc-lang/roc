@@ -206,11 +206,11 @@
 
 // const TestSink = struct {
 //     gpa: std.mem.Allocator,
-//     reports: std.ArrayList(Report),
-//     modules: std.ArrayList([]const u8),
+//     reports: std.array_list.Managed(Report),
+//     modules: std.array_list.Managed([]const u8),
 
 //     fn init(gpa: std.mem.Allocator) TestSink {
-//         return .{ .gpa = gpa, .reports = std.ArrayList(Report).init(gpa), .modules = std.ArrayList([]const u8).init(gpa) };
+//         return .{ .gpa = gpa, .reports = std.array_list.Managed(Report).init(gpa), .modules = std.array_list.Managed([]const u8).init(gpa) };
 //     }
 
 //     fn deinit(self: *TestSink) void {

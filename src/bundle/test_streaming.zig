@@ -18,7 +18,7 @@ const TEST_COMPRESSION_LEVEL: c_int = 2;
 test "simple streaming write" {
     const allocator = std.testing.allocator;
 
-    var output = std.ArrayList(u8).init(allocator);
+    var output = std.array_list.Managed(u8).init(allocator);
     defer output.deinit();
 
     var allocator_copy = allocator;
@@ -42,7 +42,7 @@ test "simple streaming read" {
     const allocator = std.testing.allocator;
 
     // First compress some data
-    var compressed = std.ArrayList(u8).init(allocator);
+    var compressed = std.array_list.Managed(u8).init(allocator);
     defer compressed.deinit();
 
     var allocator_copy = allocator;
@@ -73,7 +73,7 @@ test "simple streaming read" {
     );
     defer reader.deinit();
 
-    var decompressed = std.ArrayList(u8).init(allocator);
+    var decompressed = std.array_list.Managed(u8).init(allocator);
     defer decompressed.deinit();
 
     var buffer: [1024]u8 = undefined;
@@ -89,7 +89,7 @@ test "simple streaming read" {
 test "streaming write with exact buffer boundary" {
     const allocator = std.testing.allocator;
 
-    var output = std.ArrayList(u8).init(allocator);
+    var output = std.array_list.Managed(u8).init(allocator);
     defer output.deinit();
 
     var allocator_copy = allocator;
@@ -119,7 +119,7 @@ test "streaming read with hash mismatch" {
     const allocator = std.testing.allocator;
 
     // First compress some data
-    var compressed = std.ArrayList(u8).init(allocator);
+    var compressed = std.array_list.Managed(u8).init(allocator);
     defer compressed.deinit();
 
     var allocator_copy = allocator;
@@ -174,7 +174,7 @@ test "different compression levels" {
     var sizes: [levels.len]usize = undefined;
 
     for (levels, 0..) |level, i| {
-        var output = std.ArrayList(u8).init(allocator);
+        var output = std.array_list.Managed(u8).init(allocator);
         defer output.deinit();
 
         var allocator_copy = allocator;
@@ -204,7 +204,7 @@ test "different compression levels" {
         );
         defer reader.deinit();
 
-        var decompressed = std.ArrayList(u8).init(allocator);
+        var decompressed = std.array_list.Managed(u8).init(allocator);
         defer decompressed.deinit();
 
         var buffer: [1024]u8 = undefined;
@@ -246,7 +246,7 @@ test "large file streaming extraction" {
     }
 
     // Bundle it
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const test_util = @import("test_util.zig");

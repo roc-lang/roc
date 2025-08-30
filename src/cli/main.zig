@@ -493,7 +493,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
-        var extra_args = std.ArrayList([]const u8).init(gpa);
+        var extra_args = std.array_list.Managed([]const u8).init(gpa);
         defer extra_args.deinit();
 
         // Add system libraries for macOS
@@ -1150,7 +1150,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).init(arena_allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(arena_allocator);
     defer file_paths.deinit();
 
     var uncompressed_size: u64 = 0;
@@ -1436,7 +1436,7 @@ const TestOpsEnv = struct {
     }
 };
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
@@ -1450,7 +1450,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
@@ -1462,7 +1462,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void 
     test_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
@@ -1478,19 +1478,19 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = dbg_args;
     _ = env;
     @panic("testRocDbg not implemented yet");
 }
 
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = expect_args;
     _ = env;
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
     if (test_env.interpreter) |interp| {
@@ -1577,7 +1577,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Find all expect statements
     const statements = env.store.sliceStatements(env.all_statements);
-    var expects = std.ArrayList(ExpectTest).init(gpa);
+    var expects = std.array_list.Managed(ExpectTest).init(gpa);
     defer expects.deinit();
 
     for (statements) |stmt_idx| {
@@ -1626,7 +1626,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         error_msg: ?[]const u8 = null,
     };
 
-    var test_results = std.ArrayList(TestResult).init(gpa);
+    var test_results = std.array_list.Managed(TestResult).init(gpa);
     defer test_results.deinit();
 
     // Evaluate each expect statement
@@ -1730,7 +1730,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.ArrayList([]const u8).init(gpa);
+        var unformatted_files = std.array_list.Managed([]const u8).init(gpa);
         defer unformatted_files.deinit();
 
         for (args.paths) |path| {

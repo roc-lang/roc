@@ -35,8 +35,8 @@ pub const DecompressingHashReader = struct {
         allocator_ptr: *std.mem.Allocator,
         input_reader: std.io.AnyReader,
         expected_hash: [32]u8,
-        allocForZstd: *const fn (?*anyopaque, usize) callconv(.C) ?*anyopaque,
-        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void,
+        allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
+        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
         const custom_mem = c.ZSTD_customMem{
             .customAlloc = allocForZstd,

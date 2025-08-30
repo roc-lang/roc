@@ -10,7 +10,7 @@ const str = @import("str.zig");
 const mem = std.mem;
 
 /// TODO: Document wyhash.
-pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.C) u64 {
+pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
     if (bytes) |nonnull| {
         const slice = nonnull[0..length];
         return wyhash_hash(seed, slice);
@@ -20,7 +20,7 @@ pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.C) u64 {
 }
 
 /// TODO: Document wyhash_rocstr.
-pub fn wyhash_rocstr(seed: u64, input: str.RocStr) callconv(.C) u64 {
+pub fn wyhash_rocstr(seed: u64, input: str.RocStr) callconv(.c) u64 {
     return wyhash_hash(seed, input.asSlice());
 }
 

@@ -32,8 +32,8 @@ pub const CompressingHashWriter = struct {
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
         output_writer: std.io.AnyWriter,
-        allocForZstd: *const fn (?*anyopaque, usize) callconv(.C) ?*anyopaque,
-        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void,
+        allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
+        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
         const custom_mem = c.ZSTD_customMem{
             .customAlloc = allocForZstd,

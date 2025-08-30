@@ -47,7 +47,7 @@ const ShimError = error{
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][ModuleEnv data]
-export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
+export fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(ops, ret_ptr, arg_ptr) catch |err| {
         std.log.err("Error evaluating from shared memory: {s}", .{@errorName(err)});
     };

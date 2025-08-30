@@ -1435,7 +1435,7 @@ test "pow: 0.5 ^ 2.0" {
 
 // exports
 
-pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
+pub fn fromStr(arg: RocStr) callconv(.c) num_.NumParseResult(i128) {
     if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
     } else {
@@ -1443,11 +1443,11 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
     }
 }
 
-pub fn to_str(arg: RocDec) callconv(.C) RocStr {
+pub fn to_str(arg: RocDec) callconv(.c) RocStr {
     return @call(.always_inline, RocDec.to_str, .{arg});
 }
 
-pub fn fromF64C(arg: f64) callconv(.C) i128 {
+pub fn fromF64C(arg: f64) callconv(.c) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
@@ -1455,7 +1455,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     }
 }
 
-pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
+pub fn fromF32C(arg_f32: f32) callconv(.c) i128 {
     const arg_f64 = arg_f32;
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
@@ -1464,13 +1464,13 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     }
 }
 
-pub fn toF64(arg: RocDec) callconv(.C) f64 {
+pub fn toF64(arg: RocDec) callconv(.c) f64 {
     return @call(.always_inline, RocDec.toF64, .{arg});
 }
 
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(self: T) callconv(.C) i128 {
+        fn func(self: T) callconv(.c) i128 {
             const this = @as(i128, @intCast(self));
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
@@ -1484,114 +1484,114 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-pub fn fromU64C(arg: u64) callconv(.C) i128 {
+pub fn fromU64C(arg: u64) callconv(.c) i128 {
     return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
 }
 
-pub fn toI128(arg: RocDec) callconv(.C) i128 {
+pub fn toI128(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
 }
 
-pub fn fromI128(arg: i128) callconv(.C) RocDec {
+pub fn fromI128(arg: i128) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.fromI128, .{arg});
 }
 
-pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
+pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
-pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
+pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
-pub fn negateC(arg: RocDec) callconv(.C) i128 {
+pub fn negateC(arg: RocDec) callconv(.c) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
         roc_panic("Decimal negation overflow!", 0);
     };
 }
 
-pub fn absC(arg: RocDec) callconv(.C) i128 {
+pub fn absC(arg: RocDec) callconv(.c) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
         roc_panic("Decimal absolute value overflow!", 0);
     };
     return result.num;
 }
 
-pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
-pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
-pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
-pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
 }
 
-pub fn logC(arg: RocDec) callconv(.C) i128 {
+pub fn logC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.log, .{arg}).num;
 }
 
-pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.pow, .{ arg1, arg2 }).num;
 }
 
-pub fn sinC(arg: RocDec) callconv(.C) i128 {
+pub fn sinC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
-pub fn cosC(arg: RocDec) callconv(.C) i128 {
+pub fn cosC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
-pub fn tanC(arg: RocDec) callconv(.C) i128 {
+pub fn tanC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.tan, .{arg}).num;
 }
 
-pub fn asinC(arg: RocDec) callconv(.C) i128 {
+pub fn asinC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.asin, .{arg}).num;
 }
 
-pub fn acosC(arg: RocDec) callconv(.C) i128 {
+pub fn acosC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.acos, .{arg}).num;
 }
 
-pub fn atanC(arg: RocDec) callconv(.C) i128 {
+pub fn atanC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.atan, .{arg}).num;
 }
 
-pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.add, .{ arg1, arg2 });
 }
 
-pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
-pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.sub, .{ arg1, arg2 });
 }
 
-pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
-pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2 });
 }
 
-pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }
 
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
+        fn func(input: RocDec) callconv(.c) T {
             return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
         }
     }.func;
@@ -1600,7 +1600,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
 
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
+        fn func(input: RocDec) callconv(.c) T {
             return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
         }
     }.func;
@@ -1609,7 +1609,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
 
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(input: RocDec) callconv(.C) T {
+        fn func(input: RocDec) callconv(.c) T {
             return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
         }
     }.func;

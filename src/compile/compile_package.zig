@@ -94,11 +94,11 @@ const ModuleState = struct {
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: std.ArrayListUnmanaged(ModuleId) = .{},
+    imports: std.ArrayList(ModuleId) = .{},
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
-    external_imports: std.ArrayListUnmanaged([]const u8) = .{},
-    dependents: std.ArrayListUnmanaged(ModuleId) = .{},
-    reports: std.ArrayListUnmanaged(Report) = .{},
+    external_imports: std.ArrayList([]const u8) = .{},
+    dependents: std.ArrayList(ModuleId) = .{},
+    reports: std.ArrayList(Report) = .{},
     depth: u32 = std.math.maxInt(u32), // min depth from root
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
@@ -137,10 +137,10 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: std.ArrayListUnmanaged(Task) = .{},
+    injector: std.ArrayList(Task) = .{},
 
     // Module storage
-    modules: std.ArrayListUnmanaged(ModuleState) = .{},
+    modules: std.ArrayList(ModuleState) = .{},
     // String intern table: module name -> module ID
     module_names: std.StringHashMapUnmanaged(ModuleId) = .{},
 
@@ -148,7 +148,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Track module discovery order and which modules have had their reports emitted
-    discovered: std.ArrayListUnmanaged(ModuleId) = .{},
+    discovered: std.ArrayList(ModuleId) = .{},
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     // Timing collection (accumulated across all modules)
@@ -682,7 +682,7 @@ pub const PackageEnv = struct {
 
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
-        var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
+        var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
         defer others.deinit();
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
@@ -752,7 +752,7 @@ pub const PackageEnv = struct {
         }
 
         // Default: convert dotted module name to path under root_dir
-        var buffer = std.ArrayList(u8).init(self.gpa);
+        var buffer = std.array_list.Managed(u8).init(self.gpa);
         defer buffer.deinit();
         var it = std.mem.splitScalar(u8, mod_name, '.');
         var first = true;
@@ -794,10 +794,10 @@ pub const PackageEnv = struct {
         try visited.resize(self.gpa, self.modules.items.len, false);
 
         const Frame = struct { id: ModuleId, next_idx: usize };
-        var frames = std.ArrayList(Frame).init(self.gpa);
+        var frames = std.array_list.Managed(Frame).init(self.gpa);
         defer frames.deinit();
 
-        var stack_ids = std.ArrayList(ModuleId).init(self.gpa);
+        var stack_ids = std.array_list.Managed(ModuleId).init(self.gpa);
         defer stack_ids.deinit();
 
         visited.set(start);

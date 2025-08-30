@@ -266,13 +266,15 @@ pub const RocModules = struct {
             const module = self.getModule(module_type);
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}_test", .{@tagName(module_type)}),
-                .root_source_file = module.root_source_file.?,
-                .target = target,
-                .optimize = optimize,
-                // IPC module needs libc for mmap, munmap, close on POSIX systems
-                // Bundle module needs libc for zstd
-                // Unbundle module doesn't need libc (uses Zig's std zstandard)
-                .link_libc = (module_type == .ipc or module_type == .bundle),
+                .root_module = b.createModule(.{
+                    .root_source_file = module.root_source_file.?,
+                    .target = target,
+                    .optimize = optimize,
+                    // IPC module needs libc for mmap, munmap, close on POSIX systems
+                    // Bundle module needs libc for zstd
+                    // Unbundle module doesn't need libc (uses Zig's std zstandard)
+                    .link_libc = (module_type == .ipc or module_type == .bundle),
+                }),
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)

@@ -10,14 +10,14 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
 const Opaque = ?[*]u8;
-const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
-const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
-const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
+const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
+const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
+const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 
-const Inc = *const fn (?[*]u8) callconv(.C) void;
-const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
-const Dec = *const fn (?[*]u8) callconv(.C) void;
-const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
+const Inc = *const fn (?[*]u8) callconv(.c) void;
+const IncN = *const fn (?[*]u8, usize) callconv(.c) void;
+const Dec = *const fn (?[*]u8) callconv(.c) void;
+const HasTagId = *const fn (u16, ?[*]u8) callconv(.c) extern struct { matched: bool, data: ?[*]u8 };
 
 const SEAMLESS_SLICE_BIT: usize =
     @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
@@ -338,11 +338,11 @@ pub const RocList = extern struct {
     }
 };
 
-pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.C) void {
+pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.c) void {
     list.incref(amount, elements_refcounted);
 }
 
-pub fn listDecref(list: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec) callconv(.C) void {
+pub fn listDecref(list: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec) callconv(.c) void {
     list.decref(alignment, element_width, elements_refcounted, dec);
 }
 
@@ -352,7 +352,7 @@ pub fn listWithCapacity(
     element_width: usize,
     elements_refcounted: bool,
     inc: Inc,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     return listReserve(RocList.empty(), alignment, capacity, element_width, elements_refcounted, inc, .InPlace);
 }
 
@@ -364,7 +364,7 @@ pub fn listReserve(
     elements_refcounted: bool,
     inc: Inc,
     update_mode: UpdateMode,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const original_len = list.len();
     const cap = @as(u64, @intCast(list.getCapacity()));
     const desired_cap = @as(u64, @intCast(original_len)) +| spare;
@@ -389,7 +389,7 @@ pub fn listReleaseExcessCapacity(
     inc: Inc,
     dec: Dec,
     update_mode: UpdateMode,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
@@ -425,7 +425,7 @@ pub fn listAppendUnsafe(
     element: Opaque,
     element_width: usize,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     var output = list;
     output.length += 1;
@@ -449,7 +449,7 @@ fn listAppend(
     inc: Inc,
     update_mode: UpdateMode,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const with_capacity = listReserve(list, alignment, 1, element_width, elements_refcounted, inc, update_mode);
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
@@ -462,7 +462,7 @@ pub fn listPrepend(
     elements_refcounted: bool,
     inc: Inc,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     // TODO: properly wire in update mode.
     var with_capacity = listReserve(list, alignment, 1, element_width, elements_refcounted, inc, .Immutable);
@@ -495,7 +495,7 @@ pub fn listSwap(
     dec: Dec,
     update_mode: UpdateMode,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // Early exit to avoid swapping the same element.
     if (index_1 == index_2)
         return list;
@@ -532,7 +532,7 @@ pub fn listSublist(
     start_u64: u64,
     len_u64: u64,
     dec: Dec,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
         if (list.isUnique()) {
@@ -611,7 +611,7 @@ pub fn listDropAt(
     drop_index_u64: u64,
     inc: Inc,
     dec: Dec,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
 
@@ -700,7 +700,7 @@ pub fn listSortWith(
     inc: Inc,
     dec: Dec,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     if (input.len() < 2) {
         return input;
     }
@@ -777,7 +777,7 @@ pub fn listConcat(
     elements_refcounted: bool,
     inc: Inc,
     dec: Dec,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
@@ -884,7 +884,7 @@ pub fn listReplaceInPlace(
     element_width: usize,
     out_element: ?[*]u8,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
@@ -906,7 +906,7 @@ pub fn listReplace(
     dec: Dec,
     out_element: ?[*]u8,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
@@ -940,7 +940,7 @@ inline fn listReplaceInPlaceHelp(
 
 pub fn listIsUnique(
     list: RocList,
-) callconv(.C) bool {
+) callconv(.c) bool {
     return list.isEmpty() or list.isUnique();
 }
 
@@ -951,23 +951,23 @@ pub fn listClone(
     elements_refcounted: bool,
     inc: Inc,
     dec: Dec,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec);
 }
 
 pub fn listCapacity(
     list: RocList,
-) callconv(.C) usize {
+) callconv(.c) usize {
     return list.getCapacity();
 }
 
 pub fn listAllocationPtr(
     list: RocList,
-) callconv(.C) ?[*]u8 {
+) callconv(.c) ?[*]u8 {
     return list.getAllocationDataPtr();
 }
 
-fn rcNone(_: ?[*]u8) callconv(.C) void {}
+fn rcNone(_: ?[*]u8) callconv(.c) void {}
 
 test "listConcat: non-unique with unique overlapping" {
     var nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..], false);
@@ -990,7 +990,7 @@ test "listConcat: non-unique with unique overlapping" {
 pub fn listConcatUtf8(
     list: RocList,
     string: str.RocStr,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     if (string.len() == 0) {
         return list;
     } else {
