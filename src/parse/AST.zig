@@ -675,6 +675,7 @@ pub const Diagnostic = struct {
         expected_expr_comma,
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
+        incomplete_import,
     };
 };
 

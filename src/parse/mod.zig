@@ -98,11 +98,8 @@ pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST {
 }
 
 fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    const maybe_statement_idx = try parser.parseStmt();
-    if (maybe_statement_idx) |idx| {
-        return @intFromEnum(idx);
-    }
-    @panic("Statement to parse was not found in AST");
+    const idx = try parser.parseStmt();
+    return @intFromEnum(idx);
 }
 
 /// Parses a single Roc statement for use in snapshots. The returned AST should be deallocated by calling deinit
