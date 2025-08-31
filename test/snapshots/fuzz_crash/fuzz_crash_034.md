@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare Int LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-0
+module []0
 f
 ~~~
 # EXPECTED
@@ -49,8 +47,8 @@ module[]0 f
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

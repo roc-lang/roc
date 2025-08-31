@@ -26,7 +26,6 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [person, updated]
 
-
 person = { name : "Alice", age : 30 }
 updated = { ..person }
 age : 31
@@ -57,26 +56,26 @@ updated = { ..person, age: 31 }
                               ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_updater_basic.md:3:12:3:25:**
+**record_updater_basic.md:3:12:3:16:**
 ```roc
 person = { name: "Alice", age: 30 }
 ```
-           ^^^^^^^^^^^^^
+           ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-**record_updater_basic.md:3:27:3:34:**
+**record_updater_basic.md:4:28:4:30:**
 ```roc
-person = { name: "Alice", age: 30 }
+updated = { ..person, age: 31 }
 ```
-                          ^^^^^^^
+                           ^^
 
 
 **UNSUPPORTED NODE**
@@ -93,10 +92,30 @@ updated = { ..person, age: 31 }
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "person"))
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "updated"))
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Stmt.type_anno
+    (name "age")
+    (type num_literal_i32)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

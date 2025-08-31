@@ -27,10 +27,11 @@ KwModule OpenSquare CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSqu
 ~~~roc
 module []
 
-
 import Data exposing [Person]
+
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
+
 main = # This will cause a type mismatch
 expectsPerson("not a person")
 ~~~
@@ -53,10 +54,19 @@ expectsPerson = |p| "Got a person"
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "expectsPerson")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "expectsPerson"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

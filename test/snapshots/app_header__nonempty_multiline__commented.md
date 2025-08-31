@@ -23,9 +23,7 @@ KwApp LineComment OpenCurly LineComment LowerIdent OpColon String KwPlatform Ope
 ~~~
 # FORMATTED
 ~~~roc
-app { }
-
-# Comment after keyword
+app { }# Comment after keyword
 # Comment after packages open
 # Comment after provides open
 # Comment after exposed item

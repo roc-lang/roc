@@ -24,7 +24,6 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
 ~~~roc
 module [Maybe]
 
-
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
@@ -35,8 +34,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
 )
 ~~~
 # SOLVED

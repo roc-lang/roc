@@ -25,9 +25,10 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
-
 UnusedType := _
+
 UsedType := _
+
 value : UsedType
 value = 42
 ~~~
@@ -59,10 +60,16 @@ UsedType := _
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "value")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "value"))
+    (Expr.num_literal_i32 42)
+  )
 )
 ~~~
 # SOLVED

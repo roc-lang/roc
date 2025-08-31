@@ -28,7 +28,6 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
-
 # Test var redeclaration (should produce shadowing warning)
 redeclareTest = |_| {
 	var x_ = 5
@@ -38,7 +37,6 @@ redeclareTest = |_| {
 	# Reassign - should work without warning
 	x_ : x_
 }
-
 
 result = redeclareTest({})
 ~~~
@@ -61,8 +59,14 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "redeclareTest"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "result"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

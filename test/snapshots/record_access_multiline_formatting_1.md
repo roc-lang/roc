@@ -15,7 +15,7 @@ some_fn(arg1)?
 LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

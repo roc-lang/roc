@@ -27,10 +27,10 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign KwIf In
 ~~~roc
 module [foo]
 
-
 foo = if 1
 	A
 else 
+
 {
 	"hello"
 }
@@ -42,7 +42,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.if_else)
+  )
 )
 ~~~
 # SOLVED

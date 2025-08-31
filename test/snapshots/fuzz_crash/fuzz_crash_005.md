@@ -37,7 +37,7 @@ modu
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

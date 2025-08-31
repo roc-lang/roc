@@ -38,8 +38,8 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 import pf.Stdout
+
 printName : { name : Str, age : U64 } => Str
 printName = |person| {
 	Stdout.line!(person.name)
@@ -91,10 +91,19 @@ printName = |person| {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "printName")
+    (type binop_thick_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "printName"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

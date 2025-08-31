@@ -28,7 +28,6 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [person, final]
 
-
 person = { name : "Alice", age : 30, city : "Boston" }
 updated_one = { ..person }
 age : 31
@@ -111,37 +110,15 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
                                                    ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-**record_updater_chained.md:3:12:3:25:**
+**record_updater_chained.md:4:32:4:34:**
 ```roc
-person = { name: "Alice", age: 30, city: "Boston" }
+updated_one = { ..person, age: 31 }
 ```
-           ^^^^^^^^^^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**record_updater_chained.md:3:27:3:34:**
-```roc
-person = { name: "Alice", age: 30, city: "Boston" }
-```
-                          ^^^^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**record_updater_chained.md:3:36:3:50:**
-```roc
-person = { name: "Alice", age: 30, city: "Boston" }
-```
-                                   ^^^^^^^^^^^^^^
+                               ^^
 
 
 **UNSUPPORTED NODE**
@@ -153,6 +130,17 @@ This might be a limitation in the current implementation that will be addressed 
 updated_one = { ..person, age: 31 }
 updated2 = { ..updated_one, city: "New York" }
 ```
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**record_updater_chained.md:5:35:5:45:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+```
+                                  ^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -180,16 +168,56 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "person"))
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "name")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "city")
+        (Expr.str_literal_big)
+      )
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "updated_one"))
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Stmt.type_anno
+    (name "age")
+    (type num_literal_i32)
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "updated2"))
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Stmt.type_anno
+    (name "city")
+    (type str_literal_big)
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "final"))
+    (Expr.record_literal
+      (Expr.unary_double_dot)
+    )
+  )
+  (Stmt.type_anno
+    (name "name")
+    (type binop_colon)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

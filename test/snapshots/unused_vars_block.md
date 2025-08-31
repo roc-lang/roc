@@ -49,14 +49,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 main! = |_| {
 	# Regular unused variable - should warn
 	unused_var = 42
+
 	# Regular used variable - should be fine
 	used_var = 100
+
 	# Another unused variable - should warn
 	another_unused = "hello"
+
 	# Underscore variable that is unused - should be fine
 	_ignored = # Comment 1
 	# Comment 2
@@ -99,19 +101,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable **_ignored** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__ignored` to suppress this warning.
-The unused variable is declared here:
-
-**unused_vars_block.md:14:5:14:13:**
-```roc
-    _ignored # Comment 1
-```
-    ^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable **result** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result` to suppress this warning.
@@ -127,7 +116,10 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

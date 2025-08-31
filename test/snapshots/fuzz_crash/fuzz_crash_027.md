@@ -188,8 +188,8 @@ LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 # Thnt!
 app { pf: "c" platform [main!] }
 
-
 import pf.Stdout exposing [line!, e!]
+
 import Stdot exposing [, #tem
 ]
 # Cose
@@ -219,6 +219,7 @@ List b
 #
 
 Foo : (Bar, Baz)
+
 line : # Cpen
 (
 	Bar, #
@@ -244,7 +245,9 @@ Maya
 #se
 
 Func(a) : Maybe a -> a -> Maybe a
+
 ane = |num| if num 2 else 5
+
 add_one : U64 -> U64
 add_one = |num| {
 	other = 1
@@ -261,7 +264,6 @@ add_one = |num| {
 		other : other
 	}
 }
-
 
 match_time = |a, #rg
 b| # As
@@ -305,7 +307,6 @@ match a
 		} => 12
 	Ok(123) => 121000
 
-
 expect # Commeneyword
 blah == 1
 # Commnt
@@ -320,6 +321,7 @@ main! = |
 	tag = Blue,
 	return # Comd
 tag,
+
 	# Jusnt!
 
 	...,
@@ -391,7 +393,9 @@ a
 
 empty : {}
 empty = {}
+
 tuple : Value(a, b, c)
+
 expect {
 	foo = 1
 	# Thio
@@ -988,6 +992,30 @@ import Bae as Gooe
 ```
 
 
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**fuzz_crash_027.md:33:9:35:2:**
+```roc
+Ml(a) : { # d
+	bar : Som# Afld
+}
+```
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**fuzz_crash_027.md:37:12:39:2:**
+```roc
+Soine(a) : { #d
+	bar : Som
+} #
+```
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -1103,26 +1131,26 @@ Is there an **import** or **exposing** missing up-top?
 		                                  ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:89:5:89:11:**
+**fuzz_crash_027.md:89:5:89:8:**
 ```roc
 		{ foo: 1, bar: 2 | 7 } => 12
 ```
-		  ^^^^^^
+		  ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **bar** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:89:13:89:19:**
+**fuzz_crash_027.md:89:13:89:16:**
 ```roc
 		{ foo: 1, bar: 2 | 7 } => 12
 ```
-		          ^^^^^^
+		          ^^^
 
 
 **UNSUPPORTED NODE**
@@ -1364,48 +1392,70 @@ This might be a limitation in the current implementation that will be addressed 
 ```
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:131:13:131:21:**
+**fuzz_crash_027.md:131:13:131:16:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
-	           ^^^^^^^^
+	           ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **bar** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:131:23:131:35:**
+**fuzz_crash_027.md:131:23:131:26:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
-	                     ^^^^^^^^^^^^
+	                     ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **baz** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:131:37:131:45:**
+**fuzz_crash_027.md:131:37:131:40:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
-	                                   ^^^^^^^^
+	                                   ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:131:47:131:61:**
+**fuzz_crash_027.md:131:42:131:45:**
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
-	                                             ^^^^^^^^^^^^^^
+	                                        ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **qux** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:131:47:131:50:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                             ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:131:55:131:60:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                                     ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1679,67 +1729,220 @@ expect {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name "line")
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type block)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type block)
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name node:malformed)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ane"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "add_one")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add_one"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "match_time"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "main")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.crash)
+  (Stmt.assign
+    (pattern (Patt.ident "tag_with"))
+    (Expr.apply_tag)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ited"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "list"))
+    (Expr.list_literal)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "record"))
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "foo")
+        (Expr.num_literal_i32 123)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "bar")
+        (Expr.str_literal_big)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "baz")
+        (Expr.lookup "tag")
+      )
+      (Expr.binop_colon
+        (Expr.lookup "qux")
+        (Expr.apply_tag)
+      )
+      (Expr.lookup "punned")
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "tuple"))
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "m_tuple"))
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 123)
+      (Expr.str_literal_big)
+      (Expr.lookup "tag1")
+      (Expr.apply_tag)
+      (Expr.tuple_literal
+        (Expr.lookup "nested")
+        (Expr.lookup "tuple")
+      )
+      (Expr.list_literal)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "bsult"))
+    (Expr.binop_or
+      (Expr.binop_or
+        (Expr.binop_gt
+          (Expr.binop_double_question
+            (Expr.apply_tag)
+            (Expr.num_literal_i32 12)
+          )
+          (Expr.binop_star
+            (Expr.num_literal_i32 5)
+            (Expr.num_literal_i32 5)
+          )
+        )
+        (Expr.binop_and
+          (Expr.binop_lt
+            (Expr.binop_plus
+              (Expr.num_literal_i32 13)
+              (Expr.num_literal_i32 2)
+            )
+            (Expr.num_literal_i32 5)
+          )
+          (Expr.binop_gte
+            (Expr.binop_minus
+              (Expr.num_literal_i32 10)
+              (Expr.num_literal_i32 1)
+            )
+            (Expr.num_literal_i32 16)
+          )
+        )
+      )
+      (Expr.binop_lte
+        (Expr.num_literal_i32 12)
+        (Expr.binop_slash
+          (Expr.num_literal_i32 3)
+          (Expr.num_literal_i32 5)
+        )
+      )
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "stale"))
+    (Expr.apply_ident)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "empty")
+    (type record_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "empty"))
+    (Expr.record_literal
+    )
+  )
+  (Stmt.type_anno
+    (name "tuple")
+    (type apply_uc)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

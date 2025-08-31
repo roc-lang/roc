@@ -24,7 +24,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [stringify]
 
-
 stringify : a -> Str where module(a).to_str : a -> Str
 stringify = |value| value.to_str()
 ~~~
@@ -47,8 +46,14 @@ stringify = |value| value.to_str()
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "stringify")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "stringify"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

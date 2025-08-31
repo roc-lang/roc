@@ -15,7 +15,7 @@ OpenRound OpBar LowerIdent OpBar OpUnaryMinus OpenRound OpUnaryMinus LowerIdent 
 (apply_anon
   (lambda
     (body
-      (unary_neg <unary>)
+      (unary_neg <unary_op>)
     )
     (args
       (lc "x")

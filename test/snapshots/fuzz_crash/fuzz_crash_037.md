@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-"\
+module []"\
 ~~~
 # EXPECTED
 NIL
@@ -48,7 +46,7 @@ module[]"\
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

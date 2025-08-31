@@ -46,14 +46,13 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 process : [Some(Str), None] -> Str
 process = |maybe| "result"
+
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = |result| match result
 	Ok(_) => True
 	Err(_) => False
-
 
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
 is_ok_ret_bool = |result| match result
@@ -234,17 +233,38 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "is_ok_ret_unqualified_bool")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "is_ok_ret_unqualified_bool"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "is_ok_ret_bool")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "is_ok_ret_bool"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

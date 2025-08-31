@@ -12,7 +12,7 @@ type=expr
 OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

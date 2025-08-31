@@ -22,7 +22,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpOr OpenCurly KwC
 ~~~roc
 module []
 
-
 f = || 
 {
 	crash 1
@@ -57,8 +56,11 @@ f = || {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "f"))
+    (Expr.malformed)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

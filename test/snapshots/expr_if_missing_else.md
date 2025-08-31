@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign KwIf LowerIdent In
 ~~~roc
 module []
 
-
 foo = if tru 0
 ~~~
 # EXPECTED
@@ -40,7 +39,10 @@ foo = if tru 0
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.if_else)
+  )
 )
 ~~~
 # SOLVED

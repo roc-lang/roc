@@ -30,9 +30,7 @@ module [ # Comment after module keyword
 	something,
 	# Comment after exposed item
 	SomeType,
-]
-
-# Comment after final exposed item
+]# Comment after final exposed item
 ~~~
 # EXPECTED
 NIL

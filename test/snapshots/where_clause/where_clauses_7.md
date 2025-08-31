@@ -36,7 +36,6 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
 ~~~roc
 module [Hash]
 
-
 # After header
 Hash((a, hasher)) : # After colon
 	(a where # After var
@@ -53,12 +52,29 @@ a
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**where_clauses_7.md:14:9:16:4:**
+```roc
+		module(a).decode( # After method args open
+			List(U8), # After method arg
+		) -> a
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
 )
 ~~~
 # SOLVED

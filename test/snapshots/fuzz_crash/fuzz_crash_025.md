@@ -44,24 +44,30 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
-
 a : U8
 a = 255
+
 b : U16
 b = 65535
+
 c : U32
 c = 429496729
 U64
 d = 18446744073709551615
+
 e : U128
 e = 3402823669209384634633746074317682114553.14 : I8
 f = 8
+
 g : I16
 g = -32768
+
 h : I32
 h = -483648
+
 i : I64
 i = -92233725808
+
 j : I128
 j = -17011687303715884105728
 ~~~
@@ -82,25 +88,79 @@ c = 429496729 U64
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "a")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.num_literal_i32 255)
+  )
+  (Stmt.type_anno
+    (name "b")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.num_literal_i32 65535)
+  )
+  (Stmt.type_anno
+    (name "c")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "c"))
+    (Expr.num_literal_i32 429496729)
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "d"))
+    (Expr.num_literal_big)
+  )
+  (Stmt.type_anno
+    (name "e")
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:binop_equals)
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "f"))
+    (Expr.num_literal_i32 8)
+  )
+  (Stmt.type_anno
+    (name "g")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "g"))
+    (Expr.unary_neg)
+  )
+  (Stmt.type_anno
+    (name "h")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "h"))
+    (Expr.unary_neg)
+  )
+  (Stmt.type_anno
+    (name "i")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "i"))
+    (Expr.unary_neg)
+  )
+  (Stmt.type_anno
+    (name "j")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "j"))
+    (Expr.unary_neg)
+  )
 )
 ~~~
 # SOLVED

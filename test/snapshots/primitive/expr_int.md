@@ -20,9 +20,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
-
-foo = 42
+module [foo]foo = 42
 ~~~
 # EXPECTED
 NIL
@@ -31,7 +29,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.num_literal_i32 42)
+  )
 )
 ~~~
 # SOLVED

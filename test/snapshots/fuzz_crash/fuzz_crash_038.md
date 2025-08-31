@@ -13,7 +13,7 @@ OpStar KwImport UpperIdent KwAs ~~~
 # PARSE
 ~~~clojure
 (block
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (import
     (uc "B")
   )
@@ -41,8 +41,8 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.import)
 )
 ~~~
 # SOLVED

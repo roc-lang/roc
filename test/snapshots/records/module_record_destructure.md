@@ -28,7 +28,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
 ~~~roc
 module [extract_age]
 
-
 extract_age : {
 	age : U64
 } -> U64
@@ -36,6 +35,7 @@ extract_age = |person| {
 	{
 		age : age
 	} = person
+
 	(({
 		a : 0
 	} | .a) + age) - ({
@@ -46,6 +46,17 @@ extract_age = |person| {
 # EXPECTED
 NIL
 # PROBLEMS
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**module_record_destructure.md:3:15:3:28:**
+```roc
+extract_age : { age : U64 } -> U64
+```
+              ^^^^^^^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -93,8 +104,14 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "extract_age")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "extract_age"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

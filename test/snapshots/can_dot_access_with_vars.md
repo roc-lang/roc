@@ -73,8 +73,14 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "fn"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_ident)
 )
 ~~~

@@ -12,7 +12,7 @@ type=expr
 OpenRound Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Int LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Float LowerIdent Comma Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comma Int Underscore Int Comma Int Underscore Int Underscore Int Comma Float Comma OpUnaryMinus Float Comma Float Comma Float Comma OpUnaryMinus Float CloseRound ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

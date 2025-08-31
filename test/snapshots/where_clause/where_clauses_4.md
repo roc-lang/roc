@@ -27,21 +27,48 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent KwExpos
 ~~~roc
 module [decodeThings]
 
-
 import Decode exposing [Decode]
+
 decodeThings : List List U8 -> List a where module(a) | Decode
 decodeThings = ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**where_clauses_4.md:6:14:6:17:**
+```roc
+	where module(a).Decode
+```
+	            ^^^
+
+
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**where_clauses_4.md:6:17:6:24:**
+```roc
+	where module(a).Decode
+```
+	               ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "decodeThings")
+    (type binop_where)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "decodeThings"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

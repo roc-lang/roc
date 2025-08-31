@@ -41,16 +41,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 # Outer function with type variable 'a'
 outer : a -> a
 outer = |x| {
 	# Inner function shadows outer 'a' with its own 'a'
 	inner : a -> a
 	inner = |y| y
+
 	inner(x)
 }
-
 
 main! = |_| {}
 ~~~
@@ -61,9 +60,18 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "outer")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "outer"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

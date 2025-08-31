@@ -44,15 +44,15 @@ Is there an **import** or **exposing** missing up-top?
   ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_field_syntax.md:1:9:1:16:**
+**record_mixed_field_syntax.md:1:9:1:12:**
 ```roc
 { name, age: 30, email, status: "active", balance }
 ```
-        ^^^^^^^
+        ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -66,15 +66,15 @@ Is there an **import** or **exposing** missing up-top?
                  ^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **status** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_field_syntax.md:1:25:1:41:**
+**record_mixed_field_syntax.md:1:25:1:31:**
 ```roc
 { name, age: 30, email, status: "active", balance }
 ```
-                        ^^^^^^^^^^^^^^^^
+                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -92,9 +92,15 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
   (Expr.lookup "email")
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "status")
+    (Expr.str_literal_big)
+  )
   (Expr.lookup "balance")
 )
 ~~~

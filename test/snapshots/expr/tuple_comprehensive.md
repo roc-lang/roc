@@ -31,7 +31,7 @@ OpenCurly LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenCurly Close
 # PARSE
 ~~~clojure
 (block
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (binop_equals
     (lc "add_one")
     (lambda
@@ -141,6 +141,7 @@ add_one = |_| {}
 x = 10
 y = 20
 z = 30
+
 # example tuples
 empty = ()
 single = 42
@@ -150,6 +151,7 @@ nested = ((1, 2), (3, 4))
 mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
 with_lambda = |n| (n + 1, 42)
+
 empty
 ~~~
 # EXPECTED
@@ -262,18 +264,79 @@ The unused variable is declared here:
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "add_one"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 10)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.num_literal_i32 20)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "z"))
+    (Expr.num_literal_i32 30)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "empty"))
+    (Expr.tuple_literal
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "single"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "pair"))
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.num_literal_i32 2)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "triple"))
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.str_literal_big)
+      (Expr.apply_tag)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "nested"))
+    (Expr.tuple_literal
+      (Expr.tuple_literal
+        (Expr.num_literal_i32 1)
+        (Expr.num_literal_i32 2)
+      )
+      (Expr.tuple_literal
+        (Expr.num_literal_i32 3)
+        (Expr.num_literal_i32 4)
+      )
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "mixed"))
+    (Expr.tuple_literal
+      (Expr.apply_ident)
+      (Expr.str_literal_big)
+      (Expr.list_literal)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "with_vars"))
+    (Expr.tuple_literal
+      (Expr.lookup "x")
+      (Expr.lookup "y")
+      (Expr.lookup "z")
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "with_lambda"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.lookup "empty")
 )
 ~~~

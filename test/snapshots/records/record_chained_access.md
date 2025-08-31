@@ -40,7 +40,7 @@ person.address.street
 
 # CANONICALIZE
 ~~~clojure
-(Expr.lambda)
+(Expr.lambda (canonicalized))
 ~~~
 # SOLVED
 ~~~clojure

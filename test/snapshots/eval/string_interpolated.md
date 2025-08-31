@@ -66,8 +66,14 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "hello"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "world"))
+    (Expr.str_literal_big)
+  )
   (Expr.str_literal_big)
 )
 ~~~

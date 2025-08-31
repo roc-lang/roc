@@ -26,7 +26,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
-
 foo : U64
 bar : Thing(a, b, _)
 biz : (a, b, c)
@@ -164,18 +163,36 @@ main! : List(String) -> Result({}, _)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "foo")
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name "bar")
+    (type apply_uc)
+  )
+  (Stmt.type_anno
+    (name "biz")
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name "add_one")
+    (type malformed)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "main")
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name "tag_tuple")
+    (type apply_uc)
+  )
 )
 ~~~
 # SOLVED

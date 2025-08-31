@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare OpBang Int MalformedUnknownToken Dot LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-!0
+module []!0
  | .t
 ~~~
 # EXPECTED
@@ -60,8 +58,8 @@ module[]!0.t
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

@@ -39,6 +39,7 @@ OpenCurly LowerIdent OpColon OpenSquare UpperIdent Comma UpperIdent OpenRound Up
 ~~~roc
 apple : [Apple, IsFruit(Bool)]
 apple = Apple
+
 apple
 ~~~
 # EXPECTED
@@ -48,8 +49,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "apple")
+    (type list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "apple"))
+    (Expr.apply_tag)
+  )
   (Expr.lookup "apple")
 )
 ~~~

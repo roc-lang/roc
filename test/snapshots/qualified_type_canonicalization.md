@@ -64,9 +64,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~
 # FORMATTED
 ~~~roc
-module [Color, ModuleA]
-
-.
+module [Color, ModuleA].
 ModuleB.TypeC
 ,
 Result
@@ -79,24 +77,31 @@ import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
+
 # Simple qualified type
 simpleQualified : Color.RGB
 simpleQualified = Color.RGB({ r : 255, g : 0, b : 0 })
+
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
 aliasedQualified = (ExtMod.DataType | Default)
+
 # Multi-level qualified type
 multiLevelQualified : ModuleA.ModuleB | TypeC
 multiLevelQualified = TypeC.new
+
 # Using qualified type with generics
 resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
+
 # Function returning qualified type
 getColor : {} -> Color.RGB
 getColor = |_| Color.RGB({ r : 0, g : 255, b : 0 })
+
 # Function accepting qualified type
 processColor : Color.RGB -> Str
 processColor = |color| "Color processed"
+
 # Multiple qualified types in a function signature
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
 transform = |result| match result
@@ -329,37 +334,37 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
                   ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:15:31:15:37:**
+**qualified_type_canonicalization.md:15:31:15:32:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 ```
-                              ^^^^^^
+                              ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **g** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:15:39:15:43:**
+**qualified_type_canonicalization.md:15:39:15:40:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 ```
-                                      ^^^^
+                                      ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:15:45:15:49:**
+**qualified_type_canonicalization.md:15:45:15:46:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 ```
-                                            ^^^^
+                                            ^
 
 
 **UNDEFINED VARIABLE**
@@ -395,37 +400,37 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
                ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:31:28:31:32:**
+**qualified_type_canonicalization.md:31:28:31:29:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
-                           ^^^^
+                           ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **g** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:31:34:31:40:**
+**qualified_type_canonicalization.md:31:34:31:35:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
-                                 ^^^^^^
+                                 ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**qualified_type_canonicalization.md:31:42:31:46:**
+**qualified_type_canonicalization.md:31:42:31:43:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
-                                         ^^^^
+                                         ^
 
 
 **UNUSED VARIABLE**
@@ -521,39 +526,84 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "simpleQualified")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "simpleQualified"))
+    (Expr.apply_ident)
+  )
+  (Stmt.type_anno
+    (name "aliasedQualified")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "aliasedQualified"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "multiLevelQualified")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "multiLevelQualified"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.type_anno
+    (name "resultType")
+    (type apply_anon)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "resultType"))
+    (Expr.apply_ident)
+  )
+  (Stmt.type_anno
+    (name "getColor")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getColor"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "processColor")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processColor"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "transform")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "transform"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

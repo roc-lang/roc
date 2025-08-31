@@ -21,7 +21,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~clojure
 (record_literal
   (if_without_else
-    (condition       (malformed malformed:expr_unexpected_token)
+    (condition       (malformed)
 )
     (then       (str_literal_big "conditional")
 ))
@@ -30,22 +30,22 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
     (str_literal_big "pattern match")
   )
   (binop_colon
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (str_literal_big "test assertion")
   )
   (binop_colon
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (str_literal_big "module load")
   )
   (binop_colon
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (binop_pipe
       (uc "Bool")
       (dot_lc "true")
     )
   )
   (binop_colon
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (binop_pipe
       (uc "Bool")
       (dot_lc "false")
@@ -122,70 +122,69 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **when** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_reserved_error.md:3:5:3:26:**
+**record_different_fields_reserved_error.md:3:5:3:9:**
 ```roc
     when: "pattern match",
 ```
-    ^^^^^^^^^^^^^^^^^^^^^
+    ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.true** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_reserved_error.md:4:5:4:29:**
-```roc
-    expect: "test assertion",
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**record_different_fields_reserved_error.md:5:5:5:26:**
-```roc
-    import: "module load",
-```
-    ^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**record_different_fields_reserved_error.md:6:5:6:19:**
+**record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
     and: Bool.true,
 ```
-    ^^^^^^^^^^^^^^
+         ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.false** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_reserved_error.md:7:5:7:19:**
+**record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
     or: Bool.false,
 ```
-    ^^^^^^^^^^^^^^
+        ^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.if_else)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "when")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

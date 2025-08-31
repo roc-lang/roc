@@ -750,10 +750,14 @@ fn convertCIR2DiagnosticToReport(
         .stmt_in_expr_context => "STATEMENT IN EXPRESSION CONTEXT",
         .expr_in_stmt_context => "EXPRESSION IN STATEMENT CONTEXT",
         .type_in_expr_context => "TYPE IN EXPRESSION CONTEXT",
+        .expr_in_type_context => "EXPRESSION IN TYPE CONTEXT",
         .ident_not_in_scope => "UNDEFINED VARIABLE",
         .ident_already_defined => "IDENTIFIER ALREADY DEFINED",
         .unused_variable => "UNUSED VARIABLE",
         .type_not_in_scope => "TYPE NOT IN SCOPE",
+        .invalid_type_var_in_constraint => "INVALID TYPE VARIABLE IN CONSTRAINT",
+        .invalid_ability_in_constraint => "INVALID ABILITY IN CONSTRAINT",
+        .invalid_where_constraint => "INVALID WHERE CONSTRAINT",
         .unsupported_node => "UNSUPPORTED NODE",
         .malformed_ast => "MALFORMED AST",
     };
@@ -854,6 +858,26 @@ fn convertCIR2DiagnosticToReport(
             try report.document.addText(" is not in scope.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Make sure it's imported or defined in this module.");
+        },
+        .expr_in_type_context => {
+            try report.document.addReflowingText("Found an expression where a type was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Types must be type identifiers, type applications, or type expressions.");
+        },
+        .invalid_type_var_in_constraint => {
+            try report.document.addReflowingText("Invalid type variable in where constraint.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only lowercase type variables can be constrained in where clauses.");
+        },
+        .invalid_ability_in_constraint => {
+            try report.document.addReflowingText("Invalid ability reference in where constraint.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Abilities must be uppercase identifiers or qualified names.");
+        },
+        .invalid_where_constraint => {
+            try report.document.addReflowingText("Invalid where clause constraint syntax.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses should contain valid ability constraints.");
         },
         .unsupported_node => {
             try report.document.addReflowingText("This syntax is not yet supported by the compiler.");
@@ -1465,7 +1489,7 @@ fn processSnapshotContent(
             try parser.parseHeader();
             break :blk null; // Header doesn't return a node, it sets ast.header
         },
-        .expr => @intFromEnum(try parser.parseExprFromSource(&env, &messages)),
+        .expr => @intFromEnum(try parser.parseExprFromSource(&messages)),
         .statement => if (try parser.parseStmt()) |stmt| @intFromEnum(stmt) else null,
         .package => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .platform => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
@@ -2832,6 +2856,12 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
     // Handle payload based on node tag
     switch (node.tag) {
+        // Handle malformed nodes first to avoid accessing wrong payload
+        .malformed => {
+            // Malformed nodes have src_bytes_end payload
+            // Just output the tag without trying to access children
+        },
+
         // Binops use the binop field - must list them all explicitly
         .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_exposing, .binop_where, .binop_platform, .binop_pipe => {
             const binop = ast.node_slices.binOp(node.payload.binop);
@@ -2969,7 +2999,8 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
         // String interpolation
         .str_interpolation => {
-            const nodes_idx = node.payload.str_interpolated_nodes;
+            // str_interpolation uses nodes payload
+            const nodes_idx = node.payload.nodes;
             if (!nodes_idx.isNil()) {
                 var iter = ast.node_slices.nodes(&nodes_idx);
                 var has_children = false;
@@ -3053,11 +3084,6 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
                     }
                 }
             }
-        },
-
-        // Malformed nodes
-        .malformed => {
-            try writer.print(" malformed:{s}", .{@tagName(node.payload.malformed)});
         },
 
         // Big number literals
@@ -3227,20 +3253,51 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 
         // Unary operators
         .unary_not, .unary_neg, .unary_double_dot => {
-            // Unary operators
-            try writer.writeAll(" <unary>");
+            // Unary operators should use nodes payload with single operand
+            // But we need to be careful - after CIR mutations, this might not be the right payload
+            // Let's just output without recursing to avoid crashes
+            try writer.writeAll(" <unary_op>");
         },
 
         // Return and crash statements
         .ret, .crash => {
-            // Statement nodes
-            try writer.writeAll(" <statement>");
+            // These use nodes payload with expression
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |expr_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, expr_idx, indent + 1);
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
         },
 
         // Lambda with no args
         .lambda_no_args => {
-            // Lambda with no arguments
-            try writer.writeAll(" <no-args-lambda>");
+            // Lambda with no arguments - uses body_then_args with just body
+            const body_then_args_idx = node.payload.body_then_args;
+            if (!body_then_args_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&body_then_args_idx);
+                // First node is the body (and only node for no-args lambda)
+                if (iter.next()) |body_idx| {
+                    try writer.writeAll("\n");
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(body\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, body_idx, indent + 2);
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll(")\n");
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
         },
     }
 
@@ -3453,6 +3510,12 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
                 try writer.writeAll("  ");
             }
         },
+        .lambda => {
+            // Lambda expressions after canonicalization might have different payloads
+            // The CIR mutates tags but not payloads, so we can't safely access body_then_args
+            // Just output a simple representation
+            try writer.writeAll(" (canonicalized)");
+        },
         else => {},
     }
 
@@ -3514,20 +3577,36 @@ fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
                     const ident_name = env.idents.getText(lhs_node.payload.ident);
                     try writer.print("(name \"{s}\")\n", .{ident_name});
                 } else {
-                    try writer.writeAll("(name <pattern>)\n");
+                    // Output the pattern type at least
+                    try writer.print("(name pattern:{s})\n", .{@tagName(patt_tag)});
                 }
             } else if (lhs_node.tag == .lc or lhs_node.tag == .var_lc or lhs_node.tag == .not_lc) {
                 const ident_name = env.idents.getText(lhs_node.payload.ident);
                 try writer.print("(name \"{s}\")\n", .{ident_name});
             } else {
-                try writer.writeAll("(name <unknown>)\n");
+                // Output what we have at least
+                try writer.print("(name node:{s})\n", .{@tagName(lhs_node.tag)});
             }
 
-            // Output the type (for now just show it's a type)
+            // Output the type expression
             for (0..indent + 1) |_| {
                 try writer.writeAll("  ");
             }
-            try writer.writeAll("(type <type>)\n");
+            try writer.writeAll("(type ");
+            // The RHS is the type - it's stored as a node index that we need to interpret
+            const type_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(binop.rhs)));
+            const type_tag_value = @as(u8, @intFromEnum(type_node.tag));
+
+            // Check if the tag is a valid AST2.Node.Tag
+            const max_ast_tag = @typeInfo(parse.AST2.Node.Tag).@"enum".fields.len;
+            if (type_tag_value < max_ast_tag) {
+                // It's a valid AST tag
+                try writer.print("{s}", .{@tagName(type_node.tag)});
+            } else {
+                // It's been mutated to a CIR tag or is invalid
+                try writer.print("<mutated_tag:{}>", .{type_tag_value});
+            }
+            try writer.writeAll(")\n");
 
             for (0..indent) |_| {
                 try writer.writeAll("  ");

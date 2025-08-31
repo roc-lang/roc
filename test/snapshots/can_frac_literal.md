@@ -22,7 +22,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign Float LowerIdent O
 ~~~roc
 module []
 
-
 x = 3.14
 y = 1.23e45
 z = 0.5
@@ -34,9 +33,18 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.frac_literal_small 3.14)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.frac_literal_big big:<idx:0>)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "z"))
+    (Expr.frac_literal_small 0.5)
+  )
 )
 ~~~
 # SOLVED

@@ -18,9 +18,7 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-C : k || match 0
+module []C : k || match 0
 #
 }
 ~~~
@@ -63,8 +61,11 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type binop_or)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

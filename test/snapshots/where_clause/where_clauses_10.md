@@ -29,8 +29,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent KwExpos
 ~~~roc
 module [decode]
 
-
 import Decode exposing [Decode]
+
 # After member name
 decodeThings : # After colon
 List List U8 -> List a where # After anno
@@ -40,12 +40,36 @@ module(a) | Decode
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**where_clauses_10.md:9:11:9:14:**
+```roc
+				module(a).Decode
+```
+				      ^^^
+
+
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**where_clauses_10.md:9:14:9:21:**
+```roc
+				module(a).Decode
+```
+				         ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "decodeThings")
+    (type binop_where)
+  )
 )
 ~~~
 # SOLVED

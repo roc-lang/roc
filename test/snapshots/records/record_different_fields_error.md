@@ -19,7 +19,7 @@ type=expr
 OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma UpperIdent OpColon String Comma LowerIdent OpUnaryMinus LowerIdent OpColon String Comma LowerIdent MalformedUnknownToken LowerIdent OpColon String Comma LowerIdent MalformedNominalNameWithoutName LowerIdent OpColon String Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

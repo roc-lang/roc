@@ -31,10 +31,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [string_function, wrong_type_function]
 
-
 # Annotation says it takes and returns strings, but implementation uses number addition
 string_function : Str -> Str
 string_function = |x| x + 42
+
 # Annotation says function returns I64, but implementation returns Frac(_prec)
 wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
@@ -46,10 +46,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "string_function")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "string_function"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "wrong_type_function")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "wrong_type_function"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

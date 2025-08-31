@@ -31,7 +31,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [foo]
 
-
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
 	str = if num > 10
@@ -52,8 +51,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "foo")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

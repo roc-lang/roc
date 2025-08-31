@@ -19,9 +19,9 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleD
 )
   (branch1     (binop_thick_arrow
       (list_literal
-        (unary_double_dot <unary>)
+        (unary_double_dot <unary_op>)
         (lc "middle")
-        (unary_double_dot <unary>)
+        (unary_double_dot <unary_op>)
       )
       (ellipsis)
     )

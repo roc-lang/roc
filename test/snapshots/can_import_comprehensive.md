@@ -52,21 +52,25 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 ~~~roc
 module []
 
-
 import json.Json
 import http.Client as Http exposing [get, post]
 import utils.String as Str
+
 main = {
 	client = Http.get
 	parser = Json.utf8
 	helper = Str.trim
+
 	# Test direct module access
 	result1 = Json.parse
+
 	# Test aliased module access
 	result2 = Http.post
+
 	# Test exposed items (should work without module prefix)
 	result3 = get
 	result4 = post
+
 	# Test multiple qualified access
 	combined = Str.concat(
 		
@@ -169,10 +173,61 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "client"))
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "parser"))
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "helper"))
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "result1"))
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "result2"))
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "result3"))
+        (Expr.lookup "get")
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "result4"))
+        (Expr.lookup "post")
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "combined"))
+        (Expr.apply_ident)
+      )
+    )
+  )
 )
 ~~~
 # SOLVED

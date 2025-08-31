@@ -29,7 +29,7 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
   (block
     (binop_colon
       (lc "x")
-      (unary_neg <unary>)
+      (unary_neg <unary_op>)
     )
   )
 )
@@ -67,15 +67,15 @@ Is there an **import** or **exposing** missing up-top?
          ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_argument_closure_single.md:1:16:1:20:**
+**record_argument_closure_single.md:1:16:1:17:**
 ```roc
 (|{ x }| x )({ x: -10 })
 ```
-               ^^^^
+               ^
 
 
 # CANONICALIZE

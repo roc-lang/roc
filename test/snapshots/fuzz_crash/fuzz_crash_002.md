@@ -22,25 +22,25 @@ LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon
             (binop_colon
               (binop_colon
                 (binop_colon
-                  (malformed malformed:expr_unexpected_token)
-                  (malformed malformed:expr_unexpected_token)
+                  (malformed)
+                  (malformed)
                 )
-                (malformed malformed:expr_unexpected_token)
+                (malformed)
               )
-              (malformed malformed:expr_unexpected_token)
+              (malformed)
             )
-            (malformed malformed:expr_unexpected_token)
+            (malformed)
           )
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
         )
-        (malformed malformed:expr_unexpected_token)
+        (malformed)
       )
-      (malformed malformed:expr_unexpected_token)
+      (malformed)
     )
   )
   (lc "le")
   (list_literal
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
 )
 ~~~
@@ -188,9 +188,12 @@ modu:;::::::::::::::le[%
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "modu")
+    (type binop_colon)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

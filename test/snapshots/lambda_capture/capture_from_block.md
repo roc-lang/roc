@@ -54,8 +54,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.num_literal_i32 10)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.apply_ident)
+  )
   (Expr.lookup "b")
 )
 ~~~

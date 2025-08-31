@@ -42,14 +42,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
+
 # Pure function with no annotation
 multiply = |x, y| x * y
+
 # Function with no type annotation - should infer effectfulness from body
 print_number! = |n| Stdout.line!(n)
+
 # Another effectful function with no annotation
 process! = |x| print_number!(multiply((x, 2)))
+
 main! = process!(42)
 ~~~
 # EXPECTED
@@ -69,11 +72,23 @@ print_number! = |n| Stdout.line!(n)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "multiply"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "print_number"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

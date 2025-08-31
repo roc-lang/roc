@@ -55,6 +55,7 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~roc
 f : (Str, Str) -> (Str, Str)
 f = |x| x
+
 f((1, 2))
 ~~~
 # EXPECTED
@@ -64,8 +65,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "f")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "f"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_ident)
 )
 ~~~

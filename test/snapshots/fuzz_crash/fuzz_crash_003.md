@@ -13,8 +13,8 @@ OpAssign MalformedString ~~~
 # PARSE
 ~~~clojure
 (block
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
+  (malformed)
 )
 ~~~
 # FORMATTED
@@ -71,8 +71,8 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

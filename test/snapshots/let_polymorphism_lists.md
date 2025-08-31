@@ -57,13 +57,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
-
 # Basic empty list polymorphism
 my_empty_list = []
+
 # Empty list used in different contexts
 int_list = [1, 2, 3]
 str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
+
 # Append empty list (polymorphic use)
 all_int_list = int_list + + 
 my_empty_list
@@ -71,11 +72,14 @@ all_str_list = str_list + +
 my_empty_list
 all_float_list = float_list + + 
 my_empty_list
+
 # Function returning empty list
 get_empty = |_| []
+
 # Used at different types
 empty_int_list = get_empty(42)
 empty_str_list = get_empty("test")
+
 main = |_| {
 	# Type inference should work correctly
 	len1 = List.len(all_int_list)
@@ -189,20 +193,62 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "my_empty_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "int_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "str_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "float_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "all_int_list"))
+    (Expr.binop_plus
+      (Expr.lookup "int_list")
+      (Expr.malformed)
+    )
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "all_str_list"))
+    (Expr.binop_plus
+      (Expr.lookup "str_list")
+      (Expr.malformed)
+    )
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "all_float_list"))
+    (Expr.binop_plus
+      (Expr.lookup "float_list")
+      (Expr.malformed)
+    )
+  )
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "get_empty"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "empty_int_list"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "empty_str_list"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

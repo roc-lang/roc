@@ -32,8 +32,8 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound String C
 ~~~roc
 module []
 
-
 x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")
+
 # Test backslash before EOF
 "\
 ~~~
@@ -65,8 +65,20 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_small)
+      (Expr.str_literal_big)
+    )
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

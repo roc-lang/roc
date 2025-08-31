@@ -28,13 +28,12 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app { f: "" platform [] }
-
-{
+app { f: "" platform [] }{
 	{
 		0
 	}
 }
+
 ""
 ~~~
 # EXPECTED
@@ -65,8 +64,8 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

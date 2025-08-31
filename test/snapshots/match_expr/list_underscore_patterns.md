@@ -29,17 +29,17 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Li
       (block
         (num_literal_i32 1)
         (list_literal
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "last")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (lc "last")
         )
         (binop_thick_arrow
           (list_literal
             (lc "first")
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
           )
           (lc "first")
         )

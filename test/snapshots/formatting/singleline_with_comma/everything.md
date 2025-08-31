@@ -48,7 +48,6 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
 ~~~roc
 module []
 
-
 # Import exposing
 import I1 exposing [
 	I11,
@@ -66,6 +65,7 @@ Ias2
 
 # Where constraint
 A(a) : ((((a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str, B(b)) : b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str, 
+
 C(
 	(a, b),
 )) : (a, b)
@@ -83,6 +83,7 @@ F : [
 	B,
 ]
 g : e -> e where module(e) | A, module(e) | B, 
+
 h = |
 	x,
 	y,
@@ -111,6 +112,7 @@ h = |
 	]
 
 	h5 = (x, y)
+
 	match x
 		Z1(a, b) => a
 	Z3(
@@ -352,6 +354,30 @@ A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
 ```
 
 
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**everything.md:16:5:30:3:**
+```roc
+g : e -> e where module(e).A, module(e).B,
+
+h = |x, y,| {
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
+	h2 = h(x, y,)
+	h3 = A(x, y,)
+	h4 = [x, y,]
+	h5 = (x, y,)
+
+	match x {
+		Z1((a, b,)) => a
+		Z2(a, b,) => a
+		Z3({ a, b, }) => a
+		Z4([a, b,]) => a
+	}
+```
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -366,22 +392,37 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_colon)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type apply_uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "g")
+    (type binop_equals)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

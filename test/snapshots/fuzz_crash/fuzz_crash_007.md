@@ -43,7 +43,7 @@ ff8.8.d
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

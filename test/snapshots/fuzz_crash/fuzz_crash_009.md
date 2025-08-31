@@ -21,11 +21,11 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare BlankLine LowerIdent OpAssign 
   (lc "f")
   (record_literal
     (lc "o")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
   (binop_equals
     (lc "foo")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
 )
 ~~~
@@ -34,8 +34,10 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare BlankLine LowerIdent OpAssign 
 f
 {
 	o,
+
 }
 foo =
+
 "onmo %
 ~~~
 # EXPECTED
@@ -106,9 +108,12 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

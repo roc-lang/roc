@@ -37,11 +37,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
+
 # This should be a type error: pure annotation but effectful body
 bad_function : Str -> {}
 bad_function = |msg| Stdout.line!(msg)
+
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
@@ -61,10 +62,19 @@ bad_function = |msg| Stdout.line!(msg)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "bad_function")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "bad_function"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

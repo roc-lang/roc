@@ -24,7 +24,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [convert]
 
-
 convert : a -> b where module(a).to_b : a -> b
 convert = |a| a.to_b()
 ~~~
@@ -47,8 +46,14 @@ convert = |a| a.to_b()
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "convert")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "convert"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

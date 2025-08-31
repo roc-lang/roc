@@ -41,9 +41,7 @@ module [ # First comment
 	foo,
 	# inline comment after foo
 	bar,
-]
-
-# inline comment after bar
+] # inline comment after bar
 
 # Comment before function
 foo = # Comment in function body
@@ -65,8 +63,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "bar"))
+    (Expr.num_literal_i32 100)
+  )
 )
 ~~~
 # SOLVED

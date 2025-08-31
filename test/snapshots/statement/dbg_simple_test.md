@@ -26,7 +26,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCur
 ~~~roc
 module [test]
 
-
 test = {
 	x = 42
 	dbg(x)
@@ -49,7 +48,16 @@ Expressions can be identifiers, literals, function calls, or operators.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "test"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "x"))
+        (Expr.num_literal_i32 42)
+      )
+      (Expr.apply_ident)
+    )
+  )
 )
 ~~~
 # SOLVED

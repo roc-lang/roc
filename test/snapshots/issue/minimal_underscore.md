@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore ~~~
 ~~~roc
 module []
 
-
 BadType := _
 ~~~
 # EXPECTED
@@ -40,7 +39,7 @@ BadType := _
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

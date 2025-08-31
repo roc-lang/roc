@@ -50,21 +50,25 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
-
 # Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
 single_use : List elem -> Str
 single_use = |x| "hello"
+
 # Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
 ending_underscore : List elem_ -> elem_
 ending_underscore = |list| "default"
+
 # Test 3: COMBINATION - single-use ending in underscore (both errors)
 combo_single : List bad_ -> Str
 combo_single = |x| "combo"
+
 # Test 4: VALID CASES - these should not generate warnings
 valid_single : List _elem -> Str
 valid_single = |x| "valid"
+
 valid_multi : elem -> List elem
 valid_multi = |x| [x]
+
 main = |x| "done"
 ~~~
 # EXPECTED
@@ -138,17 +142,50 @@ main = |x| "done"
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "single_use")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "single_use"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "ending_underscore")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ending_underscore"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "combo_single")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combo_single"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "valid_single")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "valid_single"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "valid_multi")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "valid_multi"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

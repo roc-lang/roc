@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int
 ~~~roc
 module []
 
-
 foo = (asd | 0)
 ~~~
 # EXPECTED
@@ -30,7 +29,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

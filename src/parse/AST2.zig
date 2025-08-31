@@ -112,21 +112,21 @@ pub fn appendByteSlice(self: *Ast, allocator: Allocator, bytes: []const u8) Allo
 
 /// Returns an iterator over all the nodes in a block.
 /// Panics in debug builds if the given Node.Idx does not refer to a .block node.
-pub fn nodesInBlock(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
+fn nodesInBlock(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     std.debug.assert(self.tag(idx) == .block);
 
     return self.node_slices.nodes(&self.payloadPtr(idx).nodes);
 }
 
 /// Get a pointer to the payload (for the optimization where we pass pointers to nodes())
-pub fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
+fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return &self.nodes.fieldItem(.payload, multi_list_idx);
 }
 
 /// Returns an iterator over all the nodes in a string interpolation.
 /// Panics in debug builds if the given Node.Idx does not refer to a .str_interpolation node.
-pub fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
+fn nodesInInterpolation(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     std.debug.assert(self.tag(idx) == .str_interpolation);
 
     return self.node_slices.nodes(&self.payloadPtr(idx).str_interpolated_nodes);
@@ -166,7 +166,7 @@ pub const LambdaArgsIterator = struct {
 };
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .lambda node.
-pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
+fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     std.debug.assert(self.tag(idx) == .lambda);
 
     const body_then_args_idx = self.payload(idx).body_then_args;
@@ -184,7 +184,7 @@ pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 }
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .while_loop node.
-pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
+fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
     std.debug.assert(self.tag(idx) == .while_loop);
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(&nodes_idx);
@@ -201,7 +201,7 @@ pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
 }
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .for_loop node.
-pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
+fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
     std.debug.assert(self.tag(idx) == .for_loop);
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(&nodes_idx);
@@ -220,7 +220,7 @@ pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
 }
 
 /// Get an iterator for lambda args
-pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
+fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
     return LambdaArgsIterator{
         .iter = self.node_slices.nodes(&lambda_val.args_idx),
         .skipped_body = false,
@@ -758,7 +758,7 @@ test "collections.NodeSlices with negative sentinel" {
 }
 
 /// Convert a parse diagnostic to a reporting.Report for error display
-pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
     _ = self; // AST is not needed for diagnostic to report conversion
 
     const title = switch (diagnostic.tag) {

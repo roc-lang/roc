@@ -33,10 +33,10 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign Int Lo
 ~~~roc
 module []
 
-
 # Top-level variables
 x = 5
 y = 10
+
 # Function that shadows outer variable
 outerFunc = |_| {
 	x = 20
@@ -70,9 +70,18 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 5)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.num_literal_i32 10)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "outerFunc"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

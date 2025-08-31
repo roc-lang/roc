@@ -18,7 +18,7 @@ if # Comment after if
 KwIf LineComment LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

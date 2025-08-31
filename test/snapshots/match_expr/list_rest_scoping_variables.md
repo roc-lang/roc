@@ -29,13 +29,13 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
         (binop_thick_arrow
           (list_literal
             (lc "first")
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
           )
           (lc "first")
         )
         (binop_thick_arrow
           (list_literal
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
             (lc "last")
           )
           (lc "last")
@@ -43,7 +43,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
         (binop_thick_arrow
           (list_literal
             (lc "first")
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
             (lc "last")
           )
           (binop_plus

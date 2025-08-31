@@ -26,21 +26,24 @@ x : 1
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_single_field_record.md:1:3:1:7:**
+**can_single_field_record.md:1:3:1:4:**
 ```roc
 { x: 1 }
 ```
-  ^^^^
+  ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 1)
+  )
 )
 ~~~
 # SOLVED

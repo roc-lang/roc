@@ -43,11 +43,11 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
             (uc "KeyPress")
             (lc "key")
           )
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "rest")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (str_literal_big "key ${key} pressed, ${Num.toStr(List.len(rest))} more events")
         )
         (list_literal
@@ -65,11 +65,11 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
               (lc "dy2")
             )
           )
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "others")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (str_literal_big "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}")
         )
         (list_literal
@@ -84,11 +84,11 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow String OpenSquare
               (lc "y")
             )
           )
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "remaining")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (str_literal_big "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}")
         )
       )

@@ -28,7 +28,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
         (num_literal_i32 0)
         (binop_thick_arrow
           (list_literal
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
             (lc "last")
           )
           (num_literal_i32 1)
@@ -36,7 +36,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
         (binop_thick_arrow
           (list_literal
             (lc "x")
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
             (lc "y")
           )
           (num_literal_i32 2)

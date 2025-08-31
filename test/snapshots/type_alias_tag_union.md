@@ -48,75 +48,68 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Type alias with type parameters that expands to a tag union
 MyResult((ok, err)) : [Good(ok), Bad(err)]
+
 # Using the type alias
 process : MyResult(Str, I32) -> Str
 process = |_result| "processed"
+
 # Another type alias with a single parameter
 Option(a) : [Some(a), None]
+
 # Using it with different types
 getString : Option Str -> Str
 getString = |_opt| "default"
+
 getNumber : Option I32 -> I32
 getNumber = |_opt| 0
+
 main! = |_| {}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable **_result** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__result` to suppress this warning.
-The unused variable is declared here:
-
-**type_alias_tag_union.md:8:12:8:19:**
-```roc
-process = |_result| "processed"
-```
-           ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **_opt** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__opt` to suppress this warning.
-The unused variable is declared here:
-
-**type_alias_tag_union.md:15:14:15:18:**
-```roc
-getString = |_opt| "default"
-```
-             ^^^^
-
-
-**UNUSED VARIABLE**
-Variable **_opt** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__opt` to suppress this warning.
-The unused variable is declared here:
-
-**type_alias_tag_union.md:18:14:18:18:**
-```roc
-getNumber = |_opt| 0
-```
-             ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "getString")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getString"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "getNumber")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getNumber"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

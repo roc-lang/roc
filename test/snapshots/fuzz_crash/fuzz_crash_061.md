@@ -15,15 +15,13 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 ~~~clojure
 (platform-header
   (exposes
-    (malformed malformed:exposed_item_unexpected_token)
+    (malformed)
 ))
 ~~~
 # FORMATTED
 ~~~roc
 platform "
- requires { n : 0 } exposes [import ]
-
-[]
+ requires { n : 0 } exposes [import ][]
 ~~~
 # EXPECTED
 NIL
@@ -197,7 +195,7 @@ requires{}{n:0[import S	exposing[
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

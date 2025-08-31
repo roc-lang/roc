@@ -48,27 +48,30 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow 
 ~~~roc
 module []
 
-
 main : _ -> _
 main = |x| x
+
 identity : a -> a
 identity = |x| x
+
 # Function with underscore in annotation
 process : List _ -> Str
 process = |list| "processed"
+
 # Record with underscore
 get_data : {field : _, other : U32} -> U32
 get_data = |record| record.other
+
 # Pattern matching with underscore type annotation
 handle_result : Result(_, Str) -> Str
 handle_result = |result| match result
 	Ok(_) => "success" => (Err(msg) => msg)
 
-
 # Underscore in function arguments
 map :
 	(a -> b) -> List a -> List b
 map = |_, _| []
+
 # Named underscore type variables
 transform :
 	(_a -> _b) -> _b
@@ -117,20 +120,62 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "main")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "identity")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "get_data")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "get_data"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "handle_result")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handle_result"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "map")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "map"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "transform")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "transform"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

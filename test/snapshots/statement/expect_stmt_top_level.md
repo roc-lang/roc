@@ -25,8 +25,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperId
 ~~~roc
 module [foo]
 
-
 foo = Bool.True
+
 expect foo != Bool.False
 ~~~
 # EXPECTED
@@ -57,8 +57,14 @@ expect foo != Bool.False
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

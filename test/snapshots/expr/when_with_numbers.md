@@ -14,7 +14,7 @@ when x is
 LowerIdent LowerIdent LowerIdent Int OpArrow Int Int OpArrow Int ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

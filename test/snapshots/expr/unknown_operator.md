@@ -12,7 +12,7 @@ type=expr
 Int OpPlus OpPlus Int ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

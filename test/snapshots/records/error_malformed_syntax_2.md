@@ -30,15 +30,15 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpAssign String CloseCurly ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**error_malformed_syntax_2.md:1:3:1:10:**
+**error_malformed_syntax_2.md:1:3:1:6:**
 ```roc
 { age: 42, name = "Alice" }
 ```
-  ^^^^^^^
+  ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -55,7 +55,10 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 42)
+  )
   (Expr.binop_equals
     (Expr.lookup "name")
     (Expr.str_literal_big)

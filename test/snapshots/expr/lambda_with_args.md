@@ -35,7 +35,7 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.lambda)
+(Expr.lambda (canonicalized))
 ~~~
 # SOLVED
 ~~~clojure

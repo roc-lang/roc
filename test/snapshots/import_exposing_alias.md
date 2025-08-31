@@ -30,7 +30,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
-
 import json.Json exposing [decode]
 as 
 fromJson
@@ -175,26 +174,26 @@ main = {
 ```
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**import_exposing_alias.md:6:11:6:22:**
+**import_exposing_alias.md:6:11:6:15:**
 ```roc
 	data = { name: "Bob", age: 25 }
 ```
-	         ^^^^^^^^^^^
+	         ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**import_exposing_alias.md:6:24:6:31:**
+**import_exposing_alias.md:6:24:6:27:**
 ```roc
 	data = { name: "Bob", age: 25 }
 ```
-	                      ^^^^^^^
+	                      ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -222,15 +221,41 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "data"))
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "name")
+            (Expr.str_literal_small)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "age")
+            (Expr.num_literal_i32 25)
+          )
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "encoded"))
+        (Expr.apply_ident)
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "decoded"))
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "decoded")
+    )
+  )
 )
 ~~~
 # SOLVED

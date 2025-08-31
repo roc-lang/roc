@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare OpenRound OpenCurly CloseCurly CloseRound OpenRo
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-{}(!{
+module []{}(!{
 	0
 })
 ~~~
@@ -39,7 +37,7 @@ module[]({})(!{0})
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

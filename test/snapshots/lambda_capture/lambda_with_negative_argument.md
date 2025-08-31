@@ -24,7 +24,7 @@ OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int CloseRound OpenRound OpUn
       (lc "x")
     )
   )
-  (unary_neg <unary>)
+  (unary_neg <unary_op>)
 )
 ~~~
 # FORMATTED

@@ -46,17 +46,20 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 # Identity function with rigid type variable
 id : a -> a
 id = |x| x
+
 main! = |_| {
 	# Should instantiate 'a' as Int
 	num = id(42)
+
 	# Should instantiate 'a' as Str (fresh instance)
 	text = id("hello")
+
 	# Should instantiate 'a' as List Int (fresh instance)
 	list = id([1, 2, 3])
+
 	{}
 }
 ~~~
@@ -105,9 +108,18 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "id")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "id"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

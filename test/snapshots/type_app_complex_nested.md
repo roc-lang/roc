@@ -48,13 +48,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Test complex nested type applications in function signatures
 processComplex : Result(List Maybe a, Dict(Str, Error _b)) -> List a
 processComplex = |result| match result
 	Ok(maybeList) => []
 	Err(_) => []
-
 
 # Test multiple levels of nesting
 deepNested : Maybe Result(List Dict(Str, a), _b) -> a
@@ -62,9 +60,9 @@ deepNested = |_| {
 	crash "not implemented"
 }
 
-
 # Test type alias with complex nesting
 ComplexType((a, b)) : Result(List Maybe a, Dict(Str, Error b))
+
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
@@ -84,12 +82,30 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "processComplex")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processComplex"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "deepNested")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "deepNested"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type apply_uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

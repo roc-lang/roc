@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-s : (b -> c where module(a).t : c, u) : o
+module []s : (b -> c where module(a).t : c, u) : o
 ...
 ~~~
 # EXPECTED
@@ -38,8 +36,11 @@ module[]s:b->c where module(a).t:c,u:o...
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "s")
+    (type binop_colon)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

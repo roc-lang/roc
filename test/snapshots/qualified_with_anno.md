@@ -26,8 +26,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 ~~~roc
 module [value]
 
-
 MyType := [TagA, TagB]
+
 value : MyType
 value = MyType.TagA
 ~~~
@@ -59,9 +59,18 @@ value = MyType.TagA
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "value")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "value"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

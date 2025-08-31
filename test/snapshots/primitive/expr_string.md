@@ -21,9 +21,7 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign String LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
-
-name = "luc"
+module [foo]name = "luc"
 foo = "hello ${name}"
 ~~~
 # EXPECTED
@@ -33,8 +31,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "name"))
+    (Expr.str_literal_small)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

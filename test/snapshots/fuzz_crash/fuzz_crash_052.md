@@ -18,9 +18,7 @@ KwModule OpenSquare CloseSquare KwImport UpperIdent Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-import S
+module []import S
 0
 ~~~
 # EXPECTED
@@ -40,8 +38,8 @@ This might be a missing semicolon or an incorrectly placed expression.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

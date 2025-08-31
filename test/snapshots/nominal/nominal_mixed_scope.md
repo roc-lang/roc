@@ -38,13 +38,14 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [LocalStatus, processColor]
 
-
 LocalStatus := [Pending, Complete]
+
 processColor : _ -> LocalStatus
 processColor = |color| {
 
 	# bring RGB into scope
 	import Color.RGB
+
 	match color
 	Red
 	=> 
@@ -208,10 +209,16 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "processColor")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processColor"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

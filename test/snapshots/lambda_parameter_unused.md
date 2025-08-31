@@ -53,19 +53,22 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Lambda with unused parameter - should warn
 add : U64 -> U64
 add = |unused| 42
+
 # Lambda with underscore parameter that is used - should warn
 multiply : U64 -> U64
 multiply = |_factor| _factor * 2
+
 # Lambda with unused underscore parameter - should be fine
 process : U64 -> U64
 process = |_input| 100
+
 # Lambda with used parameter - should be fine
 double : U64 -> U64
 double = |value| value * 2
+
 main! = |_| {
 	result1 = add(5)
 	result2 = multiply(3)
@@ -90,31 +93,45 @@ add = |unused| 42
        ^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **_input** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__input` to suppress this warning.
-The unused variable is declared here:
-
-**lambda_parameter_unused.md:13:12:13:18:**
-```roc
-process = |_input| 100
-```
-           ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "add")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "multiply")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "multiply"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "double")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "double"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

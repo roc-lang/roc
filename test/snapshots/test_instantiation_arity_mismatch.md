@@ -55,6 +55,7 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~roc
 identity : (a, b) -> (a, b)
 identity = |pair| pair
+
 identity((1, 2))
 ~~~
 # EXPECTED
@@ -64,8 +65,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "identity")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_ident)
 )
 ~~~

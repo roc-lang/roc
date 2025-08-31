@@ -36,10 +36,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 UserId : U64
+
 getUser : UserId -> Str
 getUser = |id| if id > 10 "big" else "small"
+
 main! = |_| getUser(100)
 ~~~
 # EXPECTED
@@ -49,10 +50,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name "getUser")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getUser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -16,16 +16,14 @@ KwModule UpperIdent CloseSquare UpperIdent ~~~
   (exposes
     (uc "P")
 
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
 
     (uc "F")
 ))
 ~~~
 # FORMATTED
 ~~~roc
-module [P, ], F]
-
-P
+module [P, ], F]P
 ]
 F
 ~~~
@@ -90,9 +88,9 @@ module P]F
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

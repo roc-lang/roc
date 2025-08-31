@@ -16,10 +16,10 @@ MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIden
 ~~~clojure
 (block
   (binop_pipe
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (num_literal_i32 0)
   )
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (lc "u22")
   (num_literal_i32 0)
   (lc "u22")
@@ -111,11 +111,11 @@ This might be a missing semicolon or an incorrectly placed expression.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

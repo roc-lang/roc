@@ -56,14 +56,16 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 ~~~roc
 module []
 
-
 import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
+
 processRequest : Request -> Response
 processRequest = |req| Http.defaultResponse
+
 parseJson : Str -> Json.Value
 parseJson = |input| Json.parse(input)
+
 handleApi : Http.Request -> Result(Http.Response, Json.Error)
 handleApi = |request| {
 	result = Json.decode(request.body)
@@ -80,9 +82,11 @@ handleApi = |request| {
 
 config : Json.Config
 config = Json.defaultConfig
+
 # Test nested type qualification
 advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
 advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
+
 # Test function with multiple type parameters
 combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
 combineResults = |result1, result2| match result1
@@ -424,26 +428,65 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "processRequest")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processRequest"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "parseJson")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parseJson"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "handleApi")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleApi"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "config")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "config"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.type_anno
+    (name "advancedParser")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "advancedParser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "combineResults")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combineResults"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

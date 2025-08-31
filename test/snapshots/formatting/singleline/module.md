@@ -26,7 +26,6 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [a, b]
 
-
 a = 'a'
 b = 'a'
 ~~~
@@ -37,8 +36,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.str_literal_small)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.str_literal_small)
+  )
 )
 ~~~
 # SOLVED

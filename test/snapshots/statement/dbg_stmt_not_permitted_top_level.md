@@ -26,10 +26,10 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwDbg String Bl
 ~~~roc
 module [foo]
 
-
 # not permitted
 dbg 
 "foo"
+
 foo = ...
 ~~~
 # EXPECTED
@@ -71,9 +71,12 @@ dbg "foo"
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

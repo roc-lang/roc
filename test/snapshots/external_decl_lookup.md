@@ -38,9 +38,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
 import json.Json
+
 main! = |_| {
 	# This should create an external declaration for json.Json.utf8
 	result = Json.utf8("Hello from external module!")
@@ -75,9 +75,12 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

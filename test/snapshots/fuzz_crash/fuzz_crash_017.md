@@ -20,7 +20,7 @@ LowerIdent OpAssign String LowerIdent OpAssign MalformedString ~~~
   )
   (binop_equals
     (lc "foo")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
 )
 ~~~
@@ -46,8 +46,14 @@ foo = "hello ${namF
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "me"))
+    (Expr.str_literal_small)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

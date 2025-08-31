@@ -36,14 +36,15 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 ~~~roc
 module [red, green, blue]
 
-
 import Color
 *
 
 red : Color
 red = Red
+
 blue : Color
 blue = Blue
+
 green : Color
 green = Green
 ~~~
@@ -79,14 +80,32 @@ red : Color
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "red")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "red"))
+    (Expr.apply_tag)
+  )
+  (Stmt.type_anno
+    (name "blue")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "blue"))
+    (Expr.apply_tag)
+  )
+  (Stmt.type_anno
+    (name "green")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "green"))
+    (Expr.apply_tag)
+  )
 )
 ~~~
 # SOLVED

@@ -28,8 +28,8 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [ConsList, empty]
 
-
 ConsList(a) := [Nil, Node(ConsList(a))]
+
 empty : ConsList _a
 empty = ConsList.Nil
 ~~~
@@ -61,9 +61,18 @@ empty = ConsList.Nil
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "empty")
+    (type apply_uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "empty"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

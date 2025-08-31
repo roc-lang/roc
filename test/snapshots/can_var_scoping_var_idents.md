@@ -27,7 +27,6 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
-
 # Function showing var vs regular identifier independence
 testFunc = |input| {
 	sum = input
@@ -49,7 +48,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "testFunc"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

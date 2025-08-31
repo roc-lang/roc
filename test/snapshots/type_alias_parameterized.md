@@ -36,10 +36,11 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 Pair((a, b)) : (a, b)
+
 swapPair : Pair(a, b) -> Pair(b, a)
 swapPair = |x, y| (y, x)
+
 main! = |_| swapPair((1, 2))
 ~~~
 # EXPECTED
@@ -49,10 +50,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name "swapPair")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "swapPair"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -26,7 +26,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [red]
 
-
 import design.Styles | Color exposing [Encoder]
 as 
 CE
@@ -100,12 +99,18 @@ red : CE
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "red")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "red"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

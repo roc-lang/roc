@@ -25,7 +25,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [deserialize]
 
-
 deserialize : List U8 -> Result(a, [DecodeErr]) where module(a).decode : List U8 -> Result(a, [DecodeErr])
 deserialize = |_| ...
 ~~~
@@ -36,8 +35,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "deserialize")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "deserialize"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

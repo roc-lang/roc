@@ -52,66 +52,76 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Simple tag union with no-argument tags
 Status : [Loading, Complete, Failed]
+
 # Tag union with mixed argument types
 Result : [Success(Str), Error(Str), Warning((Str, I32))]
+
 # Nested tag unions
 Response : [Ok(Result), NetworkError, ParseError]
+
 # Multiple tag unions using similar tag names
 UserState : [Active(Str), Inactive, Suspended(Str)]
 ConnectionState : [Active, Disconnected, Connecting(Str)]
+
 # Function using tag unions
 processResult : Result -> Str
 processResult = |_result| "processed"
+
 # Function with nested tag union
 handleResponse : Response -> Str
 handleResponse = |_response| "handled"
+
 main! = |_| {}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable **_result** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__result` to suppress this warning.
-The unused variable is declared here:
-
-**type_tag_union_complex.md:18:18:18:25:**
-```roc
-processResult = |_result| "processed"
-```
-                 ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **_response** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__response` to suppress this warning.
-The unused variable is declared here:
-
-**type_tag_union_complex.md:22:19:22:28:**
-```roc
-handleResponse = |_response| "handled"
-```
-                  ^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "processResult")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processResult"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "handleResponse")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleResponse"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

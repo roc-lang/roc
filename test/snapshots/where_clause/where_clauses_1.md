@@ -30,8 +30,8 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Hash, Decode]
 
-
 Hash((a, hasher)) : (a where module(a).hash : hasher) -> hasher, module(hasher) | Hasher
+
 Decode(a) : a where module(a).decode : List U8 -> a
 ~~~
 # EXPECTED
@@ -41,8 +41,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
 )
 ~~~
 # SOLVED

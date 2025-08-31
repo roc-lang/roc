@@ -32,13 +32,17 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
-
 BadBase := _
+
 BadDerived := BadBase
+
 value : BadDerived
 value = "test"
+
 GoodBase := Str
+
 GoodDerived := GoodBase
+
 goodValue : GoodDerived
 goodValue = "test"
 ~~~
@@ -92,14 +96,26 @@ GoodDerived := GoodBase
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "value")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "value"))
+    (Expr.str_literal_small)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "goodValue")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "goodValue"))
+    (Expr.str_literal_small)
+  )
 )
 ~~~
 # SOLVED

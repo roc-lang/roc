@@ -26,9 +26,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport String KwAs LowerI
 ~~~roc
 module [foo]
 
-
 import "users.json" as data : Str
 import Json
+
 foo = Json.parse(data)
 ~~~
 # EXPECTED
@@ -59,9 +59,12 @@ foo = Json.parse(data)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

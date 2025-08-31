@@ -34,9 +34,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 mapList : List a -> (a -> b) -> List b
 mapList = |list, fn| list.map(fn)
+
 main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED
@@ -58,9 +58,18 @@ mapList = |list, fn| list.map(fn)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "mapList")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "mapList"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

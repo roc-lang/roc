@@ -29,7 +29,6 @@ hosted [
 	b!,
 ]
 
-
 a! : Str => Str
 b! : Str => Str
 ~~~
@@ -40,8 +39,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "a")
+    (type binop_thick_arrow)
+  )
+  (Stmt.type_anno
+    (name "b")
+    (type binop_thick_arrow)
+  )
 )
 ~~~
 # SOLVED

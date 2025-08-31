@@ -18,9 +18,7 @@ KwApp LineComment OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 ~~~
 # FORMATTED
 ~~~roc
-app { }
-
-# This comment is here
+app { }# This comment is here
 ~~~
 # EXPECTED
 NIL

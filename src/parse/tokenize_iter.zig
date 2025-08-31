@@ -3387,7 +3387,8 @@ pub const TokenIterator = struct {
                         .extra = .{ .none = 0 },
                     };
                 }
-                // Store in ByteSlices for now
+                // Store number text in ByteSlices for deferred parsing
+                // Number parsing happens during expression canonicalization
                 const num_text = self.cursor.buf[start_pos..self.cursor.pos];
                 const bytes_idx = try self.byte_slices.append(gpa, num_text);
                 return Token{

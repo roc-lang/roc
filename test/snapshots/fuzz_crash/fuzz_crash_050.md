@@ -18,9 +18,7 @@ KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-_
+module []_
 0 = {
 	)
 }
@@ -66,8 +64,13 @@ module[]_0={
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.num_literal_i32))
+    (Expr.block
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

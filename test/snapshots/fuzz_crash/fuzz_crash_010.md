@@ -20,12 +20,12 @@ UpperIdent OpenCurly LowerIdent Comma MalformedUnknownToken CloseSquare LowerIde
   (uc "H")
   (record_literal
     (lc "o")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (binop_equals
     (lc "foo")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
 )
 ~~~
@@ -35,6 +35,7 @@ H
 { o }
 ]
 foo =
+
 "on        (string 'onmo %')))
 ~~~
 # EXPECTED
@@ -121,10 +122,13 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

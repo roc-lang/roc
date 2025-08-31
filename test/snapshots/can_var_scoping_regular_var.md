@@ -38,14 +38,15 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
-
 # Regular function with var usage
 processItems = |items| {
 	var count_ = 0
 	var total_ = 0
+
 	# Reassign vars within same function - should work
 	count_ = count_ + 1
 	total_ = total_ + 10
+
 	# Nested function - var reassignment should fail across function boundary
 	nestedFunc = |_| {
 		count_ = count_ + 5
@@ -54,7 +55,6 @@ processItems = |items| {
 		# Should cause error - different function
 		count_ : count_
 	}
-
 
 	result = nestedFunc({})
 	total_ + result
@@ -92,7 +92,10 @@ processItems = |items| {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "processItems"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

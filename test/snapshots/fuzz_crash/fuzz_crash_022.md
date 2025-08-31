@@ -23,21 +23,21 @@ KwApp OpenCurly OpBar LowerIdent OpColon String KwPlatform OpenSquare LowerIdent
 ~~~
 # FORMATTED
 ~~~roc
-app { }
-
-: 
+app { }: 
 "c"
 platform 
 [main!]
 }
 
 UserId : U64
+
 ser : UserId -> Str
 getUser = |id| if id > 1 !
 ) 
 "big"
 else 
 "l" - 
+
 ain! = |_| getUser(900)
 ~~~
 # EXPECTED
@@ -244,18 +244,30 @@ getUser = |id| if (id > 1!) "big" else "l"
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name "ser")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getUser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.malformed))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

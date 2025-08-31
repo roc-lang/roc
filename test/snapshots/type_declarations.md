@@ -47,13 +47,18 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 
-
 Map((a, b)) : List a -> (a -> b) -> List b
+
 Foo : (Bar, Baz)
+
 Some(a) : {foo : Ok a, bar : Something}
+
 Maybe(a) : [Some(a), None]
+
 SomeFunc(a) : Maybe a -> a -> Maybe a
+
 MyType : U64
+
 MyType2 : Module.Thingy
 ~~~
 # EXPECTED
@@ -63,13 +68,34 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type binop_pipe)
+  )
 )
 ~~~
 # SOLVED

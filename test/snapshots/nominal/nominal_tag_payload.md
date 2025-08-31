@@ -41,13 +41,16 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~roc
 module [Maybe, some1, none1, some2, none2]
 
-
 Maybe(a) := [Some(a), None]
+
 some1 : a -> Maybe a
 some1 = |a| Maybe.Some(a)
+
 none1 : Maybe _a
 none1 = Maybe.None
+
 some2 = |a| Maybe.Some(a)
+
 none2 = Maybe.None
 ~~~
 # EXPECTED
@@ -111,13 +114,37 @@ none2 = Maybe.None
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "some1")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "some1"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "none1")
+    (type apply_uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "none1"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "some2"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "none2"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

@@ -55,9 +55,7 @@ KwPlatform String KwRequires OpenCurly UpperIdent Comma UpperIdent Comma CloseCu
 platform "pf" requires {R1, R2} { r1 : R1 -> R2, r2 : R1 -> R2 } exposes [
 	E1,
 	E2,
-] packages {pa1, ("pa1", pa2) : "pa2"}
-
-# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
+] packages {pa1, ("pa1", pa2) : "pa2"}# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
 ~~~
 # EXPECTED
 NIL

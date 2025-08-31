@@ -33,7 +33,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar L
 ~~~roc
 module [checkNumber]
 
-
 checkNumber = |num| {
 	if num < 0
 		{
@@ -59,7 +58,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "checkNumber"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

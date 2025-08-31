@@ -29,8 +29,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColon OpenSqua
 ~~~roc
 module [kind]
 
-
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
+
 kind : Color -> Str
 kind = |color| match color
 	(Red || Green) || Blue => "primary"
@@ -64,9 +64,18 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "kind")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "kind"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -31,8 +31,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
 ~~~roc
 module [handleResult]
 
-
 import MyResultModule
+
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = |result| {
 	match result
@@ -153,10 +153,16 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "handleResult")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleResult"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

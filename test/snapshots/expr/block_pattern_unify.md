@@ -62,9 +62,21 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "str"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "result"))
+    (Expr.binop_plus
+      (Expr.lookup "x")
+      (Expr.num_literal_i32 5)
+    )
+  )
   (Expr.lookup "result")
 )
 ~~~

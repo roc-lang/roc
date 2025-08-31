@@ -56,7 +56,6 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "platform.roc" platform [main] }
 
-
 # Map over Result type
 map_result : Result(a, e) -> (a -> b) -> Result(b, e)
 map_result = |result, transform| {
@@ -74,15 +73,19 @@ map_result = |result, transform| {
 # Simple identity function with type variable
 identity : a -> a
 identity = |x| x
+
 # Nested type variables in records
 make_pair : a -> b -> {first : a, second : b}
 make_pair = |x, y| { first : x, second : y }
+
 # Function that works with lists of any type
 list_length : List _a -> U64
 list_length = |_lst| 42
+
 # Nested Result types
 wrap_in_result : a -> Result(Result(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
+
 main = |_| "done"
 ~~~
 # EXPECTED
@@ -230,82 +233,76 @@ identity : a -> a
 ```
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **first** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_var_nested.md:18:22:18:30:**
+**type_var_nested.md:18:22:18:27:**
 ```roc
 make_pair = |x, y| { first: x, second: y }
 ```
-                     ^^^^^^^^
+                     ^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **second** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_var_nested.md:18:32:18:41:**
+**type_var_nested.md:18:32:18:38:**
 ```roc
 make_pair = |x, y| { first: x, second: y }
 ```
-                               ^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **x** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-
-**type_var_nested.md:18:14:18:15:**
-```roc
-make_pair = |x, y| { first: x, second: y }
-```
-             ^
-
-
-**UNUSED VARIABLE**
-Variable **y** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-
-**type_var_nested.md:18:17:18:18:**
-```roc
-make_pair = |x, y| { first: x, second: y }
-```
-                ^
-
-
-**UNUSED VARIABLE**
-Variable **_lst** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__lst` to suppress this warning.
-The unused variable is declared here:
-
-**type_var_nested.md:22:16:22:20:**
-```roc
-list_length = |_lst| 42
-```
-               ^^^^
+                               ^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "map_result")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "map_result"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "identity")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "make_pair")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "make_pair"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "list_length")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "list_length"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "wrap_in_result")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "wrap_in_result"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

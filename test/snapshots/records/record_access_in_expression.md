@@ -31,7 +31,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.binop_plus
-  (Expr.lambda)
+  (Expr.lambda (canonicalized))
   (Expr.num_literal_i32 5)
 )
 ~~~

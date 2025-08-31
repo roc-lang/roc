@@ -64,19 +64,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
-
 # Basic values for polymorphism testing
 num = 42
 frac = 4.2
 str = "hello"
 my_empty_list = []
 my_nonempty_list = [num, frac]
+
 # Record with polymorphic field
 make_container = |value| { data : value, count : 1 }
+
 # Used with different types
 int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
+
 # Polymorphic record update
 update_data = |container, new_value| {
 	container : container
@@ -84,20 +86,20 @@ update_data = |container, new_value| {
 	data : new_value
 }
 
-
 # Used with different record types
 updated_int = update_data((int_container, 100))
 updated_str = update_data((str_container, "world"))
+
 # Function returning polymorphic record
 identity_record = |x| {
 	value : x
 }
 
-
 # Used at different types
 int_record = identity_record(42)
 str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
+
 main = |_| {
 	# Access polymorphic fields
 	int_container.count + str_container.count
@@ -117,39 +119,26 @@ update_data = |container, new_value| { container & data: new_value }
                                                  ^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**let_polymorphism_records.md:11:28:11:39:**
+**let_polymorphism_records.md:11:28:11:32:**
 ```roc
 make_container = |value| { data: value, count: 1 }
 ```
-                           ^^^^^^^^^^^
+                           ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **count** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**let_polymorphism_records.md:11:41:11:49:**
+**let_polymorphism_records.md:11:41:11:46:**
 ```roc
 make_container = |value| { data: value, count: 1 }
 ```
-                                        ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **value** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-
-**let_polymorphism_records.md:11:19:11:24:**
-```roc
-make_container = |value| { data: value, count: 1 }
-```
-                  ^^^^^
+                                        ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -204,28 +193,15 @@ update_data = |container, new_value| { container & data: new_value }
                ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**let_polymorphism_records.md:26:25:26:33:**
+**let_polymorphism_records.md:26:25:26:30:**
 ```roc
 identity_record = |x| { value: x }
 ```
-                        ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **x** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-
-**let_polymorphism_records.md:26:20:26:21:**
-```roc
-identity_record = |x| { value: x }
-```
-                   ^
+                        ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -257,23 +233,74 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "num"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "frac"))
+    (Expr.frac_literal_small 4.2)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "str"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "my_empty_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "my_nonempty_list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "make_container"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "int_container"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "str_container"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "list_container"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "update_data"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "updated_int"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "updated_str"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity_record"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "int_record"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "str_record"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "list_record"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

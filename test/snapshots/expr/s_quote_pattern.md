@@ -21,7 +21,7 @@ KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow Triple
 )
   (branch1     (binop_thick_arrow
       (list_literal
-        (malformed malformed:pattern_unexpected_token)
+        (malformed)
       )
       (block
         (ellipsis)

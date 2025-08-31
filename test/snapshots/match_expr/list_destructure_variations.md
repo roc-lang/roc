@@ -44,32 +44,32 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare Lo
         )
         (list_literal
           (lc "head")
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "tail")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (lc "head")
         )
         (list_literal
           (uc "One")
           (uc "Two")
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "rest")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (num_literal_i32 3)
         )
         (list_literal
           (lc "x")
           (lc "y")
           (lc "z")
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (lc "more")
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (binop_plus
             (binop_plus
               (lc "x")

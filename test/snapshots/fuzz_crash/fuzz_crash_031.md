@@ -21,7 +21,7 @@ LowerIdent OpenSquare CloseSquare BlankLine LineComment LowerIdent LowerIdent Op
   (lc "vavar")
   (binop_equals
     (lc "t")
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
   )
 )
 ~~~
@@ -29,6 +29,7 @@ LowerIdent OpenSquare CloseSquare BlankLine LineComment LowerIdent LowerIdent Op
 ~~~roc
 mule
 []
+
 #el
 vavar
 t = '
@@ -83,10 +84,13 @@ vavar t= '
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "t"))
+    (Expr.malformed)
+  )
 )
 ~~~
 # SOLVED

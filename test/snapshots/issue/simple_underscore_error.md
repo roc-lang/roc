@@ -23,8 +23,8 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
-
 BadType := _
+
 foo : BadType
 foo = 42
 ~~~
@@ -45,9 +45,15 @@ BadType := _
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "foo")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.num_literal_i32 42)
+  )
 )
 ~~~
 # SOLVED

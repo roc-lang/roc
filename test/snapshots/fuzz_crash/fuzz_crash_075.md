@@ -20,7 +20,7 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
       (block
         (binop_colon
           (lc "d")
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
         )
         (block
           (num_literal_i32 0)

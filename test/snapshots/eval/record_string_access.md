@@ -44,7 +44,7 @@ This might be a limitation in the current implementation that will be addressed 
 
 # CANONICALIZE
 ~~~clojure
-(Expr.lambda)
+(Expr.lambda (canonicalized))
 ~~~
 # SOLVED
 ~~~clojure

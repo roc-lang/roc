@@ -41,17 +41,19 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 ~~~roc
 module [makeAdder, curriedAdd, applyTwice]
 
-
 # Function that returns a function with polymorphic type
 makeAdder : a -> a -> a
 makeAdder = |x| |y| x + y
+
 # Should constrain the literal 5 to I64
 curriedAdd : I64 -> I64
 curriedAdd = makeAdder(5)
+
 # Higher-order function that applies a function twice
 applyTwice :
 	(a -> a) -> a -> a
 applyTwice = |f, x| f(f(x))
+
 # Should constrain the literal 3 to I64
 addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| (x + 3, n))
@@ -63,14 +65,38 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "makeAdder")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "makeAdder"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "curriedAdd")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "curriedAdd"))
+    (Expr.apply_ident)
+  )
+  (Stmt.type_anno
+    (name "applyTwice")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "applyTwice"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "addThreeTwice")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addThreeTwice"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

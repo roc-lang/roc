@@ -52,23 +52,21 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 # Test ellipsis placeholder
 testEllipsis : U64 -> U64
 testEllipsis = |_| ...
+
 # Test crash statement
 testCrash : U64 -> U64
 testCrash = |_| {
 	crash "This is a crash message"
 }
 
-
 # Test crash with different message
 testCrashSimple : U64 -> U64
 testCrashSimple = |_| {
 	crash "oops"
 }
-
 
 main! = |_| {
 	result1 = testEllipsis(42)
@@ -122,13 +120,34 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "testEllipsis")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "testEllipsis"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "testCrash")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "testCrash"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "testCrashSimple")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "testCrashSimple"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -18,7 +18,7 @@ OpBar MalformedUnknownToken OpBar Int ~~~
       (num_literal_i32 1)
     )
     (args
-      (malformed malformed:expr_unexpected_token)
+      (malformed)
     )
   )
 )
@@ -55,7 +55,7 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

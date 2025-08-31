@@ -42,45 +42,54 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma LowerI
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **field_with_underscores** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_ok.md:2:5:2:41:**
+**record_different_fields_ok.md:2:5:2:27:**
 ```roc
     field_with_underscores: "underscore",
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **field123** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_ok.md:3:5:3:24:**
+**record_different_fields_ok.md:3:5:3:13:**
 ```roc
     field123: "numbers",
 ```
-    ^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **camelCase** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_different_fields_ok.md:4:5:4:23:**
+**record_different_fields_ok.md:4:5:4:14:**
 ```roc
     camelCase: "camel",
 ```
-    ^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "field_with_underscores")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "field123")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "camelCase")
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

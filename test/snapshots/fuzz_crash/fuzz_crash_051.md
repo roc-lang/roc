@@ -14,14 +14,12 @@ KwModule OpenSquare CloseCurly OpenCurly Int Int CloseRound OpenRound Int CloseC
 ~~~clojure
 (module-header
   (exposes
-    (malformed malformed:exposed_item_unexpected_token)
+    (malformed)
 ))
 ~~~
 # FORMATTED
 ~~~roc
-module [}]
-
-{
+module [}]{
 	0
 	0
 	)(0)
@@ -88,7 +86,7 @@ module[}{0      0)(0}
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

@@ -12,7 +12,7 @@ type=expr
 OpBang OpenRound UpperIdent OpenRound Int CloseRound CloseRound ~~~
 # PARSE
 ~~~clojure
-(unary_not <unary>)
+(unary_not <unary_op>)
 ~~~
 # FORMATTED
 ~~~roc

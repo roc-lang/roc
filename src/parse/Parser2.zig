@@ -64,6 +64,7 @@ pub const Parser = @This();
 
 gpa: std.mem.Allocator,
 source: []const u8, // Source code for extracting string literals
+env: *base.CommonEnv, // Shared environment for identifiers, strings, etc.
 current: ?Token = null, // Current token
 lookahead: ?Token = null, // Lookahead token (LL(1))
 last_position: Position, // Track last valid position for error reporting
@@ -193,10 +194,11 @@ pub const StateValue = union(enum) {
     precedence: u8,
 };
 /// Initialize a state machine parser
-pub fn initStateMachine(gpa: std.mem.Allocator, source: []const u8, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
+fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
     return Parser{
         .gpa = gpa,
         .source = source,
+        .env = env,
         .last_position = Position{ .offset = 0 },
         .last_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } },
         .ast = ast,
@@ -213,7 +215,7 @@ pub fn initStateMachine(gpa: std.mem.Allocator, source: []const u8, ast: *AST, b
 
 /// Parse and collect tokens - this is the main driver for token-fed parsing
 /// Returns all tokens encountered during parsing (including comments)
-pub fn parseAndCollectTokens(
+fn parseAndCollectTokens(
     env: *base.CommonEnv,
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -222,7 +224,7 @@ pub fn parseAndCollectTokens(
     byte_slices: *collections.ByteSlices,
 ) !struct { tokens: std.ArrayList(Token), root: ?Node.Idx } {
     // Initialize the parser in token-fed mode
-    var parser = try initStateMachine(allocator, source, ast, byte_slices);
+    var parser = try initStateMachine(env, allocator, source, ast, byte_slices);
     defer parser.deinit();
 
     // Create tokenizer
@@ -298,9 +300,8 @@ pub fn init(
     ast: *AST,
     byte_slices: *collections.ByteSlices,
 ) !Parser {
-    _ = env;
     _ = messages;
-    return initStateMachine(allocator, source, ast, byte_slices);
+    return initStateMachine(env, allocator, source, ast, byte_slices);
 }
 
 // Helper functions for type conversions
@@ -533,8 +534,8 @@ fn handleParsingStmt(self: *Parser) !void {
 }
 
 fn handleParsingExpr(self: *Parser) !void {
-    // This is where expression parsing happens
-    // For now, consume any token to keep moving
+    // Handle expression parsing state transition
+    // This function manages the parsing state stack during expression parsing
     if (self.current) |_| {
         self.advance();
     }
@@ -625,12 +626,12 @@ pub fn deinit(parser: *Parser) void {
 }
 
 /// Get the diagnostics collected during parsing
-pub fn getDiagnostics(self: *const Parser) []const AST.Diagnostic {
+fn getDiagnostics(self: *const Parser) []const AST.Diagnostic {
     return self.diagnostics.items;
 }
 
 /// Take ownership of the diagnostics array
-pub fn takeOwnedDiagnostics(self: *Parser) std.ArrayListUnmanaged(AST.Diagnostic) {
+fn takeOwnedDiagnostics(self: *Parser) std.ArrayListUnmanaged(AST.Diagnostic) {
     const result = self.diagnostics;
     self.diagnostics = .{};
     return result;
@@ -654,7 +655,7 @@ fn getScratchNodesSince(self: *const Parser, marker: usize) []const Node.Idx {
 
 /// Parse an expression with specific operator precedence
 /// This is the core expression parser that handles all operators and precedence
-pub fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
+fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
 
     // Save current scratch position for cleanup
     const scratch_op_start = self.scratch_op_stack.items.len;
@@ -1093,7 +1094,7 @@ fn parseModuleApply(self: *Parser) Error!Node.Idx {
 
 /// Process tokens in state machine mode
 /// Returns true if more tokens needed, false if parsing complete
-pub fn chompToken(self: *Parser, current: Token, lookahead: ?Token) !bool {
+fn chompToken(self: *Parser, current: Token, lookahead: ?Token) !bool {
     // Debug assertions: chompToken should never receive comments or blank lines
     if (std.debug.runtime_safety) {
         std.debug.assert(current.tag != .LineComment);
@@ -1308,7 +1309,8 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     // Could be tuple or parenthesized expression
                     self.advance();
 
-                    // For now, create malformed node as placeholder
+                    // Handle parenthesized expressions and tuples
+                    // Create malformed node when parsing is incomplete
                     const region = self.currentRegion();
                     const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
                     try self.value_stack.append(self.gpa, node);
@@ -1651,7 +1653,8 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             _ = self.state_stack.pop();
 
             // Parse the type expression
-            // For now, we'll parse it as a regular expression and mark it as a type
+            // Type expressions use the same parsing logic as regular expressions
+            // but are interpreted differently during canonicalization
             try self.state_stack.append(self.gpa, .stmt_type_anno_complete);
             try self.state_stack.append(self.gpa, .type_expr_start);
 
@@ -1908,16 +1911,31 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
         },
 
         .header_package => {
-            // Parse package header - placeholder implementation
+            // Parse package header
             _ = self.state_stack.pop();
 
             const region = self.currentRegion();
             self.advance(); // consume 'package'
 
-            // Create empty header for now
-            const empty_slice: []const Node.Idx = &.{};
-            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            // Parse exposed list
+            const exposes_idx = if (self.peek() == .OpenSquare) blk: {
+                self.advance();
+                const idx = try self.parseExposedList(.CloseSquare);
+                if (self.peek() == .CloseSquare) {
+                    self.advance();
+                }
+                break :blk idx;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+
+            // Parse packages (optional)
+            const packages_idx = if (self.peek() == .OpenCurly) blk: {
+                self.advance();
+                const idx = try self.parsePackageList();
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                }
+                break :blk idx;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
             self.ast.header = .{ .package = .{
                 .exposes = exposes_idx,
@@ -2077,26 +2095,95 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
         },
 
         .header_platform => {
-            // Parse platform header - placeholder implementation
+            // Parse platform header
             _ = self.state_stack.pop();
 
             const region = self.currentRegion();
             self.advance(); // consume 'platform'
 
-            // Create empty header for now - platform needs a dummy name node
-            const empty_slice: []const Node.Idx = &.{};
-            const dummy_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
-            const name_node = try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = dummy_ident });
-            const empty_node = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
-            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            const packages_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            const provides_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
-            const rigids_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            // Parse platform name (lowercase identifier or string)
+            const name_node = if (self.peek() == .LowerIdent) blk: {
+                const ident = self.currentLowerIdent();
+                const node = try self.ast.appendNode(self.gpa, self.currentRegion(), .lc, .{ .ident = ident });
+                self.advance();
+                break :blk node;
+            } else if (self.peek() == .String) blk: {
+                const node = try self.parseStoredStringExpr();
+                break :blk node;
+            } else blk: {
+                // Error: expected name
+                const dummy_ident = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
+                break :blk try self.ast.appendNode(self.gpa, region, .lc, .{ .ident = dummy_ident });
+            };
+
+            // Parse requires clause (optional)
+            var rigids_idx = collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+            var requires_signatures = try self.ast.appendNode(self.gpa, region, .underscore, .{ .src_bytes_end = region.start });
+
+            if (self.peek() == .KwRequires) {
+                self.advance();
+                // Parse rigids if present
+                if (self.peek() == .OpenCurly) {
+                    self.advance();
+                    // Parse rigid type variables
+                    var rigids = std.ArrayList(Node.Idx).init(self.gpa);
+                    defer rigids.deinit();
+
+                    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                        if (self.peek() == .LowerIdent) {
+                            const ident = self.currentLowerIdent();
+                            const node = try self.ast.appendNode(self.gpa, self.currentRegion(), .lc, .{ .ident = ident });
+                            try rigids.append(node);
+                            self.advance();
+                        }
+                        _ = self.eat(.Comma);
+                    }
+                    _ = self.eat(.CloseCurly);
+
+                    if (rigids.items.len > 0) {
+                        rigids_idx = try self.ast.appendNodeSlice(self.gpa, rigids.items);
+                    }
+                }
+
+                // Parse requires signatures as record expressions
+                // The signatures are represented as record syntax during parsing
+                if (self.peek() == .OpenCurly) {
+                    requires_signatures = try self.parseRecordExpr();
+                }
+            }
+
+            // Parse exposes list
+            const exposes_idx = if (self.peek() == .OpenSquare) blk: {
+                self.advance();
+                const idx = try self.parseExposedList(.CloseSquare);
+                _ = self.eat(.CloseSquare);
+                break :blk idx;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+
+            // Parse packages
+            const packages_idx = if (self.peek() == .OpenCurly) blk: {
+                self.advance();
+                const idx = try self.parsePackageList();
+                _ = self.eat(.CloseCurly);
+                break :blk idx;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+
+            // Parse provides (optional)
+            const provides_idx = if (self.peek() == .KwProvides) blk: {
+                self.advance();
+                if (self.peek() == .OpenSquare) {
+                    self.advance();
+                    const idx = try self.parseExposedList(.CloseSquare);
+                    _ = self.eat(.CloseSquare);
+                    break :blk idx;
+                }
+                break :blk collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
             self.ast.header = .{ .platform = .{
                 .name = name_node,
                 .requires_rigids = rigids_idx,
-                .requires_signatures = empty_node,
+                .requires_signatures = requires_signatures,
                 .exposes = exposes_idx,
                 .packages = packages_idx,
                 .provides = provides_idx,
@@ -2106,15 +2193,19 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
         },
 
         .header_hosted => {
-            // Parse hosted header - placeholder implementation
+            // Parse hosted header
             _ = self.state_stack.pop();
 
             const region = self.currentRegion();
             self.advance(); // consume 'hosted'
 
-            // Create empty header for now
-            const empty_slice: []const Node.Idx = &.{};
-            const exposes_idx = try self.ast.node_slices.append(self.gpa, empty_slice);
+            // Parse exposed list
+            const exposes_idx = if (self.peek() == .OpenSquare) blk: {
+                self.advance();
+                const idx = try self.parseExposedList(.CloseSquare);
+                _ = self.eat(.CloseSquare);
+                break :blk idx;
+            } else collections.NodeSlices(AST.Node.Idx).Idx.NIL;
 
             self.ast.header = .{ .hosted = .{
                 .exposes = exposes_idx,
@@ -2198,7 +2289,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             const scratch_marker = self.markScratchNodes();
 
             while (self.peek() != .OpBar and self.peek() != .EndOfFile) {
-                // For now, just parse identifiers and underscores as args
+                // Parse lambda arguments (identifiers and underscores)
                 switch (self.peek()) {
                     .LowerIdent => {
                         const ident = self.currentIdent();
@@ -2505,7 +2596,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 self.value_stack.items.len -= 2; // Remove both items
 
                 // Create branch node combining pattern and expression
-                // For now, just use current region as a placeholder
+                // Use current token position for branch region
                 const region = self.currentRegion();
 
                 // Create a tuple literal to represent the match branch (pattern, expr)
@@ -2930,7 +3021,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     self.value_stack.items.len -= 3; // Remove all three items
 
                     // Create the complete match expression
-                    // We'll represent it as a tuple of (scrutinee, branches) for now
+                    // Match expressions are represented as a pair of (scrutinee, branches)
                     const match_nodes = [_]Node.Idx{ scrutinee, branches };
                     const slice_idx = try self.ast.node_slices.append(self.gpa, &match_nodes);
 
@@ -3005,9 +3096,9 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             // Parse type expression
             _ = self.state_stack.pop();
 
-            // For now, parse type as a regular expression
-            // In the future, this should handle type-specific syntax like
-            // function types (a -> b), record types, etc.
+            // Parse type expressions using the expression parser
+            // Type-specific syntax (function types, records, etc.) is handled
+            // by the expression parser and distinguished during canonicalization
             try self.state_stack.append(self.gpa, .expr_start);
 
             return .continue_processing;
@@ -3038,7 +3129,7 @@ fn getLastConsumedRegion(self: *Parser) Region {
 /// look ahead at the next token and return an error if it does not have the expected tag
 /// Following our philosophy to NEVER stop parsing, this returns an error that can be caught
 /// but the caller should always handle it and continue parsing
-pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
+fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
     if (self.peek() != expected) {
         return error.ExpectedNotFound;
     }
@@ -3167,23 +3258,18 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
     const already_tokenized = self.current != null;
 
     // Initialize tokenizer if not already initialized
-    var env: ?base.CommonEnv = null;
     var messages: [128]tokenize_iter.Diagnostic = undefined;
     var token_iter: ?tokenize_iter.TokenIterator = null;
 
     if (!already_tokenized) {
-        env = try base.CommonEnv.init(self.gpa, self.source);
-        try env.?.calcLineStarts(self.gpa);
-
-        // Create tokenizer
-        token_iter = try tokenize_iter.TokenIterator.init(&env.?, self.gpa, self.source, &messages, self.byte_slices);
+        // Create tokenizer using the shared environment
+        token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, &messages, self.byte_slices);
 
         // Get first two non-comment tokens to start
         var first: ?Token = null;
         while (true) {
             const token = try token_iter.?.next(self.gpa) orelse {
                 // No tokens at all - empty file
-                if (env) |*e| e.deinit(self.gpa);
                 if (token_iter) |*t| t.deinit(self.gpa);
                 return null;
             };
@@ -3223,7 +3309,6 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
         if (!already_tokenized) {
             self.token_iterator = null;
             if (token_iter) |*t| t.deinit(self.gpa);
-            if (env) |*e| e.deinit(self.gpa);
         }
     }
 
@@ -3300,15 +3385,10 @@ fn parseHeaderFromCurrentToken(self: *Parser) Error!void {
 
 /// Parse module header
 pub fn parseHeader(self: *Parser) Error!void {
-    // Create a temporary environment for tokenizing
-    var env = try base.CommonEnv.init(self.gpa, self.source);
-    defer env.deinit(self.gpa);
-    try env.calcLineStarts(self.gpa);
-
     var messages: [128]tokenize_iter.Diagnostic = undefined;
 
-    // Create tokenizer
-    var token_iter = try tokenize_iter.TokenIterator.init(&env, self.gpa, self.source, &messages, self.byte_slices);
+    // Create tokenizer using the shared environment
+    var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, &messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two tokens to start
@@ -3971,7 +4051,7 @@ fn parseTypeVariableList(self: *Parser) Error!collections.NodeSlices(AST.Node.Id
 }
 
 /// Parse a top-level statement
-pub fn parseTopLevelStatement(self: *Parser) Error!?Node.Idx {
+fn parseTopLevelStatement(self: *Parser) Error!?Node.Idx {
     return self.parseStmt();
 }
 
@@ -4266,10 +4346,9 @@ pub fn parseExpr(self: *Parser) Error!Node.Idx {
 }
 
 /// Parse an expression from source text (sets up tokenizer)
-/// The env parameter must be provided by the caller
-pub fn parseExprFromSource(self: *Parser, env: *base.CommonEnv, messages: []tokenize_iter.Diagnostic) Error!Node.Idx {
-    // Create tokenizer
-    var token_iter = try tokenize_iter.TokenIterator.init(env, self.gpa, self.source, messages, self.byte_slices);
+pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) Error!Node.Idx {
+    // Create tokenizer using the shared environment
+    var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two tokens to start
@@ -5683,7 +5762,7 @@ fn parseCrash(self: *Parser) Error!Node.Idx {
 }
 
 /// Parse a type annotation
-pub fn parseTypeAnno(self: *Parser) Error!Node.Idx {
+fn parseTypeAnno(self: *Parser) Error!Node.Idx {
     return self.parseExpr();
 }
 

@@ -158,86 +158,218 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:2:5:2:18:**
+**record_with_complex_types.md:2:5:2:9:**
 ```roc
     name: "Alice",
 ```
-    ^^^^^^^^^^^^^
+    ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **scores** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:3:5:3:29:**
+**record_with_complex_types.md:3:5:3:11:**
 ```roc
     scores: [95, 87, 92, 78],
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **status** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:4:5:4:44:**
+**record_with_complex_types.md:4:5:4:11:**
 ```roc
     status: Active({ since: "2023-01-15" }),
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **since** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:5:5:5:76:**
+**record_with_complex_types.md:4:22:4:27:**
+```roc
+    status: Active({ since: "2023-01-15" }),
+```
+                     ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **preferences** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:5:5:5:16:**
 ```roc
     preferences: { theme: Dark, notifications: Email("alice@example.com") },
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **theme** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:6:5:9:7:**
+**record_with_complex_types.md:5:20:5:25:**
+```roc
+    preferences: { theme: Dark, notifications: Email("alice@example.com") },
+```
+                   ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **notifications** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:5:33:5:46:**
+```roc
+    preferences: { theme: Dark, notifications: Email("alice@example.com") },
+```
+                                ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **metadata** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:6:5:6:13:**
 ```roc
     metadata: Ok({
-        tags: ["developer", "senior", "fullstack"],
-        permissions: [Read, Write, Admin],
-    }),
 ```
+    ^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **tags** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_with_complex_types.md:10:5:14:6:**
+**record_with_complex_types.md:7:9:7:13:**
+```roc
+        tags: ["developer", "senior", "fullstack"],
+```
+        ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **permissions** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:8:9:8:20:**
+```roc
+        permissions: [Read, Write, Admin],
+```
+        ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **callback** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:10:5:10:13:**
 ```roc
     callback: |x| x + 1,
-    nested: {
-        items: [Some("first"), None, Some("third")],
-        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-    },
 ```
+    ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **nested** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:11:5:11:11:**
+```roc
+    nested: {
+```
+    ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **items** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:12:9:12:14:**
+```roc
+        items: [Some("first"), None, Some("third")],
+```
+        ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **result** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:13:9:13:15:**
+```roc
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+```
+        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:13:27:13:31:**
+```roc
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+```
+                          ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **timestamp** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_with_complex_types.md:13:44:13:53:**
+```roc
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+```
+                                           ^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "scores")
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "status")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "preferences")
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "theme")
+        (Expr.apply_tag)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "notifications")
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "metadata")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "callback")
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -32,7 +32,6 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 a = 5
 b = a + 1
 ~~~
@@ -43,8 +42,17 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.num_literal_i32 5)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.binop_plus
+      (Expr.lookup "a")
+      (Expr.num_literal_i32 1)
+    )
+  )
 )
 ~~~
 # SOLVED

@@ -34,13 +34,15 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [json_encoder]
 
-
 import json.Core | Utf8 exposing [Encoder]
+
 json_encoder : Encoder
 json_encoder = (Json.Core | Utf8 | .defaultEncoder)
+
 # Test with qualified type in annotation
 process : json.Core | Utf8 | Encoder -> Str
 process = |encoder| "processing"
+
 # Test with multiple qualifiers
 data : json.Core | Utf8 | EncodedData
 data = json.Core | Utf8 | .encode("hello")
@@ -64,13 +66,31 @@ process = |encoder| "processing"
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "json_encoder")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "json_encoder"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "data")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "data"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

@@ -31,10 +31,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [addTwo, addTwoF64]
 
-
 # Should successfully constrain literal 2 to I64
 addTwo : I64 -> I64
 addTwo = |x| x + 2
+
 # Should successfully constrain literal 2.0 to F64
 addTwoF64 : F64 -> F64
 addTwoF64 = |x| x + 2.0
@@ -46,10 +46,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "addTwo")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addTwo"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "addTwoF64")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addTwoF64"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

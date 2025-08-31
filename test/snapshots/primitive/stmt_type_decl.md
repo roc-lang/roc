@@ -23,7 +23,6 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
 ~~~roc
 module [Foo]
 
-
 Foo((a, b)) : (a, b, Str, U64)
 ~~~
 # EXPECTED
@@ -33,7 +32,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
 )
 ~~~
 # SOLVED

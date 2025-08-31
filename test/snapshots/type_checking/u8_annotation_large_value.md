@@ -21,7 +21,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
-
 x : U8
 x = 500
 ~~~
@@ -32,8 +31,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "x")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 500)
+  )
 )
 ~~~
 # SOLVED

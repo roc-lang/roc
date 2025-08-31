@@ -34,10 +34,11 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Result, processData]
 
-
 Result((a, b)) : [Ok(a), Err(b)]
+
 processData : Str -> Str
 processData = |data| "processed"
+
 # In a nested module scope, redeclare Result
 InnerModule : {
 	Result : [Success, Failure]
@@ -59,13 +60,37 @@ processData = |data|
                ^^^^
 
 
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**type_shadowing_across_scopes.md:10:15:12:2:**
+```roc
+InnerModule : {
+    Result : [Success, Failure]
+}
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "processData")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processData"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type block)
+  )
 )
 ~~~
 # SOLVED

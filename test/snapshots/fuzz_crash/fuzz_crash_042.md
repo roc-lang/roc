@@ -16,9 +16,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-import u.R
+module []import u.R
 }
 g : r -> R.a | E
 ~~~
@@ -50,9 +48,12 @@ module[]import u.R}g:r->R.a.E
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "g")
+    (type binop_thin_arrow)
+  )
 )
 ~~~
 # SOLVED

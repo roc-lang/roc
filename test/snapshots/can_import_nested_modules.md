@@ -43,22 +43,26 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
 ~~~roc
 module []
 
-
 import json.Parser | Config
 import http.Client | Auth as HttpAuth
 import utils.String | Format exposing [padLeft]
+
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str
 parseConfig = |settings| Config.toString(settings)
+
 # Test multi-level value qualification
 authenticate : Str -> Str -> HttpAuth.Token
 authenticate = |user, pass| HttpAuth.login((user, pass))
+
 # Test deeply nested qualification
 processData : Config.Parser | Advanced -> Str -> Result(Str, Config.Parser | Error)
 processData = |advancedConfig, input| Config.Parser | Advanced | .parseWith((advancedConfig, input))
+
 # Test mixed qualification (exposed item + qualified)
 formatOutput : Str -> Str
 formatOutput = |text| padLeft((text, Config.defaultPadding))
+
 # Test qualified type in function signature
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
@@ -124,19 +128,49 @@ validateAuth = |creds| HttpAuth.validate(creds)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "parseConfig")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parseConfig"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "authenticate")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "authenticate"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "processData")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processData"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "formatOutput")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "formatOutput"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "validateAuth")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "validateAuth"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

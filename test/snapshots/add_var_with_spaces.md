@@ -23,7 +23,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign LowerId
 ~~~roc
 module [add2]
 
-
 add2 = x + 2
 ~~~
 # EXPECTED
@@ -43,7 +42,13 @@ add2 = x +      2
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "add2"))
+    (Expr.binop_plus
+      (Expr.lookup "x")
+      (Expr.num_literal_i32 2)
+    )
+  )
 )
 ~~~
 # SOLVED

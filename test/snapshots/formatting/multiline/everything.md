@@ -127,7 +127,6 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
 ~~~roc
 module []
 
-
 # Import exposing
 import I1 exposing [
 	I11,
@@ -147,6 +146,7 @@ Ias2
 # Where constraint
 A(a) : (a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str
 B(b) : (b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str
+
 C(
 	(a, b),
 ) : (a, b)
@@ -164,6 +164,7 @@ F : [
 	B,
 ]
 g : e -> e where module(e) | A, module(e) | B
+
 h = |
 	x,
 	y,
@@ -192,6 +193,7 @@ h = |
 	]
 
 	h5 = (x, y)
+
 	match x
 	Z2(
 		(a, b),
@@ -450,39 +452,81 @@ A(a) : a
 ```
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
 
-**everything.md:62:3:62:9:**
+**everything.md:58:24:58:27:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                       ^^^
+
+
+**INVALID WHERE CONSTRAINT**
+Invalid where clause constraint syntax.
+Where clauses should contain valid ability constraints.
+
+**everything.md:58:27:58:29:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                          ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **h11** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:62:3:62:6:**
 ```roc
 		h11: x,
 ```
-		^^^^^^
+		^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **h12** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**everything.md:63:3:63:9:**
+**everything.md:63:3:63:6:**
 ```roc
 		h12: x,
 ```
-		^^^^^^
+		^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **h13** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**everything.md:64:3:67:4:**
+**everything.md:64:3:64:6:**
 ```roc
 		h13: {
-			h131: x,
-			h132: y,
-		},
 ```
+		^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **h131** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:65:4:65:8:**
+```roc
+			h131: x,
+```
+			^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **h132** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:66:4:66:8:**
+```roc
+			h132: y,
+```
+			^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -507,20 +551,9 @@ Is there an **import** or **exposing** missing up-top?
 			^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**everything.md:99:5:99:6:**
-```roc
-				a,
-```
-				^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **everything.md:100:5:100:6:**
 ```roc
@@ -632,25 +665,49 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type apply_uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name "g")
+    (type tuple_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "h"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

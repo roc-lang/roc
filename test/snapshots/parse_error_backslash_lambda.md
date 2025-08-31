@@ -13,7 +13,7 @@ OpBackslash LowerIdent OpArrow LowerIdent OpPlus Int ~~~
 # PARSE
 ~~~clojure
 (binop_thin_arrow
-  (malformed malformed:backslash_not_valid_lambda_syntax)
+  (malformed)
   (binop_plus
     (lc "x")
     (num_literal_i32 1)

@@ -12,7 +12,7 @@ type=expr
 OpUnaryMinus OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(unary_neg <unary>)
+(unary_neg <unary_op>)
 ~~~
 # FORMATTED
 ~~~roc

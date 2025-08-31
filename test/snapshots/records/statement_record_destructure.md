@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare BlankLine OpenCurly LowerIdent Comma LowerIdent 
 ~~~roc
 module []
 
-
 { name, age, email } = person
 ~~~
 # EXPECTED
@@ -40,7 +39,10 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.record_destructure))
+    (Expr.lookup "person")
+  )
 )
 ~~~
 # SOLVED

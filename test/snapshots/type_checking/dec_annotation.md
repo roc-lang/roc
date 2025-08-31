@@ -21,7 +21,6 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
-
 x : Dec
 x = 123.456
 ~~~
@@ -32,8 +31,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "x")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.frac_literal_big big:<idx:0>)
+  )
 )
 ~~~
 # SOLVED

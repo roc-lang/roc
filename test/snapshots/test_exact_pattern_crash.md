@@ -54,24 +54,28 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
-
 # Type alias with parameters, just like the original
 Pair((a, b)) : (a, b)
+
 # Function that uses the alias and will need instantiation
 swap_pair : Pair(a, b) -> Pair(b, a)
 swap_pair = |x, y| (y, x)
+
 # Another polymorphic function to create more complex instantiation
 map_pair : Pair(a, b) -> (a -> c) -> (b -> d) -> Pair(c, d)
 map_pair = |x, y, f, g| (f(x), g(y))
+
 # This should trigger multiple instantiations
 # First swap_pair gets instantiated, then map_pair
 # The error should involve deeply nested instantiated types
 main = {
 	# This creates Pair(Num, Num)
 	p1 = swap_pair((1, 2))
+
 	# This should fail - map_pair expects a tuple but gets four separate arguments
 	# And the instantiated types from map_pair should cause issues
 	p2 = map_pair((3, 4, |x| x + 1, |y| y * 2))
+
 	p2
 }
 ~~~
@@ -94,12 +98,40 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name "swap_pair")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "swap_pair"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "map_pair")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "map_pair"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "p1"))
+        (Expr.apply_ident)
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "p2"))
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "p2")
+    )
+  )
 )
 ~~~
 # SOLVED

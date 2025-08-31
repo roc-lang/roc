@@ -14,10 +14,10 @@ OpOr OpenRound OpBar OpenRound LowerIdent OpBar ~~~
 ~~~clojure
 (block
   (apply_anon
-    (malformed malformed:expr_unexpected_token)
+    (malformed)
     (lambda
       (body
-        (malformed malformed:expr_unexpected_token)
+        (malformed)
       )
       (args
         (lc "l888888888")
@@ -76,7 +76,7 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

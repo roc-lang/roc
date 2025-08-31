@@ -114,71 +114,128 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **someTag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**tag_vs_function_calls.md:2:5:2:22:**
+**tag_vs_function_calls.md:2:5:2:12:**
 ```roc
     someTag: Some(42),
 ```
-    ^^^^^^^^^^^^^^^^^
+    ^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **noneTag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**tag_vs_function_calls.md:3:5:3:18:**
+**tag_vs_function_calls.md:3:5:3:12:**
 ```roc
     noneTag: None,
 ```
-    ^^^^^^^^^^^^^
+    ^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **okTag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**tag_vs_function_calls.md:4:5:4:23:**
+**tag_vs_function_calls.md:4:5:4:10:**
 ```roc
     okTag: Ok("hello"),
 ```
-    ^^^^^^^^^^^^^^^^^^
+    ^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **errTag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**tag_vs_function_calls.md:5:5:5:24:**
+**tag_vs_function_calls.md:5:5:5:11:**
 ```roc
     errTag: Err("oops"),
 ```
-    ^^^^^^^^^^^^^^^^^^^
+    ^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **addOne** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**tag_vs_function_calls.md:6:5:9:47:**
+**tag_vs_function_calls.md:6:5:6:11:**
 ```roc
     addOne: |x| x + 1,
+```
+    ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **result** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tag_vs_function_calls.md:7:5:7:11:**
+```roc
     result: addOne(5),
+```
+    ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **addOne** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tag_vs_function_calls.md:7:13:7:19:**
+```roc
+    result: addOne(5),
+```
+            ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **nested** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tag_vs_function_calls.md:8:5:8:11:**
+```roc
     nested: Some(Ok(Just(42))),
+```
+    ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tagList** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tag_vs_function_calls.md:9:5:9:12:**
+```roc
     tagList: [Some(1), Some(2), None, Some(3)],
 ```
+    ^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "someTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "noneTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "okTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "errTag")
+    (Expr.apply_tag)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "addOne")
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

@@ -27,7 +27,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [foo]
 
-
 foo : Bool -> Bool
 foo = |a| {
 	expect a == Bool.True
@@ -64,8 +63,14 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "foo")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

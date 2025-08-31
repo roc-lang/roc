@@ -24,9 +24,7 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ~~~
 # FORMATTED
 ~~~roc
-module [hello!, world]
-
-import pf.Stdout
+module [hello!, world]import pf.Stdout
 hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
@@ -47,9 +45,15 @@ hello! = Stdout.line!("Hello")
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "hello"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "world"))
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

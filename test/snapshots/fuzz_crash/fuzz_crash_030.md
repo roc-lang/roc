@@ -29,7 +29,7 @@ KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineCo
 ~~~clojure
 (platform-header
   (exposes
-    (malformed malformed:exposed_item_unexpected_token)
+    (malformed)
 ))
 ~~~
 # FORMATTED
@@ -37,9 +37,7 @@ KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineCo
 platform # Cd
 "foo" requires # Ce
 #ose
-{} exposes [: ]
-
-Str
+{} exposes [: ]Str
 ) 
 => 
 {}
@@ -483,18 +481,18 @@ ar,
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

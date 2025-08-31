@@ -17,7 +17,7 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
     (uc "Stdout")
     (dot_lc "line")
   )
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
 )
 ~~~
 # FORMATTED

@@ -29,11 +29,11 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar L
 ~~~roc
 module [foo]
 
-
 foo = |num| {
 	# statement - prints out the value of num convertert to a string
 	dbg 
 	num.to_str()
+
 	# expression - prints out the value of num and then returns it
 	dbg(num)
 }
@@ -79,7 +79,10 @@ foo = |num| {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

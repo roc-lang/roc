@@ -49,69 +49,98 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_types.md:1:3:1:16:**
+**record_mixed_types.md:1:3:1:7:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ```
-  ^^^^^^^^^^^^^
+  ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_types.md:1:18:1:25:**
+**record_mixed_types.md:1:18:1:21:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ```
-                 ^^^^^^^
+                 ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **active** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_types.md:1:27:1:44:**
+**record_mixed_types.md:1:27:1:33:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ```
-                          ^^^^^^^^^^^^^^^^^
+                          ^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.true** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_types.md:1:46:1:66:**
+**record_mixed_types.md:1:35:1:44:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ```
-                                             ^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **scores** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_mixed_types.md:1:68:1:84:**
+**record_mixed_types.md:1:46:1:52:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ```
-                                                                   ^^^^^^^^^^^^^^^^
+                                             ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **balance** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_mixed_types.md:1:68:1:75:**
+```roc
+{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+```
+                                                                   ^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "name")
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "age")
+    (Expr.num_literal_i32 30)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "active")
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Expr.binop_colon
+    (Expr.lookup "scores")
+    (Expr.list_literal)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "balance")
+    (Expr.frac_literal_big big:<idx:6>)
+  )
 )
 ~~~
 # SOLVED

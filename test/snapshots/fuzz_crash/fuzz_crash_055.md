@@ -17,9 +17,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-r : a where module(a).h : s
+module []r : a where module(a).h : s
 ~~~
 # EXPECTED
 NIL
@@ -28,7 +26,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "r")
+    (type binop_where)
+  )
 )
 ~~~
 # SOLVED

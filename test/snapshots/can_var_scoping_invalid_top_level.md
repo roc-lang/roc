@@ -21,7 +21,6 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwVar LowerIdent OpAssign 
 ~~~roc
 module []
 
-
 # This should cause an error - var not allowed at top level
 var topLevelVar_ = 0
 ~~~
@@ -32,7 +31,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.init_var
+    (pattern (Patt.var_ident "topLevelVar_"))
+    (Expr.num_literal_i32 0)
+  )
 )
 ~~~
 # SOLVED

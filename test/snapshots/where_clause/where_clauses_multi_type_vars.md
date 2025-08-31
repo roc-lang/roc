@@ -24,7 +24,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [process]
 
-
 process : a -> b -> (c where module(a).convert : a) -> c, module(b).transform : b -> c
 process = |_, _| ...
 ~~~
@@ -35,8 +34,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

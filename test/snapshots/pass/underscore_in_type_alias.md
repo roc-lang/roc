@@ -32,13 +32,18 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon Underscore BlankLin
 ~~~roc
 module []
 
-
 MyType : _
+
 OtherType := _
+
 ComplexType := List _
+
 RecordType := {field : _, other : U32}
+
 FunctionType := _ -> _
+
 TupleType := (_, U32, _)
+
 TagType := [Some(_), None]
 ~~~
 # EXPECTED
@@ -113,13 +118,16 @@ TagType := [Some(_), None]
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type underscore)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

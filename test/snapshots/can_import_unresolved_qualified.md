@@ -44,23 +44,29 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 ~~~roc
 module []
 
-
 import json.Json
 import http.Client as Http
+
 # Test unresolved qualified value
 main = (Json.NonExistent | .method)
+
 # Test unresolved qualified type in annotation
 parseData : Json.InvalidType -> Str
 parseData = |data| Json.stringify(data)
+
 # Test unresolved nested qualification
 processRequest : Http.Server | Request -> Http.Server | Response
 processRequest = |req| Http.Server | .defaultResponse
+
 # Test typo in qualified name
 result = Json.prase("test")
+
 # Test unknown module qualification
 config = (Unknown.Module | .config)
+
 # Test valid module but invalid member
 client = Http.invalidMethod
+
 # Test deeply nested invalid qualification
 parser = (Json.Parser | Advanced | NonExistent | .create)
 ~~~
@@ -116,17 +122,47 @@ client = Http.invalidMethod
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "parseData")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parseData"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "processRequest")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processRequest"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "result"))
+    (Expr.apply_ident)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "config"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "client"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parser"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

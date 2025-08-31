@@ -16,7 +16,9 @@ OpenCurly KwCrash String OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
-  (crash <statement>)
+  (crash
+    (str_literal_big "This is a crash statement")
+  )
   (record_literal)
 )
 ~~~

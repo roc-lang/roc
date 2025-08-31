@@ -48,8 +48,14 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "x")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

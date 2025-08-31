@@ -50,9 +50,7 @@ package [ # Comment after keyword
 somePkg, (
 	"../main.roc", # Comment after package
 	other,
-) : "../../other/main.roc"}
-
-# Comment after last package
+) : "../../other/main.roc"}# Comment after last package
 ~~~
 # EXPECTED
 NIL

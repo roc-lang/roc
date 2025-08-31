@@ -34,11 +34,12 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [tus, r]
 
-
 LocalStatus : lue => Loc = [Pending, Complete]
+
 olor : _ -> tus
 olor = |color| {
 	import Color.RGB
+
 	match color
 		RGB => LocalStatus
 	Green
@@ -178,10 +179,19 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type binop_thick_arrow)
+  )
+  (Stmt.type_anno
+    (name "olor")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "olor"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

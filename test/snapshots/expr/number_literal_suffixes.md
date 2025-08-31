@@ -45,7 +45,7 @@ type=expr
 OpenCurly LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon OpUnaryMinus Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma LowerIdent OpColon Int LowerIdent Comma CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

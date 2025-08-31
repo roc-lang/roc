@@ -12,7 +12,7 @@ type=expr
 OpenSquare Int LowerIdent Comma Int LowerIdent Comma Int CloseSquare ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

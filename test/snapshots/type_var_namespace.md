@@ -44,19 +44,19 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 # Type variable 'elem' introduced in annotation
 process : List elem -> elem
 process = |list| {
 	# value identifier named 'elem' is allowed - different namespace from type variable
 	elem = 42
+
 	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
 	List.first(list)
 	Result | .withDefault(elem)
+
 	result
 }
-
 
 main! = |_| {}
 ~~~
@@ -110,9 +110,18 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "process")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

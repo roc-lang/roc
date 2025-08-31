@@ -37,10 +37,10 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
-
 # A polymorphic function that expects a tuple
 swap : (a, b) -> (b, a)
 swap = |x, y| (y, x)
+
 # Call it with two separate arguments instead of a tuple
 # This should trigger instantiation and then crash on error reporting
 main = swap((1, 2))
@@ -52,9 +52,18 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "swap")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "swap"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

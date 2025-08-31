@@ -28,9 +28,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerI
 ~~~roc
 module [blue]
 
-
 # import the Color module from styles package as CC
 import styles.Color as CC
+
 # instantiating an RGB nominal tab union from the styles.Color module
 blue : CC.Color
 blue = CC.Color | RGB((0, 0, 255))
@@ -42,9 +42,15 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "blue")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "blue"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

@@ -67,55 +67,64 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Simple type alias
 UserId : U64
+
 # Generic type alias
 Result((ok, err)) : [Ok(ok), Err(err)]
+
 # Record type alias
 Person : {name : Str, age : U64}
+
 # Function type alias
 MapFn((a, b)) : a -> b
+
 # Complex nested type alias
 ApiResponse(data) : Result(data, Str)
+
 # Type declaration with tag union
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
+
 # Type declaration with records and generics
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
+
 main! = |_| {
 	# Use the types to validate they work
 	userId : UserId
 	userId = 123
+
 	person : Person
 	person = { name : "Alice", age : 30 }
+
 	color : Color
 	color = Red
+
 	userId : userId
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_alias_decl.md:33:16:33:29:**
+**type_alias_decl.md:33:16:33:20:**
 ```roc
     person = { name: "Alice", age: 30 }
 ```
-               ^^^^^^^^^^^^^
+               ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_alias_decl.md:33:31:33:38:**
+**type_alias_decl.md:33:31:33:34:**
 ```roc
     person = { name: "Alice", age: 30 }
 ```
-                              ^^^^^^^
+                              ^^^
 
 
 **UNUSED VARIABLE**
@@ -160,14 +169,38 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type apply_uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type record_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

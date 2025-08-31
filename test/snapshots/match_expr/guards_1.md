@@ -41,7 +41,7 @@ KwMatch LowerIdent OpenCurly LowerIdent KwIf LowerIdent OpGreaterThan Int OpFatA
             )
 )
           (then             (binop_thick_arrow
-              (malformed malformed:expr_unexpected_token)
+              (malformed)
               (str_literal_big "other")
             )
 ))

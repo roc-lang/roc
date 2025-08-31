@@ -20,7 +20,6 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon OpenSquare Int Clos
 ~~~roc
 module []
 
-
 C : [0]
 ~~~
 # EXPECTED
@@ -30,7 +29,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type list_literal)
+  )
 )
 ~~~
 # SOLVED

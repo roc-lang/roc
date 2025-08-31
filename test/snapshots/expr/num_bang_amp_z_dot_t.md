@@ -14,7 +14,7 @@ type=expr
 Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

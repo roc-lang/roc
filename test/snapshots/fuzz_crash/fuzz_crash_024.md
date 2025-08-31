@@ -20,14 +20,12 @@ KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform
 ~~~clojure
 (module-header
   (exposes
-    (malformed malformed:exposed_item_unexpected_token)
+    (malformed)
 ))
 ~~~
 # FORMATTED
 ~~~roc
-module [module ]
-
-{
+module [module ]{
 	pf : platform 
 	".-/main._]where # A
 
@@ -131,7 +129,7 @@ var t= 0
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

@@ -93,21 +93,25 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Use 'a' as a local variable name to force type variable generation to skip it
 a = 42
+
 # This should get type 'b -> b' since 'a' is taken
 identity = |x| x
+
 # Use more names to test the sequence
 b = "hello"
 c = 3.14
 d = True
 e = False
+
 # This should get type 'f -> f' since a,b,c,d,e are taken
 anotherIdentity = |y| y
+
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
 combine = |first, second| (first, second)
+
 # Use even more names to test wraparound behavior
 f = 1
 g = 2
@@ -130,13 +134,17 @@ w = 18
 x = 19
 y = 20
 z = 21
+
 # This should get type 'aa -> aa' since a-z are taken
 yetAnotherIdentity = |arg| arg
+
 # Test that we still avoid collisions even with two-letter names
 aa = 100
 ab = 200
+
 # This should skip 'aa' and 'ab' and use 'ac -> ac'
 finalIdentity = |param| param
+
 main! = |_| {
 	# Use some of our functions to avoid unused warnings
 	result1 = identity(123)
@@ -144,6 +152,7 @@ main! = |_| {
 	result3 = combine((result1, result2))
 	result4 = yetAnotherIdentity(True)
 	result5 = finalIdentity(3.14)
+
 	# Return something to complete the function
 	a + f
 }
@@ -195,40 +204,142 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "c"))
+    (Expr.frac_literal_small 3.14)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "d"))
+    (Expr.apply_tag)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "e"))
+    (Expr.apply_tag)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "anotherIdentity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combine"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "f"))
+    (Expr.num_literal_i32 1)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "g"))
+    (Expr.num_literal_i32 2)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "h"))
+    (Expr.num_literal_i32 3)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "i"))
+    (Expr.num_literal_i32 4)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "j"))
+    (Expr.num_literal_i32 5)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "k"))
+    (Expr.num_literal_i32 6)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "l"))
+    (Expr.num_literal_i32 7)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "m"))
+    (Expr.num_literal_i32 8)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "n"))
+    (Expr.num_literal_i32 9)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "o"))
+    (Expr.num_literal_i32 10)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "p"))
+    (Expr.num_literal_i32 11)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "q"))
+    (Expr.num_literal_i32 12)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "r"))
+    (Expr.num_literal_i32 13)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "s"))
+    (Expr.num_literal_i32 14)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "t"))
+    (Expr.num_literal_i32 15)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "u"))
+    (Expr.num_literal_i32 16)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "v"))
+    (Expr.num_literal_i32 17)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "w"))
+    (Expr.num_literal_i32 18)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 19)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.num_literal_i32 20)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "z"))
+    (Expr.num_literal_i32 21)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "yetAnotherIdentity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "aa"))
+    (Expr.num_literal_i32 100)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ab"))
+    (Expr.num_literal_i32 200)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "finalIdentity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

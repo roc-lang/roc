@@ -14,7 +14,7 @@ OpenCurly LowerIdent OpAmpersand LowerIdent OpColon Int CloseCurly ~~~
 ~~~clojure
 (block
   (lc "person")
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (binop_colon
     (lc "age")
     (num_literal_i32 31)
@@ -52,6 +52,17 @@ Is there an **import** or **exposing** missing up-top?
   ^^^^^^
 
 
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**record_field_update_error.md:1:17:1:19:**
+```roc
+{ person & age: 31 }
+```
+                ^^
+
+
 **UNUSED VARIABLE**
 Variable **age** is not used anywhere in your code.
 
@@ -70,7 +81,10 @@ The unused variable is declared here:
 (Expr.block
   (Expr.lookup "person")
   (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "age")
+    (type num_literal_i32)
+  )
 )
 ~~~
 # SOLVED

@@ -45,15 +45,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 UserId : U64
 UserName : Str
 UserAge : U8
 User : {id : UserId, name : UserName, age : UserAge}
+
 create_user : UserId -> UserName -> UserAge -> User
 create_user = |id, name, age| { id : id, name : name, age : age }
+
 get_user_name : User -> UserName
 get_user_name = |user| user.name
+
 main! = |_| {
 	user = create_user((123, "Alice", 25))
 	get_user_name(user)
@@ -62,78 +64,6 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**type_multiple_aliases.md:9:33:9:35:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-                                ^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**type_multiple_aliases.md:9:37:9:41:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-                                    ^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**type_multiple_aliases.md:9:43:9:46:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-                                          ^^^
-
-
-**UNUSED VARIABLE**
-Variable **id** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
-The unused variable is declared here:
-
-**type_multiple_aliases.md:9:16:9:18:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-               ^^
-
-
-**UNUSED VARIABLE**
-Variable **name** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-
-**type_multiple_aliases.md:9:20:9:24:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-                   ^^^^
-
-
-**UNUSED VARIABLE**
-Variable **age** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-
-**type_multiple_aliases.md:9:26:9:29:**
-```roc
-create_user = |id, name, age| { id, name, age }
-```
-                         ^^^
-
-
 **UNUSED VARIABLE**
 Variable **user** is not used anywhere in your code.
 
@@ -150,15 +80,42 @@ get_user_name = |user| user.name
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name "create_user")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "create_user"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "get_user_name")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "get_user_name"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

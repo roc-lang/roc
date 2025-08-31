@@ -37,11 +37,12 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
+
 # Function with effectful annotation using fat arrow
 print_msg! : Str => {}
 print_msg! = |msg| Stdout.line!(msg)
+
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
@@ -61,10 +62,19 @@ print_msg! = |msg| Stdout.line!(msg)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "print_msg")
+    (type binop_thick_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "print_msg"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

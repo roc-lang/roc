@@ -22,8 +22,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 ~~~roc
 module []
 
-
 import json.Json as MyJson
+
 main = MyJson.decode
 ~~~
 # EXPECTED
@@ -43,8 +43,14 @@ main = MyJson.decode
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

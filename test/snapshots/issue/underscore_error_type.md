@@ -43,20 +43,28 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
-
 BadType := _
+
 foo : BadType
 foo = 42
+
 BadList := List _
+
 bar : BadList
 bar = [1, 2, 3]
+
 BadRecord := {field : _, other : U32}
+
 baz : BadRecord
 baz = { field : "hi", other : 5 }
+
 BadFunction := _ -> _
+
 qux : BadFunction
 qux = |x| x
+
 BadTuple := (_, U32)
+
 quux : BadTuple
 quux = ("hello", 42)
 ~~~
@@ -96,26 +104,26 @@ BadRecord := { field: _, other: U32 }
           ^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **field** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**underscore_error_type.md:16:9:16:20:**
+**underscore_error_type.md:16:9:16:14:**
 ```roc
 baz = { field: "hi", other: 5 }
 ```
-        ^^^^^^^^^^^
+        ^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **other** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**underscore_error_type.md:16:22:16:30:**
+**underscore_error_type.md:16:22:16:27:**
 ```roc
 baz = { field: "hi", other: 5 }
 ```
-                     ^^^^^^^^
+                     ^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -143,21 +151,63 @@ BadTuple := (_, U32)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "foo")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "bar")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "bar"))
+    (Expr.list_literal)
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "baz")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "baz"))
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "field")
+        (Expr.str_literal_small)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "other")
+        (Expr.num_literal_i32 5)
+      )
+    )
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "qux")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "qux"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "quux")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "quux"))
+    (Expr.tuple_literal
+      (Expr.str_literal_big)
+      (Expr.num_literal_i32 42)
+    )
+  )
 )
 ~~~
 # SOLVED

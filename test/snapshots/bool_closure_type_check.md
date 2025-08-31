@@ -15,7 +15,7 @@ OpenRound OpBar LowerIdent OpBar OpBang LowerIdent CloseRound OpenRound UpperIde
 (apply_anon
   (lambda
     (body
-      (unary_not <unary>)
+      (unary_not <unary_op>)
     )
     (args
       (lc "x")

@@ -25,8 +25,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
-
 import pf.Stdout exposing [line!, write!]
+
 main = 42
 ~~~
 # EXPECTED
@@ -36,8 +36,11 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.num_literal_i32 42)
+  )
 )
 ~~~
 # SOLVED

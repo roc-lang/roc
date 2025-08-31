@@ -26,7 +26,6 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [MyNumber, MyString]
 
-
 MyNumber : U64
 MyString : Str
 ~~~
@@ -37,8 +36,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
 )
 ~~~
 # SOLVED

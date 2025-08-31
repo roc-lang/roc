@@ -52,26 +52,26 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_argument_closure.md:1:22:1:27:**
+**record_argument_closure.md:1:22:1:23:**
 ```roc
 (|{ x, y }| x * y)({ x: 10, y: 20 })
 ```
-                     ^^^^^
+                     ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_argument_closure.md:1:29:1:34:**
+**record_argument_closure.md:1:29:1:30:**
 ```roc
 (|{ x, y }| x * y)({ x: 10, y: 20 })
 ```
-                            ^^^^^
+                            ^
 
 
 # CANONICALIZE

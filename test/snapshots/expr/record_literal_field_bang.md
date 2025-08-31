@@ -40,33 +40,39 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **answer** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_literal_field_bang.md:2:5:2:15:**
+**record_literal_field_bang.md:2:5:2:11:**
 ```roc
     answer: 42,
 ```
-    ^^^^^^^^^^
+    ^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **launchTheNukes!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_literal_field_bang.md:3:5:3:30:**
+**record_literal_field_bang.md:3:5:3:20:**
 ```roc
     launchTheNukes!: |{}| ...,
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "answer")
+    (Expr.num_literal_i32 42)
+  )
+  (Expr.binop_colon
+    (Expr.not_lookup)
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

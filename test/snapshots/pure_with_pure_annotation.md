@@ -39,13 +39,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 # Function with pure annotation using thin arrow
 add : I32 -> I32 -> I32
 add = |x, y| { x : x, y : y } | .x
+
 # Another pure function that calls a pure function
 double : I32 -> I32
 double = |x| add((x, x))
+
 main! = add((1, 2))
 ~~~
 # EXPECTED
@@ -80,11 +81,26 @@ add = |x, y| { x: x, y: y }.x
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "add")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "double")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "double"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

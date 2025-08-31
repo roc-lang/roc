@@ -150,8 +150,8 @@ LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 # Thnt!
 app { pf: "c" platform [main!] }
 
-
 import pf.Stdout exposing [line!]
+
 import Stdot exposing [ #tem
 	Cust,
 ]
@@ -182,11 +182,13 @@ Soine(a) :
 #
 #
 Maybe(a) : [Somne]
+
 Mayine(a) : [, #
 ]
 #)
 
 ane = |num| if num 2 else 5
+
 one : U6
 add = |num| {
 	1
@@ -203,7 +205,6 @@ add = |num| {
 		r : r
 	}
 }
-
 
 me = |a, Tb| # As
 match a
@@ -251,6 +252,7 @@ Ok(123)
 
 expect # Cord
 nt
+
 main! : Listlt({}, _)
 ma = |
 	_,
@@ -261,6 +263,7 @@ ma = |
 	expect blaue
 	return #d
 tag
+
 	#
 	...
 	me(
@@ -314,7 +317,9 @@ tag
 
 y : {}
 e = {}
+
 t : V(a, c)
+
 expect {
 	foo == 1
 	h == foo
@@ -997,53 +1002,75 @@ Is there an **import** or **exposing** missing up-top?
 		^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:96:9:96:17:**
+**fuzz_crash_019.md:96:9:96:12:**
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-	       ^^^^^^^^
+	       ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **bar** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:96:19:96:27:**
+**fuzz_crash_019.md:96:19:96:22:**
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-	                 ^^^^^^^^
+	                 ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **baz** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:96:29:96:37:**
+**fuzz_crash_019.md:96:29:96:32:**
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-	                           ^^^^^^^^
+	                           ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:96:39:96:53:**
+**fuzz_crash_019.md:96:34:96:37:**
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
-	                                     ^^^^^^^^^^^^^^
+	                                ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **qux** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:96:39:96:42:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+	                                     ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:96:47:96:52:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+	                                             ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **ned** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:96:54:96:57:**
 ```roc
@@ -1233,19 +1260,6 @@ The unused variable is declared here:
 
 
 **UNUSED VARIABLE**
-Variable **e** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_e` to suppress this warning.
-The unused variable is declared here:
-
-**fuzz_crash_019.md:75:11:75:12:**
-```roc
-ma= |_| { e
-```
-          ^
-
-
-**UNUSED VARIABLE**
 Variable **rd** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
@@ -1256,6 +1270,19 @@ The unused variable is declared here:
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
 	^^
+
+
+**UNUSED VARIABLE**
+Variable **e** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_e` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_019.md:75:11:75:12:**
+```roc
+ma= |_| { e
+```
+          ^
 
 
 **UNUSED VARIABLE**
@@ -1321,63 +1348,115 @@ h == foo
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type binop_thin_arrow)
+  )
+  (Stmt.type_anno
+    (name "line")
+    (type tuple_literal)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ane"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "one")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "me"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "main")
+    (type apply_uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ma"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "y")
+    (type record_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "e"))
+    (Expr.record_literal
+    )
+  )
+  (Stmt.type_anno
+    (name "t")
+    (type apply_uc)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

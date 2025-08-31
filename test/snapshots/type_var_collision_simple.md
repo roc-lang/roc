@@ -51,21 +51,25 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Define some variables that would normally be used for type variables
 a = 1
 b = 2
 c = 3
+
 # This identity function should get type 'd -> d' since a, b, c are taken
 identity = |x| x
+
 # This function should get type 'e -> e' since d is now also taken
 identity2 = |y| y
+
 # This function with two parameters should get types 'f, g -> (f, g)'
 pair = |first, second| (first, second)
+
 main! = |_| {
 	result1 = identity(42)
 	result2 = identity2("hello")
 	result3 = pair((result1, result2))
+
 	(a + b) + c
 }
 ~~~
@@ -88,13 +92,34 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.num_literal_i32 1)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.num_literal_i32 2)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "c"))
+    (Expr.num_literal_i32 3)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity2"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "pair"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

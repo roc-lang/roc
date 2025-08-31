@@ -33,7 +33,7 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
       (block
         (str_literal_big "small numbers")
         (str_literal_big "hello")
-        (malformed malformed:expr_unexpected_token)
+        (malformed)
         (str_literal_big "greetings")
       )
     )
@@ -52,7 +52,7 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
       (block
         (str_literal_big "success value")
         (list_literal)
-        (malformed malformed:expr_unexpected_token)
+        (malformed)
         (apply_anon
           (str_literal_big "short list")
           (tuple_literal
@@ -60,7 +60,7 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
             (underscore)
           )
         )
-        (malformed malformed:expr_unexpected_token)
+        (malformed)
         (str_literal_big "has zero")
       )
     )

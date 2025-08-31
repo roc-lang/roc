@@ -27,11 +27,12 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
-
 a : F32
 a = 3.14
+
 b : F64
 b = 2.71828
+
 c : Dec
 c = 123.456
 ~~~
@@ -42,12 +43,30 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "a")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.frac_literal_small 3.14)
+  )
+  (Stmt.type_anno
+    (name "b")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.frac_literal_big big:<idx:0>)
+  )
+  (Stmt.type_anno
+    (name "c")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "c"))
+    (Expr.frac_literal_big big:<idx:8>)
+  )
 )
 ~~~
 # SOLVED

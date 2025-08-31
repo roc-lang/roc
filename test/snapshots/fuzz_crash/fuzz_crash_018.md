@@ -46,8 +46,11 @@ This might be a missing semicolon or an incorrectly placed expression.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "b")
+    (type binop_pipe)
+  )
 )
 ~~~
 # SOLVED

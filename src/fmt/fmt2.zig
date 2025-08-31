@@ -2926,53 +2926,99 @@ const Formatter = struct {
     fn formatStringInterpolation(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // String interpolation is handled by preserving source with expression formatting
-        // For now, extract from source and format embedded expressions
-        const start = node.region.start.offset;
-        const end = node.region.end.offset;
-
-        if (start >= end or end > self.source.len) {
-            try self.pushAll("\"\"");
-            return;
-        }
-
         // Start the interpolated string
         try self.push('"');
 
         // Process the interpolation nodes
+        // String interpolation alternates between string literal parts and expression parts
         var iter = self.ast.node_slices.nodes(&node.payload.nodes);
-        var is_string_part = true;
+        var is_expression = false; // First element is always a string part (could be empty)
 
         while (iter.next()) |part_idx| {
-            if (is_string_part) {
-                // String parts - extract from source
-                const part = self.getNode(part_idx);
-                const part_start = part.region.start.offset;
-                const part_node = self.getNode(part_idx);
-                const part_end = part_node.region.end.offset;
+            const part_node = self.getNode(part_idx);
 
-                // Copy the string content (without quotes)
-                if (part_start < part_end and part_end <= self.source.len) {
-                    var content = self.source[part_start..part_end];
-
-                    // Skip quotes if present
-                    if (content.len > 0 and content[0] == '"') {
-                        content = content[1..];
-                    }
-                    if (content.len > 0 and content[content.len - 1] == '"') {
-                        content = content[0 .. content.len - 1];
-                    }
-
-                    try self.pushAll(content);
-                }
-            } else {
-                // Expression part
+            if (is_expression) {
+                // Expression part - format with ${} syntax
                 try self.pushAll("${");
+
+                // Save current state
+                const saved_has_newline = self.has_newline;
+                const saved_consecutive_newlines = self.consecutive_newlines;
+
+                // Format the expression inline (no newlines)
+                self.has_newline = false;
+                self.consecutive_newlines = 0;
                 try self.formatNode(part_idx);
+
+                // Restore state
+                self.has_newline = saved_has_newline;
+                self.consecutive_newlines = saved_consecutive_newlines;
+
                 try self.push('}');
+            } else {
+                // String literal part - extract the literal content
+                switch (part_node.tag) {
+                    .str_literal_small => {
+                        // Small string stored inline
+                        const bytes = part_node.payload.str_literal_small;
+                        for (bytes) |byte| {
+                            if (byte == 0) break; // Null-terminated
+
+                            // Escape special characters
+                            switch (byte) {
+                                '"' => try self.pushAll("\\\""),
+                                '\\' => try self.pushAll("\\\\"),
+                                '\n' => try self.pushAll("\\n"),
+                                '\r' => try self.pushAll("\\r"),
+                                '\t' => try self.pushAll("\\t"),
+                                else => try self.push(byte),
+                            }
+                        }
+                    },
+                    .str_literal_big => {
+                        // Large string stored in ByteSlices
+                        const slice = self.ast.byte_slices.slice(part_node.payload.str_literal_big);
+                        for (slice) |byte| {
+                            // Escape special characters
+                            switch (byte) {
+                                '"' => try self.pushAll("\\\""),
+                                '\\' => try self.pushAll("\\\\"),
+                                '\n' => try self.pushAll("\\n"),
+                                '\r' => try self.pushAll("\\r"),
+                                '\t' => try self.pushAll("\\t"),
+                                else => try self.push(byte),
+                            }
+                        }
+                    },
+                    else => {
+                        // Fallback: if it's not a recognized string literal, extract from source
+                        const start = part_node.region.start.offset;
+                        const end = part_node.region.end.offset;
+                        if (start < end and end <= self.source.len) {
+                            var content = self.source[start..end];
+
+                            // Skip surrounding quotes if present
+                            if (content.len >= 2 and content[0] == '"' and content[content.len - 1] == '"') {
+                                content = content[1 .. content.len - 1];
+                            }
+
+                            // Output the content with proper escaping
+                            for (content) |byte| {
+                                switch (byte) {
+                                    '"' => try self.pushAll("\\\""),
+                                    '\\' => try self.pushAll("\\\\"),
+                                    '\n' => try self.pushAll("\\n"),
+                                    '\r' => try self.pushAll("\\r"),
+                                    '\t' => try self.pushAll("\\t"),
+                                    else => try self.push(byte),
+                                }
+                            }
+                        }
+                    },
+                }
             }
 
-            is_string_part = !is_string_part;
+            is_expression = !is_expression;
         }
 
         try self.push('"');

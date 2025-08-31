@@ -25,8 +25,8 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 ~~~roc
 module [Color]
 
-
 Color := [Red, Blue]
+
 test = Color.Red
 ~~~
 # EXPECTED
@@ -57,8 +57,14 @@ test = Color.Red
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "test"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

@@ -30,8 +30,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
-
 import json.Json exposing [decode, encode]
+
 main = {
 	data = { name : "Alice", age : 30 }
 	encoded = encode(data)
@@ -42,26 +42,26 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**import_exposing_basic.md:6:14:6:27:**
+**import_exposing_basic.md:6:14:6:18:**
 ```roc
     data = { name: "Alice", age: 30 }
 ```
-             ^^^^^^^^^^^^^
+             ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**import_exposing_basic.md:6:29:6:36:**
+**import_exposing_basic.md:6:29:6:32:**
 ```roc
     data = { name: "Alice", age: 30 }
 ```
-                            ^^^^^^^
+                            ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -89,8 +89,34 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "data"))
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.lookup "name")
+            (Expr.str_literal_big)
+          )
+          (Expr.binop_colon
+            (Expr.lookup "age")
+            (Expr.num_literal_i32 30)
+          )
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "encoded"))
+        (Expr.apply_ident)
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "decoded"))
+        (Expr.apply_ident)
+      )
+      (Expr.lookup "decoded")
+    )
+  )
 )
 ~~~
 # SOLVED

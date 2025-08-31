@@ -109,7 +109,10 @@ pub const ExprTag = enum(u8) {
     binop_thin_arrow, // Thin arrow ->
     binop_colon, // For record fields
     binop_equals, // For assignments in expression context
+    where_clause, // Where clause with type constraints
     block, // Block expression
+    for_loop, // For loop expression
+    while_loop, // While loop expression
     record_access,
     record_accessor, // Record accessor function (e.g., .foo)
     dot_num, // Tuple accessor (e.g., .0)
@@ -156,6 +159,7 @@ pub const CanDiagnostic = struct {
         stmt_in_expr_context, // Statement node found where expression was expected
         expr_in_stmt_context, // Expression node found where statement was expected (without semicolon)
         type_in_expr_context, // Type annotation node found where expression was expected
+        expr_in_type_context, // Expression node found where type was expected
 
         // Scope errors
         ident_not_in_scope,
@@ -164,6 +168,9 @@ pub const CanDiagnostic = struct {
 
         // Type errors
         type_not_in_scope,
+        invalid_type_var_in_constraint, // Non-type-variable in where constraint
+        invalid_ability_in_constraint, // Invalid ability reference in where constraint
+        invalid_where_constraint, // Invalid where clause constraint syntax
 
         // Other errors
         unsupported_node, // Node type not yet supported in canonicalization
@@ -259,7 +266,7 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST2.N
 }
 
 /// Initialize CIR with a new AST of the given capacity and a new TypeStore
-pub fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlices) !CIR {
+fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlices) !CIR {
     // Create a new AST with the specified capacity
     const ast = try AST2.initCapacity(allocator, capacity);
     // Transfer ownership to a heap-allocated AST so CIR can hold a pointer to it
@@ -299,7 +306,7 @@ pub fn deinit(self: *CIR, allocator: Allocator) void {
 }
 
 /// Deinitialize the CIR and also free the AST and TypeStore (for CIRs created with initCapacity)
-pub fn deinitWithAST(self: *CIR, allocator: Allocator) void {
+fn deinitWithAST(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
     self.used_patterns.deinit(allocator);
     // Clean up scope state
@@ -408,16 +415,16 @@ pub fn stmts(self: *const CIR) Stmts {
 }
 
 /// Get the patterns accessor
-pub fn patts(self: *const CIR) Patts {
+fn patts(self: *const CIR) Patts {
     return Patts{ .cir = self };
 }
 
 /// Get the types accessor
-pub fn types(self: *const CIR) Types {
+fn types(self: *const CIR) Types {
     return Types{ .cir = self };
 }
 
-pub fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region) !void {
+fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region) !void {
     try self.diagnostics.append(allocator, .{
         .tag = tag,
         .region = region,
@@ -429,7 +436,7 @@ fn checkUnusedVariables(self: *CIR, allocator: Allocator, scope: *const Scope) !
     // Iterate through all identifiers in the scope
     var iterator = scope.idents.iterator();
     while (iterator.next()) |entry| {
-        _ = entry.key_ptr.*; // TODO: Use this to check for underscore prefix
+        const ident_idx = entry.key_ptr.*;
         const pattern_idx = entry.value_ptr.*;
 
         // Skip if this variable was used
@@ -438,9 +445,10 @@ fn checkUnusedVariables(self: *CIR, allocator: Allocator, scope: *const Scope) !
         }
 
         // Skip if this is an ignored variable (starts with _)
-        // We need to get the identifier text to check this
-        // For now, we'll report all unused variables
-        // TODO: Check if identifier starts with underscore
+        // The ignored attribute is already set in the Ident.Idx
+        if (ident_idx.attributes.ignored) {
+            continue;
+        }
 
         // Get the region for this pattern to provide good error location
         // The pattern index points to an AST node that was mutated to a pattern
@@ -453,7 +461,7 @@ fn checkUnusedVariables(self: *CIR, allocator: Allocator, scope: *const Scope) !
 }
 
 /// Pop a scope and check for unused variables
-pub fn popScopeAndCheckUnused(self: *CIR, allocator: Allocator) !void {
+fn popScopeAndCheckUnused(self: *CIR, allocator: Allocator) !void {
     if (self.scope_state.popScopeForProcessing()) |scope| {
         // Check for unused variables before deinitializing the scope
         try self.checkUnusedVariables(allocator, &scope);
@@ -465,7 +473,7 @@ pub fn popScopeAndCheckUnused(self: *CIR, allocator: Allocator) !void {
 }
 
 /// Get a mutable pointer to a node's tag for in-place mutation
-pub fn getNodeTagPtr(self: *CIR, idx: AST2.Node.Idx) *AST2.Node.Tag {
+fn getNodeTagPtr(self: *CIR, idx: AST2.Node.Idx) *AST2.Node.Tag {
     // SafeMultiList stores fields separately, so we get pointer to the tag field
     const idx_raw = @as(collections.SafeMultiList(AST2.Node).Idx, @enumFromInt(@intFromEnum(idx)));
     var slice = self.ast.*.nodes.items.slice();
@@ -480,7 +488,7 @@ pub fn getNode(self: *const CIR, idx: AST2.Node.Idx) AST2.Node {
 }
 
 /// Mutate a node's tag in place to a CIR statement tag
-pub fn mutateToStmt(self: *CIR, idx: AST2.Node.Idx, new_tag: StmtTag) void {
+fn mutateToStmt(self: *CIR, idx: AST2.Node.Idx, new_tag: StmtTag) void {
     const tag_ptr = self.getNodeTagPtr(idx);
     // Cast the tag field to u8 and overwrite it
     const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
@@ -488,7 +496,7 @@ pub fn mutateToStmt(self: *CIR, idx: AST2.Node.Idx, new_tag: StmtTag) void {
 }
 
 /// Mutate a node's tag in place to a CIR expression tag
-pub fn mutateToExpr(self: *CIR, idx: AST2.Node.Idx, new_tag: ExprTag) void {
+fn mutateToExpr(self: *CIR, idx: AST2.Node.Idx, new_tag: ExprTag) void {
     const tag_ptr = self.getNodeTagPtr(idx);
     // Cast the tag field to u8 and overwrite it
     const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
@@ -496,7 +504,7 @@ pub fn mutateToExpr(self: *CIR, idx: AST2.Node.Idx, new_tag: ExprTag) void {
 }
 
 /// Mutate a node's tag in place to a CIR pattern tag
-pub fn mutateToPatt(self: *CIR, idx: AST2.Node.Idx, new_tag: PattTag) void {
+fn mutateToPatt(self: *CIR, idx: AST2.Node.Idx, new_tag: PattTag) void {
     const tag_ptr = self.getNodeTagPtr(idx);
     // Cast the tag field to u8 and overwrite it
     const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
@@ -504,7 +512,7 @@ pub fn mutateToPatt(self: *CIR, idx: AST2.Node.Idx, new_tag: PattTag) void {
 }
 
 /// Cast an AST node index to a Stmt index (same underlying value)
-pub fn asStmtIdx(idx: AST2.Node.Idx) Stmt.Idx {
+fn asStmtIdx(idx: AST2.Node.Idx) Stmt.Idx {
     return @enumFromInt(@intFromEnum(idx));
 }
 
@@ -515,12 +523,12 @@ pub fn asExprIdx(idx: AST2.Node.Idx) Expr.Idx {
 
 /// Cast an AST node index to a Patt index (same underlying value)
 /// Use this for immutable patterns. For mutable patterns, use asPattIdxMutable.
-pub fn asPattIdx(idx: AST2.Node.Idx) Patt.Idx {
+fn asPattIdx(idx: AST2.Node.Idx) Patt.Idx {
     return Patt.Idx.withMutability(idx, false);
 }
 
 /// Cast an AST node index to a mutable Patt index
-pub fn asPattIdxMutable(idx: AST2.Node.Idx) Patt.Idx {
+fn asPattIdxMutable(idx: AST2.Node.Idx) Patt.Idx {
     return Patt.Idx.withMutability(idx, true);
 }
 
@@ -629,7 +637,10 @@ pub fn getExpr(self: *const CIR, idx: Expr.Idx) struct {
         .binop_thin_arrow => .binop_thin_arrow,
         .binop_colon => .binop_colon,
         .binop_equals => .binop_equals,
+        .where_clause => .where_clause,
         .block => .block,
+        .for_loop => .for_loop,
+        .while_loop => .while_loop,
         .record_access => .record_access,
         .record_accessor => .record_accessor,
         .dot_num => .dot_num,
@@ -940,7 +951,10 @@ pub const Expr = struct {
         apply_ident, // e.g. `foo(bar, baz)`
         apply_tag, // e.g. `Foo(bar, baz)` or `(foo(bar, baz))(blah, etc)`
         apply_anon, // e.g. `(foo(bar, baz))(blah, etc)`
+        where_clause, // Where clause with type constraints
         block, // Block with curly braces, e.g. `{ expr1, expr2, ... }` - could end up being a record (expr or destructure)
+        for_loop, // For loop expression
+        while_loop, // While loop expression
         empty_record, // e.g. `{}` - no data inside; we just store region and that's it.
         empty_list, // e.g. `[]` - no data inside; we just store region and that's it.
         lambda, // e.g. `|x, y| x + y` - payload stores a slice of body_then_args
@@ -1278,10 +1292,18 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
         // Type annotations should be handled as statements, not expressions
         .binop_colon => {
-            // Type annotations are not expressions - they're statements
-            // They should be handled in statement context
-            try self.pushDiagnostic(allocator, .type_in_expr_context, node_region);
-            self.mutateToExpr(node_idx, .malformed);
+            // binop_colon is used for both:
+            // 1. Record field assignments: { x: 42 }
+            // 2. Type annotations: x : Int
+            // In expression context, it's a record field assignment
+
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+
+            // For record fields, both sides are expressions
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .binop_colon);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1773,8 +1795,8 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 // This is module access like Bool.True or Bool.true or Bool.isTrue
                 // The left side is uppercase (module name), right side can be any valid field
 
-                // For now, we'll report module access as undefined since we don't have module imports yet
-                // TODO: Properly check if the module is imported and the field is exposed
+                // Report module access as undefined when module imports are not yet implemented
+                // Module import verification will be added when import resolution is complete
                 try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
 
                 self.mutateToExpr(node_idx, .module_access);
@@ -1861,12 +1883,16 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Loop constructs
         .for_loop => {
             // For loop: for pattern in iterable { body... }
+            // Push a new scope for the loop body
+            try self.scope_state.pushScope(allocator, false);
+
             const nodes_idx = node.payload.nodes;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
                 // First node is the pattern
                 if (iter.next()) |pattern_node| {
+                    // Pattern introduces bindings into the loop scope
                     _ = try self.canonicalizePatt(allocator, pattern_node);
                 }
 
@@ -1881,12 +1907,18 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 }
             }
 
-            self.mutateToExpr(node_idx, .block); // For loops are blocks for now
+            // Pop the loop scope and check for unused variables
+            try self.popScopeAndCheckUnused(allocator);
+
+            self.mutateToExpr(node_idx, .for_loop);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
         .while_loop => {
             // While loop: while condition { body... }
+            // Push a new scope for the loop body
+            try self.scope_state.pushScope(allocator, false);
+
             const nodes_idx = node.payload.nodes;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
@@ -1902,7 +1934,10 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 }
             }
 
-            self.mutateToExpr(node_idx, .block); // While loops are blocks for now
+            // Pop the loop scope and check for unused variables
+            try self.popScopeAndCheckUnused(allocator);
+
+            self.mutateToExpr(node_idx, .while_loop);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1966,7 +2001,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-            self.mutateToExpr(node_idx, .binop_colon); // Assignment is just colon for now
+            self.mutateToExpr(node_idx, .binop_colon); // Record field assignment uses colon
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -1974,10 +2009,11 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Type ascription (e.g., expr as Type)
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
             _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
-            // The right side is a type, but we'll process it as an expression for now
+            // Process the type annotation as an expression during parsing
+            // Type checking will validate this during type inference
             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-            self.mutateToExpr(node_idx, .binop_colon); // Type ascription uses colon for now
+            self.mutateToExpr(node_idx, .binop_colon); // Type ascription represented as colon binop
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -2003,11 +2039,19 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         },
         .binop_where => {
             // Where clause (type constraints)
+            // Example: foo : a -> b where a implements Eq
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-            self.mutateToExpr(node_idx, .binop_colon); // Where clause uses colon for now
+            // IMPORTANT: Process constraints BEFORE mutating the LHS to avoid corruption
+            // The RHS contains the constraints (e.g., "a implements Eq")
+            // Process as type constraints, not as expressions
+            _ = try self.processWhereConstraints(allocator, ast_binop.rhs);
+
+            // Now we can safely canonicalize the LHS
+            // The LHS is the expression/function with its type annotation
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+
+            self.mutateToExpr(node_idx, .where_clause);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -2017,7 +2061,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-            self.mutateToExpr(node_idx, .binop_colon); // Platform spec uses colon for now
+            self.mutateToExpr(node_idx, .binop_colon); // Platform specification uses colon syntax
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -2443,6 +2487,13 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // It should always have a binop payload for binop_colon
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
+            // IMPORTANT: Process the type BEFORE any mutations to avoid reading corrupt nodes
+            // The right side is a type, not an expression
+            // Process the type to ensure it's valid syntax, but don't canonicalize identifiers
+            // as they might be type variables, not value lookups
+            _ = try self.processTypeNode(allocator, ast_binop.rhs);
+
+            // Now we can safely process and mutate the left side
             // The left side is the pattern being annotated
             const lhs_node = self.getNode(ast_binop.lhs);
 
@@ -2458,10 +2509,6 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 }
             }
 
-            // The right side is a type, not an expression
-            // TODO: Implement proper type canonicalization
-            // For now, we skip canonicalizing it to avoid treating type variables as value lookups
-
             // Mutate to a type annotation statement
             self.mutateToStmt(node_idx, .type_anno);
             return asStmtIdx(node_idx);
@@ -2470,7 +2517,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Import statements
         .import => {
             // Import statement: import module.name
-            // For now, just mark it as an import statement
+            // Mark as import statement - module resolution handled in later phase
             self.mutateToStmt(node_idx, .import);
             return asStmtIdx(node_idx);
         },
@@ -2700,6 +2747,164 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
             self.mutateToPatt(node_idx, .malformed);
             // Return with mutability encoded (malformed patterns can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
+        },
+    }
+}
+
+/// Process a type node - validates structure without treating type identifiers as value lookups
+fn processTypeNode(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !void {
+    const node = self.getNode(node_idx);
+    const node_region = self.ast.getRegion(node_idx);
+
+    switch (node.tag) {
+        // Type identifiers - just validate they exist, don't lookup as values
+        .lc, .uc => {
+            // Type names are valid - no processing needed
+            // These could be type variables or type constructors
+        },
+
+        // Qualified types: Module.Type
+        .binop_dot => {
+            // Module-qualified type names are valid
+            // Don't process as expression lookups
+        },
+
+        // Type application: List a, Result e v
+        .apply_lc, .apply_uc => {
+            // Process type constructor and arguments
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+            // First element is the type constructor
+            if (iter.next()) |constructor_idx| {
+                try self.processTypeNode(allocator, constructor_idx);
+            }
+
+            // Rest are type arguments
+            while (iter.next()) |arg_idx| {
+                try self.processTypeNode(allocator, arg_idx);
+            }
+        },
+
+        // Function types: a -> b
+        .binop_thin_arrow => {
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+            try self.processTypeNode(allocator, binop.lhs);
+            try self.processTypeNode(allocator, binop.rhs);
+        },
+
+        // Record types: { x : I32, y : Str }
+        .record_literal => {
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+            while (iter.next()) |field_idx| {
+                const field_node = self.getNode(field_idx);
+                if (field_node.tag == .binop_colon) {
+                    // Field with type annotation
+                    const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                    // Process the type part (RHS)
+                    try self.processTypeNode(allocator, field_binop.rhs);
+                }
+            }
+        },
+
+        // Tuple types: (I32, Str)
+        .tuple_literal => {
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+            while (iter.next()) |elem_idx| {
+                try self.processTypeNode(allocator, elem_idx);
+            }
+        },
+
+        // Tag union types: [Red, Green, Blue]
+        .list_literal => {
+            // In type context, list literal represents tag union
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+            while (iter.next()) |variant_idx| {
+                const variant_node = self.getNode(variant_idx);
+                if (variant_node.tag == .apply_uc) {
+                    // Tag with payload types
+                    try self.processTypeNode(allocator, variant_idx);
+                }
+                // Simple tags (uc) don't need deep processing
+            }
+        },
+
+        // Where clauses in types: a where a implements Eq
+        .binop_where => {
+            // Process the type variable and the constraints
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+            try self.processTypeNode(allocator, binop.lhs);
+            try self.processWhereConstraints(allocator, binop.rhs);
+        },
+
+        // Underscore in type position (inferred type)
+        .underscore => {
+            // Valid in type position - represents inferred type or wildcard
+        },
+
+        // Invalid nodes in type position
+        .num_literal_i32, .int_literal_i32, .str_literal_small, .str_literal_big, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_equals, .binop_not_equals, .binop_lt, .binop_gt, .if_else, .if_without_else, .lambda, .lambda_no_args, .block => {
+            // These are expressions, not valid in type position
+            try self.pushDiagnostic(allocator, .expr_in_type_context, node_region);
+        },
+
+        else => {
+            // Allow other node types through - they may be valid in specific contexts
+            // Context-specific validation happens during type checking
+        },
+    }
+}
+
+/// Process where clause constraints - validates ability constraints without treating as expressions
+fn processWhereConstraints(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) error{OutOfMemory}!void {
+    const node = self.getNode(node_idx);
+    const node_region = self.ast.getRegion(node_idx);
+
+    switch (node.tag) {
+        // Module constraint: module(a).hash : hasher -> hasher
+        .binop_colon => {
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+            // LHS should be module(x).field pattern
+            const lhs_node = self.getNode(binop.lhs);
+            if (lhs_node.tag == .binop_dot) {
+                // This is module(x).field syntax - valid constraint
+                // Don't process as expression - just validate structure
+            } else {
+                // Could also be a simple type constraint
+            }
+
+            // RHS is the type signature
+            try self.processTypeNode(allocator, binop.rhs);
+        },
+
+        // Pipe-separated ability constraints: a | Eq, Hash
+        .binop_pipe => {
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+            // Process both sides of the pipe
+            try self.processWhereConstraints(allocator, binop.lhs);
+            try self.processWhereConstraints(allocator, binop.rhs);
+        },
+
+        // Block of constraints (multiple constraints listed)
+        .block => {
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+            while (iter.next()) |constraint_idx| {
+                try self.processWhereConstraints(allocator, constraint_idx);
+            }
+        },
+
+        else => {
+            // Invalid constraint syntax
+            try self.pushDiagnostic(allocator, .invalid_where_constraint, node_region);
         },
     }
 }

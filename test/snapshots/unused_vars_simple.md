@@ -49,15 +49,18 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Regular variable that is unused - should warn
 unused_regular = |x| 42
+
 # Underscore variable that is used - should warn
 used_underscore = |_value| _value
+
 # Underscore variable that is unused - should be fine
 unused_underscore = |_ignored| 100
+
 # Regular variable that is used - should be fine
 used_regular = |number| number + 1
+
 main! = |_| {
 	a = unused_regular(5)
 	b = used_underscore(10)
@@ -82,27 +85,29 @@ unused_regular = |x| 42
                   ^
 
 
-**UNUSED VARIABLE**
-Variable **_ignored** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `__ignored` to suppress this warning.
-The unused variable is declared here:
-
-**unused_vars_simple.md:10:22:10:30:**
-```roc
-unused_underscore = |_ignored| 100
-```
-                     ^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "unused_regular"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "used_underscore"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "unused_underscore"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "used_regular"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

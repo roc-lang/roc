@@ -33,32 +33,60 @@ KwModule OpenSquare CloseSquare BlankLine LineComment UpperIdent OpenRound Under
 ~~~roc
 module []
 
-
 # Type with underscore in parameter position
 MyType(_) : Str
+
 # Type with underscore and regular parameter
 MyType2((_, b)) : b
+
 # Type with parameters where underscore comes second
 MyType3((a, _)) : a
+
 # More complex type with underscore parameter
 ComplexType((_, b)) : {
 	field : b
 }
+
 # Type with multiple underscores
 MultiType((_, _, c)) : c
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**underscore_in_type_parameters.md:13:21:13:33:**
+```roc
+ComplexType(_, b) : { field: b }
+```
+                    ^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type lc)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type lc)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type block)
+  )
+  (Stmt.type_anno
+    (name node:apply_uc)
+    (type lc)
+  )
 )
 ~~~
 # SOLVED

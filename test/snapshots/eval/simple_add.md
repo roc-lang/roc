@@ -27,9 +27,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [addU8]
 
-
 addU8 : U8 -> U8 -> U8
 addU8 = |a, b| a + b
+
 expect addU8((1, 2)) == 3
 expect addU8((0, 10)) == 10
 ~~~
@@ -61,10 +61,16 @@ expect addU8(0, 10) == 10
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "addU8")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addU8"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

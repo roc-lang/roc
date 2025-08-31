@@ -33,8 +33,8 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
+
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
@@ -54,8 +54,11 @@ main! = |_| Stdout.line!("Hello, world!")
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

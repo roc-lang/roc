@@ -25,9 +25,10 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
-
 BadBase := _
+
 GoodAlias := BadBase
+
 value : GoodAlias
 value = "test"
 ~~~
@@ -59,10 +60,16 @@ GoodAlias := BadBase
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "value")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "value"))
+    (Expr.str_literal_small)
+  )
 )
 ~~~
 # SOLVED

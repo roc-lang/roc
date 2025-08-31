@@ -120,26 +120,26 @@ Is there an **import** or **exposing** missing up-top?
                ^^^^^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**block_with_assignments.md:8:16:8:23:**
+**block_with_assignments.md:8:16:8:19:**
 ```roc
     record = { age: 30, city: "NYC" }
 ```
-               ^^^^^^^
+               ^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **city** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**block_with_assignments.md:8:25:8:36:**
+**block_with_assignments.md:8:25:8:29:**
 ```roc
     record = { age: 30, city: "NYC" }
 ```
-                        ^^^^^^^^^^^
+                        ^^^^
 
 
 **UNUSED VARIABLE**
@@ -249,15 +249,60 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.num_literal_i32 42)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "name"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "pi"))
+    (Expr.frac_literal_big hello)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "isActive"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "pair"))
+    (Expr.tuple_literal
+      (Expr.num_literal_i32 1)
+      (Expr.str_literal_big)
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "record"))
+    (Expr.record_literal
+      (Expr.binop_colon
+        (Expr.lookup "age")
+        (Expr.num_literal_i32 30)
+      )
+      (Expr.binop_colon
+        (Expr.lookup "city")
+        (Expr.str_literal_small)
+      )
+    )
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "list"))
+    (Expr.list_literal)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.binop_plus
+      (Expr.lookup "x")
+      (Expr.num_literal_i32 10)
+    )
+  )
 )
 ~~~
 # SOLVED

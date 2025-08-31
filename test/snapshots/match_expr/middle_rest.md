@@ -23,7 +23,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
   (branch1     (binop_thick_arrow
       (list_literal
         (lc "first")
-        (unary_double_dot <unary>)
+        (unary_double_dot <unary_op>)
         (lc "last")
       )
       (block
@@ -34,7 +34,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
         (list_literal
           (lc "a")
           (lc "b")
-          (unary_double_dot <unary>)
+          (unary_double_dot <unary_op>)
         )
         (tuple_literal
           (lc "middle")
@@ -42,7 +42,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
           (lc "y")
         )
         (binop_thick_arrow
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
           (binop_plus
             (binop_plus
               (binop_plus

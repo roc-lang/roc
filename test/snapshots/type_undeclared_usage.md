@@ -32,13 +32,12 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [MyType, processValue]
 
-
 MyType : UnknownType
+
 processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
 }
-
 
 AnotherType : SomeModule.MissingType
 ~~~
@@ -61,10 +60,22 @@ processValue = |value| {
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name "processValue")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processValue"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type binop_pipe)
+  )
 )
 ~~~
 # SOLVED

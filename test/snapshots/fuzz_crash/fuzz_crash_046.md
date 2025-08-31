@@ -25,9 +25,7 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 ~~~
 # FORMATTED
 ~~~roc
-app { f: "" platform [] }
-
-import f
+app { f: "" platform [] }import f
 
 S
 ~~~
@@ -70,9 +68,9 @@ app[]{f:platform""}import fS
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

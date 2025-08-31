@@ -55,24 +55,29 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 # Test generic identity function
 identity : a -> a
 identity = |x| x
+
 # Test function with multiple type parameters
 combine : a -> b -> (a, b)
 combine = |first, second| (first, second)
+
 # Test type application with concrete types
 addOne : U64 -> U64
 addOne = |n| n + 1
+
 main! = |_| {
 	# Test identity with different types
 	num = identity(42)
 	text = identity("hello")
+
 	# Test combine function
 	pair = combine((num, text))
+
 	# Test concrete function
 	result = addOne(5)
+
 	result : result
 }
 ~~~
@@ -108,13 +113,34 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "identity")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "combine")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combine"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "addOne")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addOne"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

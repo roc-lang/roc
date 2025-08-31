@@ -23,7 +23,7 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
     )
     (dot_lc "baz")
   )
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (binop_colon
     (lc "x")
     (num_literal_i32 5)
@@ -57,35 +57,41 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_builder.md:2:5:2:9:**
+**record_builder.md:2:5:2:6:**
 ```roc
     x: 5,
 ```
-    ^^^^
+    ^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**record_builder.md:3:5:3:9:**
+**record_builder.md:3:5:3:6:**
 ```roc
     y: 0,
 ```
-    ^^^^
+    ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.lambda)
+  (Expr.lambda (canonicalized))
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Expr.binop_colon
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 5)
+  )
+  (Expr.binop_colon
+    (Expr.lookup "y")
+    (Expr.num_literal_i32 0)
+  )
 )
 ~~~
 # SOLVED

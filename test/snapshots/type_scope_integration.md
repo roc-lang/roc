@@ -35,13 +35,15 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [Foo, Bar]
 
-
 # First declare a type
 Foo : U64
+
 # Try to redeclare the same type (should error)
 Foo : Str
+
 # Declare another type that uses an undeclared type
 Bar : SomeUndeclaredType
+
 # Declare a type that properly uses a declared type
 Baz : Foo
 ~~~
@@ -52,10 +54,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type uc)
+  )
 )
 ~~~
 # SOLVED

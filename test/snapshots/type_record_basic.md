@@ -34,55 +34,51 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 getName : {name : Str, age : U64} -> Str
 getName = |_person| "hello"
+
 main! = |_| getName({ name : "luke", age : 21 })
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable **_person** is not used anywhere in your code.
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-If you don't need this variable, prefix it with an underscore like `__person` to suppress this warning.
-The unused variable is declared here:
-
-**type_record_basic.md:4:12:4:19:**
-```roc
-getName = |_person| "hello"
-```
-           ^^^^^^^
-
-
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
-
-**type_record_basic.md:6:22:6:34:**
+**type_record_basic.md:6:22:6:26:**
 ```roc
 main! = |_| getName({name: "luke", age:21})
 ```
-                     ^^^^^^^^^^^^
+                     ^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_record_basic.md:6:36:6:42:**
+**type_record_basic.md:6:36:6:39:**
 ```roc
 main! = |_| getName({name: "luke", age:21})
 ```
-                                   ^^^^^^
+                                   ^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "getName")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getName"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

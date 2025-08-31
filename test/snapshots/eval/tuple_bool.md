@@ -23,15 +23,15 @@ OpenRound UpperIdent Comma UpperIdent Comma UpperIdent Dot UpperIdent Comma Uppe
     (uc "Bool")
     (uc "False")
   )
-  (unary_not <unary>)
-  (unary_not <unary>)
+  (unary_not <unary_op>)
+  (unary_not <unary_op>)
   (binop_and
     (uc "True")
     (uc "False")
   )
   (binop_or
-    (unary_not <unary>)
-    (unary_not <unary>)
+    (unary_not <unary_op>)
+    (unary_not <unary_op>)
   )
 )
 ~~~

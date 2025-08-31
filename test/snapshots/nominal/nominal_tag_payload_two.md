@@ -36,10 +36,11 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 ~~~roc
 module [MyResult, ok, is_ok]
 
-
 MyResult((ok, err)) := [Ok(ok), Err(err)]
+
 ok : ok -> MyResult(ok, _)
 ok = |a| MyResult.Ok(a)
+
 is_ok : MyResult(_ok, _err) -> Bool
 is_ok = |result| match result
 
@@ -200,18 +201,30 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "ok")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ok"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "is_ok")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "is_ok"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

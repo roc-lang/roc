@@ -14,14 +14,12 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 ~~~clojure
 (module-header
   (exposes
-    (malformed malformed:exposed_item_unexpected_token)
+    (malformed)
 ))
 ~~~
 # FORMATTED
 ~~~roc
-module [)]
-
-{ _ }
+module [)]{ _ }
 0
 ,
 )
@@ -131,10 +129,10 @@ module[){..0,)
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

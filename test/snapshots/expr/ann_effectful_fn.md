@@ -52,6 +52,7 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRoun
 ~~~roc
 launchTheNukes : {} => Result((Bool, LaunchNukeErr))
 launchTheNukes = |{}| ...
+
 launchTheNukes({})
 ~~~
 # EXPECTED
@@ -61,8 +62,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "launchTheNukes")
+    (type binop_thick_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "launchTheNukes"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_ident)
 )
 ~~~

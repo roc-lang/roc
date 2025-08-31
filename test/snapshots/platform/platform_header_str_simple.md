@@ -25,7 +25,6 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon U
 ~~~roc
 platform "" requires { main : Str -> Str } exposes []
 
-
 entrypoint : Str -> Str
 entrypoint = main
 ~~~
@@ -46,8 +45,14 @@ entrypoint = main
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "entrypoint")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "entrypoint"))
+    (Expr.lookup "main")
+  )
 )
 ~~~
 # SOLVED

@@ -71,13 +71,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
 ~~~roc
 module []
 
-
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
+
 # Test using exposed types directly in annotations
 parseJson : Str -> Result(Value, Error)
 parseJson = |input| Json.parse(input)
+
 # Test mixing exposed types with qualified access
 handleRequest : Request -> Response
 handleRequest = |req| {
@@ -95,6 +96,7 @@ handleRequest = |req| {
 # Test using exposed types in complex signatures
 processData : Config -> List Value -> Result(List Value, Error)
 processData = |config, values| List.mapTry((values, |v| Json.validateWith((config, v))))
+
 # Test exposed types in record fields
 ServerConfig :
 	{
@@ -102,9 +104,11 @@ ServerConfig :
 		httpStatus : Status,
 		defaultResponse : Response,
 	}
+
 # Test exposed types with module-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
+
 # Test nested type usage
 handleResponse : Response -> Str
 handleResponse = |response| match response.status
@@ -711,37 +715,79 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "parseJson")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parseJson"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "handleRequest")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleRequest"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "processData")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processData"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name node:uc)
+    (type record_literal)
+  )
+  (Stmt.type_anno
+    (name "createClient")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "createClient"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "handleResponse")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleResponse"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "combineResults")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combineResults"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "status")
+    (type lc)
+  )
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

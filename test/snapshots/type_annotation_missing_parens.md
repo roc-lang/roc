@@ -23,7 +23,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [nums]
 
-
 nums : List
 U8
 ~~~
@@ -44,8 +43,11 @@ nums : List U8
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "nums")
+    (type uc)
+  )
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

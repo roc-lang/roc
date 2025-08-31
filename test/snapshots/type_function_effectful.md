@@ -34,9 +34,9 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
-
 runEffect! : (_a => _b) -> _a => _b
 runEffect! = |fn!, x| fn!(x)
+
 main! = |_| {}
 ~~~
 # EXPECTED
@@ -46,9 +46,18 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "runEffect")
+    (type binop_thick_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "runEffect"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

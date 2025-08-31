@@ -132,15 +132,15 @@ The unused variable is declared here:
 (Expr.block
   (Stmt.type_anno
     (name "swap")
-    (type <type>)
+    (type binop_thin_arrow)
   )
   (Stmt.assign
     (pattern (Patt.ident "swap"))
-    (Expr.lambda)
+    (Expr.lambda (canonicalized))
   )
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.lambda)
+    (Expr.lambda (canonicalized))
   )
 )
 ~~~

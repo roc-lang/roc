@@ -25,7 +25,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
         (binop_thick_arrow
           (list_literal
             (lc "first")
-            (unary_double_dot <unary>)
+            (unary_double_dot <unary_op>)
           )
           (num_literal_i32 0)
         )

@@ -26,8 +26,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
 ~~~roc
 module [red]
 
-
 import Color
+
 red : Color.RGB
 red = (Color.RGB | Red)
 ~~~
@@ -38,9 +38,15 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.type_anno
+    (name "red")
+    (type binop_pipe)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "red"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

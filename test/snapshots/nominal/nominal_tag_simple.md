@@ -31,10 +31,11 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Color, blue]
 
-
 Color := [Red, Green, Blue]
+
 blue : Color
 blue = Color.Blue
+
 yellow : Color
 yellow = Color.Yellow
 ~~~
@@ -77,11 +78,29 @@ yellow = Color.Yellow
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.type_anno
+    (name "blue")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "blue"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
+  (Stmt.type_anno
+    (name "yellow")
+    (type uc)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "yellow"))
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
+  )
 )
 ~~~
 # SOLVED

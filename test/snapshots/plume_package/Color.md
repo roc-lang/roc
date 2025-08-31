@@ -108,22 +108,23 @@ module [
 	named,
 ]
 
-
 Color := [RGB((U8, U8, U8)), RGBA((U8, U8, U8, Dec)), Named(Str), Hex(Str)]
+
 rgb : U8 -> U8 -> U8 -> Color
 rgb = |r, g, b| Color.RGB((r, g, b))
+
 rgba : U8 -> U8 -> U8 -> U8 -> Color
 rgba = |r, g, b, a| {
 	rounded = a.to_frac() / 255.0
 	Color.RGBA((r, g, b, rounded))
 }
 
-
 hex : Str -> Result(Color, [InvalidHex(Str)])
 hex = |str| {
 
 	bytes = str.to_utf8()
 	is_char_in_hex_range = |b| (b >= '0' && b <= '9' || b >= 'a' && b <= 'f') || b >= 'A' && b <= 'F'
+
 	match bytes
 		['#', a, b, c, d, e, f] => 
 			is_valid = ((((a.is_char_in_hex_range() && b.is_char_in_hex_range()) && c.is_char_in_hex_range()) && d.is_char_in_hex_range()) && e.is_char_in_hex_range()) && f.is_char_in_hex_range()
@@ -133,7 +134,6 @@ if is_valid Ok(Color.Hex(str))
 			Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		_ => Err
 }
-
 
 to_str : Color -> Str
 to_str = |color| match color
@@ -155,12 +155,15 @@ inner
 expect rgb((124, 56, 245)) | .to_str() == "rgb(124, 56, 245)"
 expect rgba((124, 56, 245, 255)) | .to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff") | .map_ok(to_str) == Ok("#ff00ff")
+
 named : Str -> Result(Color, [UnknownColor(Str)])
 named = |str| if str.is_named_color() Ok(Color.Named(str))
 else
 Err(UnknownColor("Unknown color ${str}"))
+
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
+
 	colors.contains(str)
 }
 ~~~
@@ -693,14 +696,38 @@ rgb = |r, g, b| Color.RGB(r, g, b)
     (Expr.apply_tag)
     (Expr.list_literal)
   )
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "rgb")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "rgb"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "rgba")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "rgba"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "hex")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "hex"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "to_str")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "to_str"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_tag)
   (Expr.malformed)
   (Expr.str_literal_big)
@@ -717,11 +744,20 @@ rgb = |r, g, b| Color.RGB(r, g, b)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "named")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "named"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.malformed)
   (Expr.apply_tag)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "is_named_color"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

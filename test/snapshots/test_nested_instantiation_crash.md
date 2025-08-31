@@ -40,55 +40,43 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
-
-# TODO: if you do this whole thing as an expr block, with `composed` at
+app { pf: "../basic-cli/platform.roc" platform [main] } # TODO: if you do this whole thing as an expr block, with `composed` at
 # the end instead of `answer =`, it triggers a parser bug!
 
 make_record : a -> {value : a, tag : Str}
 make_record = |x| { value : x, tag : "data" }
+
 get_value : {value : a, tag : Str} -> a
 get_value = |r| r.value
+
 composed : List a -> Str
 composed = |n| get_value(make_record(n))
+
 answer = composed([42])
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**test_nested_instantiation_crash.md:6:21:6:29:**
+**test_nested_instantiation_crash.md:6:21:6:26:**
 ```roc
 make_record = |x| { value: x, tag: "data" }
 ```
-                    ^^^^^^^^
+                    ^^^^^
 
 
-**TYPE IN EXPRESSION CONTEXT**
-Found a type annotation where an expression was expected.
-Type annotations should appear after a colon in declarations, not in expression contexts.
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**test_nested_instantiation_crash.md:6:31:6:42:**
+**test_nested_instantiation_crash.md:6:31:6:34:**
 ```roc
 make_record = |x| { value: x, tag: "data" }
 ```
-                              ^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **x** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-
-**test_nested_instantiation_crash.md:6:16:6:17:**
-```roc
-make_record = |x| { value: x, tag: "data" }
-```
-               ^
+                              ^^^
 
 
 **UNUSED VARIABLE**
@@ -107,13 +95,34 @@ get_value = |r| r.value
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "make_record")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "make_record"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "get_value")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "get_value"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "composed")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "composed"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "answer"))
+    (Expr.apply_ident)
+  )
 )
 ~~~
 # SOLVED

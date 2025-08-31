@@ -29,9 +29,9 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [message, greet]
 
-
 # Test that Unicode emojis are properly handled in string literals
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
+
 # Test other Unicode characters
 greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"
 ~~~
@@ -42,8 +42,14 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "message"))
+    (Expr.str_literal_big)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "greet"))
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

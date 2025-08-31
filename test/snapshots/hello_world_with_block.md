@@ -43,8 +43,8 @@ LineComment BlankLine LineComment KwApp OpenCurly LowerIdent OpColon String KwPl
 # Multiline comments?
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-
 import pf.Stdout
+
 main! = |_| {
 	world = "World"
 	# Hello
@@ -81,8 +81,11 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
 )
 ~~~
 # SOLVED

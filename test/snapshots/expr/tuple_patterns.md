@@ -37,7 +37,7 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
         (binop_equals
           (binop_equals
             (apply_anon
-              (malformed malformed:expr_unexpected_token)
+              (malformed)
               (tuple_literal
                 (lc "x")
                 (lc "y")
@@ -121,22 +121,27 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
 
 	# Simple tuple destructuring
 ((x, y)) = (1, 2)(
+
 # Nested tuple patterns
 ((a, b), (c, d)))
 
 ) = ((10, 20), (30, 40))(
+
 # Mixed patterns with literals
 (first, second, third))
 
 ) = (100, 42, 200)(
+
 # Tuple with string and tag patterns
 (name, string, boolean))
 
 ) = ("Alice", "fixed", True)(
+
 # Tuple with list pattern
 (list, hello))
 
 ) = ([1, 2, 3], "hello")
+
 {}
 ~~~
 # EXPECTED
@@ -186,7 +191,13 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.malformed))
+    (Expr.tuple_literal
+      (Expr.list_literal)
+      (Expr.str_literal_big)
+    )
+  )
   (Expr.record_literal
   )
 )

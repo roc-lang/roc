@@ -22,7 +22,7 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIden
       (dot_lc "roc")
     )
   )
-  (malformed malformed:expr_unexpected_token)
+  (malformed)
   (apply_uc
     (uc "Pair")
     (tuple_literal
@@ -30,7 +30,7 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIden
       (binop_plus
         (lc "b")
         (apply_anon
-          (malformed malformed:expr_unexpected_token)
+          (malformed)
         )
       )
     )
@@ -131,9 +131,9 @@ Pair(a, b+ : (
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.malformed)
 )
 ~~~
 # SOLVED

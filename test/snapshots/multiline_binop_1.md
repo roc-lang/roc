@@ -19,7 +19,7 @@ type=expr
 Int LineComment OpPlus LineComment BlankLine LineComment BlankLine Int LineComment OpStar LineComment Int ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc

@@ -75,9 +75,11 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~roc
 identity : a -> a
 identity = |x| x
+
 needs_string :
 	(Str -> Str) -> Str
 needs_string = |f| f(["hello"])
+
 needs_string(identity)
 ~~~
 # EXPECTED
@@ -87,10 +89,22 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
+  (Stmt.type_anno
+    (name "identity")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.type_anno
+    (name "needs_string")
+    (type binop_thin_arrow)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "needs_string"))
+    (Expr.lambda (canonicalized))
+  )
   (Expr.apply_ident)
 )
 ~~~
