@@ -122,36 +122,70 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^
 
 
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_reserved_error.md:3:5:3:26:**
+```roc
+    when: "pattern match",
+```
+    ^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_reserved_error.md:4:5:4:29:**
+```roc
+    expect: "test assertion",
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_reserved_error.md:5:5:5:26:**
+```roc
+    import: "module load",
+```
+    ^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_reserved_error.md:6:5:6:19:**
+```roc
+    and: Bool.true,
+```
+    ^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_reserved_error.md:7:5:7:19:**
+```roc
+    or: Bool.false,
+```
+    ^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.if_else)
-  (Expr.binop_colon
-    (Expr.lookup "when")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

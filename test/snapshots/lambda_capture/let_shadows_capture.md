@@ -58,23 +58,43 @@ y = (|_| {
 	x : x
 })({})
 
-y# Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
+# Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
+y
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**let_shadows_capture.md:5:9:5:10:**
+```roc
+        x 
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**let_shadows_capture.md:2:5:2:6:**
+```roc
+    x = 5
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.lookup "y")
 )
 ~~~
@@ -84,4 +104,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+y : _a
 ~~~

@@ -52,52 +52,94 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+# Polymorphic function that swaps elements of a tuple
 swap : (a, b) -> (b, a)
 swap = |pair| {
 	(x, y) = pair((y, x))
 }
 
+# Multiple uses that would conflict if 'a' and 'b' weren't instantiated
 main! = |_| {
+	# First use: swap (Int, Str)
 	result1 = swap((42, "hello"))
+
+	# Second use: swap (Bool, List Int)
+	# This would fail if 'a' and 'b' from the first call were reused
 	result2 = swap((Bool.true, [1, 2, 3]))
+
+	# Third use: swap (Str, Str)
+	# This shows even when both types are the same, we still need fresh vars
 	result3 = swap(("foo", "bar"))
+
 	{}
 }
-
-# Polymorphic function that swaps elements of a tuple
-# Multiple uses that would conflict if 'a' and 'b' weren't instantiated
-# First use: swap (Int, Str)
-# Second use: swap (Bool, List Int)
-# This would fail if 'a' and 'b' from the first call were reused
-# Third use: swap (Str, Str)
-# This shows even when both types are the same, we still need fresh vars
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.true** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**rigid_var_no_instantiation_error.md:17:21:17:30:**
+```roc
+    result2 = swap((Bool.true, [1, 2, 3]))
+```
+                    ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result1** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_no_instantiation_error.md:13:5:13:12:**
+```roc
+    result1 = swap((42, "hello"))
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result2** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_no_instantiation_error.md:17:5:17:12:**
+```roc
+    result2 = swap((Bool.true, [1, 2, 3]))
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result3** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_no_instantiation_error.md:21:5:21:12:**
+```roc
+    result3 = swap(("foo", "bar"))
+```
+    ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "swap")
-    (Expr.binop_thin_arrow
-      (Expr.tuple_literal
-        (Expr.lookup "a")
-        (Expr.lookup "b")
-      )
-      (Expr.tuple_literal
-        (Expr.lookup "b")
-        (Expr.lookup "a")
-      )
-    )
+  (Stmt.type_anno
+    (name "swap")
+    (type <type>)
   )
-  (Expr.binop_equals
-    (Expr.lookup "swap")
+  (Stmt.assign
+    (pattern (Patt.ident "swap"))
     (Expr.lambda)
   )
-  (Expr.binop_equals
-    (Expr.not_lookup)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
     (Expr.lambda)
   )
 )
@@ -108,5 +150,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-swap : _c
 ~~~

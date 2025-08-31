@@ -37,26 +37,15 @@ some_fn(arg1)?
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_access_multiline_formatting_1.md:1:14:2:2:**
-```roc
-some_fn(arg1)?
-	.static_dispatch_method()?
-```
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

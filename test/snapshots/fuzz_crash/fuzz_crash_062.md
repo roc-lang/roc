@@ -67,14 +67,33 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_062.md:2:1:2:4:**
+```roc
+as s|||0
+```
+^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_062.md:2:4:2:9:**
+```roc
+as s|||0
+```
+   ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_or
-    (Expr.lookup "s")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

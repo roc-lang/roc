@@ -44,26 +44,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**multiline_binop_1.md:1:3:2:2:**
-```roc
-1 # One
-	+ # Plus
-```
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

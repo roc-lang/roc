@@ -72,6 +72,17 @@ match nestedList
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **nestedList** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nested_list_scoping.md:1:7:1:17:**
+```roc
+match nestedList {
+```
+      ^^^^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

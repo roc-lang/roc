@@ -32,26 +32,15 @@ if Bool.True Ok(0) else Err(1)
                    ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**if_then_else_simple_tag.md:1:20:1:25:**
-```roc
-if Bool.True Ok(0) else Err(1)
-```
-                   ^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

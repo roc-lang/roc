@@ -32,26 +32,15 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
              ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**static_dispatch_super_test.md:1:14:1:15:**
-```roc
-some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-```
-             ^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

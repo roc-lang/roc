@@ -41,7 +41,17 @@ else {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **bool** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**if_then_else_7.md:1:4:1:8:**
+```roc
+if bool {
+```
+   ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

@@ -136,20 +136,27 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
+
+# Basic polymorphic values
 num = 42
 frac = 4.2
 str = "hello"
 bool = True
+# Polymorphic empty collections
 empty_list = []
 empty_record = {}
+# Using empty list in multiple contexts
 int_list = [1, 2, 3]
 str_list = ["a", "b", "c"]
 bool_list = [True, False]
+# Nested empty lists
 nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
+# Polymorphic record with empty list
 poly_record = { items : empty_list, count : 0 }
 use_poly_record1 = { items : [1, 2, 3], count : 0 }
 use_poly_record2 = { items : ["x", "y", "z"], count : 0 }
+# Complex nested structure with multiple polymorphic uses
 base_config = {
 	data : empty_list,
 	metadata :
@@ -160,6 +167,7 @@ base_config = {
 		},
 }
 
+# Different instantiations of base_config
 config1 = { data : [1, 2, 3, 4, 5], metadata :
 	{
 		version : num,
@@ -167,21 +175,30 @@ config1 = { data : [1, 2, 3, 4, 5], metadata :
 		description : str,
 	}, name : "integers" }
 
-config2 = {
-	data : ["apple", "banana", "cherry"],
+
+config2 = { # Test comment 1
+	data : ["apple", "banana", "cherry"], # Test comment 2
 	metadata :
 		{
-			version : num,
-			ratio : frac,
-			description : str,
-		},
-	name : "fruits",
+			 # Test comment 3
+version : num,
+			 # Test comment 4
+ratio : frac,
+			 # Test comment 5
+description : str,
+		}, # Test comment 6
+	# Test comment 7
+	name : "fruits", # Test comment 8
 }
 
+# Test comment 9
+
+# Polymorphic function-like structures
 make_container = |val| { value : val, wrapper : [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
+# Deeply nested polymorphism
 deep = {
 	level1 :
 		{
@@ -197,388 +214,372 @@ deep = {
 	results : [{ data : [1], tag : "single" }, { data : [1, 2], tag : "ints" }, { data : [1, 2, 3], tag : "more" }],
 }
 
+# Polymorphic values used in computations
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
 compute4 = { base : num, derived : [num, num + 1, num + 2] }
+# Mixed polymorphic structures
 mixed = { numbers : {value : num, list : [num, num], float : frac}, strings : {value : str, list : [str, str]}, empty_lists : {raw : empty_list, in_list : [empty_list], in_record : {
 	data : empty_list
 }}, computations : {from_num : num * 100, from_frac : frac * 10.0, list_from_num : [num, num, num]} }
 
+
 main = |_| {
+	# Just type-check everything
 	container1.value + 10
 }
-
-# Basic polymorphic values
-# Polymorphic empty collections
-# Using empty list in multiple contexts
-# Nested empty lists
-# Polymorphic record with empty list
-# Complex nested structure with multiple polymorphic uses
-# Different instantiations of base_config
-# Test comment 1
-# Test comment 2
-# Test comment 3
-# Test comment 4
-# Test comment 5
-# Test comment 6
-# Test comment 7
-# Test comment 8
-# Test comment 9
-# Polymorphic function-like structures
-# Deeply nested polymorphism
-# Polymorphic values used in computations
-# Mixed polymorphic structures
-# Just type-check everything
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:23:17:23:34:**
+```roc
+poly_record = { items: empty_list, count: 0 }
+```
+                ^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:23:36:23:44:**
+```roc
+poly_record = { items: empty_list, count: 0 }
+```
+                                   ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:24:22:24:38:**
+```roc
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+```
+                     ^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:24:40:24:48:**
+```roc
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+```
+                                       ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:25:22:25:44:**
+```roc
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+```
+                     ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:25:46:25:54:**
+```roc
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+```
+                                             ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:29:5:29:21:**
+```roc
+    data: empty_list,
+```
+    ^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:30:5:34:6:**
+```roc
+    metadata: {
+        version: num,
+        ratio: frac,
+        description: str,
+    },
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:39:5:39:26:**
+```roc
+    data: [1, 2, 3, 4, 5],
+```
+    ^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:40:5:44:6:**
+```roc
+    metadata: {
+        version: num,
+        ratio: frac,
+        description: str,
+    },
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:45:5:45:21:**
+```roc
+    name: "integers",
+```
+    ^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:49:5:49:40:**
+```roc
+    data: ["apple", "banana", "cherry"], # Test comment 2
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:50:5:54:6:**
+```roc
+    metadata: { # Test comment 3
+        version: num, # Test comment 4
+        ratio: frac, # Test comment 5
+        description: str, # Test comment 6
+    }, # Test comment 7
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:55:5:55:19:**
+```roc
+    name: "fruits", # Test comment 8
+```
+    ^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:59:26:59:36:**
+```roc
+make_container = |val| { value: val, wrapper: [val] }
+```
+                         ^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:59:38:59:52:**
+```roc
+make_container = |val| { value: val, wrapper: [val] }
+```
+                                     ^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **val** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_val` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_complex.md:59:19:59:22:**
+```roc
+make_container = |val| { value: val, wrapper: [val] }
+```
+                  ^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:66:5:75:6:**
+```roc
+    level1: {
+        level2: {
+            level3: {
+                data: empty_list,
+                value: num,
+            },
+            items: [num, num * 2, num * 3],
+        },
+        collection: empty_list,
+    },
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:76:5:80:6:**
+```roc
+    results: [
+        { data: [1], tag: "single" },
+        { data: [1, 2], tag: "ints" },
+        { data: [1, 2, 3], tag: "more" },
+    ],
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:87:14:87:23:**
+```roc
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
+```
+             ^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:87:25:87:57:**
+```roc
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
+```
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:91:5:91:59:**
+```roc
+    numbers: { value: num, list: [num, num], float: frac },
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:92:5:92:46:**
+```roc
+    strings: { value: str, list: [str, str] },
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:93:5:97:6:**
+```roc
+    empty_lists: {
+        raw: empty_list,
+        in_list: [empty_list],
+        in_record: { data: empty_list },
+    },
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_complex.md:98:5:102:6:**
+```roc
+    computations: {
+        from_num: num * 100,
+        from_frac: frac * 10.0,
+        list_from_num: [num, num, num],
+    },
+```
+
+
+**UNUSED VARIABLE**
+Variable **container1** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_container1` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_complex.md:107:5:107:15:**
+```roc
+    container1.value + 10
+```
+    ^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "num")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "frac")
-    (Expr.frac_literal_small 4.2)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "bool")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty_record")
-    (Expr.record_literal
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "int_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "bool_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "nested_empty")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "mixed_nested")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "poly_record")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "items")
-        (Expr.lookup "empty_list")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "count")
-        (Expr.num_literal_i32 0)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "use_poly_record1")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "items")
-        (Expr.list_literal)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "count")
-        (Expr.num_literal_i32 0)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "use_poly_record2")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "items")
-        (Expr.list_literal)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "count")
-        (Expr.num_literal_i32 0)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "base_config")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "data")
-        (Expr.lookup "empty_list")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "metadata")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "version")
-            (Expr.lookup "num")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "ratio")
-            (Expr.lookup "frac")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "description")
-            (Expr.lookup "str")
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "config1")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "data")
-        (Expr.list_literal)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "metadata")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "version")
-            (Expr.lookup "num")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "ratio")
-            (Expr.lookup "frac")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "description")
-            (Expr.lookup "str")
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.str_literal_big)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "config2")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "data")
-        (Expr.list_literal)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "metadata")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "version")
-            (Expr.lookup "num")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "ratio")
-            (Expr.lookup "frac")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "description")
-            (Expr.lookup "str")
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.str_literal_big)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "make_container")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "container1")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "container2")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "container3")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "deep")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "level1")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "level2")
-            (Expr.record_literal
-              (Expr.binop_colon
-                (Expr.lookup "level3")
-                (Expr.record_literal
-                  (Expr.binop_colon
-                    (Expr.lookup "data")
-                    (Expr.lookup "empty_list")
-                  )
-                  (Expr.binop_colon
-                    (Expr.lookup "value")
-                    (Expr.lookup "num")
-                  )
-                )
-              )
-              (Expr.binop_colon
-                (Expr.lookup "items")
-                (Expr.list_literal)
-              )
-            )
-          )
-          (Expr.binop_colon
-            (Expr.lookup "collection")
-            (Expr.lookup "empty_list")
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "results")
-        (Expr.list_literal)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "compute1")
-    (Expr.binop_plus
-      (Expr.lookup "num")
-      (Expr.num_literal_i32 10)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "compute2")
-    (Expr.binop_star
-      (Expr.lookup "num")
-      (Expr.num_literal_i32 2)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "compute3")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "compute4")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "base")
-        (Expr.lookup "num")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "derived")
-        (Expr.list_literal)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "mixed")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "numbers")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "value")
-            (Expr.lookup "num")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "list")
-            (Expr.list_literal)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "float")
-            (Expr.lookup "frac")
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "strings")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "value")
-            (Expr.lookup "str")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "list")
-            (Expr.list_literal)
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "empty_lists")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "raw")
-            (Expr.lookup "empty_list")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "in_list")
-            (Expr.list_literal)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "in_record")
-            (Expr.record_literal
-              (Expr.binop_colon
-                (Expr.lookup "data")
-                (Expr.lookup "empty_list")
-              )
-            )
-          )
-        )
-      )
-      (Expr.binop_colon
-        (Expr.lookup "computations")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "from_num")
-            (Expr.binop_star
-              (Expr.lookup "num")
-              (Expr.num_literal_i32 100)
-            )
-          )
-          (Expr.binop_colon
-            (Expr.lookup "from_frac")
-            (Expr.binop_star
-              (Expr.lookup "frac")
-              (Expr.frac_literal_small 10)
-            )
-          )
-          (Expr.binop_colon
-            (Expr.lookup "list_from_num")
-            (Expr.list_literal)
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -587,32 +588,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-num : Num(_size)
-frac : F64
-str : Str
-bool : []_others
-empty_list : List(_elem)
-empty_record : {}
-int_list : List(_elem)
-str_list : List(_elem)
-bool_list : List(_elem)
-nested_empty : List(_elem)
-mixed_nested : List(_elem)
-poly_record : {}
-use_poly_record1 : {}
-use_poly_record2 : {}
-base_config : {}
-config1 : {}
-config2 : {}
-make_container : _a
-container1 : _a
-container2 : _a
-container3 : _a
-deep : {}
-compute1 : Num(_size)
-compute2 : Num(_size)
-compute3 : List(_elem)
-compute4 : {}
-mixed : {}
-main : _a
 ~~~

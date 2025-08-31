@@ -23,22 +23,27 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign LowerId
 ~~~roc
 module [add2]
 
+
 add2 = x + 2
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**add_var_with_spaces.md:3:8:3:9:**
+```roc
+add2 = x +      2
+```
+       ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "add2")
-    (Expr.binop_plus
-      (Expr.lookup "x")
-      (Expr.num_literal_i32 2)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -47,5 +52,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-add2 : Num(_size)
 ~~~

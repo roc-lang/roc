@@ -752,6 +752,7 @@ fn convertCIR2DiagnosticToReport(
         .type_in_expr_context => "TYPE IN EXPRESSION CONTEXT",
         .ident_not_in_scope => "UNDEFINED VARIABLE",
         .ident_already_defined => "IDENTIFIER ALREADY DEFINED",
+        .unused_variable => "UNUSED VARIABLE",
         .type_not_in_scope => "TYPE NOT IN SCOPE",
         .unsupported_node => "UNSUPPORTED NODE",
         .malformed_ast => "MALFORMED AST",
@@ -826,6 +827,22 @@ fn convertCIR2DiagnosticToReport(
             try report.document.addText(" has already been defined in this scope.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Each identifier can only be defined once. Consider using a different name.");
+        },
+        .unused_variable => {
+            const var_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("Variable ");
+            try report.document.addAnnotated(var_text, .error_highlight);
+            try report.document.addText(" is not used anywhere in your code.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+            try report.document.addInlineCode(try std.fmt.allocPrint(allocator, "_{s}", .{var_text}));
+            try report.document.addText(" to suppress this warning.");
+            try report.document.addLineBreak();
+            try report.document.addText("The unused variable is declared here:");
         },
         .type_not_in_scope => {
             const type_text = if (region.start.offset < region.end.offset)
@@ -1505,16 +1522,19 @@ fn processSnapshotContent(
         const node_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
         const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
 
-        // Check if it's an expression-like node
-        if (isExpressionNode(node.tag)) {
+        // For file content, check if it's a block and use the file canonicalizer
+        if (content.meta.node_type == .file and node.tag == .block) {
+            // Canonicalize as a file with top-level definitions
+            maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents);
+        } else if (isExpressionNode(node.tag)) {
             maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
         } else if (isStatementNode(node.tag)) {
             maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
         } else if (isPatternNode(node.tag)) {
             maybe_patt_idx = try cir.canonicalizePatt(allocator, node_idx);
         } else {
-            // Default to statement for file-level nodes
-            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
+            // Default to expression for unknown nodes
+            maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
         }
     }
 
@@ -3271,9 +3291,9 @@ fn generateCanonicalizeSection2(
     if (maybe_expr_idx) |expr_idx| {
         try outputCIR2ExprAsSExpr(output.md_writer, cir, env, expr_idx, 0);
     } else if (maybe_stmt_idx) |stmt_idx| {
-        try outputCIR2StmtAsSExpr(output.md_writer, cir, stmt_idx, 0);
+        try outputCIR2StmtAsSExpr(output.md_writer, cir, env, stmt_idx, 0);
     } else if (maybe_patt_idx) |patt_idx| {
-        try outputCIR2PattAsSExpr(output.md_writer, cir, patt_idx, 0);
+        try outputCIR2PattAsSExpr(output.md_writer, cir, env, patt_idx, 0);
     } else {
         try output.md_writer.writeAll("(empty)\n");
     }
@@ -3283,7 +3303,7 @@ fn generateCanonicalizeSection2(
 }
 
 /// Helper to output CIR2 expression as S-expression
-fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) !void {
+fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) anyerror!void {
     const expr = cir.getExpr(expr_idx);
 
     // Indent
@@ -3388,26 +3408,46 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
                 try writer.writeAll("  ");
             }
         },
-        .block, .record_literal => {
-            // These have a nodes field that contains the block/record contents
+        .block => {
+            // Block contains statements that have been canonicalized
             const nodes_idx = expr.payload.nodes;
             try writer.writeAll("\n");
             var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
             while (iter.next()) |block_item_idx| {
-                // After canonicalization, all block contents should be expressions
-                // Even statements like imports get converted to malformed expressions
-                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
-                // Check if this expression is valid before trying to output it
-                const e = cir.getExpr(e_idx);
-                if (e.tag == .malformed) {
-                    // Output as malformed
+                // Check what type of node this is
+                const node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(block_item_idx)));
+                const tag_value = @as(u8, @intFromEnum(node.tag));
+
+                // Check if it's a statement, expression, or pattern
+                if (tag_value >= CIR.STMT_TAG_START and tag_value < CIR.EXPR_TAG_START) {
+                    // It's a statement
+                    const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
+                    try outputCIR2StmtAsSExpr(writer, cir, env, stmt_idx, indent + 1);
+                } else if (tag_value >= CIR.EXPR_TAG_START and tag_value < CIR.PATT_TAG_START) {
+                    // It's an expression
+                    const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
+                    try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+                } else {
+                    // Unknown or malformed
                     for (0..indent + 1) |_| {
                         try writer.writeAll("  ");
                     }
                     try writer.writeAll("(Expr.malformed)\n");
-                } else {
-                    try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
                 }
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .record_literal => {
+            // Record literals contain expressions
+            const nodes_idx = expr.payload.nodes;
+            try writer.writeAll("\n");
+            var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |field_idx| {
+                // Record fields are expressions
+                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_idx)));
+                try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
             }
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -3420,7 +3460,7 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
 }
 
 /// Helper to output CIR2 statement as S-expression
-fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, stmt_idx: CIR.Stmt.Idx, indent: usize) !void {
+fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, stmt_idx: CIR.Stmt.Idx, indent: usize) anyerror!void {
     const stmt = cir.getStmt(stmt_idx);
 
     // Indent
@@ -3428,12 +3468,79 @@ fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, stmt_idx: CIR.Stmt.Id
         try writer.writeAll("  ");
     }
 
-    // Output statement
-    try writer.print("(Stmt.{s})\n", .{@tagName(stmt.tag)});
+    // Output statement with details
+    try writer.print("(Stmt.{s}", .{@tagName(stmt.tag)});
+
+    // Add details based on statement type
+    switch (stmt.tag) {
+        .assign, .init_var, .reassign => {
+            // These have binop payloads with pattern and expression
+            const binop = cir.getBinOp(CIR.Stmt.Idx, stmt.payload.binop);
+            try writer.writeAll("\n");
+
+            // Output the pattern (left side)
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            try writer.writeAll("(pattern ");
+            const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            try outputCIR2PattAsSExpr(writer, cir, env, patt_idx, 0);
+            try writer.writeAll(")\n");
+
+            // Output the expression (right side)
+            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+            try outputCIR2ExprAsSExpr(writer, cir, env, expr_idx, indent + 1);
+
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .type_anno => {
+            // Type annotation has binop with identifier and type
+            const binop = cir.getBinOp(CIR.Stmt.Idx, stmt.payload.binop);
+            try writer.writeAll("\n");
+
+            // Output the identifier
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            const lhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
+            // Check if the LHS has an identifier in its payload
+            const tag_value = @as(u8, @intFromEnum(lhs_node.tag));
+            if (tag_value >= CIR.PATT_TAG_START) {
+                // It's been mutated to a pattern - check if it's an ident pattern
+                const patt_tag = @as(CIR.PattTag, @enumFromInt(tag_value));
+                if (patt_tag == .ident or patt_tag == .var_ident) {
+                    const ident_name = env.idents.getText(lhs_node.payload.ident);
+                    try writer.print("(name \"{s}\")\n", .{ident_name});
+                } else {
+                    try writer.writeAll("(name <pattern>)\n");
+                }
+            } else if (lhs_node.tag == .lc or lhs_node.tag == .var_lc or lhs_node.tag == .not_lc) {
+                const ident_name = env.idents.getText(lhs_node.payload.ident);
+                try writer.print("(name \"{s}\")\n", .{ident_name});
+            } else {
+                try writer.writeAll("(name <unknown>)\n");
+            }
+
+            // Output the type (for now just show it's a type)
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            try writer.writeAll("(type <type>)\n");
+
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        else => {},
+    }
+
+    try writer.writeAll(")\n");
 }
 
 /// Helper to output CIR2 pattern as S-expression
-fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, patt_idx: CIR.Patt.Idx, indent: usize) !void {
+fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, patt_idx: CIR.Patt.Idx, indent: usize) anyerror!void {
     const patt = cir.getPatt(patt_idx);
 
     // Indent
@@ -3443,10 +3550,19 @@ fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, patt_idx: CIR.Patt.Id
 
     // Output pattern
     try writer.print("(Patt.{s}", .{@tagName(patt.tag)});
+
+    // Add details based on pattern type
+    if (patt.tag == .ident or patt.tag == .var_ident) {
+        // Output the identifier name
+        // The payload is a union, we need to access the ident field directly
+        const ident_name = env.idents.getText(patt.payload.ident);
+        try writer.print(" \"{s}\"", .{ident_name});
+    }
+
     if (patt.is_mutable) {
         try writer.writeAll(" :mutable");
     }
-    try writer.writeAll(")\n");
+    try writer.writeAll(")");
 }
 
 /// Generate SOLVED section showing internal type solving details

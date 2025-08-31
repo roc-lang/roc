@@ -52,15 +52,26 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**record_argument_closure.md:1:3:1:11:**
+**record_argument_closure.md:1:22:1:27:**
 ```roc
 (|{ x, y }| x * y)({ x: 10, y: 20 })
 ```
-  ^^^^^^^^
+                     ^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_argument_closure.md:1:29:1:34:**
+```roc
+(|{ x, y }| x * y)({ x: 10, y: 20 })
+```
+                            ^^^^^
 
 
 # CANONICALIZE

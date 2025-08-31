@@ -32,6 +32,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
+
 BadBase := _
 BadDerived := BadBase
 value : BadDerived
@@ -44,52 +45,61 @@ goodValue = "test"
 # EXPECTED
 NIL
 # PROBLEMS
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**underscore_error_propagation.md:3:12:3:13:**
+**underscore_error_propagation.md:3:9:3:11:**
 ```roc
 BadBase := _
 ```
-           ^
+        ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_error_propagation.md:5:12:5:14:**
+```roc
+BadDerived := BadBase
+```
+           ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_error_propagation.md:10:10:10:12:**
+```roc
+GoodBase := Str
+```
+         ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_error_propagation.md:12:13:12:15:**
+```roc
+GoodDerived := GoodBase
+```
+            ^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "value")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "value")
-    (Expr.str_literal_small)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "goodValue")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "goodValue")
-    (Expr.str_literal_small)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -98,6 +108,4 @@ BadBase := _
 ~~~
 # TYPES
 ~~~roc
-value : Str
-goodValue : Str
 ~~~

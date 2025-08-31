@@ -47,17 +47,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.binop_plus
-      (Expr.lookup "x")
-      (Expr.num_literal_i32 1)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.binop_star
     (Expr.lookup "y")
     (Expr.num_literal_i32 2)
@@ -70,4 +61,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+y : Num(_size)
 ~~~

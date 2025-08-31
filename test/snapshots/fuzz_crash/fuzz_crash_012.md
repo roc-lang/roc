@@ -62,10 +62,21 @@ This is an unexpected parsing error. Please check your syntax.
   ^^^^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_012.md:1:3:1:17:**
+```roc
+||(|(l888888888|
+```
+  ^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_ident)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

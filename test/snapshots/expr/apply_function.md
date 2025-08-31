@@ -27,7 +27,17 @@ foo((42, "hello"))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**apply_function.md:1:1:1:4:**
+```roc
+foo(42, "hello")
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

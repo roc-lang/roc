@@ -69,17 +69,6 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**literal_patterns.md:3:5:3:9:**
-```roc
-    Zero => "hello"
-```
-    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **literal_patterns.md:4:5:5:12:**
 ```roc
     Greeting => 3

@@ -42,77 +42,78 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
+# TODO: if you do this whole thing as an expr block, with `composed` at
+# the end instead of `answer =`, it triggers a parser bug!
+
 make_record : a -> {value : a, tag : Str}
 make_record = |x| { value : x, tag : "data" }
 get_value : {value : a, tag : Str} -> a
 get_value = |r| r.value
 composed : List a -> Str
 composed = |n| get_value(make_record(n))
-answer = composed([42])# TODO: if you do this whole thing as an expr block, with `composed` at
-# the end instead of `answer =`, it triggers a parser bug!
+answer = composed([42])
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**test_nested_instantiation_crash.md:6:21:6:29:**
+```roc
+make_record = |x| { value: x, tag: "data" }
+```
+                    ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**test_nested_instantiation_crash.md:6:31:6:42:**
+```roc
+make_record = |x| { value: x, tag: "data" }
+```
+                              ^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**test_nested_instantiation_crash.md:6:16:6:17:**
+```roc
+make_record = |x| { value: x, tag: "data" }
+```
+               ^
+
+
+**UNUSED VARIABLE**
+Variable **r** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_r` to suppress this warning.
+The unused variable is declared here:
+
+**test_nested_instantiation_crash.md:9:17:9:18:**
+```roc
+get_value = |r| r.value
+```
+                ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "make_record")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "value")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "tag")
-          (Expr.apply_tag)
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "make_record")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "get_value")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "value")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "tag")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "get_value")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "composed")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "composed")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "answer")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -121,8 +122,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-make_record : _b
-get_value : _b
-composed : _b
-answer : _b
 ~~~

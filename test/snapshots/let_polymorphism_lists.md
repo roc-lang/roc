@@ -57,29 +57,32 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
+
+# Basic empty list polymorphism
 my_empty_list = []
+# Empty list used in different contexts
 int_list = [1, 2, 3]
 str_list = ["hello", "world"]
 float_list = [1.1, 2.2, 3.3]
+# Append empty list (polymorphic use)
 all_int_list = int_list + + 
 my_empty_list
 all_str_list = str_list + + 
 my_empty_list
 all_float_list = float_list + + 
 my_empty_list
+# Function returning empty list
 get_empty = |_| []
+# Used at different types
 empty_int_list = get_empty(42)
 empty_str_list = get_empty("test")
 main = |_| {
+	# Type inference should work correctly
 	len1 = List.len(all_int_list)
 	len2 = List.len(all_str_list)
 	len3 = List.len(all_float_list)
 	(len1 + len2) + len3
 }
-
-# Function returning empty list
-# Used at different types
-# Type inference should work correctly
 ~~~
 # EXPECTED
 NIL
@@ -117,65 +120,89 @@ all_float_list = float_list ++ my_empty_list
                              ^^
 
 
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**let_polymorphism_lists.md:12:28:12:41:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**let_polymorphism_lists.md:13:28:13:41:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+                           ^^^^^^^^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**let_polymorphism_lists.md:14:32:14:45:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                               ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **List.len** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**let_polymorphism_lists.md:25:12:25:20:**
+```roc
+    len1 = List.len(all_int_list)
+```
+           ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **List.len** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**let_polymorphism_lists.md:26:12:26:20:**
+```roc
+    len2 = List.len(all_str_list)
+```
+           ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **List.len** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**let_polymorphism_lists.md:27:12:27:20:**
+```roc
+    len3 = List.len(all_float_list)
+```
+           ^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "my_empty_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "int_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "float_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "all_int_list")
-    (Expr.binop_plus
-      (Expr.lookup "int_list")
-      (Expr.malformed)
-    )
-  )
-  (Expr.lookup "my_empty_list")
-  (Expr.binop_equals
-    (Expr.lookup "all_str_list")
-    (Expr.binop_plus
-      (Expr.lookup "str_list")
-      (Expr.malformed)
-    )
-  )
-  (Expr.lookup "my_empty_list")
-  (Expr.binop_equals
-    (Expr.lookup "all_float_list")
-    (Expr.binop_plus
-      (Expr.lookup "float_list")
-      (Expr.malformed)
-    )
-  )
-  (Expr.lookup "my_empty_list")
-  (Expr.binop_equals
-    (Expr.lookup "get_empty")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty_int_list")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty_str_list")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -184,15 +211,4 @@ all_float_list = float_list ++ my_empty_list
 ~~~
 # TYPES
 ~~~roc
-my_empty_list : List(_elem)
-int_list : List(_elem)
-str_list : List(_elem)
-float_list : List(_elem)
-all_int_list : Num(_size)
-all_str_list : Num(_size)
-all_float_list : Num(_size)
-get_empty : _a
-empty_int_list : _a
-empty_str_list : _a
-main : _a
 ~~~

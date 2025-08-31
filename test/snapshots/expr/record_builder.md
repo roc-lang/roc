@@ -57,26 +57,26 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**record_builder.md:1:3:1:6:**
+**record_builder.md:2:5:2:9:**
 ```roc
-{ Foo.Bar.baz <-
+    x: 5,
 ```
-  ^^^
+    ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**record_builder.md:1:6:1:10:**
+**record_builder.md:3:5:3:9:**
 ```roc
-{ Foo.Bar.baz <-
+    y: 0,
 ```
-     ^^^^
+    ^^^^
 
 
 # CANONICALIZE
@@ -84,14 +84,8 @@ This might be a limitation in the current implementation that will be addressed 
 (Expr.record_literal
   (Expr.lambda)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 0)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

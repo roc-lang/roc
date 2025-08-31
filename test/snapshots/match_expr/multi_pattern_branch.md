@@ -51,6 +51,17 @@ match color
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **color** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**multi_pattern_branch.md:1:7:1:12:**
+```roc
+match color {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -60,17 +71,6 @@ This might be a limitation in the current implementation that will be addressed 
     Blue | Green | Red => 1
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**multi_pattern_branch.md:3:5:3:10:**
-```roc
-    Black => 2
-```
-    ^^^^^
 
 
 **UNSUPPORTED NODE**

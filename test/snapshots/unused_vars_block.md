@@ -49,35 +49,85 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 main! = |_| {
+	# Regular unused variable - should warn
 	unused_var = 42
+	# Regular used variable - should be fine
 	used_var = 100
+	# Another unused variable - should warn
 	another_unused = "hello"
-	_ignored = 999
+	# Underscore variable that is unused - should be fine
+	_ignored = # Comment 1
+	# Comment 2
+999
+
+	# Comment 3
+
+	# Use only the used_var
 	result = used_var + 10
 	result : result
 }
-
-# Regular unused variable - should warn
-# Regular used variable - should be fine
-# Another unused variable - should warn
-# Underscore variable that is unused - should be fine
-# Comment 1
-# Comment 2
-# Comment 3
-# Use only the used_var
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **another_unused** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_another_unused` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_block.md:11:5:11:19:**
+```roc
+    another_unused = "hello"
+```
+    ^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **unused_var** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_unused_var` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_block.md:5:5:5:15:**
+```roc
+    unused_var = 42
+```
+    ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **_ignored** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__ignored` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_block.md:14:5:14:13:**
+```roc
+    _ignored # Comment 1
+```
+    ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_block.md:20:5:20:11:**
+```roc
+    result
+```
+    ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

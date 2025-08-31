@@ -33,14 +33,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "name")
-    (Expr.str_literal_small)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -49,6 +43,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-name : Str
-foo : Str
 ~~~

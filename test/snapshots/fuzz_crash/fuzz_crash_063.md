@@ -60,22 +60,33 @@ module[}0}.a
          ^
 
 
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_063.md:1:9:1:10:**
+```roc
+module[}0}.a
+```
+        ^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_063.md:1:10:1:11:**
+**fuzz_crash_063.md:1:10:1:13:**
 ```roc
 module[}0}.a
 ```
-         ^
+         ^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -47,6 +47,17 @@ match value
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**wildcard_patterns.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -58,15 +69,17 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **other** is not used anywhere in your code.
 
-**wildcard_patterns.md:3:5:3:9:**
+If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
+The unused variable is declared here:
+
+**wildcard_patterns.md:4:5:4:10:**
 ```roc
-    Zero => "zero"
+    other => "something else"
 ```
-    ^^^^
+    ^^^^^
 
 
 # CANONICALIZE

@@ -64,38 +64,44 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
+
+# Basic values for polymorphism testing
 num = 42
 frac = 4.2
 str = "hello"
 my_empty_list = []
 my_nonempty_list = [num, frac]
+# Record with polymorphic field
 make_container = |value| { data : value, count : 1 }
+# Used with different types
 int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
+# Polymorphic record update
 update_data = |container, new_value| {
 	container : container
 	& 
 	data : new_value
 }
 
+
+# Used with different record types
 updated_int = update_data((int_container, 100))
 updated_str = update_data((str_container, "world"))
+# Function returning polymorphic record
 identity_record = |x| {
 	value : x
 }
 
+
+# Used at different types
 int_record = identity_record(42)
 str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
 main = |_| {
+	# Access polymorphic fields
 	int_container.count + str_container.count
 }
-
-# Used with different record types
-# Function returning polymorphic record
-# Used at different types
-# Access polymorphic fields
 ~~~
 # EXPECTED
 NIL
@@ -111,77 +117,163 @@ update_data = |container, new_value| { container & data: new_value }
                                                  ^^
 
 
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_records.md:11:28:11:39:**
+```roc
+make_container = |value| { data: value, count: 1 }
+```
+                           ^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_records.md:11:41:11:49:**
+```roc
+make_container = |value| { data: value, count: 1 }
+```
+                                        ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **value** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:11:19:11:24:**
+```roc
+make_container = |value| { data: value, count: 1 }
+```
+                  ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **data** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:19:52:19:56:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                                   ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **container** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_container` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:19:40:19:49:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                       ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **new_value** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_new_value` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:19:27:19:36:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                          ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **container** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_container` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:19:16:19:25:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+               ^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**let_polymorphism_records.md:26:25:26:33:**
+```roc
+identity_record = |x| { value: x }
+```
+                        ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:26:20:26:21:**
+```roc
+identity_record = |x| { value: x }
+```
+                   ^
+
+
+**UNUSED VARIABLE**
+Variable **int_container** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_int_container` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:35:5:35:18:**
+```roc
+    int_container.count + str_container.count
+```
+    ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **str_container** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str_container` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:35:27:35:40:**
+```roc
+    int_container.count + str_container.count
+```
+                          ^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "num")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "frac")
-    (Expr.frac_literal_small 4.2)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "my_empty_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "my_nonempty_list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "make_container")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "int_container")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str_container")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "list_container")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "update_data")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "updated_int")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "updated_str")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity_record")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "int_record")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str_record")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "list_record")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -190,21 +282,4 @@ update_data = |container, new_value| { container & data: new_value }
 ~~~
 # TYPES
 ~~~roc
-num : Num(_size)
-frac : F64
-str : Str
-my_empty_list : List(_elem)
-my_nonempty_list : List(_elem)
-make_container : _a
-int_container : _a
-str_container : _a
-list_container : _a
-update_data : _a
-updated_int : _a
-updated_str : _a
-identity_record : _a
-int_record : _a
-str_record : _a
-list_record : _a
-main : _a
 ~~~

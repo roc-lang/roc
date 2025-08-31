@@ -52,9 +52,9 @@ module[]_0={
 ```
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
 **fuzz_crash_050.md:1:9:1:10:**
 ```roc
@@ -67,12 +67,7 @@ module[]_0={
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.num_literal_i32 0)
-    (Expr.block
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -31,22 +31,22 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**record_chained_access.md:1:1:1:22:**
+**record_chained_access.md:1:7:1:15:**
 ```roc
 person.address.street
 ```
-^^^^^^^^^^^^^^^^^^^^^
+      ^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

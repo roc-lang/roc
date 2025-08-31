@@ -37,7 +37,17 @@ app { pf: "../main.roc" platform [main!], other: "../../other/main.roc" }
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **main!** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**app_header_nonempty_singleline.md:1:35:1:40:**
+```roc
+app { pf: "../main.roc" platform [main!], other: "../../other/main.roc" }
+```
+                                  ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (empty)

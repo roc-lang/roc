@@ -33,43 +33,46 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign Int Lo
 ~~~roc
 module []
 
+
+# Top-level variables
 x = 5
 y = 10
+# Function that shadows outer variable
 outerFunc = |_| {
 	x = 20
+	# Should shadow top-level x
 	innerResult = {
+		# Block scope
 		z = x + y
+		# x should resolve to 20, y to 10
 		z + 1
 	}
 
 	innerResult : innerResult
 }
-
-# Top-level variables
-# Function that shadows outer variable
-# Should shadow top-level x
-# Block scope
-# x should resolve to 20, y to 10
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **innerResult** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_innerResult` to suppress this warning.
+The unused variable is declared here:
+
+**can_basic_scoping.md:15:5:15:16:**
+```roc
+    innerResult
+```
+    ^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 10)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "outerFunc")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -78,7 +81,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-y : Num(_size)
-outerFunc : _a
 ~~~

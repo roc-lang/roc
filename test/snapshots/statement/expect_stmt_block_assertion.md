@@ -27,6 +27,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [foo]
 
+
 foo : Bool -> Bool
 foo = |a| {
 	expect a == Bool.True
@@ -36,21 +37,35 @@ foo = |a| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.True** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**expect_stmt_block_assertion.md:5:17:5:26:**
+```roc
+    expect a == Bool.True
+```
+                ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **a** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+
+**expect_stmt_block_assertion.md:6:5:6:6:**
+```roc
+    a
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -59,5 +74,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _b
 ~~~

@@ -26,6 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport String KwAs LowerI
 ~~~roc
 module [foo]
 
+
 import "users.json" as data : Str
 import Json
 foo = Json.parse(data)
@@ -33,26 +34,26 @@ foo = Json.parse(data)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.parse** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**inline_ingested_file.md:3:1:3:34:**
+**inline_ingested_file.md:6:7:6:17:**
 ```roc
-import "users.json" as data : Str
+foo = Json.parse(data)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      ^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**inline_ingested_file.md:4:1:4:12:**
+**inline_ingested_file.md:6:18:6:22:**
 ```roc
-import Json
+foo = Json.parse(data)
 ```
-^^^^^^^^^^^
+                 ^^^^
 
 
 # CANONICALIZE
@@ -60,10 +61,7 @@ import Json
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -72,5 +70,4 @@ import Json
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

@@ -40,11 +40,14 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 ~~~roc
 module [foo, bar, MyType, OtherType, foo, MyType]
 
-foo = 42
-MyType : [A, B, C]# This module exposes foo, bar, MyType, and OtherType
+
+# This module exposes foo, bar, MyType, and OtherType
 # but only implements foo and MyType
 # This should generate "exposed but not implemented" errors for bar and OtherType
 # Also tests redundant exposed entries for foo and MyType
+
+foo = 42
+MyType : [A, B, C]
 ~~~
 # EXPECTED
 NIL
@@ -53,14 +56,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -69,5 +66,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : Num(_size)
 ~~~

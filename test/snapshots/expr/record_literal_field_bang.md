@@ -40,28 +40,33 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**record_literal_field_bang.md:3:23:3:25:**
+**record_literal_field_bang.md:2:5:2:15:**
+```roc
+    answer: 42,
+```
+    ^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_literal_field_bang.md:3:5:3:30:**
 ```roc
     launchTheNukes!: |{}| ...,
 ```
-                      ^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "answer")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

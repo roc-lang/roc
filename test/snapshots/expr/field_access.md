@@ -24,26 +24,16 @@ person.name
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**field_access.md:1:1:1:12:**
-```roc
-person.name
-```
-^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

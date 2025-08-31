@@ -40,16 +40,33 @@ app { f: "" platform [] }
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_044.md:1:20:2:3:**
+```roc
+app[]{f:platform""}{{0
+}}
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_044.md:4:1:4:3:**
+```roc
+""
+```
+^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.block
-    (Expr.block
-      (Expr.num_literal_i32 0)
-    )
-  )
-  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

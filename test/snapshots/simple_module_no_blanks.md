@@ -33,29 +33,23 @@ world = "World"
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**simple_module_no_blanks.md:2:1:2:17:**
+**simple_module_no_blanks.md:3:10:3:22:**
 ```roc
-import pf.Stdout
+hello! = Stdout.line!("Hello")
 ```
-^^^^^^^^^^^^^^^^
+         ^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "world")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -64,5 +58,4 @@ import pf.Stdout
 ~~~
 # TYPES
 ~~~roc
-world : Str
 ~~~

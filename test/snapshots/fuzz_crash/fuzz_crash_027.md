@@ -188,9 +188,12 @@ LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 # Thnt!
 app { pf: "c" platform [main!] }
 
+
 import pf.Stdout exposing [line!, e!]
-import Stdot exposing [,
+import Stdot exposing [, #tem
 ]
+# Cose
+
 import pkg.S exposing [func]
 as 
 fry
@@ -201,27 +204,45 @@ fry
 import Bae as Gooe
 import Ba
 Map((a, b)) : List a -> (a -> b) -> List b
+# Cere
+# Anre
+# Ag
 MapML(
 	(
 		a,
 		b,
 	),
-) : List -> (a -> b) -> List b
+) : # Aon
+List -> ( #rg
+a -> b) -> # row
+List b
+#
+
 Foo : (Bar, Baz)
-line : (
-	Bar,
+line : # Cpen
+(
+	Bar, #
 	Baz,
 )
+#m
+# Co
 Some(a) : {foo : Ok a, bar : g}
 Ml(a) : {
+	# d
 	bar : Som
 }
+# Afld
+
 Soine(a) : {
+	#d
 	bar : Som
 }
+#
 Maya
-) : [,
+) : [, #
 ]
+#se
+
 Func(a) : Maybe a -> a -> Maybe a
 ane = |num| if num 2 else 5
 add_one : U64 -> U64
@@ -231,6 +252,7 @@ add_one = |num| {
 		{
 			dbg # bug
 ()
+			#r
 			0
 		}
 	else {
@@ -240,13 +262,17 @@ add_one = |num| {
 	}
 }
 
-match_time = |a, b| match a
+
+match_time = |a, #rg
+b| # As
+match a
 	lue || Red => 
 		x : x
 		x : x
 	Blue => 
 		1
-		"foo" => 00
+		"foo" => # ent
+00
 		"foo"
 		=> 
 		20
@@ -254,7 +280,8 @@ match_time = |a, b| match a
 		rest
 		] # Aftet
 			 => ment
-		[1, 2]
+		
+[1, 2]
 		rest
 		] => 123
 		[ist] => 123
@@ -264,8 +291,10 @@ match_time = |a, b| match a
 		123((1, 2))
 		) => 123
 		({ foo : 1, bar : 2, ..rest } => 12-) -> add(34)
-		{
-			foo : 1,
+		{ # Afrd open
+			foo : #
+			#ue
+1, # Aftd field
 			bar : 2,
 			_,
 		} => 12
@@ -276,23 +305,30 @@ match_time = |a, b| match a
 		} => 12
 	Ok(123) => 121000
 
-expect blah == 1
+
+expect # Commeneyword
+blah == 1
+# Commnt
+
 main! : List String -> Result({}, _)
 main! = |
 	_,
-| {
+| { # Yeah Ie
 	world = "World",
 	var number = 123,
 	expect blah == 1,
 	tag = Blue,
-	return tag,
+	return # Comd
+tag,
+	# Jusnt!
+
 	...,
 	match_time(
 		...,
-	),
+	), #
 	some_func(dbg # bug
 			),
-	42,
+	42, # Aft expr
 }
 
 crash "Unreachtement
@@ -328,7 +364,7 @@ m_tuple = (
 	123,
 	"World",
 	tag1,
-	Ok(world),
+	Ok(world), # Thisnt
 	(nested, tuple),
 	[1, 2, 3],
 )
@@ -344,6 +380,7 @@ Stdoline
 !"How about ${ #
 			
 Num.toStr(number)
+# on expr
 } 
 as 
 a
@@ -357,9 +394,10 @@ empty = {}
 tuple : Value(a, b, c)
 expect {
 	foo = 1
+	# Thio
 	blah = 1
 	blah == foo
-}# Thio
+}
 ~~~
 # EXPECTED
 NIL
@@ -898,56 +936,93 @@ empty : {}
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:4:1:4:38:**
-```roc
-import pf.Stdout exposing [line!, e!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:6:1:8:4:**
-```roc
-import Stdot
-		exposing [ #tem
-		] # Cose
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:10:1:10:28:**
+**fuzz_crash_027.md:10:29:10:32:**
 ```roc
 import pkg.S exposing [func as fry, Custom.*]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            ^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_027.md:10:32:10:35:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+                               ^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:12:1:12:19:**
+**fuzz_crash_027.md:10:35:10:37:**
 ```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+                                  ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:10:43:10:45:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+```
+                                          ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:10:45:12:1:**
+```roc
+import pkg.S exposing [func as fry, Custom.*]
+
 import Bae as Gooe
 ```
-^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:13:1:14:4:**
+**fuzz_crash_027.md:40:1:40:5:**
 ```roc
-import
-	Ba
+Maya) : [ #
 ```
+^^^^
+
+
+**UNUSED VARIABLE**
+Variable **other** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_027.md:56:3:56:8:**
+```roc
+		other
+```
+		^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **other** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_027.md:49:2:49:7:**
+```roc
+	other = 1
+```
+	^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -962,26 +1037,15 @@ This might be a limitation in the current implementation that will be addressed 
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **rest** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:67:3:67:7:**
+**fuzz_crash_027.md:70:38:70:42:**
 ```roc
-		Blue		=> 1
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
 ```
-		^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:68:3:68:8:**
-```roc
-		"foo" => # ent
-```
-		^^^^^
+		                                   ^^^^
 
 
 **UNSUPPORTED NODE**
@@ -993,6 +1057,17 @@ This might be a limitation in the current implementation that will be addressed 
 		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
 			=> ment
 ```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **ment** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:71:7:71:11:**
+```roc
+			=> ment
+```
+			   ^^^^
 
 
 **UNSUPPORTED NODE**
@@ -1010,29 +1085,6 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:75:3:77:4:**
-```roc
-		[
-ist
-		] => 123
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:78:3:78:7:**
-```roc
-		3.14 => 314
-```
-		^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **fuzz_crash_027.md:81:15:81:17:**
 ```roc
 		(1, 2 | 5, 3) => 123
@@ -1040,30 +1092,37 @@ This might be a limitation in the current implementation that will be addressed 
 		            ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **add** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_027.md:82:3:82:29:**
+**fuzz_crash_027.md:82:37:82:40:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-		^^^^^^^^^^^^^^^^^^^^^^^^^^
+		                                  ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**fuzz_crash_027.md:83:3:88:7:**
+**fuzz_crash_027.md:89:5:89:11:**
 ```roc
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
 ```
+		  ^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_027.md:89:13:89:19:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		          ^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -1077,16 +1136,30 @@ This might be a limitation in the current implementation that will be addressed 
 		                     ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **..rest** is not used anywhere in your code.
 
-**fuzz_crash_027.md:90:3:92:5:**
+If you don't need this variable, prefix it with an underscore like `_..rest` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_027.md:82:21:82:27:**
 ```roc
-		{
-			foo: 1,
-			} => 12
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
+		                  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **ist** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_027.md:76:1:76:4:**
+```roc
+ist
+```
+^^^
 
 
 **UNSUPPORTED NODE**
@@ -1100,48 +1173,507 @@ This might be a limitation in the current implementation that will be addressed 
 		^^^^^^^^^^^^^^^^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNUSED VARIABLE**
+Variable **b** is not used anywhere in your code.
 
-**fuzz_crash_027.md:99:36:99:37:**
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+
+**fuzz_crash_027.md:62:2:62:3:**
 ```roc
-main! : List(String) -> Result({}, _)
+	b,
 ```
-                                   ^
+	^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:142:23:142:24:**
+**fuzz_crash_027.md:96:1:97:11:**
 ```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+expect # Commeneyword
+	blah == 1 # Commnt
 ```
-	                     ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:101:2:101:7:**
+```roc
+	world = "World"
+```
+	^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **var number** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:102:2:102:12:**
+```roc
+	var number = 123
+```
+	^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **blah** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:103:9:103:13:**
+```roc
+	expect blah == 1
+```
+	       ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:104:2:104:5:**
+```roc
+	tag = Blue
+```
+	^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:106:3:106:6:**
+```roc
+		tag
+```
+		^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **some_func** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:114:2:114:11:**
+```roc
+	some_func(
+```
+	^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **number** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:119:16:119:22:**
+```roc
+	tag_with = Ok(number)
+```
+	              ^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_027.md:124:1:124:2:**
+```roc
+e[, # afarg
+```
+^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:142:33:142:34:**
+**fuzz_crash_027.md:124:2:125:3:**
 ```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+e[, # afarg
+		),	456, # ee
 ```
-	                               ^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:142:40:142:41:**
+**fuzz_crash_027.md:125:3:125:4:**
+```roc
+		),	456, # ee
+```
+		^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:125:4:125:6:**
+```roc
+		),	456, # ee
+```
+		 ^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_027.md:125:6:125:9:**
+```roc
+		),	456, # ee
+```
+		  	^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:125:9:126:2:**
+```roc
+		),	456, # ee
+	]
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:126:2:127:2:**
+```roc
+	]
+	for n in list {
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:127:2:130:3:**
+```roc
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_027.md:131:13:131:21:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	           ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_027.md:131:23:131:35:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                     ^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_027.md:131:37:131:45:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                   ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_027.md:131:47:131:61:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                             ^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **punned** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:131:63:131:69:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	                                                             ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:132:25:132:28:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                       ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:132:33:132:38:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                               ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **nested** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:132:42:132:48:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tag1** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:136:3:136:7:**
+```roc
+		tag1,
+```
+		^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:137:6:137:11:**
+```roc
+		Ok(world), # Thisnt
+```
+		   ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **nested** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:138:4:138:10:**
+```roc
+		(nested, tuple),
+```
+		 ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:141:14:141:17:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	            ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **some_fn** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:142:10:142:17:**
 ```roc
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
 ```
-	                                      ^
+	        ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **arg1** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_027.md:142:18:142:22:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:142:23:142:33:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                     ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:142:33:142:40:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                               ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:142:40:142:46:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                                      ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:142:46:143:2:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:143:2:143:10:**
+```roc
+	Stdoline!(
+```
+	^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:143:10:143:11:**
+```roc
+	Stdoline!(
+```
+	        ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:145:4:145:21:**
+```roc
+			Num.toStr(number) # on expr
+```
+			^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:146:3:146:5:**
+```roc
+		} as a",
+```
+		^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:146:5:146:8:**
+```roc
+		} as a",
+```
+		  ^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_027.md:146:8:146:9:**
+```roc
+		} as a",
+```
+		     ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:146:9:147:2:**
+```roc
+		} as a",
+	)
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:147:2:148:1:**
+```roc
+	)
+} # Commenl decl
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:148:1:150:1:**
+```roc
+} # Commenl decl
+
+empty : {}
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_027.md:155:1:159:2:**
+```roc
+expect {
+	foo = 1 # Thio
+	blah = 1
+	blah == foo
+}
+```
 
 
 # CANONICALIZE
@@ -1151,286 +1683,62 @@ This might be a limitation in the current implementation that will be addressed 
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "fry")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "line")
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.lookup "g")
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.apply_tag)
-  (Expr.binop_colon
-    (Expr.malformed)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "ane")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "add_one")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "match_time")
-    (Expr.lambda)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
-  (Expr.crash
-    (Expr.malformed)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "tag_with")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "ited")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "list")
-    (Expr.list_literal)
-  )
-  (Expr.lookup "e")
-  (Expr.list_literal)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 456)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.block
-    (Expr.malformed)
-    (Expr.lookup "list")
-    (Expr.block
-      (Expr.apply_ident)
-      (Expr.binop_equals
-        (Expr.lookup "number")
-        (Expr.binop_plus
-          (Expr.lookup "number")
-          (Expr.lookup "n")
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "record")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.num_literal_i32 123)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "baz")
-        (Expr.lookup "tag")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "qux")
-        (Expr.apply_tag)
-      )
-      (Expr.lookup "punned")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "m_tuple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 123)
-      (Expr.str_literal_big)
-      (Expr.lookup "tag1")
-      (Expr.apply_tag)
-      (Expr.tuple_literal
-        (Expr.lookup "nested")
-        (Expr.lookup "tuple")
-      )
-      (Expr.list_literal)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "bsult")
-    (Expr.binop_or
-      (Expr.binop_or
-        (Expr.binop_gt
-          (Expr.binop_double_question
-            (Expr.apply_tag)
-            (Expr.num_literal_i32 12)
-          )
-          (Expr.binop_star
-            (Expr.num_literal_i32 5)
-            (Expr.num_literal_i32 5)
-          )
-        )
-        (Expr.binop_and
-          (Expr.binop_lt
-            (Expr.binop_plus
-              (Expr.num_literal_i32 13)
-              (Expr.num_literal_i32 2)
-            )
-            (Expr.num_literal_i32 5)
-          )
-          (Expr.binop_gte
-            (Expr.binop_minus
-              (Expr.num_literal_i32 10)
-              (Expr.num_literal_i32 1)
-            )
-            (Expr.num_literal_i32 16)
-          )
-        )
-      )
-      (Expr.binop_lte
-        (Expr.num_literal_i32 12)
-        (Expr.binop_slash
-          (Expr.num_literal_i32 3)
-          (Expr.num_literal_i32 5)
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "stale")
-    (Expr.apply_ident)
-  )
-  (Expr.apply_ident)
-  (Expr.apply_ident)
-  (Expr.lambda)
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.unary_not)
-  (Expr.apply_ident)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.lookup "a")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "empty")
-    (Expr.record_literal
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty")
-    (Expr.record_literal
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "tuple")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -1440,16 +1748,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-ane : _d
-add_one : _d
-match_time : _d
-tag_with : []_others
-ited : Str
-list : List(_elem)
-record : {}
-tuple : _d
-m_tuple : _d
-bsult : [True, False]_others
-stale : _d
-empty : {}
 ~~~

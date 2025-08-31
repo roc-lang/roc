@@ -27,6 +27,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [person, updated]
 
+
 person = { name : "Alice", age : 30 }
 updated = { ..person }
 age : 31
@@ -57,32 +58,45 @@ Expressions can be identifiers, literals, function calls, or operators.
          ^
 
 
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_047.md:3:12:3:25:**
+```roc
+person = { name: "Alice", age: 30 }
+```
+           ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**fuzz_crash_047.md:3:27:3:34:**
+```roc
+person = { name: "Alice", age: 30 }
+```
+                          ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_047.md:5:10:5:11:**
+```roc
+ age: 31 }
+```
+         ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "person")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.num_literal_i32 30)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "updated")
-    (Expr.record_literal
-      (Expr.unary_double_dot)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -92,6 +106,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-person : {}
-updated : {}
 ~~~

@@ -44,14 +44,19 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
+# Type variable 'elem' introduced in annotation
 process : List elem -> elem
 process = |list| {
+	# value identifier named 'elem' is allowed - different namespace from type variable
 	elem = 42
+	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
 	List.first(list)
 	Result | .withDefault(elem)
 	result
 }
+
 
 main! = |_| {}
 ~~~
@@ -80,6 +85,17 @@ Expressions can be identifiers, literals, function calls, or operators.
                                  ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **List.first** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**type_var_namespace.md:11:14:11:24:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+             ^^^^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -94,21 +110,9 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.lookup "elem")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "process")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -117,5 +121,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-process : _a
 ~~~

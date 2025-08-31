@@ -31,6 +31,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [foo]
 
+
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
 	str = if num > 10
@@ -51,17 +52,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -70,5 +62,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

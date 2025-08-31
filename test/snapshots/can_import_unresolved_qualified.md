@@ -44,201 +44,73 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 ~~~roc
 module []
 
+
 import json.Json
 import http.Client as Http
+# Test unresolved qualified value
 main = (Json.NonExistent | .method)
+# Test unresolved qualified type in annotation
 parseData : Json.InvalidType -> Str
 parseData = |data| Json.stringify(data)
+# Test unresolved nested qualification
 processRequest : Http.Server | Request -> Http.Server | Response
 processRequest = |req| Http.Server | .defaultResponse
-result = Json.prase("test")
-config = (Unknown.Module | .config)
-client = Http.invalidMethod
-parser = (Json.Parser | Advanced | NonExistent | .create)# Test unresolved qualified value
-# Test unresolved qualified type in annotation
-# Test unresolved nested qualification
 # Test typo in qualified name
+result = Json.prase("test")
 # Test unknown module qualification
+config = (Unknown.Module | .config)
 # Test valid module but invalid member
+client = Http.invalidMethod
 # Test deeply nested invalid qualification
+parser = (Json.Parser | Advanced | NonExistent | .create)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.stringify** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_unresolved_qualified.md:3:1:3:17:**
+**can_import_unresolved_qualified.md:11:20:11:34:**
 ```roc
-import json.Json
+parseData = |data| Json.stringify(data)
 ```
-^^^^^^^^^^^^^^^^
+                   ^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **req** is not used anywhere in your code.
 
-**can_import_unresolved_qualified.md:4:1:4:27:**
-```roc
-import http.Client as Http
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
 
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:7:8:7:12:**
-```roc
-main = Json.NonExistent.method
-```
-       ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:7:12:7:24:**
-```roc
-main = Json.NonExistent.method
-```
-           ^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:14:18:14:22:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                 ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:14:22:14:29:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                     ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:14:41:14:45:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                                        ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:14:45:14:52:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                                            ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:15:24:15:28:**
+**can_import_unresolved_qualified.md:15:19:15:22:**
 ```roc
 processRequest = |req| Http.Server.defaultResponse
 ```
-                       ^^^^
+                  ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.prase** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_unresolved_qualified.md:15:28:15:35:**
+**can_import_unresolved_qualified.md:18:10:18:20:**
 ```roc
-processRequest = |req| Http.Server.defaultResponse
+result = Json.prase("test")
 ```
-                           ^^^^^^^
+         ^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Http.invalidMethod** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_unresolved_qualified.md:21:10:21:17:**
+**can_import_unresolved_qualified.md:24:10:24:28:**
 ```roc
-config = Unknown.Module.config
+client = Http.invalidMethod
 ```
-         ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:21:17:21:24:**
-```roc
-config = Unknown.Module.config
-```
-                ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:27:10:27:14:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-         ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:27:14:27:21:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-             ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:27:21:27:30:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-                    ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:27:30:27:42:**
-```roc
-parser = Json.Parser.Advanced.NonExistent.create
-```
-                             ^^^^^^^^^^^^
+         ^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -246,54 +118,15 @@ parser = Json.Parser.Advanced.NonExistent.create
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "parseData")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "parseData")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processRequest")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.lambda)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processRequest")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "result")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "config")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "client")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "parser")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -302,11 +135,4 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # TYPES
 ~~~roc
-main : _a
-parseData : _a
-processRequest : _a
-result : _a
-config : _a
-client : _a
-parser : _a
 ~~~

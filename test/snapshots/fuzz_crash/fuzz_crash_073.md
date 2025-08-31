@@ -39,18 +39,29 @@ module[]!0.t
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_073.md:1:11:1:12:**
+**fuzz_crash_073.md:1:9:1:10:**
 ```roc
 module[]!0.t
 ```
-          ^
+        ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_073.md:1:11:1:14:**
+```roc
+module[]!0.t
+```
+          ^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.unary_not)
-  (Expr.lambda)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

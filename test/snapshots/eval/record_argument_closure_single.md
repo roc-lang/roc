@@ -56,6 +56,28 @@ This might be a limitation in the current implementation that will be addressed 
   ^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_argument_closure_single.md:1:10:1:11:**
+```roc
+(|{ x }| x )({ x: -10 })
+```
+         ^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_argument_closure_single.md:1:16:1:20:**
+```roc
+(|{ x }| x )({ x: -10 })
+```
+               ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

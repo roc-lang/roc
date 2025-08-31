@@ -34,15 +34,30 @@ OpBar OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpBar String ~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **first_name** is not used anywhere in your code.
 
-**function_record_parameter_rest.md:1:2:1:24:**
+If you don't need this variable, prefix it with an underscore like `_first_name` to suppress this warning.
+The unused variable is declared here:
+
+**function_record_parameter_rest.md:1:4:1:14:**
 ```roc
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ```
- ^^^^^^^^^^^^^^^^^^^^^^
+   ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **..rest** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_..rest` to suppress this warning.
+The unused variable is declared here:
+
+**function_record_parameter_rest.md:1:16:1:22:**
+```roc
+|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
+```
+               ^^^^^^
 
 
 # CANONICALIZE

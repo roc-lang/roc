@@ -47,6 +47,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~roc
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 
+
 Map((a, b)) : List a -> (a -> b) -> List b
 Foo : (Bar, Baz)
 Some(a) : {foo : Ok a, bar : Something}
@@ -62,64 +63,13 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "foo")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "bar")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

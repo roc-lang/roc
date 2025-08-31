@@ -38,38 +38,61 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
+
+# Regular function with var usage
 processItems = |items| {
 	var count_ = 0
 	var total_ = 0
+	# Reassign vars within same function - should work
 	count_ = count_ + 1
 	total_ = total_ + 10
+	# Nested function - var reassignment should fail across function boundary
 	nestedFunc = |_| {
 		count_ = count_ + 5
+		# Should cause error - different function
 		total_ = total_ * 2
+		# Should cause error - different function
 		count_ : count_
 	}
+
 
 	result = nestedFunc({})
 	total_ + result
 }
-
-# Regular function with var usage
-# Reassign vars within same function - should work
-# Nested function - var reassignment should fail across function boundary
-# Should cause error - different function
-# Should cause error - different function
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **count_** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_count_` to suppress this warning.
+The unused variable is declared here:
+
+**can_var_scoping_regular_var.md:16:3:16:9:**
+```roc
+		count_
+```
+		^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **items** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+
+**can_var_scoping_regular_var.md:4:17:4:22:**
+```roc
+processItems = |items| {
+```
+                ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "processItems")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -78,5 +101,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-processItems : _a
 ~~~

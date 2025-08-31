@@ -49,9 +49,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
+# Regular variable that is unused - should warn
 unused_regular = |x| 42
+# Underscore variable that is used - should warn
 used_underscore = |_value| _value
+# Underscore variable that is unused - should be fine
 unused_underscore = |_ignored| 100
+# Regular variable that is used - should be fine
 used_regular = |number| number + 1
 main! = |_| {
 	a = unused_regular(5)
@@ -60,39 +65,44 @@ main! = |_| {
 	d = used_regular(20)
 	((a + b) + c) + d
 }
-
-# Regular variable that is unused - should warn
-# Underscore variable that is used - should warn
-# Underscore variable that is unused - should be fine
-# Regular variable that is used - should be fine
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_simple.md:4:19:4:20:**
+```roc
+unused_regular = |x| 42
+```
+                  ^
+
+
+**UNUSED VARIABLE**
+Variable **_ignored** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__ignored` to suppress this warning.
+The unused variable is declared here:
+
+**unused_vars_simple.md:10:22:10:30:**
+```roc
+unused_underscore = |_ignored| 100
+```
+                     ^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "unused_regular")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "used_underscore")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "unused_underscore")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "used_regular")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -101,8 +111,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-unused_regular : _e
-used_underscore : _e
-unused_underscore : _e
-used_regular : _e
 ~~~

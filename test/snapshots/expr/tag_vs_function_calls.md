@@ -114,30 +114,71 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**tag_vs_function_calls.md:2:5:2:22:**
+```roc
+    someTag: Some(42),
+```
+    ^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**tag_vs_function_calls.md:3:5:3:18:**
+```roc
+    noneTag: None,
+```
+    ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**tag_vs_function_calls.md:4:5:4:23:**
+```roc
+    okTag: Ok("hello"),
+```
+    ^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**tag_vs_function_calls.md:5:5:5:24:**
+```roc
+    errTag: Err("oops"),
+```
+    ^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**tag_vs_function_calls.md:6:5:9:47:**
+```roc
+    addOne: |x| x + 1,
+    result: addOne(5),
+    nested: Some(Ok(Just(42))),
+    tagList: [Some(1), Some(2), None, Some(3)],
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "someTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "noneTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "okTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "errTag")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "addOne")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

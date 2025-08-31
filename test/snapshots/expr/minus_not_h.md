@@ -21,7 +21,17 @@ OpUnaryMinus OpBang LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **h** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**minus_not_h.md:1:3:1:4:**
+```roc
+-!h
+```
+  ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.unary_neg)

@@ -52,6 +52,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 ~~~roc
 module []
 
+
 import json.Json
 import http.Client as Http exposing [get, post]
 import utils.String as Str
@@ -59,55 +60,110 @@ main = {
 	client = Http.get
 	parser = Json.utf8
 	helper = Str.trim
+	# Test direct module access
 	result1 = Json.parse
+	# Test aliased module access
 	result2 = Http.post
+	# Test exposed items (should work without module prefix)
 	result3 = get
 	result4 = post
+	# Test multiple qualified access
 	combined = Str.concat(
-		(client, parser, helper, result1, result2, result3, result4, combined),
+		
+(client, parser, helper, result1, result2, result3, result4, combined),
 	)
 
 }
-
-# Test direct module access
-# Test aliased module access
-# Test exposed items (should work without module prefix)
-# Test multiple qualified access
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Http.get** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_comprehensive.md:3:1:3:17:**
+**can_import_comprehensive.md:8:14:8:22:**
 ```roc
-import json.Json
+    client = Http.get
 ```
-^^^^^^^^^^^^^^^^
+             ^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.utf8** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_comprehensive.md:4:1:4:48:**
+**can_import_comprehensive.md:9:14:9:23:**
 ```roc
-import http.Client as Http exposing [get, post]
+    parser = Json.utf8
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Str.trim** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_comprehensive.md:5:1:5:27:**
+**can_import_comprehensive.md:10:14:10:22:**
 ```roc
-import utils.String as Str
+    helper = Str.trim
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Json.parse** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_comprehensive.md:13:15:13:25:**
+```roc
+    result1 = Json.parse
+```
+              ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Http.post** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_comprehensive.md:16:15:16:24:**
+```roc
+    result2 = Http.post
+```
+              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **get** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_comprehensive.md:19:15:19:18:**
+```roc
+    result3 = get
+```
+              ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **post** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_comprehensive.md:20:15:20:19:**
+```roc
+    result4 = post
+```
+              ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Str.concat** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_comprehensive.md:23:16:23:26:**
+```roc
+    combined = Str.concat
+```
+               ^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -116,58 +172,7 @@ import utils.String as Str
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.block
-      (Expr.binop_equals
-        (Expr.lookup "client")
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "parser")
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "helper")
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "result1")
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "result2")
-        (Expr.module_access
-          (Expr.malformed)
-          (Expr.malformed)
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "result3")
-        (Expr.lookup "get")
-      )
-      (Expr.binop_equals
-        (Expr.lookup "result4")
-        (Expr.lookup "post")
-      )
-      (Expr.binop_equals
-        (Expr.lookup "combined")
-        (Expr.apply_ident)
-      )
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -176,5 +181,4 @@ import utils.String as Str
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

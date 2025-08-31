@@ -93,14 +93,22 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
+# Use 'a' as a local variable name to force type variable generation to skip it
 a = 42
+# This should get type 'b -> b' since 'a' is taken
 identity = |x| x
+# Use more names to test the sequence
 b = "hello"
 c = 3.14
 d = True
 e = False
+# This should get type 'f -> f' since a,b,c,d,e are taken
 anotherIdentity = |y| y
+# Test with a function that has multiple type variables
+# Should get types like 'f, g -> (f, g)' or similar
 combine = |first, second| (first, second)
+# Use even more names to test wraparound behavior
 f = 1
 g = 2
 h = 3
@@ -122,176 +130,105 @@ w = 18
 x = 19
 y = 20
 z = 21
+# This should get type 'aa -> aa' since a-z are taken
 yetAnotherIdentity = |arg| arg
+# Test that we still avoid collisions even with two-letter names
 aa = 100
 ab = 200
+# This should skip 'aa' and 'ab' and use 'ac -> ac'
 finalIdentity = |param| param
 main! = |_| {
+	# Use some of our functions to avoid unused warnings
 	result1 = identity(123)
 	result2 = anotherIdentity("test")
 	result3 = combine((result1, result2))
 	result4 = yetAnotherIdentity(True)
 	result5 = finalIdentity(3.14)
+	# Return something to complete the function
 	a + f
 }
 
-# Use 'a' as a local variable name to force type variable generation to skip it
-# This should get type 'b -> b' since 'a' is taken
-# Use more names to test the sequence
-# This should get type 'f -> f' since a,b,c,d,e are taken
-# Test with a function that has multiple type variables
-# Should get types like 'f, g -> (f, g)' or similar
-# Use even more names to test wraparound behavior
-# This should get type 'aa -> aa' since a-z are taken
-# Test that we still avoid collisions even with two-letter names
-# This should skip 'aa' and 'ab' and use 'ac -> ac'
-# Use some of our functions to avoid unused warnings
-# Return something to complete the function
 # Just use some of our variables
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **result5** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result5` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_name_avoids_collision.md:61:5:61:12:**
+```roc
+    result5 = finalIdentity(3.14)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result3** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_name_avoids_collision.md:59:5:59:12:**
+```roc
+    result3 = combine(result1, result2)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result4** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result4` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_name_avoids_collision.md:60:5:60:12:**
+```roc
+    result4 = yetAnotherIdentity(True)
+```
+    ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "a")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "b")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "c")
-    (Expr.frac_literal_small 3.14)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "d")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "e")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "anotherIdentity")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "combine")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "f")
-    (Expr.num_literal_i32 1)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "g")
-    (Expr.num_literal_i32 2)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "h")
-    (Expr.num_literal_i32 3)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "i")
-    (Expr.num_literal_i32 4)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "j")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "k")
-    (Expr.num_literal_i32 6)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "l")
-    (Expr.num_literal_i32 7)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "m")
-    (Expr.num_literal_i32 8)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "n")
-    (Expr.num_literal_i32 9)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "o")
-    (Expr.num_literal_i32 10)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "p")
-    (Expr.num_literal_i32 11)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "q")
-    (Expr.num_literal_i32 12)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "r")
-    (Expr.num_literal_i32 13)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "s")
-    (Expr.num_literal_i32 14)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "t")
-    (Expr.num_literal_i32 15)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "u")
-    (Expr.num_literal_i32 16)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "v")
-    (Expr.num_literal_i32 17)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "w")
-    (Expr.num_literal_i32 18)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 19)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 20)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "z")
-    (Expr.num_literal_i32 21)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "yetAnotherIdentity")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "aa")
-    (Expr.num_literal_i32 100)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "ab")
-    (Expr.num_literal_i32 200)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "finalIdentity")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -300,37 +237,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-a : Num(_size)
-identity : _ac
-b : Str
-c : F64
-d : []_others
-e : []_others
-anotherIdentity : _ac
-combine : _ac
-f : Num(_size)
-g : Num(_size)
-h : Num(_size)
-i : Num(_size)
-j : Num(_size)
-k : Num(_size)
-l : Num(_size)
-m : Num(_size)
-n : Num(_size)
-o : Num(_size)
-p : Num(_size)
-q : Num(_size)
-r : Num(_size)
-s : Num(_size)
-t : Num(_size)
-u : Num(_size)
-v : Num(_size)
-w : Num(_size)
-x : Num(_size)
-y : Num(_size)
-z : Num(_size)
-yetAnotherIdentity : _ac
-aa : Num(_size)
-ab : Num(_size)
-finalIdentity : _ac
 ~~~

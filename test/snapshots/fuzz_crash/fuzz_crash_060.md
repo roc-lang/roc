@@ -21,6 +21,7 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 module []
 
 C : k || match 0
+#
 }
 ~~~
 # EXPECTED
@@ -48,16 +49,21 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_060.md:3:1:3:2:**
+```roc
+}
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_or
-      (Expr.lookup "k")
-      (Expr.match)
-    )
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

@@ -108,6 +108,7 @@ module [
 	named,
 ]
 
+
 Color := [RGB((U8, U8, U8)), RGBA((U8, U8, U8, Dec)), Named(Str), Hex(Str)]
 rgb : U8 -> U8 -> U8 -> Color
 rgb = |r, g, b| Color.RGB((r, g, b))
@@ -117,18 +118,22 @@ rgba = |r, g, b, a| {
 	Color.RGBA((r, g, b, rounded))
 }
 
+
 hex : Str -> Result(Color, [InvalidHex(Str)])
 hex = |str| {
+
 	bytes = str.to_utf8()
 	is_char_in_hex_range = |b| (b >= '0' && b <= '9' || b >= 'a' && b <= 'f') || b >= 'A' && b <= 'F'
 	match bytes
 		['#', a, b, c, d, e, f] => 
 			is_valid = ((((a.is_char_in_hex_range() && b.is_char_in_hex_range()) && c.is_char_in_hex_range()) && d.is_char_in_hex_range()) && e.is_char_in_hex_range()) && f.is_char_in_hex_range()
-			if is_valid Ok(Color.Hex(str))
+			
+if is_valid Ok(Color.Hex(str))
 			else 
 			Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		_ => Err
 }
+
 
 to_str : Color -> Str
 to_str = |color| match color
@@ -287,6 +292,54 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **Color.RGB** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:18:17:18:26:**
+```roc
+rgb = |r, g, b| Color.RGB(r, g, b)
+```
+                ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.RGBA** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:23:5:23:15:**
+```roc
+    Color.RGBA(r, g, b, rounded)
+```
+    ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **a** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:22:15:22:16:**
+```roc
+    rounded = a.to_frac() / 255.0
+```
+              ^
+
+
+**UNUSED VARIABLE**
+Variable **a** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:21:18:21:19:**
+```roc
+rgba = |r, g, b, a| {
+```
+                 ^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -305,6 +358,199 @@ This might be a limitation in the current implementation that will be addressed 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
         }
 ```
+
+
+**UNUSED VARIABLE**
+Variable **str** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:29:13:29:16:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^
+
+
+**UNUSED VARIABLE**
+Variable **is_char_in_hex_range** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_is_char_in_hex_range` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:30:5:30:25:**
+```roc
+    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+```
+    ^^^^^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **str** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:27:8:27:11:**
+```roc
+hex = |str| {
+```
+       ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:50:15:50:16:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+              ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **g** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:50:18:50:19:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+                 ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:50:21:50:22:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+                    ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.RGBA** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:51:5:51:15:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:51:16:51:17:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+               ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **g** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:51:19:51:20:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                  ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:51:22:51:23:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                     ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:51:25:51:26:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.Named** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:52:5:52:16:**
+```roc
+    Color.Named(inner) => inner
+```
+    ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **inner** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:52:17:52:22:**
+```roc
+    Color.Named(inner) => inner
+```
+                ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **inner** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:52:27:52:32:**
+```roc
+    Color.Named(inner) => inner
+```
+                          ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.Hex** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:53:5:53:14:**
+```roc
+    Color.Hex(inner) => inner
+```
+    ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **inner** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:53:15:53:20:**
+```roc
+    Color.Hex(inner) => inner
+```
+              ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **inner** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:53:25:53:30:**
+```roc
+    Color.Hex(inner) => inner
+```
+                        ^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -340,6 +586,106 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
        ^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **Color.Named** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:63:12:63:23:**
+```roc
+        Ok(Color.Named(str))
+```
+           ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Set.from_list** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**Color.md:68:14:68:27:**
+```roc
+    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
+```
+             ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **colors** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_colors` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:70:5:70:11:**
+```roc
+    colors.contains(str)
+```
+    ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **hex** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_hex` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:27:1:27:4:**
+```roc
+hex = |str| {
+```
+^^^
+
+
+**UNUSED VARIABLE**
+Variable **named** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_named` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:61:1:61:6:**
+```roc
+named = |str|
+```
+^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **is_named_color** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_is_named_color` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:67:1:67:15:**
+```roc
+is_named_color = |str|{
+```
+^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **rgba** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rgba` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:21:1:21:5:**
+```roc
+rgba = |r, g, b, a| {
+```
+^^^^
+
+
+**UNUSED VARIABLE**
+Variable **rgb** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rgb` to suppress this warning.
+The unused variable is declared here:
+
+**Color.md:18:1:18:4:**
+```roc
+rgb = |r, g, b| Color.RGB(r, g, b)
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -347,65 +693,14 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
     (Expr.apply_tag)
     (Expr.list_literal)
   )
-  (Expr.binop_colon
-    (Expr.lookup "rgb")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.apply_tag)
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "rgb")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "rgba")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.binop_thin_arrow
-            (Expr.apply_tag)
-            (Expr.apply_tag)
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "rgba")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "hex")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "hex")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "to_str")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "to_str")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.apply_tag)
   (Expr.malformed)
   (Expr.str_literal_big)
@@ -422,23 +717,11 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "named")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "named")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.apply_tag)
-  (Expr.binop_equals
-    (Expr.lookup "is_named_color")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

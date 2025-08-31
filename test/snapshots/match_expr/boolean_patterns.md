@@ -38,6 +38,17 @@ match isReady
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **isReady** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**boolean_patterns.md:1:7:1:14:**
+```roc
+match isReady {
+```
+      ^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -47,17 +58,6 @@ This might be a limitation in the current implementation that will be addressed 
 	True => "ready to go!"
 ```
 	^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**boolean_patterns.md:3:2:3:7:**
-```roc
-	False => "not ready yet"
-```
-	^^^^^
 
 
 # CANONICALIZE

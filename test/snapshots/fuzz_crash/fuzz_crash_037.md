@@ -34,6 +34,17 @@ module[]"\
         ^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_037.md:1:9:1:11:**
+```roc
+module[]"\
+```
+        ^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

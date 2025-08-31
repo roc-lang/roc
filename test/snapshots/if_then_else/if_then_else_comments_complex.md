@@ -24,6 +24,8 @@ KwIf LineComment LowerIdent LineComment OpenCurly LineComment Int CloseCurly Lin
 ~~~
 # FORMATTED
 ~~~roc
+# Comment after if
+# Comment after cond
 { # Comment after then open
 			# Comment after then close
 # Comment after else
@@ -56,26 +58,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**if_then_else_comments_complex.md:3:3:4:4:**
-```roc
-		{ # Comment after then open
-			1
-```
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

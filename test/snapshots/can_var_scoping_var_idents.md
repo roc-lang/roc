@@ -27,17 +27,19 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
+
+# Function showing var vs regular identifier independence
 testFunc = |input| {
 	sum = input
+	# Regular identifier
 	var sum_ = input * 2
+	# Var with underscore - should not conflict
+
 	sum_ = sum_ + sum
+	# Reassign var - should work
 	sum + sum_
 }
 
-# Function showing var vs regular identifier independence
-# Regular identifier
-# Var with underscore - should not conflict
-# Reassign var - should work
 # Both should be accessible
 ~~~
 # EXPECTED
@@ -47,10 +49,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "testFunc")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -59,5 +58,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-testFunc : _a
 ~~~

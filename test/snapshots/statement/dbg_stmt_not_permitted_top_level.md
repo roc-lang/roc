@@ -26,6 +26,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwDbg String Bl
 ~~~roc
 module [foo]
 
+
+# not permitted
 dbg 
 "foo"
 foo = ...
@@ -44,15 +46,34 @@ dbg "foo"
 ^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**dbg_stmt_not_permitted_top_level.md:4:1:4:5:**
+```roc
+dbg "foo"
+```
+^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**dbg_stmt_not_permitted_top_level.md:4:5:4:10:**
+```roc
+dbg "foo"
+```
+    ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.str_literal_small)
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -61,5 +82,4 @@ dbg "foo"
 ~~~
 # TYPES
 ~~~roc
-foo : Error
 ~~~

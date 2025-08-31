@@ -36,6 +36,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 ~~~roc
 module [MyResult, ok, is_ok]
 
+
 MyResult((ok, err)) := [Ok(ok), Err(err)]
 ok : ok -> MyResult(ok, _)
 ok = |a| MyResult.Ok(a)
@@ -97,80 +98,119 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_tag_payload_two.md:5:25:5:26:**
+**nominal_tag_payload_two.md:3:19:3:21:**
 ```roc
-ok : ok -> MyResult(ok, _)
+MyResult(ok, err) := [Ok(ok), Err(err)]
 ```
-                        ^
+                  ^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNDEFINED VARIABLE**
+Nothing is named **MyResult.Ok** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**nominal_tag_payload_two.md:10:17:10:18:**
+**nominal_tag_payload_two.md:6:10:6:21:**
+```roc
+ok = |a| MyResult.Ok(a)
+```
+         ^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:10:14:10:19:**
 ```roc
     MyResult.Ok(_) => Bool.True
 ```
-                ^
+             ^^^^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_tag_payload_two.md:11:18:11:19:**
+**nominal_tag_payload_two.md:10:20:10:23:**
+```roc
+    MyResult.Ok(_) => Bool.True
+```
+                   ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:10:23:10:32:**
+```roc
+    MyResult.Ok(_) => Bool.True
+```
+                      ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:11:5:11:20:**
 ```roc
     MyResult.Err(_) => Bool.False
 ```
-                 ^
+    ^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:11:21:11:24:**
+```roc
+    MyResult.Err(_) => Bool.False
+```
+                    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:11:24:11:34:**
+```roc
+    MyResult.Err(_) => Bool.False
+```
+                       ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload_two.md:12:1:12:2:**
+```roc
+}
+```
+^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "ok")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "ok")
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "ok")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "is_ok")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "is_ok")
-    (Expr.lambda)
-  )
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -180,6 +220,4 @@ Patterns can only appear in specific contexts like function parameters, destruct
 ~~~
 # TYPES
 ~~~roc
-ok : _b
-is_ok : _b
 ~~~

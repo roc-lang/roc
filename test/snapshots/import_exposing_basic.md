@@ -30,6 +30,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
+
 import json.Json exposing [decode, encode]
 main = {
 	data = { name : "Alice", age : 30 }
@@ -41,48 +42,55 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**import_exposing_basic.md:3:1:3:43:**
+**import_exposing_basic.md:6:14:6:27:**
 ```roc
-import json.Json exposing [decode, encode]
+    data = { name: "Alice", age: 30 }
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**import_exposing_basic.md:6:29:6:36:**
+```roc
+    data = { name: "Alice", age: 30 }
+```
+                            ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **encode** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_basic.md:7:15:7:21:**
+```roc
+    encoded = encode(data)
+```
+              ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **decode** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_basic.md:8:15:8:21:**
+```roc
+    decoded = decode(encoded)
+```
+              ^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.block
-      (Expr.binop_equals
-        (Expr.lookup "data")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "name")
-            (Expr.str_literal_big)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "age")
-            (Expr.num_literal_i32 30)
-          )
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "encoded")
-        (Expr.apply_ident)
-      )
-      (Expr.binop_equals
-        (Expr.lookup "decoded")
-        (Expr.apply_ident)
-      )
-      (Expr.lookup "decoded")
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -91,5 +99,4 @@ import json.Json exposing [decode, encode]
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

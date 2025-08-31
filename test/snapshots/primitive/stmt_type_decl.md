@@ -23,6 +23,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
 ~~~roc
 module [Foo]
 
+
 Foo((a, b)) : (a, b, Str, U64)
 ~~~
 # EXPECTED
@@ -31,23 +32,14 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

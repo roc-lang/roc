@@ -21,7 +21,17 @@ OpBang LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **blah** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**unary_not.md:1:2:1:6:**
+```roc
+!blah
+```
+ ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.unary_not)

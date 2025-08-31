@@ -183,10 +183,21 @@ requires{}{n:0[import S	exposing[
                        	        ^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_061.md:2:33:2:34:**
+```roc
+requires{}{n:0[import S	exposing[
+```
+                       	        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.list_literal)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

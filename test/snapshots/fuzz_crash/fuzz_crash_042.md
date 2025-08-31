@@ -40,33 +40,11 @@ module[]import u.R}g:r->R.a.E
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_042.md:1:9:1:19:**
+**fuzz_crash_042.md:1:19:1:20:**
 ```roc
 module[]import u.R}g:r->R.a.E
 ```
-        ^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_042.md:1:25:1:26:**
-```roc
-module[]import u.R}g:r->R.a.E
-```
-                        ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_042.md:1:26:1:28:**
-```roc
-module[]import u.R}g:r->R.a.E
-```
-                         ^^
+                  ^
 
 
 # CANONICALIZE
@@ -74,13 +52,7 @@ module[]import u.R}g:r->R.a.E
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "r")
-      (Expr.lambda)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

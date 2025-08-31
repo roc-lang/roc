@@ -21,7 +21,17 @@ OpUnaryMinus LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**unary_negation.md:1:2:1:5:**
+```roc
+-foo
+```
+ ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.unary_neg)

@@ -37,15 +37,30 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **age** is not used anywhere in your code.
 
-**function_record_parameter.md:1:2:1:15:**
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+
+**function_record_parameter.md:1:10:1:13:**
 ```roc
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ```
- ^^^^^^^^^^^^^
+         ^^^
+
+
+**UNUSED VARIABLE**
+Variable **name** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+
+**function_record_parameter.md:1:4:1:8:**
+```roc
+|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
+```
+   ^^^^
 
 
 # CANONICALIZE

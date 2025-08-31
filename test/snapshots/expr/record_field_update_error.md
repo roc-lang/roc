@@ -41,15 +41,36 @@ Expressions can be identifiers, literals, function calls, or operators.
          ^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **person** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_field_update_error.md:1:3:1:9:**
+```roc
+{ person & age: 31 }
+```
+  ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **age** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+
+**record_field_update_error.md:1:12:1:15:**
+```roc
+{ person & age: 31 }
+```
+           ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.lookup "person")
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

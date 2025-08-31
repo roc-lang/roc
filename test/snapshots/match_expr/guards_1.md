@@ -71,6 +71,17 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**guards_1.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

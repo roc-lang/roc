@@ -67,14 +67,23 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
+# Simple type alias
 UserId : U64
+# Generic type alias
 Result((ok, err)) : [Ok(ok), Err(err)]
+# Record type alias
 Person : {name : Str, age : U64}
+# Function type alias
 MapFn((a, b)) : a -> b
+# Complex nested type alias
 ApiResponse(data) : Result(data, Str)
+# Type declaration with tag union
 Color : [Red, Green, Blue, Custom((U8, U8, U8))]
+# Type declaration with records and generics
 Container(item) : {contents : List item, metadata : {size : U64, created : Str}}
 main! = |_| {
+	# Use the types to validate they work
 	userId : UserId
 	userId = 123
 	person : Person
@@ -83,85 +92,82 @@ main! = |_| {
 	color = Red
 	userId : userId
 }
-
-# Simple type alias
-# Generic type alias
-# Record type alias
-# Function type alias
-# Complex nested type alias
-# Type declaration with tag union
-# Type declaration with records and generics
-# Use the types to validate they work
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_alias_decl.md:33:16:33:29:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+               ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_alias_decl.md:33:31:33:38:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+                              ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **color** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
+The unused variable is declared here:
+
+**type_alias_decl.md:36:5:36:10:**
+```roc
+    color = Red
+```
+    ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **person** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+
+**type_alias_decl.md:33:5:33:11:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+    ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **userId** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_userId` to suppress this warning.
+The unused variable is declared here:
+
+**type_alias_decl.md:38:5:38:11:**
+```roc
+    userId
+```
+    ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "contents")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "metadata")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "size")
-            (Expr.apply_tag)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "created")
-            (Expr.apply_tag)
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

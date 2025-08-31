@@ -32,18 +32,22 @@ b : S.R
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_018.md:1:1:1:2:**
+```roc
+0 b:S
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.binop_colon
-    (Expr.lookup "b")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

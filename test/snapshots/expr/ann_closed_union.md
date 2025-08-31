@@ -48,14 +48,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "apple")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "apple")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.lookup "apple")
 )
 ~~~
@@ -65,4 +59,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+apple : []_others
 ~~~

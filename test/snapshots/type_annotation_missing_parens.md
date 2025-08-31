@@ -23,21 +23,29 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [nums]
 
+
 nums : List
 U8
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_annotation_missing_parens.md:3:13:3:15:**
+```roc
+nums : List U8
+```
+            ^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "nums")
-    (Expr.apply_tag)
-  )
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

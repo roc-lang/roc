@@ -34,6 +34,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 processNested : List Result(Str, Err) -> List Str
 processNested = |_list| ["one", "two"]
 main! = |_| processNested([])
@@ -41,25 +42,25 @@ main! = |_| processNested([])
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **_list** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__list` to suppress this warning.
+The unused variable is declared here:
+
+**type_app_nested.md:4:18:4:23:**
+```roc
+processNested = |_list| ["one","two"]
+```
+                 ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "processNested")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processNested")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -68,5 +69,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-processNested : _a
 ~~~

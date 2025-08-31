@@ -27,7 +27,17 @@ add((5, 3))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **add** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**function_call.md:1:1:1:4:**
+```roc
+add(5, 3)
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

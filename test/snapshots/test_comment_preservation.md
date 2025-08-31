@@ -37,20 +37,25 @@ KwModule OpenSquare LineComment LowerIdent Comma LineComment LowerIdent Comma Li
 ~~~
 # FORMATTED
 ~~~roc
-module [
+module [ # First comment
 	foo,
+	# inline comment after foo
 	bar,
 ]
 
-foo = 42
-bar = 100# First comment
-# inline comment after foo
 # inline comment after bar
+
 # Comment before function
-# Comment in function body
+foo = # Comment in function body
+42
+
 # inline comment after value
+
 # Comment between functions
-# comment after equals
+
+bar = # comment after equals
+100
+
 # Trailing comment at end of file
 ~~~
 # EXPECTED
@@ -60,14 +65,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "bar")
-    (Expr.num_literal_i32 100)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -76,6 +75,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : Num(_size)
-bar : Num(_size)
 ~~~

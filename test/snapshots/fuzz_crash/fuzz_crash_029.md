@@ -35,9 +35,11 @@ KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineC
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" requires {} exposes [
-	: ,
-]
+platform # Cd
+"foo" requires # Ce
+# Co		{	} #ose
+# d
+{} exposes [: ]
 
 Str
 ) 
@@ -49,20 +51,23 @@ Str
 	
 exposes #rd
 		
-[,
+[, #
 ]
+# Cse
 packages # Cd
 		
 vides
-{
+# Cd
+{ # pen
 	pkg : "..l",
 	mmen,
 }
+# Cose
 provides # Cd
 		
 [
 	Ok(world),
-	n,
+	n, # pen
 ]
 ar
 ,
@@ -417,30 +422,199 @@ Expressions can be identifiers, literals, function calls, or operators.
 		^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:5:14:5:17:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			          ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:5:17:5:19:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			             ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:5:19:5:22:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			               ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:5:22:5:24:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			                  ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:5:24:6:4:**
+```roc
+			n! : List(Str) => {}, # ure
+			} #Ce
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:6:4:7:2:**
+```roc
+			} #Ce
+	exposes #rd
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:7:2:8:3:**
+```roc
+	exposes #rd
+		[ #
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:8:3:9:4:**
+```roc
+		[ #
+		] # Cse
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:10:2:11:3:**
+```roc
+	packages # Cd
+		vides # Cd
+```
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_029.md:11:3:11:8:**
+```roc
+		vides # Cd
+```
+		^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:12:3:13:20:**
+```roc
+		{ # pen
+pkg: "..l", mmen		} # Cose
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:14:2:15:3:**
+```roc
+	provides # Cd
+		[ Ok(world), (n # pen
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:15:3:16:1:**
+```roc
+		[ Ok(world), (n # pen
+ar,
+```
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_029.md:16:1:16:3:**
+```roc
+ar,
+```
+^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:16:3:17:3:**
+```roc
+ar,
+		]
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_029.md:17:3:17:4:**
+```roc
+		]
+```
+		^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.record_literal
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.list_literal)
   (Expr.malformed)
-  (Expr.lookup "vides")
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "pkg")
-      (Expr.str_literal_small)
-    )
-    (Expr.lookup "mmen")
-  )
   (Expr.malformed)
-  (Expr.list_literal)
-  (Expr.lookup "ar")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )

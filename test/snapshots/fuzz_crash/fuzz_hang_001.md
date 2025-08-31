@@ -36,10 +36,21 @@ This is an unexpected parsing error. Please check your syntax.
 ^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_hang_001.md:1:1:1:4:**
+```roc
+0 (
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_ident)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

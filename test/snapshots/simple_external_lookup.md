@@ -24,9 +24,9 @@ List.map
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **List.map** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **simple_external_lookup.md:1:1:1:9:**
 ```roc
@@ -37,13 +37,16 @@ List.map
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.module_access
+  (Expr.malformed)
+  (Expr.malformed)
+)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag module_access :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

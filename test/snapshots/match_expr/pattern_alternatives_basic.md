@@ -29,6 +29,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColon OpenSqua
 ~~~roc
 module [kind]
 
+
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 kind : Color -> Str
 kind = |color| match color
@@ -63,21 +64,9 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "kind")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "kind")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -86,5 +75,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-kind : _a
 ~~~

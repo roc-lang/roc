@@ -25,13 +25,21 @@ module []
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_068.md:1:10:1:13:**
+```roc
+module[]({0})
+```
+         ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.block
-    (Expr.num_literal_i32 0)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

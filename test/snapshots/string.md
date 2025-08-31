@@ -32,7 +32,9 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound String C
 ~~~roc
 module []
 
+
 x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")
+# Test backslash before EOF
 "\
 ~~~
 # EXPECTED
@@ -49,22 +51,21 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**string.md:15:1:15:3:**
+```roc
+"\
+```
+^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.tuple_literal
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_small)
-      (Expr.str_literal_big)
-    )
-  )
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -74,5 +75,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-x : _a
 ~~~

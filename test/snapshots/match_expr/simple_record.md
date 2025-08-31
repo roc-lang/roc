@@ -46,6 +46,17 @@ match person
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **person** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**simple_record.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

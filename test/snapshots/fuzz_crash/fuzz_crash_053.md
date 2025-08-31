@@ -84,19 +84,55 @@ module[){..0,)
              ^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
+**fuzz_crash_053.md:1:9:1:13:**
+```roc
+module[){..0,)
+```
+        ^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_053.md:1:12:1:13:**
+```roc
+module[){..0,)
+```
+           ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_053.md:1:13:1:14:**
+```roc
+module[){..0,)
+```
+            ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_053.md:1:14:1:15:**
+```roc
+module[){..0,)
+```
+             ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.record_literal
-    (Expr.malformed)
-  )
-  (Expr.num_literal_i32 0)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )

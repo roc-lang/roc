@@ -27,26 +27,29 @@ get_name!({}) ?? "Bob"
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **get_name!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**double_question_binop.md:1:1:1:23:**
+**double_question_binop.md:1:1:1:10:**
 ```roc
 get_name!({}) ?? "Bob"
 ```
-^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.binop_double_question
+  (Expr.apply_ident)
+  (Expr.str_literal_small)
+)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag binop_double_question :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

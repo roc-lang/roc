@@ -49,11 +49,22 @@ app[]{f:platform""}import fS
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_046.md:1:20:1:28:**
+**fuzz_crash_046.md:1:28:1:29:**
 ```roc
 app[]{f:platform""}import fS
 ```
-                   ^^^^^^^^
+                           ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_046.md:1:29:1:30:**
+```roc
+app[]{f:platform""}import fS
+```
+                            ^
 
 
 # CANONICALIZE
@@ -61,7 +72,7 @@ app[]{f:platform""}import fS
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

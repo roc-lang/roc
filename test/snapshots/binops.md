@@ -105,7 +105,50 @@ OpenRound Int OpPlus Int Comma Int OpBinaryMinus Int Comma Int OpStar Int Comma 
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.True** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**binops.md:13:5:13:14:**
+```roc
+    Bool.True and Bool.False,
+```
+    ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.False** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**binops.md:13:19:13:29:**
+```roc
+    Bool.True and Bool.False,
+```
+                  ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.False** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**binops.md:14:5:14:15:**
+```roc
+    Bool.False or Bool.True,
+```
+    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.True** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**binops.md:14:19:14:28:**
+```roc
+    Bool.False or Bool.True,
+```
+                  ^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.tuple_literal

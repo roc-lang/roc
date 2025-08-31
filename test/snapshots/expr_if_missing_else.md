@@ -20,19 +20,27 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign KwIf LowerIdent In
 ~~~roc
 module []
 
+
 foo = if tru 0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **tru** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**expr_if_missing_else.md:3:10:3:13:**
+```roc
+foo = if tru 0
+```
+         ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.if_else)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -41,5 +49,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

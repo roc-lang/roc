@@ -45,17 +45,17 @@ Expressions can be identifiers, literals, function calls, or operators.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_008.md:1:2:1:3:**
+**fuzz_crash_008.md:1:1:1:5:**
 ```roc
 ||1
 ```
- ^
+^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

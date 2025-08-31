@@ -26,9 +26,9 @@ OpenSquare Int Comma Int Comma LineComment Int Comma CloseSquare ~~~
 ~~~roc
 [
 	1,
-	2,
+	2, # Foo
 	3,
-]# Foo
+]
 ~~~
 # EXPECTED
 NIL

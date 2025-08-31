@@ -52,17 +52,23 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
+# Test ellipsis placeholder
 testEllipsis : U64 -> U64
 testEllipsis = |_| ...
+# Test crash statement
 testCrash : U64 -> U64
 testCrash = |_| {
 	crash "This is a crash message"
 }
 
+
+# Test crash with different message
 testCrashSimple : U64 -> U64
 testCrashSimple = |_| {
 	crash "oops"
 }
+
 
 main! = |_| {
 	result1 = testEllipsis(42)
@@ -70,55 +76,59 @@ main! = |_| {
 	result3 = testCrashSimple(42)
 	[]
 }
-
-# Test ellipsis placeholder
-# Test crash statement
-# Test crash with different message
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **result2** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+
+**crash_and_ellipsis_test.md:21:5:21:12:**
+```roc
+    result2 = testCrash(42)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result3** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+
+**crash_and_ellipsis_test.md:22:5:22:12:**
+```roc
+    result3 = testCrashSimple(42)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **result1** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+The unused variable is declared here:
+
+**crash_and_ellipsis_test.md:20:5:20:12:**
+```roc
+    result1 = testEllipsis(42)
+```
+    ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "testEllipsis")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "testEllipsis")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "testCrash")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "testCrash")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "testCrashSimple")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "testCrashSimple")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -127,7 +137,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-testEllipsis : _a
-testCrash : _a
-testCrashSimple : _a
 ~~~

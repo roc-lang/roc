@@ -50,19 +50,30 @@ G	if 0{}else||0
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_059.md:1:20:2:2:**
+**fuzz_crash_059.md:2:3:2:15:**
 ```roc
-app[]{f:platform""}import	B	as
 G	if 0{}else||0
 ```
+ 	^^^^^^^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_059.md:2:15:2:16:**
+```roc
+G	if 0{}else||0
+```
+ 	            ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.if_else)
-  (Expr.num_literal_i32 0)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

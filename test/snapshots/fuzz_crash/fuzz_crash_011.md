@@ -54,12 +54,45 @@ module P]F
         ^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_011.md:1:8:1:9:**
+```roc
+module P]F
+```
+       ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_011.md:1:9:1:10:**
+```roc
+module P]F
+```
+        ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_011.md:1:10:1:11:**
+```roc
+module P]F
+```
+         ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -53,12 +53,17 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
+# Lambda with unused parameter - should warn
 add : U64 -> U64
 add = |unused| 42
+# Lambda with underscore parameter that is used - should warn
 multiply : U64 -> U64
 multiply = |_factor| _factor * 2
+# Lambda with unused underscore parameter - should be fine
 process : U64 -> U64
 process = |_input| 100
+# Lambda with used parameter - should be fine
 double : U64 -> U64
 double = |value| value * 2
 main! = |_| {
@@ -68,67 +73,48 @@ main! = |_| {
 	result4 = double(4)
 	((result1 + result2) + result3) + result4
 }
-
-# Lambda with unused parameter - should warn
-# Lambda with underscore parameter that is used - should warn
-# Lambda with unused underscore parameter - should be fine
-# Lambda with used parameter - should be fine
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **unused** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
+The unused variable is declared here:
+
+**lambda_parameter_unused.md:5:8:5:14:**
+```roc
+add = |unused| 42
+```
+       ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **_input** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__input` to suppress this warning.
+The unused variable is declared here:
+
+**lambda_parameter_unused.md:13:12:13:18:**
+```roc
+process = |_input| 100
+```
+           ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "add")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "multiply")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "multiply")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "process")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "double")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "double")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -137,8 +123,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-add : _a
-multiply : _a
-process : _a
-double : _a
 ~~~

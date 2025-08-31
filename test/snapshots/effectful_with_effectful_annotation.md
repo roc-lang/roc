@@ -37,56 +37,34 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
 import pf.Stdout
+# Function with effectful annotation using fat arrow
 print_msg! : Str => {}
 print_msg! = |msg| Stdout.line!(msg)
-main! = print_msg!("Hello, world!")# Function with effectful annotation using fat arrow
+main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**effectful_with_effectful_annotation.md:3:1:3:17:**
+**effectful_with_effectful_annotation.md:7:20:7:32:**
 ```roc
-import pf.Stdout
+print_msg! = |msg| Stdout.line!(msg)
 ```
-^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**effectful_with_effectful_annotation.md:6:14:6:17:**
-```roc
-print_msg! : Str => {}
-```
-             ^^^
+                   ^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.record_literal
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

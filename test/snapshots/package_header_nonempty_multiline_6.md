@@ -40,20 +40,18 @@ KwPackage LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperI
 ~~~
 # FORMATTED
 ~~~roc
-package [
+package [ # Comment after keyword
+	# Comment after exposes open
 	something,
+	# Comment after exposed item
 	SomeType,
-] packages {somePkg, (
-	"../main.roc",
+] packages { # Comment after last exposed item
+# Comment after packages open
+somePkg, (
+	"../main.roc", # Comment after package
 	other,
 ) : "../../other/main.roc"}
 
-# Comment after keyword
-# Comment after exposes open
-# Comment after exposed item
-# Comment after last exposed item
-# Comment after packages open
-# Comment after package
 # Comment after last package
 ~~~
 # EXPECTED

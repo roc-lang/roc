@@ -25,14 +25,13 @@ KwModule LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperId
 ~~~
 # FORMATTED
 ~~~roc
-module [
+module [ # Comment after module keyword
+	# Comment After exposes open
 	something,
+	# Comment after exposed item
 	SomeType,
 ]
 
-# Comment after module keyword
-# Comment After exposes open
-# Comment after exposed item
 # Comment after final exposed item
 ~~~
 # EXPECTED

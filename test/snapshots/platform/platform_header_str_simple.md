@@ -25,27 +25,29 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon U
 ~~~roc
 platform "" requires { main : Str -> Str } exposes []
 
+
 entrypoint : Str -> Str
 entrypoint = main
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **main** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**platform_header_str_simple.md:8:14:8:18:**
+```roc
+entrypoint = main
+```
+             ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "entrypoint")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "entrypoint")
-    (Expr.lookup "main")
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -54,5 +56,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-entrypoint : _a
 ~~~

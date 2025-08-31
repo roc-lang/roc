@@ -66,28 +66,30 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
 ~~~roc
 module [MyU64, Person, Result, Tree, Node]
 
+
+# Built-in types should work
 MyU64 : U64
 MyString : Str
 MyBool : Bool
+# Simple user-defined type
 Person : {name : Str, age : U64}
+# Type with parameters
 Result((ok, err)) : [Ok(ok), Err(err)]
+# Forward reference - Tree references Node before Node is defined
 Tree(a) : [Branch(Node(a)), Leaf(a)]
+# Node definition comes after Tree
 Node(a) : {value : a, children : List Tree a}
+# Using a previously defined type
 MyResult : Result(Str, U64)
+# Type redeclaration (should error)
 Person : U64
+# Using an undeclared type (should error)
 BadType : SomeUndeclaredType
+# Using built-in types with parameters
 MyList : List Str
 MyDict : Dict(Str, U64)
-Complex : {person : Person, result : Result(Bool, Str), tree : Tree U64}# Built-in types should work
-# Simple user-defined type
-# Type with parameters
-# Forward reference - Tree references Node before Node is defined
-# Node definition comes after Tree
-# Using a previously defined type
-# Type redeclaration (should error)
-# Using an undeclared type (should error)
-# Using built-in types with parameters
 # Complex nested type using multiple declared types
+Complex : {person : Person, result : Result(Bool, Str), tree : Tree U64}
 ~~~
 # EXPECTED
 NIL
@@ -96,89 +98,19 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "value")
-        (Expr.lookup "a")
-      )
-      (Expr.binop_colon
-        (Expr.lookup "children")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "person")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "result")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "tree")
-        (Expr.apply_tag)
-      )
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

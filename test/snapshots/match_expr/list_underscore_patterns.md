@@ -76,16 +76,18 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Li
 match items
 	[_] => 
 		1
-		[.., ]
+		 # pattern match on a list with a single (ignored) element
+[.., ]
 		last
 		] => last
-		[first, ..] ] => first
-		[_, _, third] => third
-		[x, _, _, y] => x + y
-		[] => 0
-# pattern match on the first item in the list
-# pattern match on the third item in the list
-# first + fourth item in the list
+		 # pattern match on the last item in the list
+[first, ..] ] => first
+		 # pattern match on the first item in the list
+[_, _, third] => third
+		 # pattern match on the third item in the list
+[x, _, _, y] => x + y
+		 # first + fourth item in the list
+[] => 0
 # match an empty list
 ~~~
 # EXPECTED
@@ -144,6 +146,17 @@ Expected either a comma **,** to continue the list or a closing bracket **]** to
     [first, ..] => first # pattern match on the first item in the list
 ```
     ^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **items** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_underscore_patterns.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
 
 
 **UNSUPPORTED NODE**

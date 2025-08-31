@@ -29,6 +29,7 @@ LowerIdent OpenSquare CloseSquare BlankLine LineComment LowerIdent LowerIdent Op
 ~~~roc
 mule
 []
+#el
 vavar
 t = '
 ~~~
@@ -46,16 +47,46 @@ vavar t= '
          ^
 
 
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_031.md:1:1:1:5:**
+```roc
+mule []
+```
+^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_031.md:1:6:1:8:**
+```roc
+mule []
+```
+     ^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_031.md:4:1:4:6:**
+```roc
+vavar t= '
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "mule")
-  (Expr.list_literal)
-  (Expr.lookup "vavar")
-  (Expr.binop_equals
-    (Expr.lookup "t")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -64,5 +95,4 @@ vavar t= '
 ~~~
 # TYPES
 ~~~roc
-t : Error
 ~~~

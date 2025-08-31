@@ -79,18 +79,25 @@ import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
+# Simple qualified type
 simpleQualified : Color.RGB
 simpleQualified = Color.RGB({ r : 255, g : 0, b : 0 })
+# Aliased qualified type
 aliasedQualified : ExtMod.DataType
 aliasedQualified = (ExtMod.DataType | Default)
+# Multi-level qualified type
 multiLevelQualified : ModuleA.ModuleB | TypeC
 multiLevelQualified = TypeC.new
+# Using qualified type with generics
 resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
+# Function returning qualified type
 getColor : {} -> Color.RGB
 getColor = |_| Color.RGB({ r : 0, g : 255, b : 0 })
+# Function accepting qualified type
 processColor : Color.RGB -> Str
 processColor = |color| "Color processed"
+# Multiple qualified types in a function signature
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
 transform = |result| match result
 
@@ -226,220 +233,326 @@ Expressions can be identifiers, literals, function calls, or operators.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:8:1:8:21:**
+**qualified_type_canonicalization.md:3:12:3:13:**
 ```roc
+    ModuleA.ModuleB.TypeC,
+```
+           ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:3:13:3:26:**
+```roc
+    ModuleA.ModuleB.TypeC,
+```
+            ^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:3:26:4:5:**
+```roc
+    ModuleA.ModuleB.TypeC,
+    Result,
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:4:5:4:11:**
+```roc
+    Result,
+```
+    ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:4:11:5:5:**
+```roc
+    Result,
+    ExternalModule,
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:5:5:5:19:**
+```roc
+    ExternalModule,
+```
+    ^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:5:19:6:1:**
+```roc
+    ExternalModule,
+]
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:6:1:8:1:**
+```roc
+]
+
 import Basics.Result
 ```
-^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.RGB** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_type_canonicalization.md:15:19:15:28:**
+```roc
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+```
+                  ^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:15:31:15:37:**
+```roc
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+```
+                              ^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:15:39:15:43:**
+```roc
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+```
+                                      ^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:15:45:15:49:**
+```roc
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+```
+                                            ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **TypeC.new** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_type_canonicalization.md:23:23:23:32:**
+```roc
+multiLevelQualified = TypeC.new
+```
+                      ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Result.Ok** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_type_canonicalization.md:27:14:27:23:**
+```roc
+resultType = Result.Ok(42)
+```
+             ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.RGB** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_type_canonicalization.md:31:16:31:25:**
+```roc
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+```
+               ^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:31:28:31:32:**
+```roc
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+```
+                           ^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:31:34:31:40:**
+```roc
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+```
+                                 ^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**qualified_type_canonicalization.md:31:42:31:46:**
+```roc
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+```
+                                         ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **color** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
+The unused variable is declared here:
+
+**qualified_type_canonicalization.md:35:17:35:22:**
+```roc
+processColor = |color|
+```
+                ^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:9:1:9:13:**
+**qualified_type_canonicalization.md:42:16:42:23:**
 ```roc
-import Color
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
 ```
-^^^^^^^^^^^^
+               ^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:10:1:10:40:**
+**qualified_type_canonicalization.md:42:24:42:27:**
 ```roc
-import ModuleA.ModuleB exposing [TypeC]
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                       ^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:11:1:11:32:**
+**qualified_type_canonicalization.md:42:27:42:47:**
 ```roc
-import ExternalModule as ExtMod
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:19:20:19:26:**
+**qualified_type_canonicalization.md:43:9:43:24:**
 ```roc
-aliasedQualified = ExtMod.DataType.Default
+        Result.Err(err) => TypeC.default
 ```
-                   ^^^^^^
+        ^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:19:26:19:35:**
+**qualified_type_canonicalization.md:43:25:43:28:**
 ```roc
-aliasedQualified = ExtMod.DataType.Default
+        Result.Err(err) => TypeC.default
 ```
-                         ^^^^^^^^^
+                        ^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:22:23:22:30:**
+**qualified_type_canonicalization.md:43:28:43:41:**
 ```roc
-multiLevelQualified : ModuleA.ModuleB.TypeC
+        Result.Err(err) => TypeC.default
 ```
-                      ^^^^^^^
+                           ^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:22:30:22:38:**
+**qualified_type_canonicalization.md:44:5:44:6:**
 ```roc
-multiLevelQualified : ModuleA.ModuleB.TypeC
+    }
 ```
-                             ^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_type_canonicalization.md:39:55:39:62:**
-```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                                                      ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_type_canonicalization.md:39:62:39:70:**
-```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                                                             ^^^^^^^^
+    ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
-  (Expr.malformed)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "simpleQualified")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "simpleQualified")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "aliasedQualified")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "aliasedQualified")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "multiLevelQualified")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "multiLevelQualified")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "resultType")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "resultType")
-    (Expr.apply_ident)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "getColor")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-      )
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "getColor")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processColor")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "transform")
-    (Expr.binop_thin_arrow
-      (Expr.apply_ident)
-      (Expr.lambda)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "transform")
-    (Expr.lambda)
-  )
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -449,11 +562,4 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ~~~
 # TYPES
 ~~~roc
-simpleQualified : _a
-aliasedQualified : _a
-multiLevelQualified : _a
-resultType : _a
-getColor : _a
-processColor : _a
-transform : _a
 ~~~

@@ -21,7 +21,17 @@ foo
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**expr_ident_simple.md:1:1:1:4:**
+```roc
+foo
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.lookup "foo")

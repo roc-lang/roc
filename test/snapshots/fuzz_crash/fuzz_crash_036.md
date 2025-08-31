@@ -36,12 +36,21 @@ module[]{B
         ^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_036.md:1:9:1:11:**
+```roc
+module[]{B
+```
+        ^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.block
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

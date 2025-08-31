@@ -112,24 +112,26 @@ var t= 0
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_024.md:1:18:7:9:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+
+#el
+var t= ]
+
+#el
+var t= 0
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "pf")
-      (Expr.malformed)
-    )
-    (Expr.malformed)
-    (Expr.binop_equals
-      (Expr.lookup "t")
-      (Expr.malformed)
-    )
-    (Expr.binop_equals
-      (Expr.lookup "t")
-      (Expr.num_literal_i32 0)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

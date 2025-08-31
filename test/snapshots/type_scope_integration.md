@@ -35,13 +35,15 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [Foo, Bar]
 
+
+# First declare a type
 Foo : U64
-Foo : Str
-Bar : SomeUndeclaredType
-Baz : Foo# First declare a type
 # Try to redeclare the same type (should error)
+Foo : Str
 # Declare another type that uses an undeclared type
+Bar : SomeUndeclaredType
 # Declare a type that properly uses a declared type
+Baz : Foo
 ~~~
 # EXPECTED
 NIL
@@ -50,22 +52,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

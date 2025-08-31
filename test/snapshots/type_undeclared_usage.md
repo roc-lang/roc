@@ -32,43 +32,39 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [MyType, processValue]
 
+
 MyType : UnknownType
 processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
 }
 
+
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **value** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+
+**type_undeclared_usage.md:6:17:6:22:**
+```roc
+processValue = |value| {
+```
+                ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processValue")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processValue")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -77,5 +73,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-processValue : _a
 ~~~

@@ -48,85 +48,59 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow 
 ~~~roc
 module []
 
+
 main : _ -> _
 main = |x| x
 identity : a -> a
 identity = |x| x
+# Function with underscore in annotation
 process : List _ -> Str
 process = |list| "processed"
+# Record with underscore
 get_data : {field : _, other : U32} -> U32
 get_data = |record| record.other
+# Pattern matching with underscore type annotation
 handle_result : Result(_, Str) -> Str
 handle_result = |result| match result
 	Ok(_) => "success" => (Err(msg) => msg)
 
+
+# Underscore in function arguments
 map :
 	(a -> b) -> List a -> List b
 map = |_, _| []
+# Named underscore type variables
 transform :
 	(_a -> _b) -> _b
-transform = |_, b| b# Function with underscore in annotation
-# Record with underscore
-# Pattern matching with underscore type annotation
-# Underscore in function arguments
-# Named underscore type variables
+transform = |_, b| b
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNUSED VARIABLE**
+Variable **list** is not used anywhere in your code.
 
-**underscore_in_regular_annotations.md:3:8:3:9:**
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+
+**underscore_in_regular_annotations.md:11:12:11:16:**
 ```roc
-main : _ -> _
+process = |list| "processed"
 ```
-       ^
+           ^^^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNUSED VARIABLE**
+Variable **record** is not used anywhere in your code.
 
-**underscore_in_regular_annotations.md:3:13:3:14:**
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+
+**underscore_in_regular_annotations.md:15:21:15:27:**
 ```roc
-main : _ -> _
+get_data = |record| record.other
 ```
-            ^
-
-
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
-
-**underscore_in_regular_annotations.md:10:16:10:17:**
-```roc
-process : List(_) -> Str
-```
-               ^
-
-
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
-
-**underscore_in_regular_annotations.md:14:21:14:22:**
-```roc
-get_data : { field: _, other: U32 } -> U32
-```
-                    ^
-
-
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
-
-**underscore_in_regular_annotations.md:18:24:18:25:**
-```roc
-handle_result : Result(_, Str) -> Str
-```
-                       ^
+                    ^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -143,101 +117,20 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "main")
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "process")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "get_data")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "field")
-          (Expr.malformed)
-        )
-        (Expr.binop_colon
-          (Expr.lookup "other")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "get_data")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "handle_result")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "handle_result")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "map")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "a")
-        (Expr.lookup "b")
-      )
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "map")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "transform")
-    (Expr.binop_thin_arrow
-      (Expr.binop_thin_arrow
-        (Expr.lookup "_a")
-        (Expr.lookup "_b")
-      )
-      (Expr.lookup "_b")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "transform")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -246,11 +139,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-main : _c
-identity : _c
-process : _c
-get_data : _c
-handle_result : _c
-map : _c
-transform : _c
 ~~~

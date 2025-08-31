@@ -37,7 +37,8 @@ getUser = |id| if id > 1 !
 ) 
 "big"
 else 
-"l" - ain! = |_| getUser(900)
+"l" - 
+ain! = |_| getUser(900)
 ~~~
 # EXPECTED
 NIL
@@ -139,39 +140,122 @@ getUser = |id| if (id > 1!) "big" else "l"
                                   ^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:1:9:1:11:**
+```roc
+app { |f: "c" platform [main!] }
+```
+        ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:1:11:1:14:**
+```roc
+app { |f: "c" platform [main!] }
+```
+          ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:1:15:1:24:**
+```roc
+app { |f: "c" platform [main!] }
+```
+              ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:1:24:1:31:**
+```roc
+app { |f: "c" platform [main!] }
+```
+                       ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:1:32:3:1:**
+```roc
+app { |f: "c" platform [main!] }
+
+UserId : U64
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:6:27:6:29:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+                          ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:6:29:6:34:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+                            ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_022.md:6:35:6:40:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+                                  ^^^^^
+
+
+**EXPRESSION IN PATTERN CONTEXT**
+Found an expression where a pattern was expected.
+This location requires a pattern for matching or destructuring, not a computed value.
+
+**fuzz_crash_022.md:6:40:8:6:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+
+-ain! = |_| getUser(900)
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.list_literal)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "ser")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "getUser")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.str_literal_small)
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.binop_minus
-      (Expr.str_literal_small)
-      (Expr.not_lookup)
-    )
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -180,5 +264,4 @@ getUser = |id| if (id > 1!) "big" else "l"
 ~~~
 # TYPES
 ~~~roc
-getUser : _a
 ~~~

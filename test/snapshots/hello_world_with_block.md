@@ -43,36 +43,46 @@ LineComment BlankLine LineComment KwApp OpenCurly LowerIdent OpColon String KwPl
 # Multiline comments?
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
 import pf.Stdout
 main! = |_| {
 	world = "World"
+	# Hello
 	Stdout.line!("Hello, world!")
 }
-
-# Hello
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**hello_world_with_block.md:6:1:6:17:**
+**hello_world_with_block.md:11:2:11:14:**
 ```roc
-import pf.Stdout
+	Stdout.line!("Hello, world!")
 ```
-^^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **world** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
+The unused variable is declared here:
+
+**hello_world_with_block.md:9:2:9:7:**
+```roc
+	world = "World"
+```
+	^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

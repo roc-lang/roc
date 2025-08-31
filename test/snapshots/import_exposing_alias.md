@@ -30,6 +30,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
+
 import json.Json exposing [decode]
 as 
 fromJson
@@ -100,11 +101,122 @@ main = {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**import_exposing_alias.md:3:1:3:34:**
+**import_exposing_alias.md:3:35:3:38:**
 ```roc
 import json.Json exposing [decode as fromJson, encode as toJson]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**import_exposing_alias.md:3:38:3:46:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                     ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**import_exposing_alias.md:3:46:3:48:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                             ^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**import_exposing_alias.md:3:48:3:54:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                               ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**import_exposing_alias.md:3:55:3:58:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                                      ^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**import_exposing_alias.md:3:58:3:64:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                                         ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**import_exposing_alias.md:3:64:5:1:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+
+main = {
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**import_exposing_alias.md:6:11:6:22:**
+```roc
+	data = { name: "Bob", age: 25 }
+```
+	         ^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**import_exposing_alias.md:6:24:6:31:**
+```roc
+	data = { name: "Bob", age: 25 }
+```
+	                      ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **toJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:7:12:7:18:**
+```roc
+	encoded = toJson(data)
+```
+	          ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **fromJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:8:12:8:20:**
+```roc
+	decoded = fromJson(encoded)
+```
+	          ^^^^^^^^
 
 
 # CANONICALIZE
@@ -112,39 +224,13 @@ import json.Json exposing [decode as fromJson, encode as toJson]
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "fromJson")
   (Expr.malformed)
-  (Expr.lookup "encode")
   (Expr.malformed)
-  (Expr.lookup "toJson")
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.block
-      (Expr.binop_equals
-        (Expr.lookup "data")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "name")
-            (Expr.str_literal_small)
-          )
-          (Expr.binop_colon
-            (Expr.lookup "age")
-            (Expr.num_literal_i32 25)
-          )
-        )
-      )
-      (Expr.binop_equals
-        (Expr.lookup "encoded")
-        (Expr.apply_ident)
-      )
-      (Expr.binop_equals
-        (Expr.lookup "decoded")
-        (Expr.apply_ident)
-      )
-      (Expr.lookup "decoded")
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -153,5 +239,4 @@ import json.Json exposing [decode as fromJson, encode as toJson]
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

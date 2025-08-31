@@ -46,14 +46,8 @@ foo = "hello ${namF
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "me")
-    (Expr.str_literal_small)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -62,6 +56,4 @@ foo = "hello ${namF
 ~~~
 # TYPES
 ~~~roc
-me : Str
-foo : Error
 ~~~

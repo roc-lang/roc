@@ -163,36 +163,34 @@ modu:;::::::::::::::le[%
                       ^^
 
 
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_002.md:1:21:1:23:**
+```roc
+modu:;::::::::::::::le[%
+```
+                    ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_002.md:1:23:1:25:**
+```roc
+modu:;::::::::::::::le[%
+```
+                      ^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "modu")
-    (Expr.binop_colon
-      (Expr.binop_colon
-        (Expr.binop_colon
-          (Expr.binop_colon
-            (Expr.binop_colon
-              (Expr.binop_colon
-                (Expr.binop_colon
-                  (Expr.malformed)
-                  (Expr.malformed)
-                )
-                (Expr.malformed)
-              )
-              (Expr.malformed)
-            )
-            (Expr.malformed)
-          )
-          (Expr.malformed)
-        )
-        (Expr.malformed)
-      )
-      (Expr.malformed)
-    )
-  )
-  (Expr.lookup "le")
-  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

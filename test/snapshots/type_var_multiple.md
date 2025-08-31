@@ -38,12 +38,15 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
+# Multiple type variables 'a' and 'b' introduced in annotation
 swap : (a, b) -> (b, a)
 swap = |pair| {
 	(first, second) = pair((second, first))
 }
 
-main! = |_| {}# Multiple type variables 'a' and 'b' introduced in annotation
+
+main! = |_| {}
 ~~~
 # EXPECTED
 NIL
@@ -52,27 +55,9 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "swap")
-    (Expr.binop_thin_arrow
-      (Expr.tuple_literal
-        (Expr.lookup "a")
-        (Expr.lookup "b")
-      )
-      (Expr.tuple_literal
-        (Expr.lookup "b")
-        (Expr.lookup "a")
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "swap")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -81,5 +66,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-swap : _c
 ~~~

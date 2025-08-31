@@ -58,16 +58,21 @@ o:0)
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_040.md:1:20:2:5:**
+```roc
+app[]{f:platform""}{
+o:0)
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "o")
-      (Expr.num_literal_i32 0)
-    )
-    (Expr.malformed)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

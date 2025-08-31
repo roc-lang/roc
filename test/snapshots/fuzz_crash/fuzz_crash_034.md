@@ -24,12 +24,33 @@ f
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_034.md:1:9:1:10:**
+```roc
+module[]0 f
+```
+        ^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_034.md:1:11:1:12:**
+```roc
+module[]0 f
+```
+          ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.num_literal_i32 0)
-  (Expr.lookup "f")
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

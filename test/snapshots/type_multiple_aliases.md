@@ -45,6 +45,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
 UserId : U64
 UserName : Str
 UserAge : U8
@@ -61,71 +62,103 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_multiple_aliases.md:9:33:9:35:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+                                ^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_multiple_aliases.md:9:37:9:41:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+                                    ^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_multiple_aliases.md:9:43:9:46:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+                                          ^^^
+
+
+**UNUSED VARIABLE**
+Variable **id** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
+The unused variable is declared here:
+
+**type_multiple_aliases.md:9:16:9:18:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+               ^^
+
+
+**UNUSED VARIABLE**
+Variable **name** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+
+**type_multiple_aliases.md:9:20:9:24:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+                   ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **age** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+
+**type_multiple_aliases.md:9:26:9:29:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+                         ^^^
+
+
+**UNUSED VARIABLE**
+Variable **user** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_user` to suppress this warning.
+The unused variable is declared here:
+
+**type_multiple_aliases.md:12:24:12:28:**
+```roc
+get_user_name = |user| user.name
+```
+                       ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "id")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "create_user")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.binop_thin_arrow
-          (Expr.apply_tag)
-          (Expr.apply_tag)
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "create_user")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "get_user_name")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "get_user_name")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -134,6 +167,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-create_user : _a
-get_user_name : _a
 ~~~

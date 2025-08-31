@@ -27,6 +27,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [addU8]
 
+
 addU8 : U8 -> U8 -> U8
 addU8 = |a, b| a + b
 expect addU8((1, 2)) == 3
@@ -35,24 +36,33 @@ expect addU8((0, 10)) == 10
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**simple_add.md:6:1:6:24:**
+```roc
+expect addU8(1, 2) == 3
+```
+^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**simple_add.md:7:1:7:26:**
+```roc
+expect addU8(0, 10) == 10
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "addU8")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "addU8")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
 )
@@ -63,5 +73,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-addU8 : _c
 ~~~

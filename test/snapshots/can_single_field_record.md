@@ -26,14 +26,21 @@ x : 1
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**can_single_field_record.md:1:3:1:7:**
+```roc
+{ x: 1 }
+```
+  ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 1)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

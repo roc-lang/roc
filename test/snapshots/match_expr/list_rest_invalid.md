@@ -50,15 +50,26 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 match items
 	[first, ..rest] => 
 		0
-		[..rest, last] => 1
-		[x, ..rest, y] => 2
-# invalid rest pattern should error
-# invalid rest pattern should error
+		 # invalid rest pattern should error
+[..rest, last] => 1
+		 # invalid rest pattern should error
+[x, ..rest, y] => 2
 # invalid rest pattern should error
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **items** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_rest_invalid.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

@@ -41,6 +41,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~roc
 module [Maybe, some1, none1, some2, none2]
 
+
 Maybe(a) := [Some(a), None]
 some1 : a -> Maybe a
 some1 = |a| Maybe.Some(a)
@@ -52,47 +53,71 @@ none2 = Maybe.None
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_payload.md:3:10:3:12:**
+```roc
+Maybe(a) := [Some(a), None]
+```
+         ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Maybe.Some** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_tag_payload.md:6:13:6:23:**
+```roc
+some1 = |a| Maybe.Some(a)
+```
+            ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Maybe.None** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_tag_payload.md:9:9:9:19:**
+```roc
+none1 = Maybe.None
+```
+        ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Maybe.Some** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_tag_payload.md:11:13:11:23:**
+```roc
+some2 = |a| Maybe.Some(a)
+```
+            ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Maybe.None** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_tag_payload.md:13:9:13:19:**
+```roc
+none2 = Maybe.None
+```
+        ^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "some1")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "some1")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "none1")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "none1")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "some2")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "none2")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -101,8 +126,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-some1 : _b
-none1 : _b
-some2 : _b
-none2 : _b
 ~~~

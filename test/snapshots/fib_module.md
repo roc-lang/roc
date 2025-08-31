@@ -23,6 +23,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar L
 ~~~roc
 module [fib]
 
+
 fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
 ~~~
 # EXPECTED
@@ -32,10 +33,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "fib")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -44,5 +42,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-fib : _a
 ~~~

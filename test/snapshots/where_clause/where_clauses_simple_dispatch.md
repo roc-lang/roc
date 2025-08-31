@@ -24,46 +24,31 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [stringify]
 
+
 stringify : a -> Str where module(a).to_str : a -> Str
 stringify = |value| value.to_str()
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **value** is not used anywhere in your code.
 
-**where_clauses_simple_dispatch.md:3:34:3:37:**
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+
+**where_clauses_simple_dispatch.md:4:21:4:26:**
 ```roc
-stringify : a -> Str where module(a).to_str : a -> Str
+stringify = |value| value.to_str()
 ```
-                                 ^^^
+                    ^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "stringify")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.apply_tag)
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.lookup "a")
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "stringify")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -72,5 +57,4 @@ stringify : a -> Str where module(a).to_str : a -> Str
 ~~~
 # TYPES
 ~~~roc
-stringify : _b
 ~~~

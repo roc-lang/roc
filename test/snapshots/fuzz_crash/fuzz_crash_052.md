@@ -26,22 +26,22 @@ import S
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
 
-**fuzz_crash_052.md:1:9:2:2:**
+**fuzz_crash_052.md:3:1:3:2:**
 ```roc
-module[]import
-S
+0
 ```
+^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.num_literal_i32 0)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

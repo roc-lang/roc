@@ -20,6 +20,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon OpenSquare Int Clos
 ~~~roc
 module []
 
+
 C : [0]
 ~~~
 # EXPECTED
@@ -28,18 +29,14 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

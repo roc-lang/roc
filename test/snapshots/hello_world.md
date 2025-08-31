@@ -33,31 +33,29 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
 import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**hello_world.md:3:1:3:17:**
+**hello_world.md:5:13:5:25:**
 ```roc
-import pf.Stdout
+main! = |_| Stdout.line!("Hello, world!")
 ```
-^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

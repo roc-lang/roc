@@ -75,7 +75,56 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **b_loc** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**deeply_nested_capture.md:5:13:5:18:**
+```roc
+        |c| b_loc + c
+```
+            ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **b** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+
+**deeply_nested_capture.md:4:25:4:26:**
+```roc
+        b_loc = a_loc + b
+```
+                        ^
+
+
+**UNUSED VARIABLE**
+Variable **b** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+
+**deeply_nested_capture.md:3:6:3:7:**
+```roc
+    |b| {
+```
+     ^
+
+
+**UNUSED VARIABLE**
+Variable **a** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+
+**deeply_nested_capture.md:1:5:1:6:**
+```roc
+(((|a| {
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

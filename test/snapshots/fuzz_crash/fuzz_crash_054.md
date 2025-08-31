@@ -63,11 +63,33 @@ f]
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_054.md:1:20:1:39:**
+**fuzz_crash_054.md:1:40:2:1:**
 ```roc
 app[]{f:platform""}import S exposing[c as
+f]
 ```
-                   ^^^^^^^^^^^^^^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_054.md:2:1:2:2:**
+```roc
+f]
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_054.md:2:2:2:3:**
+```roc
+f]
+```
+ ^
 
 
 # CANONICALIZE
@@ -75,7 +97,7 @@ app[]{f:platform""}import S exposing[c as
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.lookup "f")
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

@@ -42,7 +42,17 @@ app
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **main!** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**app_header__nonempty_multiline__trailing_comma.md:2:32:2:37:**
+```roc
+	{ pf: "../main.roc" platform [main!,], somePkg: "../main.roc", }
+```
+	                              ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (empty)

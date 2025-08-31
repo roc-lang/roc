@@ -35,7 +35,8 @@ f
 {
 	o,
 }
-foo = "onmo %
+foo =
+"onmo %
 ~~~
 # EXPECTED
 NIL
@@ -78,18 +79,36 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^^^^^^
 
 
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_009.md:1:2:1:3:**
+```roc
+ f{o,
+```
+ ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_009.md:1:3:4:4:**
+```roc
+ f{o,
+     ]
+
+foo =
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "f")
-  (Expr.record_literal
-    (Expr.lookup "o")
-    (Expr.malformed)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -98,5 +117,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-foo : Error
 ~~~

@@ -23,7 +23,17 @@ x
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_block_single_expr.md:1:3:1:4:**
+```roc
+{ x }
+```
+  ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -219,6 +219,17 @@ Expressions can be identifiers, literals, function calls, or operators.
                                                  ^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **events** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:1:7:1:13:**
+```roc
+match events {
+```
+      ^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

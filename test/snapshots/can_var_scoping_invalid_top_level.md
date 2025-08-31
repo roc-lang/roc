@@ -21,7 +21,9 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwVar LowerIdent OpAssign 
 ~~~roc
 module []
 
-var topLevelVar_ = 0# This should cause an error - var not allowed at top level
+
+# This should cause an error - var not allowed at top level
+var topLevelVar_ = 0
 ~~~
 # EXPECTED
 NIL
@@ -30,10 +32,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "topLevelVar_")
-    (Expr.num_literal_i32 0)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -42,5 +41,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-topLevelVar_ : Num(_size)
 ~~~

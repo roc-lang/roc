@@ -26,6 +26,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 ~~~roc
 module []
 
+
 foo : U64
 bar : Thing(a, b, _)
 biz : (a, b, c)
@@ -94,68 +95,87 @@ main! : List(String) -> Result({}, _)
 ```
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_048.md:4:19:4:20:**
+**fuzz_crash_048.md:7:1:7:3:**
 ```roc
-bar : Thing(a, b, _)
+U8, U16 -> U32)
 ```
-                  ^
+^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_048.md:8:36:8:37:**
+**fuzz_crash_048.md:7:3:7:5:**
 ```roc
+U8, U16 -> U32)
+```
+  ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_048.md:7:5:7:8:**
+```roc
+U8, U16 -> U32)
+```
+    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_048.md:7:9:7:12:**
+```roc
+U8, U16 -> U32)
+```
+        ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_048.md:7:12:7:15:**
+```roc
+U8, U16 -> U32)
+```
+           ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_048.md:7:15:8:1:**
+```roc
+U8, U16 -> U32)
 main! : List(String) -> Result({}, _)
 ```
-                                   ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "bar")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "biz")
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-      (Expr.lookup "c")
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.malformed)
-  )
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.not_lookup)
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "tag_tuple")
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

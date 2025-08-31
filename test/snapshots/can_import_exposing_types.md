@@ -71,11 +71,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
 ~~~roc
 module []
 
+
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
+# Test using exposed types directly in annotations
 parseJson : Str -> Result(Value, Error)
 parseJson = |input| Json.parse(input)
+# Test mixing exposed types with qualified access
 handleRequest : Request -> Response
 handleRequest = |req| {
 	result = Json.decode(req.body)
@@ -92,14 +95,17 @@ handleRequest = |req| {
 # Test using exposed types in complex signatures
 processData : Config -> List Value -> Result(List Value, Error)
 processData = |config, values| List.mapTry((values, |v| Json.validateWith((config, v))))
+# Test exposed types in record fields
 ServerConfig :
 	{
 		jsonConfig : Config,
 		httpStatus : Status,
 		defaultResponse : Response,
 	}
+# Test exposed types with module-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
+# Test nested type usage
 handleResponse : Response -> Str
 handleResponse = |response| match response.status
 	Ok(status) => Http
@@ -360,37 +366,26 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.parse** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_exposing_types.md:3:1:3:49:**
+**can_import_exposing_types.md:9:21:9:31:**
 ```roc
-import json.Json exposing [Value, Error, Config]
+parseJson = |input| Json.parse(input)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    ^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.decode** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_exposing_types.md:4:1:4:64:**
+**can_import_exposing_types.md:14:14:14:25:**
 ```roc
-import http.Client as Http exposing [Request, Response, Status]
+    result = Json.decode(req.body)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:5:1:5:38:**
-```roc
-import utils.Result exposing [Result]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+             ^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -404,6 +399,122 @@ This might be a limitation in the current implementation that will be addressed 
         ^^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:16:30:16:35:**
+```roc
+        Ok(value) => Http.ok(value)
+```
+                             ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **error** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:17:13:17:18:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+            ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Http.badRequest** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:17:23:17:38:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+                      ^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **error** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:17:39:17:44:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+                                      ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **req** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_exposing_types.md:14:26:14:29:**
+```roc
+    result = Json.decode(req.body)
+```
+                         ^^^
+
+
+**UNUSED VARIABLE**
+Variable **req** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_exposing_types.md:13:18:13:21:**
+```roc
+handleRequest = |req| {
+```
+                 ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:19:1:22:1:**
+```roc
+}
+
+# Test using exposed types in complex signatures
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **List.mapTry** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:24:5:24:16:**
+```roc
+    List.mapTry(
+```
+    ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Json.validateWith** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:26:13:26:30:**
+```roc
+        |v| Json.validateWith(config, v),
+```
+            ^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Http.clientWith** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_exposing_types.md:38:25:38:40:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+                        ^^^^^^^^^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -413,6 +524,65 @@ This might be a limitation in the current implementation that will be addressed 
         Ok(status) => Http.statusToString(status)
 ```
         ^^^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **response** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_response` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_exposing_types.md:43:11:43:19:**
+```roc
+    match response.status {
+```
+          ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:45:9:45:19:**
+```roc
+        Err(error) => Error.toString(error)
+```
+        ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:45:20:45:23:**
+```roc
+        Err(error) => Error.toString(error)
+```
+                   ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:45:23:45:44:**
+```roc
+        Err(error) => Error.toString(error)
+```
+                      ^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:46:5:49:1:**
+```roc
+    }
+
+# Test mixing exposed and qualified in same expression
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
 
 
 **UNSUPPORTED NODE**
@@ -426,121 +596,151 @@ This might be a limitation in the current implementation that will be addressed 
         ^^^^^^^^^^^^^^^
 
 
+**UNUSED VARIABLE**
+Variable **httpStatus** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_exposing_types.md:50:31:50:41:**
+```roc
+combineResults = |jsonResult, httpStatus|
+```
+                              ^^^^^^^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**can_import_exposing_types.md:52:45:52:50:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                            ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:52:50:52:51:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                                 ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:52:51:52:53:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                                  ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:52:72:52:73:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                                                       ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:52:73:53:9:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+        Err(error) => Err(error)
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:53:9:53:19:**
+```roc
+        Err(error) => Err(error)
+```
+        ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:53:20:53:23:**
+```roc
+        Err(error) => Err(error)
+```
+                   ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:53:23:53:33:**
+```roc
+        Err(error) => Err(error)
+```
+                      ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_exposing_types.md:54:5:54:6:**
+```roc
+    }
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "parseJson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "parseJson")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "handleRequest")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "handleRequest")
-    (Expr.lambda)
-  )
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processData")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processData")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "jsonConfig")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "httpStatus")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "defaultResponse")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "createClient")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "createClient")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "handleResponse")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "handleResponse")
-    (Expr.lambda)
-  )
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "combineResults")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "combineResults")
-    (Expr.lambda)
-  )
-  (Expr.lookup "value")
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "status")
-    (Expr.lookup "httpStatus")
-  )
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -550,10 +750,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-parseJson : _a
-handleRequest : _a
-processData : _a
-createClient : _a
-handleResponse : _a
-combineResults : _a
 ~~~

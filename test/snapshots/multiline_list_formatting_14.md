@@ -24,6 +24,7 @@ OpenSquare LineComment Int Comma LineComment BlankLine LineComment BlankLine Int
 ~~~
 # FORMATTED
 ~~~roc
+# Open
 1# First
 # A comment in the middle
 # Second
@@ -67,26 +68,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 	^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**multiline_list_formatting_14.md:2:2:2:3:**
-```roc
-	1, # First
-```
-	^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

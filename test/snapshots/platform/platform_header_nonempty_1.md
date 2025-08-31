@@ -39,10 +39,14 @@ KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineC
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" requires {Main} {
-} exposes [
-	: ,
-]
+platform # Comment after platform keyword
+"foo" requires { # Comment after name
+# Comment after requires keyword
+# Comment after rigids open
+Main} # Comment after rigid member
+# Comment after rigids close
+{ # Comment after signatures open
+} exposes [: ]
 
 Str
 ) 
@@ -54,20 +58,21 @@ Str
 	
 exposes # Comment after exposes keyword
 		
-[
-	foo,
+[ # Comment after exposes open
+	foo, # Comment after exposed item
 ]
+# Comment after exposes close
 packages # Comment after packages keyword
 		
-{
-	some_pkg : "../some_pkg.roc",
+{ # Comment after packages open
+	some_pkg : "../some_pkg.roc", # Comment after package
 }
+# Comment after packages close
 provides # Comment after provides keyword
 		
-[
-	bar,
-]# Comment after provides open
-# Comment after exposed item
+[ # Comment after provides open
+	bar, # Comment after exposed item
+]
 ~~~
 # EXPECTED
 NIL
@@ -368,27 +373,156 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:8:18:8:21:**
+```roc
+				main! : List(Str) => {}, # Comment after signature
+```
+				             ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:8:21:8:23:**
+```roc
+				main! : List(Str) => {}, # Comment after signature
+```
+				                ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:8:23:8:26:**
+```roc
+				main! : List(Str) => {}, # Comment after signature
+```
+				                  ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:8:26:8:28:**
+```roc
+				main! : List(Str) => {}, # Comment after signature
+```
+				                     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:8:28:9:4:**
+```roc
+				main! : List(Str) => {}, # Comment after signature
+			} # Comment after signatures close
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:9:4:10:2:**
+```roc
+			} # Comment after signatures close
+	exposes # Comment after exposes keyword
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:10:2:11:3:**
+```roc
+	exposes # Comment after exposes keyword
+		[ # Comment after exposes open
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:11:3:13:4:**
+```roc
+		[ # Comment after exposes open
+			foo, # Comment after exposed item
+		] # Comment after exposes close
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:14:2:15:3:**
+```roc
+	packages # Comment after packages keyword
+		{ # Comment after packages open
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:15:3:17:4:**
+```roc
+		{ # Comment after packages open
+			some_pkg: "../some_pkg.roc", # Comment after package
+		} # Comment after packages close
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:18:2:19:3:**
+```roc
+	provides # Comment after provides keyword
+		[ # Comment after provides open
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**platform_header_nonempty_1.md:19:3:21:4:**
+```roc
+		[ # Comment after provides open
+			bar, # Comment after exposed item
+		]
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.record_literal
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.list_literal)
   (Expr.malformed)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "some_pkg")
-      (Expr.str_literal_big)
-    )
-  )
   (Expr.malformed)
-  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

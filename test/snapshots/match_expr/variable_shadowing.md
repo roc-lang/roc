@@ -56,6 +56,28 @@ match (value, other)
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**variable_shadowing.md:1:8:1:13:**
+```roc
+match (value, other) {
+```
+       ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **other** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**variable_shadowing.md:1:15:1:20:**
+```roc
+match (value, other) {
+```
+              ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

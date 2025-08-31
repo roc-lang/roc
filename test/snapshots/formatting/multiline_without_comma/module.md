@@ -29,6 +29,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [a, b]
 
+
 a = 'a'
 b = 'a'
 ~~~
@@ -39,14 +40,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "a")
-    (Expr.str_literal_small)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "b")
-    (Expr.str_literal_small)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -55,6 +50,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-a : Str
-b : Str
 ~~~

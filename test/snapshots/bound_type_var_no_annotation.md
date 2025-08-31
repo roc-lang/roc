@@ -53,68 +53,63 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 identity = |x| x
+# Test function with multiple type parameters
 combine : a -> b -> (a, b)
 combine = |first, second| (first, second)
+# Test type application with concrete types
 addOne : U64 -> U64
 addOne = |n| n + 1
 main! = |_| {
+	# Test identity with different types
 	num = identity(42)
 	text = identity("hello")
+	# Test combine function
 	pair = combine((num, text))
+	# Test concrete function
 	result = addOne(5)
 	result : result
 }
-
-# Test function with multiple type parameters
-# Test type application with concrete types
-# Test identity with different types
-# Test combine function
-# Test concrete function
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **result** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result` to suppress this warning.
+The unused variable is declared here:
+
+**bound_type_var_no_annotation.md:24:5:24:11:**
+```roc
+    result
+```
+    ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **pair** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+The unused variable is declared here:
+
+**bound_type_var_no_annotation.md:19:5:19:9:**
+```roc
+    pair = combine(num, text)
+```
+    ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "combine")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.tuple_literal
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "combine")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "addOne")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "addOne")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -123,7 +118,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-identity : _c
-combine : _c
-addOne : _c
 ~~~

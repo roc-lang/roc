@@ -39,59 +39,52 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
+# Function with pure annotation using thin arrow
 add : I32 -> I32 -> I32
 add = |x, y| { x : x, y : y } | .x
+# Another pure function that calls a pure function
 double : I32 -> I32
 double = |x| add((x, x))
-main! = add((1, 2))# Function with pure annotation using thin arrow
-# Another pure function that calls a pure function
+main! = add((1, 2))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
 
-**pure_with_pure_annotation.md:5:14:5:28:**
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**pure_with_pure_annotation.md:5:19:5:20:**
 ```roc
 add = |x, y| { x: x, y: y }.x
 ```
-             ^^^^^^^^^^^^^^
+                  ^
+
+
+**UNUSED VARIABLE**
+Variable **y** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+
+**pure_with_pure_annotation.md:5:25:5:26:**
+```roc
+add = |x, y| { x: x, y: y }.x
+```
+                        ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "add")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "double")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "double")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -100,6 +93,4 @@ add = |x, y| { x: x, y: y }.x
 ~~~
 # TYPES
 ~~~roc
-add : _a
-double : _a
 ~~~

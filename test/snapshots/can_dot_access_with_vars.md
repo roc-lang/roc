@@ -57,18 +57,24 @@ list.map(fn)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **list** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+
+**can_dot_access_with_vars.md:4:5:4:9:**
+```roc
+    list.map(fn)
+```
+    ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "fn")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.apply_ident)
 )
 ~~~
@@ -78,4 +84,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+list : List(_elem)
+fn : _a
 ~~~

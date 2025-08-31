@@ -48,6 +48,8 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
 ~~~roc
 module []
 
+
+# Import exposing
 import I1 exposing [I11, I12]
 import I2 exposing [I21]
 as 
@@ -135,88 +137,112 @@ A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**everything.md:4:1:4:30:**
-```roc
-import I1 exposing [I11, I12]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**everything.md:5:1:5:24:**
+**everything.md:5:25:5:28:**
 ```roc
 import I2 exposing [I21 as Ias1, I22 as Ias2]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^
+                        ^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**everything.md:8:22:8:25:**
+**everything.md:5:28:5:32:**
 ```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+```
+                           ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:5:32:5:34:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+```
+                               ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:5:34:5:37:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+```
+                                 ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:5:38:5:41:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+```
+                                     ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:5:41:5:45:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+```
+                                        ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:5:45:8:1:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2]
+
+# Where constraint
 A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
 ```
-                     ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**everything.md:8:52:8:55:**
+**everything.md:19:9:19:15:**
 ```roc
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 ```
-                                                   ^^^
+	       ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**everything.md:9:22:9:25:**
+**everything.md:19:17:19:23:**
 ```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 ```
-                     ^^^
+	               ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**everything.md:9:52:9:55:**
+**everything.md:19:25:19:50:**
 ```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 ```
-                                                   ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**everything.md:16:24:16:27:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                       ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**everything.md:16:37:16:40:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                                    ^^^
+	                       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -234,17 +260,6 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**everything.md:27:3:27:11:**
-```roc
-		Z2(a, b) => a
-```
-		^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **everything.md:28:3:28:20:**
 ```roc
 		Z3({ a, b }) => a
@@ -252,15 +267,82 @@ This might be a limitation in the current implementation that will be addressed 
 		^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **h1** is not used anywhere in your code.
 
-**everything.md:29:3:29:13:**
+If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:19:2:19:4:**
+```roc
+	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
+```
+	^^
+
+
+**UNUSED VARIABLE**
+Variable **h2** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:20:2:20:4:**
+```roc
+	h2 = h(x, y)
+```
+	^^
+
+
+**UNUSED VARIABLE**
+Variable **h3** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:21:2:21:4:**
+```roc
+	h3 = A(x, y)
+```
+	^^
+
+
+**UNUSED VARIABLE**
+Variable **h5** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:23:2:23:4:**
+```roc
+	h5 = (x, y)
+```
+	^^
+
+
+**UNUSED VARIABLE**
+Variable **h4** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:22:2:22:4:**
+```roc
+	h4 = [x, y]
+```
+	^^
+
+
+**UNUSED VARIABLE**
+Variable **b** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+
+**everything.md:29:10:29:11:**
 ```roc
 		Z4([a, b]) => a
 ```
-		^^^^^^^^^^
+		       ^
 
 
 # CANONICALIZE
@@ -269,113 +351,20 @@ This might be a limitation in the current implementation that will be addressed 
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.tuple_literal
-          (Expr.binop_thin_arrow
-            (Expr.binop_colon
-              (Expr.lookup "a")
-              (Expr.binop_colon
-                (Expr.lambda)
-                (Expr.tuple_literal
-                  (Expr.lookup "a")
-                  (Expr.lookup "a")
-                )
-              )
-            )
-            (Expr.apply_tag)
-          )
-          (Expr.lambda)
-        )
-        (Expr.tuple_literal
-          (Expr.lookup "a")
-          (Expr.lookup "a")
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.tuple_literal
-          (Expr.binop_thin_arrow
-            (Expr.binop_colon
-              (Expr.lookup "b")
-              (Expr.binop_colon
-                (Expr.lambda)
-                (Expr.tuple_literal
-                  (Expr.lookup "b")
-                  (Expr.lookup "b")
-                )
-              )
-            )
-            (Expr.apply_tag)
-          )
-          (Expr.lambda)
-        )
-        (Expr.tuple_literal
-          (Expr.lookup "b")
-          (Expr.lookup "b")
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.lookup "a")
-      (Expr.lookup "b")
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "a")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "b")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "g")
-    (Expr.tuple_literal
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "e")
-          (Expr.lookup "e")
-        )
-        (Expr.lambda)
-      )
-      (Expr.lambda)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "h")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -384,5 +373,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-h : _c
 ~~~

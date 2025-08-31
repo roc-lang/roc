@@ -38,9 +38,12 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [LocalStatus, processColor]
 
+
 LocalStatus := [Pending, Complete]
 processColor : _ -> LocalStatus
 processColor = |color| {
+
+	# bring RGB into scope
 	import Color.RGB
 	match color
 	Red
@@ -114,15 +117,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_mixed_scope.md:5:16:5:17:**
+**nominal_mixed_scope.md:3:13:3:15:**
 ```roc
-processColor : _ -> LocalStatus
+LocalStatus := [Pending, Complete]
 ```
-               ^
+            ^^
 
 
 **UNSUPPORTED NODE**
@@ -136,24 +139,78 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **LocalStatus.Pending** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_mixed_scope.md:12:20:12:39:**
+```roc
+        RGB.Red => LocalStatus.Pending
+```
+                   ^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **RGB.Green** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_mixed_scope.md:13:9:13:18:**
+```roc
+        RGB.Green => LocalStatus.Complete
+```
+        ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **LocalStatus.Complete** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_mixed_scope.md:13:22:13:42:**
+```roc
+        RGB.Green => LocalStatus.Complete
+```
+                     ^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **RGB.Blue** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_mixed_scope.md:14:9:14:17:**
+```roc
+        RGB.Blue => LocalStatus.Pending
+```
+        ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **LocalStatus.Pending** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_mixed_scope.md:14:21:14:40:**
+```roc
+        RGB.Blue => LocalStatus.Pending
+```
+                    ^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_mixed_scope.md:16:1:16:2:**
+```roc
+}
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processColor")
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processColor")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -163,5 +220,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-processColor : _a
 ~~~

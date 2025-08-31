@@ -94,15 +94,46 @@ Pair(a, b+ : (
 ^^^^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_021.md:1:1:1:13:**
+```roc
+Fli/main.roc" }
+```
+^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_021.md:1:13:3:1:**
+```roc
+Fli/main.roc" }
+
+Pair(a, b+ : (
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_021.md:3:1:3:15:**
+```roc
+Pair(a, b+ : (
+```
+^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_slash
-    (Expr.apply_tag)
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

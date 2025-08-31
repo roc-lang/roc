@@ -35,6 +35,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "platform/main.roc" platform [main] }
 
+
 helper : I64 -> I64
 helper = |n| n * 2
 main : I64 -> I64 -> I64
@@ -47,31 +48,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "helper")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "helper")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "main")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -80,6 +60,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-helper : _a
-main : _a
 ~~~

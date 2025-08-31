@@ -51,14 +51,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 5)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.lookup "y")
 )
 ~~~
@@ -68,4 +62,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+y : _a
 ~~~

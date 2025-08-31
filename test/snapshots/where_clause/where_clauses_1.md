@@ -30,77 +30,19 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Hash, Decode]
 
+
 Hash((a, hasher)) : (a where module(a).hash : hasher) -> hasher, module(hasher) | Hasher
 Decode(a) : a where module(a).decode : List U8 -> a
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_1.md:5:9:5:12:**
-```roc
-		module(a).hash : hasher -> hasher,
-```
-		      ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_1.md:6:9:6:17:**
-```roc
-		module(hasher).Hasher
-```
-		      ^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_1.md:8:27:8:30:**
-```roc
-Decode(a) : a where module(a).decode : List(U8) -> a
-```
-                          ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.binop_thin_arrow
-        (Expr.binop_colon
-          (Expr.lookup "a")
-          (Expr.binop_colon
-            (Expr.lambda)
-            (Expr.lookup "hasher")
-          )
-        )
-        (Expr.lookup "hasher")
-      )
-      (Expr.lambda)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.lookup "a")
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.lookup "a")
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

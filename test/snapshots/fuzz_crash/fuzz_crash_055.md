@@ -24,37 +24,17 @@ r : a where module(a).h : s
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_055.md:2:7:2:10:**
-```roc
-module(a).h:s
-```
-      ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "r")
-    (Expr.binop_colon
-      (Expr.lookup "a")
-      (Expr.binop_colon
-        (Expr.lambda)
-        (Expr.lookup "s")
-      )
-    )
-  )
+(Expr.block
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc
-# File does not contain a block of statements
 ~~~

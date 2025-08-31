@@ -23,11 +23,21 @@ modu
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_005.md:1:1:1:5:**
+```roc
+modu
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lookup "modu")
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

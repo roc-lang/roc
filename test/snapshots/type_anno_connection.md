@@ -29,6 +29,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [add_one, my_number]
 
+
 add_one : U64 -> U64
 add_one = |x| x + 1
 my_number : U64
@@ -41,25 +42,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "add_one")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "add_one")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "my_number")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "my_number")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -68,6 +54,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-add_one : _a
-my_number : _a
 ~~~

@@ -44,6 +44,17 @@ match numbers
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **numbers** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_patterns.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

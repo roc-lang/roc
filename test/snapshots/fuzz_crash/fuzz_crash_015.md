@@ -50,16 +50,27 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_015.md:1:1:1:4:**
+**fuzz_crash_015.md:1:1:1:6:**
 ```roc
 0o0.0
 ```
-^^^
+^^^^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_015.md:2:1:2:2:**
+```roc
+0_0
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
 **fuzz_crash_015.md:2:2:2:3:**
 ```roc
@@ -68,9 +79,53 @@ Patterns can only appear in specific contexts like function parameters, destruct
  ^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_015.md:2:3:2:4:**
+```roc
+0_0
+```
+  ^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_015.md:3:1:3:2:**
+```roc
+0u8.0
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_015.md:3:2:3:6:**
+```roc
+0u8.0
+```
+ ^^^^
+
+
+**EXPRESSION IN STATEMENT CONTEXT**
+Found an expression where a statement was expected.
+This might be a missing semicolon or an incorrectly placed expression.
+
+**fuzz_crash_015.md:4:1:4:2:**
+```roc
+0_
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
 **fuzz_crash_015.md:4:2:4:3:**
 ```roc
@@ -82,13 +137,13 @@ Patterns can only appear in specific contexts like function parameters, destruct
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
-  (Expr.num_literal_i32 0)
   (Expr.malformed)
-  (Expr.num_literal_i32 0)
-  (Expr.num_literal_i32 0)
-  (Expr.lambda)
-  (Expr.num_literal_i32 0)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

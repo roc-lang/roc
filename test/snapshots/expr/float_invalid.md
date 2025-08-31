@@ -24,26 +24,16 @@ Float Dot Int ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**float_invalid.md:1:1:1:8:**
-```roc
-3.14.15
-```
-^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

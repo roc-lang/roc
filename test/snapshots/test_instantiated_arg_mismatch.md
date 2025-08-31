@@ -48,26 +48,15 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**test_instantiated_arg_mismatch.md:3:5:3:10:**
-```roc
-    pair = |x, y| (x, y)
-```
-    ^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

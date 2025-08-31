@@ -56,6 +56,8 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "platform.roc" platform [main] }
 
+
+# Map over Result type
 map_result : Result(a, e) -> (a -> b) -> Result(b, e)
 map_result = |result, transform| {
 	match result
@@ -72,15 +74,16 @@ map_result = |result, transform| {
 # Simple identity function with type variable
 identity : a -> a
 identity = |x| x
+# Nested type variables in records
 make_pair : a -> b -> {first : a, second : b}
 make_pair = |x, y| { first : x, second : y }
+# Function that works with lists of any type
 list_length : List _a -> U64
 list_length = |_lst| 42
+# Nested Result types
 wrap_in_result : a -> Result(Result(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
-main = |_| "done"# Nested type variables in records
-# Function that works with lists of any type
-# Nested Result types
+main = |_| "done"
 ~~~
 # EXPECTED
 NIL
@@ -179,87 +182,130 @@ This might be a limitation in the current implementation that will be addressed 
         ^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **error** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**type_var_nested.md:8:13:8:18:**
+```roc
+        Err(error) => Err(error)
+```
+            ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **error** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**type_var_nested.md:8:27:8:32:**
+```roc
+        Err(error) => Err(error)
+```
+                          ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **transform** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_transform` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_nested.md:5:23:5:32:**
+```roc
+map_result = |result, transform| {
+```
+                      ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_var_nested.md:10:1:13:1:**
+```roc
+}
+
+# Simple identity function with type variable
+identity : a -> a
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_var_nested.md:18:22:18:30:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+                     ^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_var_nested.md:18:32:18:41:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+                               ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_nested.md:18:14:18:15:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+             ^
+
+
+**UNUSED VARIABLE**
+Variable **y** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_nested.md:18:17:18:18:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+                ^
+
+
+**UNUSED VARIABLE**
+Variable **_lst** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__lst` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_nested.md:22:16:22:20:**
+```roc
+list_length = |_lst| 42
+```
+               ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "map_result")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "map_result")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "identity")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "make_pair")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.record_literal
-          (Expr.binop_colon
-            (Expr.lookup "first")
-            (Expr.lookup "a")
-          )
-          (Expr.binop_colon
-            (Expr.lookup "second")
-            (Expr.lookup "b")
-          )
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "make_pair")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "list_length")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "list_length")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "wrap_in_result")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "wrap_in_result")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -268,10 +314,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-map_result : _c
-identity : _c
-make_pair : _c
-list_length : _c
-wrap_in_result : _c
-main : _c
 ~~~

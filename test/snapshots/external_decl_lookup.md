@@ -38,38 +38,38 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
 import pf.Stdout
 import json.Json
 main! = |_| {
+	# This should create an external declaration for json.Json.utf8
 	result = Json.utf8("Hello from external module!")
 	Stdout.line!(result)
 }
-
-# This should create an external declaration for json.Json.utf8
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.utf8** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**external_decl_lookup.md:3:1:3:17:**
+**external_decl_lookup.md:8:14:8:23:**
 ```roc
-import pf.Stdout
+    result = Json.utf8("Hello from external module!")
 ```
-^^^^^^^^^^^^^^^^
+             ^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**external_decl_lookup.md:4:1:4:17:**
+**external_decl_lookup.md:9:5:9:17:**
 ```roc
-import json.Json
+    Stdout.line!(result)
 ```
-^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -77,10 +77,7 @@ import json.Json
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

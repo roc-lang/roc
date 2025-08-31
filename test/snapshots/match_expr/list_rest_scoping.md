@@ -65,6 +65,17 @@ match items
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **items** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_rest_scoping.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

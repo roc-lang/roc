@@ -64,23 +64,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "f")
-    (Expr.binop_thin_arrow
-      (Expr.tuple_literal
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-      (Expr.tuple_literal
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "f")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.apply_ident)
 )
 ~~~
@@ -90,4 +75,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+f : _a
 ~~~

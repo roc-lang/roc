@@ -42,30 +42,69 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**error_duplicate_fields.md:1:3:1:16:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+  ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**error_duplicate_fields.md:1:18:1:25:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                 ^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**error_duplicate_fields.md:1:27:1:38:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                          ^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**error_duplicate_fields.md:1:40:1:66:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**error_duplicate_fields.md:1:68:1:75:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+                                                                   ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 30)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_small)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "email")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 25)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

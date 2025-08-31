@@ -81,6 +81,17 @@ match data
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**mixed_pattern_scoping.md:1:7:1:11:**
+```roc
+match data {
+```
+      ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -96,33 +107,11 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**mixed_pattern_scoping.md:3:5:3:11:**
-```roc
-    Err(x) => x - 1
-```
-    ^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **mixed_pattern_scoping.md:4:5:4:21:**
 ```roc
     Ok([x]) => x * 2
 ```
     ^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**mixed_pattern_scoping.md:5:5:5:11:**
-```roc
-    Err(y) => y / 2
-```
-    ^^^^^^
 
 
 # CANONICALIZE

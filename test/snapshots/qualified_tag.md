@@ -25,27 +25,40 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 ~~~roc
 module [Color]
 
+
 Color := [Red, Blue]
 test = Color.Red
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_tag.md:3:7:3:9:**
+```roc
+Color := [Red, Blue]
+```
+      ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Color.Red** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_tag.md:5:8:5:17:**
+```roc
+test = Color.Red
+```
+       ^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "test")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -54,5 +67,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-test : _a
 ~~~

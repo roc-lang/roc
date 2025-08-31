@@ -38,6 +38,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 import pf.Stdout
 printName : { name : Str, age : U64 } => Str
 printName = |person| {
@@ -50,47 +51,50 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Stdout.line!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**type_record_effectful.md:3:1:3:17:**
+**type_record_effectful.md:7:5:7:17:**
 ```roc
-import pf.Stdout
+    Stdout.line!(person.name)
 ```
-^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **person** is not used anywhere in your code.
 
-**type_record_effectful.md:5:13:5:36:**
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+
+**type_record_effectful.md:8:5:8:11:**
 ```roc
-printName : { name: Str, age: U64 } => Str
+    person.name
 ```
-            ^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **person** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+
+**type_record_effectful.md:6:14:6:20:**
+```roc
+printName = |person| {
+```
+             ^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "printName")
-    (Expr.binop_thick_arrow
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "printName")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -99,5 +103,4 @@ printName : { name: Str, age: U64 } => Str
 ~~~
 # TYPES
 ~~~roc
-printName : _a
 ~~~

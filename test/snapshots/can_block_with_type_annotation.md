@@ -32,18 +32,24 @@ x = "hello"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**can_block_with_type_annotation.md:2:3:2:4:**
+```roc
+  x = "hello" }
+```
+  ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "x")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -52,4 +58,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Str
 ~~~

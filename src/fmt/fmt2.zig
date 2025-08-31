@@ -30,6 +30,7 @@ const Formatter = struct {
     curr_indent_level: u32 = 0,
     has_newline: bool = true, // Starts true since beginning of file is considered a newline
     token_cursor: usize = 0, // Current position in tokens array for efficient traversal
+    consecutive_newlines: u32 = 0, // Track consecutive newlines to prevent multiple blank lines
 
     fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, tokens: []const Token) !Formatter {
         return Formatter{
@@ -53,7 +54,7 @@ const Formatter = struct {
         // Format the header if present
         if (self.ast.header) |header| {
             try self.formatHeader(header);
-            try self.ensureBlankLine();
+            // Don't add blank line here - let the source tokens handle spacing
         }
 
         // Format the root node (which is usually a block containing all top-level statements)
@@ -92,9 +93,74 @@ const Formatter = struct {
         return @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(payload_u32));
     }
 
+    /// Flush all comments between two offsets (used for preserving comments between statements)
+    fn flushCommentsInRegion(self: *Formatter, start_offset: usize, end_offset: usize) !bool {
+        var found_any = false;
+
+        // Process tokens in the specified region
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+
+            // Stop if we've passed the end of the region
+            if (token.region.start.offset >= end_offset) {
+                break;
+            }
+
+            // Skip tokens before our region
+            if (token.region.end.offset <= start_offset) {
+                self.token_cursor += 1;
+                continue;
+            }
+
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    // Add newline before comment if we haven't found any yet
+                    if (!found_any) {
+                        try self.ensureNewline();
+                    }
+
+                    try self.pushIndent();
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
+                    try self.newline();
+
+                    found_any = true;
+                    self.token_cursor += 1;
+                },
+                .BlankLine => {
+                    // Only add a blank line if we don't already have one
+                    // A blank line needs 2 consecutive newlines total
+                    if (self.consecutive_newlines < 2) {
+                        // Add newlines to make a blank line
+                        while (self.consecutive_newlines < 2) {
+                            try self.newline();
+                        }
+                    }
+                    // If we already have 2+ newlines, skip this blank line token
+                    self.token_cursor += 1;
+                    found_any = true;
+                },
+                else => {
+                    // Skip non-comment tokens
+                    self.token_cursor += 1;
+                },
+            }
+        }
+
+        return found_any;
+    }
+
     /// Flush any comment and blank line tokens before the given position
     fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
         var found_any = false;
+
+        // Debug: log what we're looking for
+        if (std.debug.runtime_safety and false) { // Disabled by default
+            std.debug.print("flushCommentsBeforePosition: pos.offset={}, cursor={}\n", .{ pos.offset, self.token_cursor });
+            if (self.token_cursor < self.tokens.len) {
+                const token = self.tokens[self.token_cursor];
+                std.debug.print("  Current token at cursor: tag={s}, offset={}\n", .{ @tagName(token.tag), token.region.start.offset });
+            }
+        }
 
         while (self.token_cursor < self.tokens.len) {
             const token = self.tokens[self.token_cursor];
@@ -108,7 +174,10 @@ const Formatter = struct {
                 .LineComment, .DocComment => {
                     // Ensure we're on a new line before outputting the comment
                     if (!self.has_newline) {
-                        try self.pushAll(" ");
+                        // Check if we need a space before the comment
+                        if (self.output.items.len > 0 and self.output.items[self.output.items.len - 1] != ' ') {
+                            try self.pushAll(" ");
+                        }
                     } else {
                         try self.pushIndent();
                     }
@@ -123,28 +192,23 @@ const Formatter = struct {
                     self.token_cursor += 1;
                 },
                 .BlankLine => {
-                    // When we encounter a BlankLine while flushing comments, we need to handle it
-                    // A blank line after a comment should be output as just a newline
-                    // (the previous comment already added one newline, so we just need one more)
-
-                    // Debug: Make sure we're not copying the source content with spaces
-                    if (std.debug.runtime_safety) {
-                        const region = self.source[token.region.start.offset..token.region.end.offset];
-                        var space_count: usize = 0;
-                        for (region) |c| {
-                            if (c == ' ') space_count += 1;
-                        }
-                        if (space_count >= 4) {
-                            std.debug.print("WARNING: BlankLine token contains {} spaces, but we're NOT copying them\n", .{space_count});
+                    // Only add a blank line if we don't already have one
+                    // A blank line needs 2 consecutive newlines total
+                    if (self.consecutive_newlines < 2) {
+                        // Add newlines to make a blank line
+                        while (self.consecutive_newlines < 2) {
+                            try self.newline();
                         }
                     }
-
-                    // Output a clean newline for the blank line (no spaces!)
-                    try self.newline();
+                    // If we already have 2+ newlines, skip this blank line token
                     self.token_cursor += 1;
                     found_any = true;
                 },
-                else => break, // Stop at non-comment/blank tokens
+                else => {
+                    // Skip non-comment/blank tokens but keep looking for comments
+                    // This ensures we find all comments before the target position
+                    self.token_cursor += 1;
+                },
             }
         }
 
@@ -1862,14 +1926,30 @@ const Formatter = struct {
         var iter = self.ast.node_slices.nodes(&nodes_idx);
 
         var first = true;
+        var prev_end_offset: ?usize = null;
         while (iter.next()) |stmt_idx| {
-            if (!first) {
-                // Always add a newline between statements
+            const stmt_node = self.getNode(stmt_idx);
+
+            // For the first statement, flush comments before it
+            if (first) {
+                _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+                first = false;
+            } else if (prev_end_offset) |end_offset| {
+                // For subsequent statements, flush all comments between the previous statement and this one
+                // This ensures comments in the middle of the file are preserved
+                _ = try self.flushCommentsInRegion(end_offset, stmt_node.region.start.offset);
+
+                // Ensure we have a newline before the next statement
                 try self.ensureNewline();
+                try self.pushIndent();
             }
 
-            try self.formatNode(stmt_idx);
-            first = false;
+            // Now format the statement itself
+            // Use formatNodeWithoutCommentFlush since we already flushed comments above
+            try self.formatNodeWithoutCommentFlush(stmt_idx);
+
+            // Remember where this statement ended for next iteration
+            prev_end_offset = stmt_node.region.end.offset;
         }
     }
 
@@ -1923,55 +2003,35 @@ const Formatter = struct {
 
         var iter = self.ast.node_slices.nodes(&nodes_idx);
         var first = true;
+        var prev_end_offset: ?usize = null;
+
         while (iter.next()) |stmt_idx| {
             const stmt_node = self.getNode(stmt_idx);
 
-            // Add newline before each statement
-            if (!first) {
-                try self.ensureNewline();
-            } else {
+            if (first) {
                 // For the first statement, we need a newline after the opening brace
                 try self.newline();
-            }
 
-            // Flush any comments before this statement (they handle their own indentation and newlines)
-            _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+                // Flush any comments before the first statement
+                _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+
+                first = false;
+            } else if (prev_end_offset) |end_offset| {
+                // For subsequent statements, flush all comments between the previous statement and this one
+                _ = try self.flushCommentsInRegion(end_offset, stmt_node.region.start.offset);
+
+                // Ensure we have a newline before the next statement
+                try self.ensureNewline();
+            }
 
             // Add indentation for the statement
-            // Debug: Check what we're about to indent
-            if (std.debug.runtime_safety) {
-                if (self.output.items.len > 0) {
-                    // Count how many chars back to the last newline
-                    var chars_since_newline: usize = 0;
-                    var i = self.output.items.len;
-                    while (i > 0) {
-                        i -= 1;
-                        if (self.output.items[i] == '\n') {
-                            break;
-                        }
-                        chars_since_newline += 1;
-                    }
-
-                    // If we have exactly 4 spaces after the last newline, that's our bug!
-                    if (chars_since_newline == 4) {
-                        // Check if they're all spaces
-                        var all_spaces = true;
-                        for (self.output.items[self.output.items.len - 4 ..]) |c| {
-                            if (c != ' ') {
-                                all_spaces = false;
-                                break;
-                            }
-                        }
-                        if (all_spaces) {
-                            std.debug.panic("ERROR: About to add indentation when we already have 4 spaces on the line!\nOutput: {s}\n", .{self.output.items});
-                        }
-                    }
-                }
-            }
             try self.pushIndent();
 
             // Format the statement itself
             try self.formatNodeWithoutCommentFlush(stmt_idx);
+
+            // Remember where this statement ended for next iteration
+            prev_end_offset = stmt_node.region.end.offset;
 
             // Check for blank lines after this node
             try self.flushBlankLinesAfterPosition(stmt_node.region.end);
@@ -3195,8 +3255,21 @@ const Formatter = struct {
     }
 
     fn push(self: *Formatter, c: u8) !void {
-        // Debug check for consecutive spaces
+        // Debug check for consecutive spaces and blank lines
         if (std.debug.runtime_safety) {
+            if (c == '\n') {
+                // Track consecutive newlines
+                self.consecutive_newlines += 1;
+
+                // Check for more than 2 consecutive newlines (which would be more than 1 blank line)
+                if (self.consecutive_newlines > 2) {
+                    std.debug.panic("ERROR: Formatter is emitting more than 1 consecutive blank line! Already have {} newlines, trying to add another.\nOutput so far:\n{s}\n", .{ self.consecutive_newlines - 1, self.output.items });
+                }
+            } else if (c != ' ' and c != '\t') {
+                // Reset counter on non-whitespace (but spaces and tabs don't reset it!)
+                self.consecutive_newlines = 0;
+            }
+
             if (c == ' ' and self.output.items.len > 0) {
                 const prev = self.output.items[self.output.items.len - 1];
                 if (prev == '\n') {
@@ -3233,6 +3306,13 @@ const Formatter = struct {
                         std.debug.panic("ERROR: push() is adding consecutive space #{} at output position {}! Preceding context: {s}\n", .{ space_count + 1, self.output.items.len, self.output.items[std.math.sub(usize, self.output.items.len, 50) catch 0 ..] });
                     }
                 }
+            }
+        } else {
+            // In non-debug mode, still track consecutive newlines
+            if (c == '\n') {
+                self.consecutive_newlines += 1;
+            } else if (c != ' ' and c != '\t') {
+                self.consecutive_newlines = 0;
             }
         }
 
@@ -3282,6 +3362,16 @@ const Formatter = struct {
             }
         }
         self.has_newline = str[str.len - 1] == '\n';
+
+        // Update consecutive newlines counter based on what we're appending
+        for (str) |c| {
+            if (c == '\n') {
+                self.consecutive_newlines += 1;
+            } else if (c != ' ' and c != '\t') {
+                self.consecutive_newlines = 0;
+            }
+        }
+
         try self.output.appendSlice(str);
     }
 
@@ -3295,7 +3385,18 @@ const Formatter = struct {
 
         const str = self.source[start..end];
 
-        self.has_newline = str[str.len - 1] == '\n';
+        // Debug assertion: literals should never contain newlines
+        if (std.debug.runtime_safety) {
+            for (str) |c| {
+                if (c == '\n') {
+                    std.debug.panic("ERROR: pushLiteralFromRegion encountered a newline in what should be a literal! Region [{}-{}]: {s}\n", .{ start, end, str });
+                }
+            }
+        }
+
+        self.has_newline = false; // Literals never end with newlines
+        // Since we're outputting non-whitespace content, reset consecutive newlines
+        self.consecutive_newlines = 0;
         try self.output.appendSlice(str);
     }
 
@@ -3319,10 +3420,16 @@ const Formatter = struct {
     }
 
     fn ensureBlankLine(self: *Formatter) !void {
-        // Ensure we have at least one newline
-        try self.ensureNewline();
-        // Then add another one for the blank line
-        try self.newline();
+        // We want exactly 2 consecutive newlines for a blank line (one ends the previous line, one creates the blank)
+        if (self.consecutive_newlines == 0) {
+            // No newlines yet, add two
+            try self.newline();
+            try self.newline();
+        } else if (self.consecutive_newlines == 1) {
+            // One newline already, add one more for the blank line
+            try self.newline();
+        }
+        // If we already have 2+ newlines, don't add more
     }
 
     fn newline(self: *Formatter) !void {

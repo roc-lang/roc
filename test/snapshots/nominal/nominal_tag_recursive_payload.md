@@ -28,6 +28,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [ConsList, empty]
 
+
 ConsList(a) := [Nil, Node(ConsList(a))]
 empty : ConsList _a
 empty = ConsList.Nil
@@ -35,25 +36,34 @@ empty = ConsList.Nil
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_recursive_payload.md:3:13:3:15:**
+```roc
+ConsList(a) := [Nil, Node(ConsList(a))]
+```
+            ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **ConsList.Nil** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_tag_recursive_payload.md:6:9:6:21:**
+```roc
+empty = ConsList.Nil
+```
+        ^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "empty")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -62,5 +72,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-empty : _b
 ~~~

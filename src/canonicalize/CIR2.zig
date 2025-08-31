@@ -38,9 +38,12 @@ diagnostics: std.ArrayListUnmanaged(CanDiagnostic),
 // Scope state for tracking variable definitions and nested scopes
 scope_state: ScopeState,
 
+// Track which patterns have been used/referenced to detect unused variables
+used_patterns: std.AutoHashMapUnmanaged(Patt.Idx, void),
+
 /// Starting offset for statement tags to avoid collision with AST2.Node.Tag
 /// Calculated at compile time based on actual AST2.Node.Tag values
-const STMT_TAG_START = @typeInfo(AST2.Node.Tag).@"enum".fields.len;
+pub const STMT_TAG_START = @typeInfo(AST2.Node.Tag).@"enum".fields.len;
 
 pub const StmtTag = enum(u8) {
     assign = STMT_TAG_START, // immutable assignment
@@ -62,7 +65,7 @@ pub const StmtTag = enum(u8) {
 
 /// Calculate the starting offset for expression tags
 /// Starts after all statement tags
-const EXPR_TAG_START = STMT_TAG_START + @typeInfo(StmtTag).@"enum".fields.len;
+pub const EXPR_TAG_START = STMT_TAG_START + @typeInfo(StmtTag).@"enum".fields.len;
 
 /// CIR Expression tags - start after statement tags
 pub const ExprTag = enum(u8) {
@@ -120,7 +123,7 @@ pub const ExprTag = enum(u8) {
 
 /// Calculate the starting offset for pattern tags
 /// Starts after all expression tags
-const PATT_TAG_START = EXPR_TAG_START + @typeInfo(ExprTag).@"enum".fields.len;
+pub const PATT_TAG_START = EXPR_TAG_START + @typeInfo(ExprTag).@"enum".fields.len;
 
 /// CIR Pattern tags - start after expression tags
 pub const PattTag = enum(u8) {
@@ -128,6 +131,16 @@ pub const PattTag = enum(u8) {
     var_ident,
     underscore,
     num_literal_i32,
+    frac_literal,
+    str_literal,
+    tuple,
+    list,
+    list_rest,
+    record,
+    record_rest,
+    tag,
+    as,
+    alternatives,
     malformed,
 };
 
@@ -147,6 +160,7 @@ pub const CanDiagnostic = struct {
         // Scope errors
         ident_not_in_scope,
         ident_already_defined,
+        unused_variable, // Variable defined but never used
 
         // Type errors
         type_not_in_scope,
@@ -164,7 +178,84 @@ pub fn init(ast: *AST2, type_store: *TypeStore) CIR {
         .types_store = type_store,
         .diagnostics = .{},
         .scope_state = .{},
+        .used_patterns = .{},
     };
+}
+
+/// Canonicalize a file's block node containing top-level definitions
+pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) !Expr.Idx {
+    // Initialize root scope if not already done
+    if (self.scope_state.scopes.items.len == 0) {
+        try self.scope_state.scopes.append(allocator, Scope.init(false));
+    }
+
+    const block_node = self.getNode(block_idx);
+    std.debug.assert(block_node.tag == .block);
+
+    // Get the statements from the block
+    const nodes_idx = block_node.payload.nodes;
+    var statements = std.ArrayList(AST2.Node.Idx).init(allocator);
+    defer statements.deinit();
+
+    if (!nodes_idx.isNil()) {
+        var iter = self.ast.node_slices.nodes(&nodes_idx);
+        while (iter.next()) |stmt_idx| {
+            try statements.append(stmt_idx);
+        }
+    }
+
+    // First pass: Collect all top-level definition names
+    // This allows definitions to reference each other regardless of order
+    for (statements.items) |stmt_idx| {
+        const stmt_node = self.getNode(stmt_idx);
+
+        switch (stmt_node.tag) {
+            .binop_equals => {
+                // This is a value definition like: foo = ...
+                const binop = self.ast.node_slices.binOp(stmt_node.payload.binop);
+                const lhs = self.getNode(binop.lhs);
+
+                // Get the name being defined
+                if (lhs.tag == .lc or lhs.tag == .var_lc or lhs.tag == .not_lc) {
+                    const ident = lhs.payload.ident;
+                    // Pre-register this identifier as a placeholder if not already registered
+                    // (It might already be registered from a type annotation)
+                    if (self.scope_state.lookupIdent(ident) == null) {
+                        const placeholder_patt = Patt.Idx.withMutability(binop.lhs, false);
+                        try self.scope_state.addIdent(allocator, ident, placeholder_patt);
+                        try self.scope_state.symbol_table.put(allocator, ident, binop.lhs);
+                    }
+                }
+            },
+            .binop_colon => {
+                // This is a type annotation like: foo : Type
+                const binop = self.ast.node_slices.binOp(stmt_node.payload.binop);
+                const lhs = self.getNode(binop.lhs);
+
+                // Get the name being annotated
+                if (lhs.tag == .lc or lhs.tag == .var_lc or lhs.tag == .not_lc) {
+                    const ident = lhs.payload.ident;
+                    // Pre-register this identifier if not already registered
+                    if (self.scope_state.lookupIdent(ident) == null) {
+                        const placeholder_patt = Patt.Idx.withMutability(binop.lhs, false);
+                        try self.scope_state.addIdent(allocator, ident, placeholder_patt);
+                        try self.scope_state.symbol_table.put(allocator, ident, binop.lhs);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Second pass: Canonicalize all the definitions with names in scope
+    for (statements.items) |stmt_idx| {
+        _ = try self.canonicalizeStmt(allocator, stmt_idx, raw_src, idents);
+    }
+
+    // The block itself should be mutated to an expression block
+    self.mutateToExpr(block_idx, .block);
+    try self.ensureTypeVarExists(block_idx);
+    return asExprIdx(block_idx);
 }
 
 /// Initialize CIR with a new AST of the given capacity and a new TypeStore
@@ -186,12 +277,14 @@ pub fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlice
         .types_store = types_ptr,
         .diagnostics = .{},
         .scope_state = .{},
+        .used_patterns = .{},
     };
 }
 
 /// Deinitialize the CIR and free all memory
 pub fn deinit(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
+    self.used_patterns.deinit(allocator);
     // Clean up scope state
     for (self.scope_state.scopes.items) |*scope| {
         scope.deinit(allocator);
@@ -208,6 +301,7 @@ pub fn deinit(self: *CIR, allocator: Allocator) void {
 /// Deinitialize the CIR and also free the AST and TypeStore (for CIRs created with initCapacity)
 pub fn deinitWithAST(self: *CIR, allocator: Allocator) void {
     self.diagnostics.deinit(allocator);
+    self.used_patterns.deinit(allocator);
     // Clean up scope state
     for (self.scope_state.scopes.items) |*scope| {
         scope.deinit(allocator);
@@ -323,12 +417,51 @@ pub fn types(self: *const CIR) Types {
     return Types{ .cir = self };
 }
 
-/// Push a diagnostic error
 pub fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region) !void {
     try self.diagnostics.append(allocator, .{
         .tag = tag,
         .region = region,
     });
+}
+
+/// Check for unused variables in a scope before popping it
+fn checkUnusedVariables(self: *CIR, allocator: Allocator, scope: *const Scope) !void {
+    // Iterate through all identifiers in the scope
+    var iterator = scope.idents.iterator();
+    while (iterator.next()) |entry| {
+        _ = entry.key_ptr.*; // TODO: Use this to check for underscore prefix
+        const pattern_idx = entry.value_ptr.*;
+
+        // Skip if this variable was used
+        if (self.used_patterns.contains(pattern_idx)) {
+            continue;
+        }
+
+        // Skip if this is an ignored variable (starts with _)
+        // We need to get the identifier text to check this
+        // For now, we'll report all unused variables
+        // TODO: Check if identifier starts with underscore
+
+        // Get the region for this pattern to provide good error location
+        // The pattern index points to an AST node that was mutated to a pattern
+        const node_idx = pattern_idx.toNodeIdx();
+        const region = self.ast.getRegion(node_idx);
+
+        // Report unused variable
+        try self.pushDiagnostic(allocator, .unused_variable, region);
+    }
+}
+
+/// Pop a scope and check for unused variables
+pub fn popScopeAndCheckUnused(self: *CIR, allocator: Allocator) !void {
+    if (self.scope_state.popScopeForProcessing()) |scope| {
+        // Check for unused variables before deinitializing the scope
+        try self.checkUnusedVariables(allocator, &scope);
+
+        // Now deinitialize the scope
+        var mut_scope = scope;
+        mut_scope.deinit(allocator);
+    }
 }
 
 /// Get a mutable pointer to a node's tag for in-place mutation
@@ -536,6 +669,16 @@ pub fn getPatt(self: *const CIR, idx: Patt.Idx) struct {
         .var_ident => .var_ident,
         .underscore => .underscore,
         .num_literal_i32 => .num_literal_i32,
+        .frac_literal => .frac_literal_small,
+        .str_literal => .str_literal_small,
+        .tuple => .tuple_destructure,
+        .list => .list_destructure,
+        .list_rest => .double_dot_ident,
+        .record => .record_destructure,
+        .record_rest => .double_dot_ident,
+        .tag => .applied_tag,
+        .as => .as,
+        .alternatives => .malformed, // Alternatives should be handled separately
         .malformed => .malformed,
     };
 
@@ -1089,14 +1232,23 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             try self.ensureTypeVarExists(node_idx);
 
             // Look up the definition in the symbol table and connect types
-            if (self.scope_state.symbol_table.get(ident_idx)) |def_node_idx| {
-                // Connect this lookup's type to its definition's type
-                // Both the lookup and its definition share the same type variable
-                // So we need to ensure the definition's type variable exists too
-                try self.ensureTypeVarExists(def_node_idx);
+            if (self.scope_state.lookupIdent(ident_idx)) |patt_idx| {
+                // Mark this pattern as used for unused variable checking
+                try self.used_patterns.put(allocator, patt_idx, {});
 
-                // The types are connected via shared type variables
-                // Type unification happens during type checking phase
+                // Get the definition node from symbol table
+                if (self.scope_state.symbol_table.get(ident_idx)) |def_node_idx| {
+                    // Connect this lookup's type to its definition's type
+                    // Both the lookup and its definition share the same type variable
+                    // So we need to ensure the definition's type variable exists too
+                    try self.ensureTypeVarExists(def_node_idx);
+
+                    // The types are connected via shared type variables
+                    // Type unification happens during type checking phase
+                }
+            } else {
+                // Variable not in scope - report error
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
             }
 
             return asExprIdx(node_idx);
@@ -1124,8 +1276,18 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
+        // Type annotations should be handled as statements, not expressions
+        .binop_colon => {
+            // Type annotations are not expressions - they're statements
+            // They should be handled in statement context
+            try self.pushDiagnostic(allocator, .type_in_expr_context, node_region);
+            self.mutateToExpr(node_idx, .malformed);
+            try self.ensureTypeVarExists(node_idx);
+            return asExprIdx(node_idx);
+        },
+
         // Binary operators
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_colon, .binop_equals => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_equals => {
             // Get the binop data from AST's node slices
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
@@ -1140,7 +1302,6 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 .binop_star => .binop_star,
                 .binop_slash => .binop_slash,
                 .binop_double_slash => .binop_double_slash,
-                .binop_colon => .binop_colon,
                 .binop_equals => .binop_equals,
                 else => unreachable,
             };
@@ -1201,16 +1362,17 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Otherwise it's a regular block
             // Push a new scope for the block
             try self.scope_state.pushScope(allocator, false); // false = not a function boundary
-            defer self.scope_state.popScope(allocator);
+            defer self.popScopeAndCheckUnused(allocator) catch {};
 
             // Canonicalize all nodes in the block with proper scope tracking
             iter = self.ast.*.node_slices.nodes(&nodes_idx);
             while (iter.next()) |n| {
                 const n_node = self.getNode(n);
                 // Check if this is a statement or expression
-                if (n_node.tag == .binop_equals) {
-                    // Assignment in a block - convert to expression
-                    _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+                if (n_node.tag == .binop_equals or n_node.tag == .binop_colon) {
+                    // Assignment or type annotation in a block
+                    // These should be treated as statements
+                    _ = try self.canonicalizeStmt(allocator, n, raw_src, idents);
                 } else if (n_node.tag == .import) {
                     // Import statement in a block - not allowed, convert to malformed
                     const n_region = self.ast.getRegion(n);
@@ -1464,7 +1626,27 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         .not_lc => {
             // Bang identifier (e.g., !foo) - effectful function call
             self.mutateToExpr(node_idx, .not_lookup);
+
+            const ident_idx = node.payload.ident;
+
+            // Ensure type variable exists for the lookup
             try self.ensureTypeVarExists(node_idx);
+
+            // Look up the definition and mark as used
+            if (self.scope_state.lookupIdent(ident_idx)) |patt_idx| {
+                // Mark this pattern as used for unused variable checking
+                try self.used_patterns.put(allocator, patt_idx, {});
+
+                // Get the definition node from symbol table
+                if (self.scope_state.symbol_table.get(ident_idx)) |def_node_idx| {
+                    // Ensure the definition's type variable exists too
+                    try self.ensureTypeVarExists(def_node_idx);
+                }
+            } else {
+                // Variable not in scope - report error
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+            }
+
             return asExprIdx(node_idx);
         },
 
@@ -1545,18 +1727,26 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
         // Lambda expressions
         .lambda => {
             // Lambda expression with parameters and body
+            // Push a new scope for the lambda (this is a function boundary)
+            try self.scope_state.pushScope(allocator, true); // true = function boundary
+            defer self.popScopeAndCheckUnused(allocator) catch {};
+
             const nodes_idx = node.payload.body_then_args;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
-                // First is body
-                if (iter.next()) |body_node| {
-                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
+                // First node is the body - save it for later
+                const body_node = iter.next();
+
+                // Process parameters first and add them to scope
+                while (iter.next()) |param_node| {
+                    _ = try self.canonicalizePatt(allocator, param_node);
+                    // Pattern canonicalization registers names in scope
                 }
 
-                // Rest are parameters
-                while (iter.next()) |param_node| {
-                    _ = try self.canonicalizeLambdaParams(allocator, param_node, raw_src, idents);
+                // Now process the body with parameters in scope
+                if (body_node) |body| {
+                    _ = try self.canonicalizeExpr(allocator, body, raw_src, idents);
                 }
             }
 
@@ -1582,6 +1772,11 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             if (lhs_tag == .uc and (rhs_tag == .uc or rhs_tag == .lc or rhs_tag == .dot_lc or rhs_tag == .not_lc)) {
                 // This is module access like Bool.True or Bool.true or Bool.isTrue
                 // The left side is uppercase (module name), right side can be any valid field
+
+                // For now, we'll report module access as undefined since we don't have module imports yet
+                // TODO: Properly check if the module is imported and the field is exposed
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+
                 self.mutateToExpr(node_idx, .module_access);
                 try self.ensureTypeVarExists(node_idx);
                 return asExprIdx(node_idx);
@@ -2113,17 +2308,19 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     const ident = lhs_node.payload.ident;
 
                     if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
-                        // Identifier already exists - check if it's a var
+                        // Identifier already exists
+                        // We always allow type annotation followed by implementation
+                        // Check if it's a var pattern (which means reassignment)
                         if (ScopeState.isVarPattern(existing_patt_idx)) {
                             // This is a var reassignment
                             // Check for cross-function boundary reassignment
                             if (self.scope_state.isVarReassignmentAcrossFunctionBoundary(existing_patt_idx)) {
-                                try self.pushDiagnostic(allocator, .ident_already_defined, node_region);
+                                // Use just the identifier's region, not the whole assignment
+                                try self.pushDiagnostic(allocator, .ident_already_defined, lhs_node.region);
                             }
 
                             // Canonicalize as reassignment
                             // Note: For reassignment, we don't canonicalize LHS as it should be a reference to existing var
-                            // Canonicalize the RHS expression - this mutates it in place
                             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                             // Mutate AST node to reassignment statement
@@ -2131,11 +2328,17 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                             // existing_patt_idx is used above in scope boundary check
                             return asStmtIdx(node_idx);
                         } else {
-                            // Error: trying to reassign immutable variable
-                            try self.pushDiagnostic(allocator, .ident_already_defined, node_region);
+                            // This is likely the implementation for a type-annotated function
+                            // We allow type annotation followed by implementation
+                            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-                            // Mutate to malformed statement - this AST node is semantically invalid
-                            self.mutateToStmt(node_idx, .malformed);
+                            // Update the pattern to be properly canonicalized
+                            const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                            // Update the existing entry with the proper pattern
+                            try self.scope_state.updateIdent(allocator, ident, patt_idx);
+
+                            // Mutate AST node to statement
+                            self.mutateToStmt(node_idx, .assign);
                             return asStmtIdx(node_idx);
                         }
                     } else {
@@ -2157,10 +2360,40 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                         return asStmtIdx(node_idx);
                     }
                 },
+                .not_lc => {
+                    // Effectful function definition: foo! = ...
+                    const ident = lhs_node.payload.ident;
+
+                    // Check if already defined (similar to .lc case)
+                    if (self.scope_state.lookupIdent(ident)) |_| {
+                        // We always allow type annotation followed by implementation
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                        try self.scope_state.updateIdent(allocator, ident, patt_idx);
+
+                        self.mutateToStmt(node_idx, .assign);
+                        return asStmtIdx(node_idx);
+                    } else {
+                        // New effectful function definition
+                        const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                        try self.scope_state.addIdent(allocator, ident, patt_idx);
+                        try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                        self.mutateToStmt(node_idx, .assign);
+                        return asStmtIdx(node_idx);
+                    }
+                },
                 else => {
                     // Complex pattern on LHS - treat as pattern match assignment
-                    // Canonicalize both sides - this mutates the nodes in place
+                    // Canonicalize the pattern and register all bindings
                     _ = try self.canonicalizePatt(allocator, ast_binop.lhs);
+
+                    // Pattern canonicalization registers all identifiers
+
+                    // Canonicalize the RHS expression
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                     // Mutate AST node to assignment statement
@@ -2210,11 +2443,24 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // It should always have a binop payload for binop_colon
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
 
-            // The left side is the name being annotated
-            // The right side is the type expression
-            // For now, we'll just process both sides
-            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+            // The left side is the pattern being annotated
+            const lhs_node = self.getNode(ast_binop.lhs);
+
+            // Register the name being annotated if it's an identifier
+            if (lhs_node.tag == .lc or lhs_node.tag == .var_lc or lhs_node.tag == .not_lc) {
+                const ident = lhs_node.payload.ident;
+                const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+
+                // Add to scope if not already there
+                if (self.scope_state.lookupIdent(ident) == null) {
+                    try self.scope_state.addIdent(allocator, ident, patt_idx);
+                    try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+                }
+            }
+
+            // The right side is a type, not an expression
+            // TODO: Implement proper type canonicalization
+            // For now, we skip canonicalizing it to avoid treating type variables as value lookups
 
             // Mutate to a type annotation statement
             self.mutateToStmt(node_idx, .type_anno);
@@ -2266,34 +2512,175 @@ pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_para
     switch (node.tag) {
         .lc => {
             // Lowercase identifier pattern
+            const ident = node.payload.ident;
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, if (is_mutable) .var_ident else .ident);
 
+            // Register in scope
+            const patt_idx = Patt.Idx.withMutability(node_idx, is_mutable);
+            try self.scope_state.addIdent(allocator, ident, patt_idx);
+            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
             // Return the index with mutability encoded
-            return Patt.Idx.withMutability(node_idx, is_mutable);
+            return patt_idx;
         },
         .var_lc => {
             // Mutable identifier pattern (var_lc always means mutable)
+            const ident = node.payload.ident;
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, .var_ident);
 
+            // Register in scope as mutable
+            const patt_idx = Patt.Idx.withMutability(node_idx, true);
+            try self.scope_state.addIdent(allocator, ident, patt_idx);
+            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
             // Return the index with mutability encoded (always mutable for var_lc)
-            return Patt.Idx.withMutability(node_idx, true);
+            return patt_idx;
+        },
+        .not_lc => {
+            // Effectful identifier pattern: x!
+            const ident = node.payload.ident;
+            // Mutate the AST node's tag in place
+            self.mutateToPatt(node_idx, .ident);
+
+            // Register in scope
+            const patt_idx = Patt.Idx.withMutability(node_idx, is_mutable);
+            try self.scope_state.addIdent(allocator, ident, patt_idx);
+            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
+            // Return the index with mutability encoded
+            return patt_idx;
         },
         .underscore => {
-            // Underscore pattern
+            // Underscore pattern - doesn't bind any names
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, .underscore);
 
             // Return the index with mutability encoded (underscore can't be mutable)
             return Patt.Idx.withMutability(node_idx, false);
         },
-        .num_literal_i32 => {
-            // Number literal pattern
-            // Mutate the AST node's tag in place
-            self.mutateToPatt(node_idx, .num_literal_i32);
+        .tuple_literal => {
+            // Tuple pattern - recursively process each element
+            self.mutateToPatt(node_idx, .tuple);
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |elem_idx| {
+                _ = try self.canonicalizePattWithMutability(allocator, ast_param, elem_idx, false);
+            }
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .list_literal => {
+            // List pattern - recursively process each element
+            self.mutateToPatt(node_idx, .list);
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |elem_idx| {
+                _ = try self.canonicalizePattWithMutability(allocator, ast_param, elem_idx, false);
+            }
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .record_literal => {
+            // Record pattern - process field patterns
+            self.mutateToPatt(node_idx, .record);
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |field_idx| {
+                const field_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
+                if (field_node.tag == .binop_colon) {
+                    // Field with explicit pattern: { x: pattern }
+                    const binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                    _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.rhs, false);
+                } else if (field_node.tag == .lc) {
+                    // Shorthand field: { x } means { x: x }
+                    const ident = field_node.payload.ident;
+                    self.mutateToPatt(field_idx, .ident);
+                    const field_patt_idx = Patt.Idx.withMutability(field_idx, false);
+                    try self.scope_state.addIdent(allocator, ident, field_patt_idx);
+                    try self.scope_state.symbol_table.put(allocator, ident, field_idx);
+                } else if (field_node.tag == .double_dot_lc) {
+                    // Rest pattern: { ..rest }
+                    const ident = field_node.payload.ident;
+                    self.mutateToPatt(field_idx, .record_rest);
+                    const rest_patt_idx = Patt.Idx.withMutability(field_idx, false);
+                    try self.scope_state.addIdent(allocator, ident, rest_patt_idx);
+                    try self.scope_state.symbol_table.put(allocator, ident, field_idx);
+                }
+            }
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .apply_uc => {
+            // Tag pattern with payload: Foo(x, y)
+            self.mutateToPatt(node_idx, .tag);
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+            // Skip the tag itself (first element)
+            _ = iter.next();
+            // Process payload patterns
+            while (iter.next()) |payload_idx| {
+                _ = try self.canonicalizePattWithMutability(allocator, ast_param, payload_idx, false);
+            }
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .uc => {
+            // Tag without payload - doesn't bind names
+            self.mutateToPatt(node_idx, .tag);
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .binop_as => {
+            // As pattern: pattern as name
+            self.mutateToPatt(node_idx, .as);
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
 
-            // Return the index with mutability encoded (literals can't be mutable)
+            // Process the pattern part
+            _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.lhs, false);
+
+            // Register the alias name
+            const rhs_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(binop.rhs)));
+            if (rhs_node.tag == .lc) {
+                const ident = rhs_node.payload.ident;
+                self.mutateToPatt(binop.rhs, .ident);
+                const alias_patt_idx = Patt.Idx.withMutability(binop.rhs, false);
+                try self.scope_state.addIdent(allocator, ident, alias_patt_idx);
+                try self.scope_state.symbol_table.put(allocator, ident, binop.rhs);
+            }
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .binop_pipe => {
+            // Pattern alternatives: pattern1 | pattern2
+            self.mutateToPatt(node_idx, .alternatives);
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+            // Process both alternatives
+            _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.lhs, false);
+            _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.rhs, false);
+
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .double_dot_lc => {
+            // Rest pattern in list: ..rest
+            const ident = node.payload.ident;
+            self.mutateToPatt(node_idx, .list_rest);
+
+            const patt_idx = Patt.Idx.withMutability(node_idx, false);
+            try self.scope_state.addIdent(allocator, ident, patt_idx);
+            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
+            return patt_idx;
+        },
+        .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big => {
+            // Integer literal pattern
+            self.mutateToPatt(node_idx, .num_literal_i32);
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .frac_literal_small, .frac_literal_big => {
+            // Float literal pattern
+            self.mutateToPatt(node_idx, .frac_literal);
+            return Patt.Idx.withMutability(node_idx, false);
+        },
+        .str_literal_small, .str_literal_big => {
+            // String literal pattern
+            self.mutateToPatt(node_idx, .str_literal);
             return Patt.Idx.withMutability(node_idx, false);
         },
 
@@ -2437,12 +2824,17 @@ pub const ScopeState = struct {
         try self.scopes.append(allocator, Scope.init(is_function_boundary));
     }
 
-    /// Pop the current scope
+    /// Pop the current scope (used by CIR which handles unused variables)
     pub fn popScope(self: *ScopeState, allocator: Allocator) void {
         if (self.scopes.pop()) |scope| {
             var mut_scope = scope;
             mut_scope.deinit(allocator);
         }
+    }
+
+    /// Pop the current scope and return it for processing
+    pub fn popScopeForProcessing(self: *ScopeState) ?Scope {
+        return self.scopes.pop();
     }
 
     /// Get the current scope (top of stack)
@@ -2513,6 +2905,14 @@ pub const ScopeState = struct {
 
     /// Add an identifier to the current scope
     pub fn addIdent(self: *ScopeState, allocator: Allocator, ident: Ident.Idx, patt_idx: Patt.Idx) !void {
+        if (self.currentScope()) |scope| {
+            try scope.idents.put(allocator, ident, patt_idx);
+        }
+    }
+
+    pub fn updateIdent(self: *ScopeState, allocator: Allocator, ident: Ident.Idx, patt_idx: Patt.Idx) !void {
+        // Update an existing identifier with a new pattern
+        // This is used when we pre-register names and then update them with actual patterns
         if (self.currentScope()) |scope| {
             try scope.idents.put(allocator, ident, patt_idx);
         }

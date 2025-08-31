@@ -29,11 +29,21 @@ ff8 | 8.d | .d
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_007.md:1:1:1:8:**
+```roc
+ff8.8.d
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

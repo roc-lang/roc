@@ -76,6 +76,17 @@ match result
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **result** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**branch_scoping.md:1:7:1:13:**
+```roc
+match result {
+```
+      ^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -91,33 +102,11 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**branch_scoping.md:3:5:3:15:**
-```roc
-    Err(value) => value - 1
-```
-    ^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **branch_scoping.md:4:5:4:35:**
 ```roc
     Ok(different) => different * 2
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**branch_scoping.md:5:5:5:19:**
-```roc
-    Err(different) => different / 2
-```
-    ^^^^^^^^^^^^^^
 
 
 # CANONICALIZE

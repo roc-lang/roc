@@ -34,6 +34,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 get_name : {name : Str, age : U64} -> Str
 get_name = |person| person.name
 main! = |_| {}
@@ -41,34 +42,25 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **person** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+
+**type_record_simple.md:4:21:4:27:**
+```roc
+get_name = |person| person.name
+```
+                    ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "get_name")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "name")
-          (Expr.apply_tag)
-        )
-        (Expr.binop_colon
-          (Expr.lookup "age")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "get_name")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -77,5 +69,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-get_name : _a
 ~~~

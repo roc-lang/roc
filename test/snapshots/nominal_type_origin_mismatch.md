@@ -27,44 +27,36 @@ KwModule OpenSquare CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSqu
 ~~~roc
 module []
 
+
 import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
-main = expectsPerson("not a person")# This will cause a type mismatch
+main = # This will cause a type mismatch
+expectsPerson("not a person")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **p** is not used anywhere in your code.
 
-**nominal_type_origin_mismatch.md:3:1:3:30:**
+If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
+The unused variable is declared here:
+
+**nominal_type_origin_mismatch.md:6:18:6:19:**
 ```roc
-import Data exposing [Person]
+expectsPerson = |p| "Got a person"
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "expectsPerson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "expectsPerson")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -73,6 +65,4 @@ import Data exposing [Person]
 ~~~
 # TYPES
 ~~~roc
-expectsPerson : _a
-main : _a
 ~~~

@@ -34,6 +34,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 getName : {name : Str, age : U64} -> Str
 getName = |_person| "hello"
 main! = |_| getName({ name : "luke", age : 21 })
@@ -41,34 +42,47 @@ main! = |_| getName({ name : "luke", age : 21 })
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **_person** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `__person` to suppress this warning.
+The unused variable is declared here:
+
+**type_record_basic.md:4:12:4:19:**
+```roc
+getName = |_person| "hello"
+```
+           ^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_record_basic.md:6:22:6:34:**
+```roc
+main! = |_| getName({name: "luke", age:21})
+```
+                     ^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**type_record_basic.md:6:36:6:42:**
+```roc
+main! = |_| getName({name: "luke", age:21})
+```
+                                   ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "getName")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "name")
-          (Expr.apply_tag)
-        )
-        (Expr.binop_colon
-          (Expr.lookup "age")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "getName")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -77,5 +91,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-getName : _a
 ~~~

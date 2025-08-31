@@ -34,6 +34,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 getField : {field : a, other : _b} -> a
 getField = |record| record.field
 main! = |_| {}
@@ -41,34 +42,25 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **record** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+
+**type_record_with_vars.md:4:21:4:27:**
+```roc
+getField = |record| record.field
+```
+                    ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "getField")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "field")
-          (Expr.lookup "a")
-        )
-        (Expr.binop_colon
-          (Expr.lookup "other")
-          (Expr.lookup "_b")
-        )
-      )
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "getField")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -77,5 +69,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-getField : _b
 ~~~

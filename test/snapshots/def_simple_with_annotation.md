@@ -24,6 +24,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [foo]
 
+
 foo : Str
 foo = "one"
 ~~~
@@ -34,14 +35,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.str_literal_small)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -50,5 +45,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : Str
 ~~~

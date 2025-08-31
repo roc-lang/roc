@@ -29,9 +29,12 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar L
 ~~~roc
 module [foo]
 
+
 foo = |num| {
+	# statement - prints out the value of num convertert to a string
 	dbg 
 	num.to_str()
+	# expression - prints out the value of num and then returns it
 	dbg(num)
 }
 ~~~
@@ -60,13 +63,23 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^^
 
 
+**UNUSED VARIABLE**
+Variable **num** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+The unused variable is declared here:
+
+**dbg_stmt_block_example.md:3:8:3:11:**
+```roc
+foo = |num| {
+```
+       ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -75,5 +88,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

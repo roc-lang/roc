@@ -26,6 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [red]
 
+
 import design.Styles | Color exposing [Encoder]
 as 
 CE
@@ -66,11 +67,34 @@ red : CE
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_import_long_package.md:3:1:3:45:**
+**nominal_import_long_package.md:3:46:3:49:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                             ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_import_long_package.md:3:49:3:51:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                                                ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_import_long_package.md:3:51:5:1:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+
+red : CE
+```
 
 
 # CANONICALIZE
@@ -78,16 +102,10 @@ import design.Styles.Color exposing [Encoder as CE]
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "red")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "red")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -96,5 +114,4 @@ import design.Styles.Color exposing [Encoder as CE]
 ~~~
 # TYPES
 ~~~roc
-red : Error
 ~~~

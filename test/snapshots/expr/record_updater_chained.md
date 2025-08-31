@@ -28,6 +28,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent
 ~~~roc
 module [person, final]
 
+
 person = { name : "Alice", age : 30, city : "Boston" }
 updated_one = { ..person }
 age : 31
@@ -110,64 +111,84 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
                                                    ^
 
 
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_updater_chained.md:3:12:3:25:**
+```roc
+person = { name: "Alice", age: 30, city: "Boston" }
+```
+           ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_updater_chained.md:3:27:3:34:**
+```roc
+person = { name: "Alice", age: 30, city: "Boston" }
+```
+                          ^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_updater_chained.md:3:36:3:50:**
+```roc
+person = { name: "Alice", age: 30, city: "Boston" }
+```
+                                   ^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_updater_chained.md:4:35:5:1:**
+```roc
+updated_one = { ..person, age: 31 }
+updated2 = { ..updated_one, city: "New York" }
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_updater_chained.md:5:46:6:1:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_updater_chained.md:6:52:6:53:**
+```roc
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+                                                   ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "person")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "name")
-        (Expr.str_literal_big)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.num_literal_i32 30)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "city")
-        (Expr.str_literal_big)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "updated_one")
-    (Expr.record_literal
-      (Expr.unary_double_dot)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 31)
-  )
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "updated2")
-    (Expr.record_literal
-      (Expr.unary_double_dot)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "city")
-    (Expr.str_literal_big)
-  )
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "final")
-    (Expr.record_literal
-      (Expr.unary_double_dot)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.binop_colon
-      (Expr.tuple_literal
-        (Expr.str_literal_big)
-        (Expr.lookup "age")
-      )
-      (Expr.num_literal_i32 32)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -177,8 +198,4 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 ~~~
 # TYPES
 ~~~roc
-person : {}
-updated_one : {}
-updated2 : {}
-final : {}
 ~~~

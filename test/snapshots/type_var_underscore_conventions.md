@@ -50,87 +50,105 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent Close
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main] }
 
+
+# Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
 single_use : List elem -> Str
 single_use = |x| "hello"
+# Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
 ending_underscore : List elem_ -> elem_
 ending_underscore = |list| "default"
+# Test 3: COMBINATION - single-use ending in underscore (both errors)
 combo_single : List bad_ -> Str
 combo_single = |x| "combo"
+# Test 4: VALID CASES - these should not generate warnings
 valid_single : List _elem -> Str
 valid_single = |x| "valid"
 valid_multi : elem -> List elem
 valid_multi = |x| [x]
-main = |x| "done"# Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
-# Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
-# Test 3: COMBINATION - single-use ending in underscore (both errors)
-# Test 4: VALID CASES - these should not generate warnings
+main = |x| "done"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_underscore_conventions.md:5:15:5:16:**
+```roc
+single_use = |x| "hello"
+```
+              ^
+
+
+**UNUSED VARIABLE**
+Variable **list** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_underscore_conventions.md:9:22:9:26:**
+```roc
+ending_underscore = |list| "default"
+```
+                     ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_underscore_conventions.md:13:17:13:18:**
+```roc
+combo_single = |x| "combo"
+```
+                ^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_underscore_conventions.md:17:17:17:18:**
+```roc
+valid_single = |x| "valid"
+```
+                ^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_underscore_conventions.md:22:9:22:10:**
+```roc
+main = |x| "done"
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "single_use")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "single_use")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "ending_underscore")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.lookup "elem_")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "ending_underscore")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "combo_single")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "combo_single")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "valid_single")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "valid_single")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "valid_multi")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "elem")
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "valid_multi")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -139,10 +157,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-single_use : _a
-ending_underscore : _a
-combo_single : _a
-valid_single : _a
-valid_multi : _a
-main : _a
 ~~~

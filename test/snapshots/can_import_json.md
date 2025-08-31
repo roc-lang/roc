@@ -22,34 +22,29 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Bla
 ~~~roc
 module []
 
+
 import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.utf8** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_json.md:3:1:3:17:**
+**can_import_json.md:5:8:5:17:**
 ```roc
-import json.Json
+main = Json.utf8
 ```
-^^^^^^^^^^^^^^^^
+       ^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -58,5 +53,4 @@ import json.Json
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

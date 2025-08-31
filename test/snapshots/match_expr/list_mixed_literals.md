@@ -71,6 +71,17 @@ match sequence
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **sequence** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_mixed_literals.md:1:7:1:15:**
+```roc
+match sequence {
+```
+      ^^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

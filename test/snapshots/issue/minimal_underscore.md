@@ -20,29 +20,27 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore ~~~
 ~~~roc
 module []
 
+
 BadType := _
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**minimal_underscore.md:3:12:3:13:**
+**minimal_underscore.md:3:9:3:11:**
 ```roc
 BadType := _
 ```
-           ^
+        ^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

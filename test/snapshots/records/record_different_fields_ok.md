@@ -42,22 +42,45 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma LowerI
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_ok.md:2:5:2:41:**
+```roc
+    field_with_underscores: "underscore",
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_ok.md:3:5:3:24:**
+```roc
+    field123: "numbers",
+```
+    ^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_different_fields_ok.md:4:5:4:23:**
+```roc
+    camelCase: "camel",
+```
+    ^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "field_with_underscores")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "field123")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "camelCase")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

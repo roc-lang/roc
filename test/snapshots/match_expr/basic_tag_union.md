@@ -45,6 +45,17 @@ match color
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **color** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**basic_tag_union.md:1:7:1:12:**
+```roc
+match color {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -54,17 +65,6 @@ This might be a limitation in the current implementation that will be addressed 
 	Red => 1
 ```
 	^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**basic_tag_union.md:3:2:3:6:**
-```roc
-	Blue => 2
-```
-	^^^^
 
 
 **UNSUPPORTED NODE**

@@ -42,7 +42,28 @@ OpenRound UpperIdent Comma UpperIdent Comma UpperIdent Dot UpperIdent Comma Uppe
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.True** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tuple_bool.md:1:15:1:24:**
+```roc
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+```
+              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.False** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tuple_bool.md:1:26:1:36:**
+```roc
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+```
+                         ^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.tuple_literal

@@ -39,77 +39,23 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 ~~~roc
 module [broken_fn1, broken_fn2, broken_fn3]
 
+
+# Missing colon in constraint
 broken_fn1 : a -> b where module(a).method -> b
-broken_fn2 : a -> b where broken_fn3 : a -> b where module(c).method : c -> d# Missing colon in constraint
 # Empty where clause
+broken_fn2 : a -> b where 
 # Referencing undefined type variable
+broken_fn3 : a -> b where module(c).method : c -> d
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_error_cases.md:6:11:6:14:**
-```roc
-    module(a).method -> b
-```
-          ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_error_cases.md:15:11:15:14:**
-```roc
-    module(c).method : c -> d
-```
-          ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "broken_fn1")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.lookup "b")
-        )
-        (Expr.lambda)
-      )
-      (Expr.lookup "b")
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "broken_fn2")
-    (Expr.binop_thin_arrow
-      (Expr.binop_colon
-        (Expr.binop_thin_arrow
-          (Expr.binop_colon
-            (Expr.binop_thin_arrow
-              (Expr.lookup "a")
-              (Expr.lookup "b")
-            )
-            (Expr.binop_colon
-              (Expr.lookup "broken_fn3")
-              (Expr.lookup "a")
-            )
-          )
-          (Expr.lookup "b")
-        )
-        (Expr.binop_colon
-          (Expr.lambda)
-          (Expr.lookup "c")
-        )
-      )
-      (Expr.lookup "d")
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

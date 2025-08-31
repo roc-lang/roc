@@ -38,26 +38,32 @@ This is an unexpected parsing error. Please check your syntax.
  ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**parse_error_backslash_lambda.md:1:2:1:12:**
+**parse_error_backslash_lambda.md:1:7:1:8:**
 ```roc
 \x -> x + 1
 ```
- ^^^^^^^^^^
+      ^
 
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.binop_thin_arrow
+  (Expr.malformed)
+  (Expr.binop_plus
+    (Expr.lookup "x")
+    (Expr.num_literal_i32 1)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag binop_thin_arrow :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

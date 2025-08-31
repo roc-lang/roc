@@ -120,11 +120,24 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
 ((((
 
 	# Simple tuple destructuring
-((x, y)) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([1, 2, 3], "hello")
-{}# Nested tuple patterns
+((x, y)) = (1, 2)(
+# Nested tuple patterns
+((a, b), (c, d)))
+
+) = ((10, 20), (30, 40))(
 # Mixed patterns with literals
+(first, second, third))
+
+) = (100, 42, 200)(
 # Tuple with string and tag patterns
+(name, string, boolean))
+
+) = ("Alice", "fixed", True)(
 # Tuple with list pattern
+(list, hello))
+
+) = ([1, 2, 3], "hello")
+{}
 ~~~
 # EXPECTED
 NIL
@@ -145,28 +158,35 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**tuple_patterns.md:1:2:16:18:**
+```roc
+{
+
+    # Simple tuple destructuring
+    (x, y) = (1, 2)
+
+    # Nested tuple patterns
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+
+    # Mixed patterns with literals
+    (first, second, third) = (100, 42, 200)
+
+    # Tuple with string and tag patterns
+    (name, string, boolean) = ("Alice", "fixed", True)
+
+    # Tuple with list pattern
+    (list, hello) = ([1, 2, 3], "hello")
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.binop_equals
-      (Expr.binop_equals
-        (Expr.binop_equals
-          (Expr.binop_equals
-            (Expr.apply_ident)
-            (Expr.apply_ident)
-          )
-          (Expr.apply_ident)
-        )
-        (Expr.apply_ident)
-      )
-      (Expr.apply_ident)
-    )
-    (Expr.tuple_literal
-      (Expr.list_literal)
-      (Expr.str_literal_big)
-    )
-  )
+  (Expr.malformed)
   (Expr.record_literal
   )
 )

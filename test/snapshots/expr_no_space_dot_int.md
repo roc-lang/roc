@@ -20,6 +20,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int
 ~~~roc
 module []
 
+
 foo = (asd | 0)
 ~~~
 # EXPECTED
@@ -29,10 +30,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -41,5 +39,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

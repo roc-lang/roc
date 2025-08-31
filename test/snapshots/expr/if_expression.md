@@ -30,7 +30,17 @@ if x > 5 "big" else "small"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**if_expression.md:1:4:1:5:**
+```roc
+if x > 5 "big" else "small"
+```
+   ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

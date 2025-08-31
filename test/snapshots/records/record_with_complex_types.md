@@ -158,43 +158,86 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:2:5:2:18:**
+```roc
+    name: "Alice",
+```
+    ^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:3:5:3:29:**
+```roc
+    scores: [95, 87, 92, 78],
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:4:5:4:44:**
+```roc
+    status: Active({ since: "2023-01-15" }),
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:5:5:5:76:**
+```roc
+    preferences: { theme: Dark, notifications: Email("alice@example.com") },
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:6:5:9:7:**
+```roc
+    metadata: Ok({
+        tags: ["developer", "senior", "fullstack"],
+        permissions: [Read, Write, Admin],
+    }),
+```
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_with_complex_types.md:10:5:14:6:**
+```roc
+    callback: |x| x + 1,
+    nested: {
+        items: [Some("first"), None, Some("third")],
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+    },
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "scores")
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "status")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "preferences")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "theme")
-        (Expr.apply_tag)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "notifications")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "metadata")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "callback")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

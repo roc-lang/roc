@@ -43,6 +43,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore Bla
 ~~~roc
 module []
 
+
 BadType := _
 foo : BadType
 foo = 42
@@ -62,162 +63,101 @@ quux = ("hello", 42)
 # EXPECTED
 NIL
 # PROBLEMS
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**underscore_error_type.md:3:12:3:13:**
+**underscore_error_type.md:3:9:3:11:**
 ```roc
 BadType := _
 ```
-           ^
+        ^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**underscore_error_type.md:8:17:8:18:**
+**underscore_error_type.md:8:9:8:11:**
 ```roc
 BadList := List(_)
 ```
-                ^
+        ^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**underscore_error_type.md:13:23:13:24:**
+**underscore_error_type.md:13:11:13:13:**
 ```roc
 BadRecord := { field: _, other: U32 }
 ```
-                      ^
+          ^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
 
-**underscore_error_type.md:18:16:18:17:**
+**underscore_error_type.md:16:9:16:20:**
+```roc
+baz = { field: "hi", other: 5 }
+```
+        ^^^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**underscore_error_type.md:16:22:16:30:**
+```roc
+baz = { field: "hi", other: 5 }
+```
+                     ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_error_type.md:18:13:18:15:**
 ```roc
 BadFunction := _ -> _
 ```
-               ^
+            ^^
 
 
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**underscore_error_type.md:18:21:18:22:**
-```roc
-BadFunction := _ -> _
-```
-                    ^
-
-
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
-
-**underscore_error_type.md:23:14:23:15:**
+**underscore_error_type.md:23:10:23:12:**
 ```roc
 BadTuple := (_, U32)
 ```
-             ^
+         ^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.malformed)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "foo")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "bar")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "bar")
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "field")
-        (Expr.malformed)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "other")
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "baz")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "baz")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "field")
-        (Expr.str_literal_small)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "other")
-        (Expr.num_literal_i32 5)
-      )
-    )
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.binop_thin_arrow
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "qux")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "qux")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.tuple_literal
-      (Expr.malformed)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "quux")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "quux")
-    (Expr.tuple_literal
-      (Expr.str_literal_big)
-      (Expr.num_literal_i32 42)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -226,9 +166,4 @@ BadTuple := (_, U32)
 ~~~
 # TYPES
 ~~~roc
-foo : Num(_size)
-bar : List(_elem)
-baz : {}
-qux : _a
-quux : _a
 ~~~

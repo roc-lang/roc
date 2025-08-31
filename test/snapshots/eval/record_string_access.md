@@ -35,22 +35,22 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**record_string_access.md:1:1:1:19:**
+**record_string_access.md:1:1:1:15:**
 ```roc
 {foo: "Hello"}.foo
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.lambda)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

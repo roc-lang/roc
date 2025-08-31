@@ -34,44 +34,38 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Result, processData]
 
+
 Result((a, b)) : [Ok(a), Err(b)]
 processData : Str -> Str
 processData = |data| "processed"
+# In a nested module scope, redeclare Result
 InnerModule : {
 	Result : [Success, Failure]
-}# In a nested module scope, redeclare Result
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **data** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+The unused variable is declared here:
+
+**type_shadowing_across_scopes.md:6:16:6:20:**
+```roc
+processData = |data|
+```
+               ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "processData")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processData")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.apply_tag)
-        (Expr.list_literal)
-      )
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -80,5 +74,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-processData : _c
 ~~~

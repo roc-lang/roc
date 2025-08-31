@@ -26,14 +26,21 @@ name : "Alice"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_one_field.md:1:3:1:16:**
+```roc
+{ name: "Alice" }
+```
+  ^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

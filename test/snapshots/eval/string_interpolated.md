@@ -37,18 +37,37 @@ world = "World"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **hello** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_hello` to suppress this warning.
+The unused variable is declared here:
+
+**string_interpolated.md:2:2:2:7:**
+```roc
+	hello = "Hello"
+```
+	^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **world** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
+The unused variable is declared here:
+
+**string_interpolated.md:3:2:3:7:**
+```roc
+	world = "World"
+```
+	^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "hello")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "world")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.str_literal_big)
 )
 ~~~
@@ -58,4 +77,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+hello : Str
+world : Str
 ~~~

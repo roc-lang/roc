@@ -54,26 +54,15 @@ Expressions can be identifiers, literals, function calls, or operators.
                    ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**error_malformed_syntax.md:1:20:1:22:**
-```roc
-{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
-```
-                   ^^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

@@ -24,69 +24,19 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [process]
 
+
 process : a -> b -> (c where module(a).convert : a) -> c, module(b).transform : b -> c
 process = |_, _| ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_multi_type_vars.md:3:33:3:36:**
-```roc
-process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
-```
-                                ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**where_clauses_multi_type_vars.md:3:61:3:64:**
-```roc
-process : a, b -> c where module(a).convert : a -> c, module(b).transform : b -> c
-```
-                                                            ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.binop_thin_arrow
-        (Expr.lookup "b")
-        (Expr.binop_thin_arrow
-          (Expr.binop_colon
-            (Expr.tuple_literal
-              (Expr.binop_thin_arrow
-                (Expr.binop_colon
-                  (Expr.lookup "c")
-                  (Expr.binop_colon
-                    (Expr.lambda)
-                    (Expr.lookup "a")
-                  )
-                )
-                (Expr.lookup "c")
-              )
-              (Expr.lambda)
-            )
-            (Expr.lookup "b")
-          )
-          (Expr.lookup "c")
-        )
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "process")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -95,5 +45,4 @@ process : a, b -> c where module(a).convert : a -> c, module(b).transform : b ->
 ~~~
 # TYPES
 ~~~roc
-process : _d
 ~~~

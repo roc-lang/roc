@@ -22,6 +22,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon UpperIdent UpperIde
 ~~~roc
 module []
 
+
 FirstType : U64
 SecondType : Str
 ThirdType : List U8
@@ -33,18 +34,9 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.apply_tag)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

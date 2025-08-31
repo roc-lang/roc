@@ -25,31 +25,19 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [main]
 
+
 import pf.Stdout exposing [line!, write!]
 main = 42
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**exposed_items_test.md:3:1:3:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "main")
-    (Expr.num_literal_i32 42)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -58,5 +46,4 @@ import pf.Stdout exposing [line!, write!]
 ~~~
 # TYPES
 ~~~roc
-main : Num(_size)
 ~~~

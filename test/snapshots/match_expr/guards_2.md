@@ -58,26 +58,15 @@ Expressions can be identifiers, literals, function calls, or operators.
                       ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**guards_2.md:2:23:2:25:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                      ^^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

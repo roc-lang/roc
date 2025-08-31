@@ -33,20 +33,68 @@ OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerId
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_mixed_field_syntax.md:1:3:1:7:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+  ^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_mixed_field_syntax.md:1:9:1:16:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+        ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **email** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_mixed_field_syntax.md:1:18:1:23:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                 ^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**record_mixed_field_syntax.md:1:25:1:41:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                        ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **balance** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_mixed_field_syntax.md:1:43:1:50:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                                          ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.binop_colon
-    (Expr.lookup "age")
-    (Expr.num_literal_i32 30)
-  )
+  (Expr.malformed)
   (Expr.lookup "email")
-  (Expr.binop_colon
-    (Expr.lookup "status")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
   (Expr.lookup "balance")
 )
 ~~~

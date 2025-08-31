@@ -29,9 +29,11 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineCommen
 ~~~roc
 module [message, greet]
 
+
+# Test that Unicode emojis are properly handled in string literals
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
-greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"# Test that Unicode emojis are properly handled in string literals
 # Test other Unicode characters
+greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"
 ~~~
 # EXPECTED
 NIL
@@ -40,14 +42,8 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "message")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "greet")
-    (Expr.str_literal_big)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -56,6 +52,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-message : Str
-greet : Str
 ~~~

@@ -34,7 +34,8 @@ UpperIdent OpenCurly LowerIdent Comma MalformedUnknownToken CloseSquare LowerIde
 H
 { o }
 ]
-foo = "on        (string 'onmo %')))
+foo =
+"on        (string 'onmo %')))
 ~~~
 # EXPECTED
 NIL
@@ -84,19 +85,46 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_010.md:1:1:1:2:**
+```roc
+H{o,
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_010.md:1:2:2:7:**
+```roc
+H{o,
+    ]
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_010.md:2:6:3:1:**
+```roc
+    ]
+foo =
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
-  (Expr.record_literal
-    (Expr.lookup "o")
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.malformed)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -105,5 +133,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-foo : Error
 ~~~

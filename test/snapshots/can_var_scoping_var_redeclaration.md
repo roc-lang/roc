@@ -28,32 +28,41 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
 ~~~roc
 module []
 
+
+# Test var redeclaration (should produce shadowing warning)
 redeclareTest = |_| {
 	var x_ = 5
 	var x_ = 10
+	# Redeclare var - should warn but proceed
 	x_ = 15
+	# Reassign - should work without warning
 	x_ : x_
 }
 
-result = redeclareTest({})# Test var redeclaration (should produce shadowing warning)
-# Redeclare var - should warn but proceed
-# Reassign - should work without warning
+
+result = redeclareTest({})
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x_** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
+The unused variable is declared here:
+
+**can_var_scoping_var_redeclaration.md:8:2:8:4:**
+```roc
+	x_
+```
+	^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "redeclareTest")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "result")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -62,6 +71,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-redeclareTest : _a
-result : _a
 ~~~

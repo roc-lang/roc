@@ -46,42 +46,68 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/platform.roc" platform [main!] }
 
+
+# Identity function with rigid type variable
 id : a -> a
 id = |x| x
 main! = |_| {
+	# Should instantiate 'a' as Int
 	num = id(42)
+	# Should instantiate 'a' as Str (fresh instance)
 	text = id("hello")
+	# Should instantiate 'a' as List Int (fresh instance)
 	list = id([1, 2, 3])
 	{}
 }
-
-# Identity function with rigid type variable
-# Should instantiate 'a' as Int
-# Should instantiate 'a' as Str (fresh instance)
-# Should instantiate 'a' as List Int (fresh instance)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **list** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_instantiation.md:15:5:15:9:**
+```roc
+    list = id([1, 2, 3])
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **text** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_text` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_instantiation.md:12:5:12:9:**
+```roc
+    text = id("hello")
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **num** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+The unused variable is declared here:
+
+**rigid_var_instantiation.md:9:5:9:8:**
+```roc
+    num = id(42)
+```
+    ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "id")
-    (Expr.binop_thin_arrow
-      (Expr.lookup "a")
-      (Expr.lookup "a")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "id")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -90,5 +116,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-id : _b
 ~~~

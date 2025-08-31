@@ -57,26 +57,15 @@ Expressions can be identifiers, literals, function calls, or operators.
                           ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_list_rest_types.md:2:27:2:29:**
-```roc
-    [first, .. as restNums] => restNums
-```
-                          ^^
-
-
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag malformed :type "Error")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+Error
 ~~~

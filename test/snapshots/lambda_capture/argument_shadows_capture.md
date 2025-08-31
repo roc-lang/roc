@@ -42,14 +42,23 @@ x = 5(|x| x)(10)# Should not capture outer `x` -- this should give a shadowing w
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**argument_shadows_capture.md:2:5:2:6:**
+```roc
+    x = 5
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.apply_ident)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -58,4 +67,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : _a
 ~~~

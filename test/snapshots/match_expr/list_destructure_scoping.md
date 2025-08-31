@@ -48,6 +48,17 @@ match list
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **list** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_scoping.md:1:7:1:11:**
+```roc
+match list {
+```
+      ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

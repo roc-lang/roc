@@ -20,23 +20,27 @@ KwModule OpenSquare CloseSquare BlankLine OpenCurly LowerIdent Comma LowerIdent 
 ~~~roc
 module []
 
+
 { name, age, email } = person
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **person** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**statement_record_destructure.md:3:24:3:30:**
+```roc
+{ name, age, email } = person
+```
+                       ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.record_literal
-      (Expr.lookup "name")
-      (Expr.lookup "age")
-      (Expr.lookup "email")
-    )
-    (Expr.lookup "person")
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -109,64 +109,155 @@ y = x + 10
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **Bool.true** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**block_with_assignments.md:5:16:5:25:**
+```roc
+    isActive = Bool.true
+```
+               ^^^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**block_with_assignments.md:8:16:8:23:**
+```roc
+    record = { age: 30, city: "NYC" }
+```
+               ^^^^^^^
+
+
+**TYPE IN EXPRESSION CONTEXT**
+Found a type annotation where an expression was expected.
+Type annotations should appear after a colon in declarations, not in expression contexts.
+
+**block_with_assignments.md:8:25:8:36:**
+```roc
+    record = { age: 30, city: "NYC" }
+```
+                        ^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **record** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:8:5:8:11:**
+```roc
+    record = { age: 30, city: "NYC" }
+```
+    ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **isActive** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_isActive` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:5:5:5:13:**
+```roc
+    isActive = Bool.true
+```
+    ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **add** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_add` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:6:5:6:8:**
+```roc
+    add = |a, b| a + b
+```
+    ^^^
+
+
+**UNUSED VARIABLE**
+Variable **pair** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:7:5:7:9:**
+```roc
+    pair = (1, "hello")
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **y** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:10:5:10:6:**
+```roc
+    y = x + 10
+```
+    ^
+
+
+**UNUSED VARIABLE**
+Variable **list** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:9:5:9:9:**
+```roc
+    list = [1, 2, 3]
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **name** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:3:5:3:9:**
+```roc
+    name = "Alice"
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **pi** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_pi` to suppress this warning.
+The unused variable is declared here:
+
+**block_with_assignments.md:4:5:4:7:**
+```roc
+    pi = 3.14159
+```
+    ^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "name")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "pi")
-    (Expr.frac_literal_big hello)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "isActive")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "add")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "pair")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 1)
-      (Expr.str_literal_big)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "record")
-    (Expr.record_literal
-      (Expr.binop_colon
-        (Expr.lookup "age")
-        (Expr.num_literal_i32 30)
-      )
-      (Expr.binop_colon
-        (Expr.lookup "city")
-        (Expr.str_literal_small)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "list")
-    (Expr.list_literal)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.binop_plus
-      (Expr.lookup "x")
-      (Expr.num_literal_i32 10)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -175,4 +266,13 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+name : Str
+pi : F64
+isActive : _c
+add : _c
+pair : _c
+record : {}
+list : List(_elem)
+y : Num(_size)
 ~~~

@@ -56,6 +56,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 ~~~roc
 module []
 
+
 import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
@@ -79,8 +80,10 @@ handleApi = |request| {
 
 config : Json.Config
 config = Json.defaultConfig
+# Test nested type qualification
 advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
 advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
+# Test function with multiple type parameters
 combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
 combineResults = |result1, result2| match result1
 	Ok(value1) => match result2
@@ -209,37 +212,50 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Http.defaultResponse** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_type_annotations.md:3:1:3:56:**
+**can_import_type_annotations.md:8:24:8:44:**
 ```roc
-import http.Client as Http exposing [Request, Response]
+processRequest = |req| Http.defaultResponse
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNUSED VARIABLE**
+Variable **req** is not used anywhere in your code.
 
-**can_import_type_annotations.md:4:1:4:17:**
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_type_annotations.md:8:19:8:22:**
 ```roc
-import json.Json
+processRequest = |req| Http.defaultResponse
 ```
-^^^^^^^^^^^^^^^^
+                  ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.parse** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_type_annotations.md:5:1:5:38:**
+**can_import_type_annotations.md:11:21:11:31:**
 ```roc
-import utils.Result exposing [Result]
+parseJson = |input| Json.parse(input)
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **Json.decode** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:15:14:15:25:**
+```roc
+    result = Json.decode(request.body)
+```
+             ^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -253,70 +269,86 @@ This might be a limitation in the current implementation that will be addressed 
         ^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:17:37:17:41:**
+```roc
+        Ok(data) => Ok(Http.success(data))
+```
+                                    ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:18:13:18:16:**
+```roc
+        Err(err) => Err(err)
+```
+            ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:18:25:18:28:**
+```roc
+        Err(err) => Err(err)
+```
+                        ^^^
+
+
+**UNUSED VARIABLE**
+Variable **request** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_request` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_type_annotations.md:15:26:15:33:**
+```roc
+    result = Json.decode(request.body)
+```
+                         ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **request** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_request` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_type_annotations.md:14:14:14:21:**
+```roc
+handleApi = |request| {
+```
+             ^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_type_annotations.md:26:18:26:22:**
+**can_import_type_annotations.md:20:1:22:1:**
 ```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+}
+
+config : Json.Config
 ```
-                 ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **Json.defaultConfig** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**can_import_type_annotations.md:26:22:26:29:**
+**can_import_type_annotations.md:23:10:23:28:**
 ```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+config = Json.defaultConfig
 ```
-                     ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:26:64:26:68:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                                               ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:26:68:26:75:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                                                   ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:27:40:27:44:**
-```roc
-advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
-```
-                                       ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:27:44:27:51:**
-```roc
-advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
-```
-                                           ^^^^^^^
+         ^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -332,97 +364,85 @@ This might be a limitation in the current implementation that will be addressed 
 ```
 
 
+**UNUSED VARIABLE**
+Variable **result2** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+
+**can_import_type_annotations.md:31:28:31:35:**
+```roc
+combineResults = |result1, result2|
+```
+                           ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:38:9:38:17:**
+```roc
+        Err(err) => Err(err)
+```
+        ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:38:18:38:21:**
+```roc
+        Err(err) => Err(err)
+```
+                 ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:38:21:38:29:**
+```roc
+        Err(err) => Err(err)
+```
+                    ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:39:5:39:6:**
+```roc
+    }
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "processRequest")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "processRequest")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "parseJson")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "parseJson")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "handleApi")
-    (Expr.binop_thin_arrow
-      (Expr.module_access
-        (Expr.malformed)
-        (Expr.malformed)
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "handleApi")
-    (Expr.lambda)
-  )
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "config")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "config")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
-  (Expr.binop_colon
-    (Expr.lookup "advancedParser")
-    (Expr.binop_thin_arrow
-      (Expr.lambda)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "advancedParser")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "combineResults")
-    (Expr.binop_thin_arrow
-      (Expr.apply_tag)
-      (Expr.binop_thin_arrow
-        (Expr.apply_tag)
-        (Expr.apply_tag)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "combineResults")
-    (Expr.lambda)
-  )
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -432,10 +452,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-processRequest : _c
-parseJson : _c
-handleApi : _c
-config : _c
-advancedParser : _c
-combineResults : _c
 ~~~

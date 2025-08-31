@@ -27,7 +27,17 @@ if bool 1 else 2
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **bool** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**if_then_else_simple_minimal.md:1:4:1:8:**
+```roc
+if bool 1 else 2
+```
+   ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.if_else)

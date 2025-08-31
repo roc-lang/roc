@@ -28,6 +28,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
 ~~~roc
 module [extract_age]
 
+
 extract_age : {
 	age : U64
 } -> U64
@@ -49,11 +50,33 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
+**module_record_destructure.md:5:5:5:12:**
+```roc
+    { age } = person
+```
+    ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
 **module_record_destructure.md:7:2:7:10:**
 ```roc
 	{ a: 0 }.a + age - { a: 0 }.a
 ```
 	^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**module_record_destructure.md:7:15:7:18:**
+```roc
+	{ a: 0 }.a + age - { a: 0 }.a
+```
+	             ^^^
 
 
 **UNSUPPORTED NODE**
@@ -70,22 +93,8 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "extract_age")
-    (Expr.binop_thin_arrow
-      (Expr.record_literal
-        (Expr.binop_colon
-          (Expr.lookup "age")
-          (Expr.apply_tag)
-        )
-      )
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "extract_age")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -94,5 +103,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-extract_age : _b
 ~~~

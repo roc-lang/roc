@@ -22,6 +22,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpOr OpenCurly KwC
 ~~~roc
 module []
 
+
 f = || 
 {
 	crash 1
@@ -41,18 +42,23 @@ f = || {
     ^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_067.md:3:8:5:2:**
+```roc
+f = || {
+    crash 1
+}
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "f")
-    (Expr.malformed)
-  )
-  (Expr.block
-    (Expr.crash
-      (Expr.num_literal_i32 1)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -61,5 +67,4 @@ f = || {
 ~~~
 # TYPES
 ~~~roc
-f : Error
 ~~~

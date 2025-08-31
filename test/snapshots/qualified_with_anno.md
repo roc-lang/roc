@@ -26,6 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 ~~~roc
 module [value]
 
+
 MyType := [TagA, TagB]
 value : MyType
 value = MyType.TagA
@@ -33,25 +34,34 @@ value = MyType.TagA
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_with_anno.md:3:8:3:10:**
+```roc
+MyType := [TagA, TagB]
+```
+       ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **MyType.TagA** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**qualified_with_anno.md:6:9:6:20:**
+```roc
+value = MyType.TagA
+```
+        ^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.apply_tag)
-    (Expr.list_literal)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "value")
-    (Expr.apply_tag)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "value")
-    (Expr.module_access
-      (Expr.malformed)
-      (Expr.malformed)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -60,5 +70,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-value : _a
 ~~~

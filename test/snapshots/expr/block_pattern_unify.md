@@ -46,25 +46,25 @@ result
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **str** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+
+**block_pattern_unify.md:3:5:3:8:**
+```roc
+    str = "hello"
+```
+    ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "str")
-    (Expr.str_literal_big)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "result")
-    (Expr.binop_plus
-      (Expr.lookup "x")
-      (Expr.num_literal_i32 5)
-    )
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.lookup "result")
 )
 ~~~
@@ -74,4 +74,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
+str : Str
+result : Num(_size)
 ~~~

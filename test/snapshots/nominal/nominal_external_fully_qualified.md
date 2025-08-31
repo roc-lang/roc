@@ -31,6 +31,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
 ~~~roc
 module [handleResult]
 
+
 import MyResultModule
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = |result| {
@@ -92,54 +93,69 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **MyResultType.Ok** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**nominal_external_fully_qualified.md:3:1:3:22:**
+**nominal_external_fully_qualified.md:8:24:8:39:**
 ```roc
-import MyResultModule
+        MyResultModule.MyResultType.Ok(value) => value
 ```
-^^^^^^^^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**nominal_external_fully_qualified.md:9:9:9:23:**
+**nominal_external_fully_qualified.md:8:40:8:45:**
+```roc
+        MyResultModule.MyResultType.Ok(value) => value
+```
+                                       ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **code** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_external_fully_qualified.md:9:41:9:45:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
 ```
-        ^^^^^^^^^^^^^^
+                                        ^^^^
+
+
+**UNUSED VARIABLE**
+Variable **value** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+
+**nominal_external_fully_qualified.md:8:50:8:55:**
+```roc
+        MyResultModule.MyResultType.Ok(value) => value
+```
+                                                 ^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_external_fully_qualified.md:9:23:9:36:**
+**nominal_external_fully_qualified.md:11:1:11:2:**
 ```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+}
 ```
-                      ^^^^^^^^^^^^^
+^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_colon
-    (Expr.lookup "handleResult")
-    (Expr.binop_thin_arrow
-      (Expr.apply_ident)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "handleResult")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~
@@ -149,5 +165,4 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
-handleResult : _a
 ~~~

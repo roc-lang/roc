@@ -34,9 +34,10 @@ KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineCo
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" requires {} exposes [
-	: ,
-]
+platform # Cd
+"foo" requires # Ce
+#ose
+{} exposes [: ]
 
 Str
 ) 
@@ -50,18 +51,20 @@ exposes #rd
 		
 [.
 		]
+# Cse
 packages # Cd
 		
-{
+{ # pen
 	pkg : 77,
 	"..c",
 	mm,
 }
+#
 provides # Cd
 		
-[
+[ # pen
 	ar,
-]# pen
+]
 ~~~
 # EXPECTED
 NIL
@@ -344,29 +347,154 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:5:15:5:18:**
+```roc
+			{n! : List(Str) => {}, # ure
+```
+			           ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:5:18:5:20:**
+```roc
+			{n! : List(Str) => {}, # ure
+```
+			              ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:5:20:5:23:**
+```roc
+			{n! : List(Str) => {}, # ure
+```
+			                ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:5:23:5:25:**
+```roc
+			{n! : List(Str) => {}, # ure
+```
+			                   ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:5:25:6:4:**
+```roc
+			{n! : List(Str) => {}, # ure
+			} #Ce
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:6:4:7:2:**
+```roc
+			} #Ce
+	exposes #rd
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:7:2:8:3:**
+```roc
+	exposes #rd
+		[ .
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:8:3:9:4:**
+```roc
+		[ .
+		] # Cse
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:10:2:11:3:**
+```roc
+	packages # Cd
+		{ # pen
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:11:3:12:18:**
+```roc
+		{ # pen
+pkg: 77"..c", mm} #
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:13:2:14:3:**
+```roc
+	provides # Cd
+		[ # pen
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_030.md:14:3:16:4:**
+```roc
+		[ # pen
+ar,
+		]
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.record_literal
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
-  (Expr.list_literal)
   (Expr.malformed)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "pkg")
-      (Expr.num_literal_i32 77)
-    )
-    (Expr.str_literal_small)
-    (Expr.lookup "mm")
-  )
   (Expr.malformed)
-  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

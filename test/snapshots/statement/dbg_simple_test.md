@@ -26,6 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCur
 ~~~roc
 module [test]
 
+
 test = {
 	x = 42
 	dbg(x)
@@ -48,16 +49,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "test")
-    (Expr.block
-      (Expr.binop_equals
-        (Expr.lookup "x")
-        (Expr.num_literal_i32 42)
-      )
-      (Expr.apply_ident)
-    )
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -66,5 +58,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-test : _a
 ~~~

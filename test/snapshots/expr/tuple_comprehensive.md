@@ -141,6 +141,7 @@ add_one = |_| {}
 x = 10
 y = 20
 z = 30
+# example tuples
 empty = ()
 single = 42
 pair = (1, 2)
@@ -149,7 +150,7 @@ nested = ((1, 2), (3, 4))
 mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
 with_lambda = |n| (n + 1, 42)
-empty# example tuples
+empty
 ~~~
 # EXPECTED
 NIL
@@ -166,83 +167,113 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNUSED VARIABLE**
+Variable **pair** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:11:2:11:6:**
+```roc
+	pair = (1, 2)
+```
+	^^^^
+
+
+**UNUSED VARIABLE**
+Variable **with_vars** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_with_vars` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:15:2:15:11:**
+```roc
+	with_vars = (x, y, z)
+```
+	^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **triple** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_triple` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:12:2:12:8:**
+```roc
+	triple = (1, "hello", True)
+```
+	^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **single** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:10:2:10:8:**
+```roc
+	single = (42)
+```
+	^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **nested** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_nested` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:13:2:13:8:**
+```roc
+	nested = ((1, 2), (3, 4))
+```
+	^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **with_lambda** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:16:2:16:13:**
+```roc
+	with_lambda = (|n| n + 1, 42)
+```
+	^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **mixed** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_mixed` to suppress this warning.
+The unused variable is declared here:
+
+**tuple_comprehensive.md:14:2:14:7:**
+```roc
+	mixed = (add_one(5), "world", [1, 2, 3])
+```
+	^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.lookup "add_one")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "x")
-    (Expr.num_literal_i32 10)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "y")
-    (Expr.num_literal_i32 20)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "z")
-    (Expr.num_literal_i32 30)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "empty")
-    (Expr.tuple_literal
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "single")
-    (Expr.num_literal_i32 42)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "pair")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 1)
-      (Expr.num_literal_i32 2)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "triple")
-    (Expr.tuple_literal
-      (Expr.num_literal_i32 1)
-      (Expr.str_literal_big)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "nested")
-    (Expr.tuple_literal
-      (Expr.tuple_literal
-        (Expr.num_literal_i32 1)
-        (Expr.num_literal_i32 2)
-      )
-      (Expr.tuple_literal
-        (Expr.num_literal_i32 3)
-        (Expr.num_literal_i32 4)
-      )
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "mixed")
-    (Expr.tuple_literal
-      (Expr.apply_ident)
-      (Expr.str_literal_big)
-      (Expr.list_literal)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "with_vars")
-    (Expr.tuple_literal
-      (Expr.lookup "x")
-      (Expr.lookup "y")
-      (Expr.lookup "z")
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "with_lambda")
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Expr.lookup "empty")
 )
 ~~~
@@ -252,4 +283,16 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
+add_one : _a
+x : Num(_size)
+y : Num(_size)
+z : Num(_size)
+empty : _a
+single : Num(_size)
+pair : _a
+triple : _a
+nested : _a
+mixed : _a
+with_vars : _a
+with_lambda : _a
 ~~~

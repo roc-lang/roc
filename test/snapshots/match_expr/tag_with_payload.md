@@ -71,6 +71,17 @@ match shape
 # EXPECTED
 NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named **shape** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tag_with_payload.md:1:7:1:12:**
+```roc
+match shape {
+```
+      ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -80,17 +91,6 @@ This might be a limitation in the current implementation that will be addressed 
     Circle(radius) => 3.14 * radius * radius
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**tag_with_payload.md:3:5:3:29:**
-```roc
-    Rectangle(width, height) => width * height
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**

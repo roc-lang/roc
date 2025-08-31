@@ -51,11 +51,16 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
+# Define some variables that would normally be used for type variables
 a = 1
 b = 2
 c = 3
+# This identity function should get type 'd -> d' since a, b, c are taken
 identity = |x| x
+# This function should get type 'e -> e' since d is now also taken
 identity2 = |y| y
+# This function with two parameters should get types 'f, g -> (f, g)'
 pair = |first, second| (first, second)
 main! = |_| {
 	result1 = identity(42)
@@ -63,47 +68,33 @@ main! = |_| {
 	result3 = pair((result1, result2))
 	(a + b) + c
 }
-
-# Define some variables that would normally be used for type variables
-# This identity function should get type 'd -> d' since a, b, c are taken
-# This function should get type 'e -> e' since d is now also taken
-# This function with two parameters should get types 'f, g -> (f, g)'
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable **result3** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+
+**type_var_collision_simple.md:20:5:20:12:**
+```roc
+    result3 = pair(result1, result2)
+```
+    ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "a")
-    (Expr.num_literal_i32 1)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "b")
-    (Expr.num_literal_i32 2)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "c")
-    (Expr.num_literal_i32 3)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "identity2")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.lookup "pair")
-    (Expr.lambda)
-  )
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -112,10 +103,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-a : Num(_size)
-b : Num(_size)
-c : Num(_size)
-identity : _d
-identity2 : _d
-pair : _d
 ~~~

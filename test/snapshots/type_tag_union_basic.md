@@ -46,12 +46,14 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~roc
 app { pf: "../basic-cli/main.roc" platform [main!] }
 
+
 process : [Some(Str), None] -> Str
 process = |maybe| "result"
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = |result| match result
 	Ok(_) => True
 	Err(_) => False
+
 
 is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
 is_ok_ret_bool = |result| match result
@@ -149,6 +151,19 @@ main! = |_| {}
 ```
 
 
+**UNUSED VARIABLE**
+Variable **maybe** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
+The unused variable is declared here:
+
+**type_tag_union_basic.md:4:12:4:17:**
+```roc
+process = |maybe| "result"
+```
+           ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -164,9 +179,20 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**type_tag_union_basic.md:9:5:9:11:**
+**type_tag_union_basic.md:14:5:14:18:**
 ```roc
-    Err(_) => False
+    Ok(_) => Bool.True
+```
+    ^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_tag_union_basic.md:15:5:15:11:**
+```roc
+    Err(_) => Bool.False
 ```
     ^^^^^^
 
@@ -175,71 +201,50 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**type_tag_union_basic.md:14:5:14:18:**
-```roc
-    Ok(_) => Bool.True
-```
-    ^^^^^^^^^^^^^
-
-
-**PATTERN IN EXPRESSION CONTEXT**
-Found a pattern where an expression was expected.
-Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
-
-**type_tag_union_basic.md:15:9:15:10:**
+**type_tag_union_basic.md:15:12:15:15:**
 ```roc
     Err(_) => Bool.False
 ```
-        ^
+           ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_tag_union_basic.md:15:15:15:25:**
+```roc
+    Err(_) => Bool.False
+```
+              ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_tag_union_basic.md:16:1:18:1:**
+```roc
+}
+
+main! = |_| {}
+```
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_colon
-    (Expr.lookup "process")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "process")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "is_ok_ret_unqualified_bool")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "is_ok_ret_unqualified_bool")
-    (Expr.lambda)
-  )
-  (Expr.binop_colon
-    (Expr.lookup "is_ok_ret_bool")
-    (Expr.binop_thin_arrow
-      (Expr.list_literal)
-      (Expr.apply_tag)
-    )
-  )
-  (Expr.binop_equals
-    (Expr.lookup "is_ok_ret_bool")
-    (Expr.lambda)
-  )
-  (Expr.apply_tag)
   (Expr.malformed)
-  (Expr.module_access
-    (Expr.malformed)
-    (Expr.malformed)
-  )
   (Expr.malformed)
-  (Expr.binop_equals
-    (Expr.not_lookup)
-    (Expr.lambda)
-  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -248,7 +253,4 @@ Patterns can only appear in specific contexts like function parameters, destruct
 ~~~
 # TYPES
 ~~~roc
-process : _a
-is_ok_ret_unqualified_bool : _a
-is_ok_ret_bool : _a
 ~~~

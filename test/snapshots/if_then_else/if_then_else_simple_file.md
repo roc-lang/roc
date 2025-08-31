@@ -27,9 +27,11 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign KwIf In
 ~~~roc
 module [foo]
 
+
 foo = if 1
 	A
-else {
+else 
+{
 	"hello"
 }
 ~~~
@@ -40,10 +42,7 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_equals
-    (Expr.lookup "foo")
-    (Expr.if_else)
-  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
@@ -52,5 +51,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

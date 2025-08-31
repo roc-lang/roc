@@ -21,7 +21,17 @@ OpBang LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named **isValid** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**unary_op_not.md:1:2:1:9:**
+```roc
+!isValid
+```
+ ^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.unary_not)
