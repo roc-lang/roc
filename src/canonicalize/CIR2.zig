@@ -1579,8 +1579,9 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             const lhs_tag = self.ast.*.tag(ast_binop.lhs);
             const rhs_tag = self.ast.*.tag(ast_binop.rhs);
 
-            if (lhs_tag == .uc and rhs_tag == .uc) {
-                // This is module access like Bool.True
+            if (lhs_tag == .uc and (rhs_tag == .uc or rhs_tag == .lc or rhs_tag == .dot_lc or rhs_tag == .not_lc)) {
+                // This is module access like Bool.True or Bool.true or Bool.isTrue
+                // The left side is uppercase (module name), right side can be any valid field
                 self.mutateToExpr(node_idx, .module_access);
                 try self.ensureTypeVarExists(node_idx);
                 return asExprIdx(node_idx);

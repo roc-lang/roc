@@ -56,17 +56,6 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pure_annotation_effectful_body_error.md:7:22:7:28:**
-```roc
-bad_function = |msg| Stdout.line!(msg)
-```
-                     ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

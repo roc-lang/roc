@@ -122,28 +122,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_different_fields_reserved_error.md:6:10:6:14:**
-```roc
-    and: Bool.true,
-```
-         ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_different_fields_reserved_error.md:7:9:7:13:**
-```roc
-    or: Bool.false,
-```
-        ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
@@ -162,11 +140,17 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Expr.binop_colon
     (Expr.malformed)
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.malformed)
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

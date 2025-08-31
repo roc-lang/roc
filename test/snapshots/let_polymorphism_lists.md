@@ -117,39 +117,6 @@ all_float_list = float_list ++ my_empty_list
                              ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**let_polymorphism_lists.md:25:12:25:16:**
-```roc
-    len1 = List.len(all_int_list)
-```
-           ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**let_polymorphism_lists.md:26:12:26:16:**
-```roc
-    len2 = List.len(all_str_list)
-```
-           ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**let_polymorphism_lists.md:27:12:27:16:**
-```roc
-    len3 = List.len(all_float_list)
-```
-           ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

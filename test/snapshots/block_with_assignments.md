@@ -109,17 +109,7 @@ y = x + 10
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**block_with_assignments.md:5:16:5:20:**
-```roc
-    isActive = Bool.true
-```
-               ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -137,7 +127,10 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Expr.binop_equals
     (Expr.lookup "isActive")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "add")

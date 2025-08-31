@@ -39,24 +39,16 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_json.md:5:8:5:12:**
-```roc
-main = Json.utf8
-```
-       ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.binop_equals
     (Expr.lookup "main")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

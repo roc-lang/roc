@@ -101,28 +101,6 @@ import utils.String.Format exposing [padLeft]
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_nested_modules.md:9:26:9:32:**
-```roc
-parseConfig = |settings| Config.toString(settings)
-```
-                         ^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_nested_modules.md:13:29:13:37:**
-```roc
-authenticate = |user, pass| HttpAuth.login(user, pass)
-```
-                            ^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_nested_modules.md:16:15:16:21:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
@@ -194,28 +172,6 @@ This might be a limitation in the current implementation that will be addressed 
     Config.Parser.Advanced.parseWith(advancedConfig, input)
 ```
                  ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_nested_modules.md:22:37:22:43:**
-```roc
-formatOutput = |text| padLeft(text, Config.defaultPadding)
-```
-                                    ^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_nested_modules.md:26:24:26:32:**
-```roc
-validateAuth = |creds| HttpAuth.validate(creds)
-```
-                       ^^^^^^^^
 
 
 # CANONICALIZE

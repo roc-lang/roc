@@ -49,17 +49,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_mixed_types.md:1:35:1:39:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                  ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
@@ -73,7 +63,10 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Expr.binop_colon
     (Expr.lookup "active")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "scores")

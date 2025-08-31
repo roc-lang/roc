@@ -67,17 +67,6 @@ print_msg! : Str => {}
              ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**effectful_with_effectful_annotation.md:7:20:7:26:**
-```roc
-print_msg! = |msg| Stdout.line!(msg)
-```
-                   ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

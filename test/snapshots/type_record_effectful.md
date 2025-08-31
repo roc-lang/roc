@@ -72,17 +72,6 @@ printName : { name: Str, age: U64 } => Str
             ^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_record_effectful.md:7:5:7:11:**
-```roc
-    Stdout.line!(person.name)
-```
-    ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

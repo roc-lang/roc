@@ -39,24 +39,16 @@ import json.Json as MyJson
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_with_alias.md:5:8:5:14:**
-```roc
-main = MyJson.decode
-```
-       ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.malformed)
   (Expr.binop_equals
     (Expr.lookup "main")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
 )
 ~~~

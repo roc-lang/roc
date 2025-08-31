@@ -1356,17 +1356,6 @@ main! : List(String) -> Result({}, _)
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_023.md:175:3:175:9:**
-```roc
-		Stdout.line!("Adding ${n} to ${number}")
-```
-		^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **fuzz_crash_023.md:189:39:189:40:**
 ```roc
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
@@ -1394,39 +1383,6 @@ This might be a limitation in the current implementation that will be addressed 
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 	                                                                                              ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:190:2:190:8:**
-```roc
-	Stdout.line!(interpolated)?
-```
-	^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:191:2:191:8:**
-```roc
-	Stdout.line!(
-```
-	^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:193:4:193:7:**
-```roc
-			Num.toStr(number) # Comment after string interpolation expr
-```
-			^^^
 
 
 # CANONICALIZE

@@ -314,17 +314,6 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**qualified_type_canonicalization.md:23:23:23:28:**
-```roc
-multiLevelQualified = TypeC.new
-```
-                      ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **qualified_type_canonicalization.md:39:55:39:62:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
@@ -341,28 +330,6 @@ This might be a limitation in the current implementation that will be addressed 
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                                                              ^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_type_canonicalization.md:42:27:42:32:**
-```roc
-        Result.Ok(rgb) => TypeC.fromColor(rgb)
-```
-                          ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_type_canonicalization.md:43:28:43:33:**
-```roc
-        Result.Err(err) => TypeC.default
-```
-                           ^^^^^
 
 
 # CANONICALIZE
@@ -411,7 +378,10 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Expr.binop_equals
     (Expr.lookup "multiLevelQualified")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "resultType")
@@ -466,7 +436,10 @@ This might be a limitation in the current implementation that will be addressed 
   (Expr.apply_ident)
   (Expr.apply_ident)
   (Expr.malformed)
-  (Expr.lambda)
+  (Expr.module_access
+    (Expr.malformed)
+    (Expr.malformed)
+  )
   (Expr.malformed)
 )
 ~~~

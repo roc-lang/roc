@@ -75,17 +75,7 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**rigid_var_no_instantiation_error.md:17:21:17:25:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-                    ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

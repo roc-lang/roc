@@ -72,28 +72,6 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**external_decl_lookup.md:8:14:8:18:**
-```roc
-    result = Json.utf8("Hello from external module!")
-```
-             ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**external_decl_lookup.md:9:5:9:11:**
-```roc
-    Stdout.line!(result)
-```
-    ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

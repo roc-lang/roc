@@ -110,72 +110,6 @@ import utils.String as Str
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:8:14:8:18:**
-```roc
-    client = Http.get
-```
-             ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:9:14:9:18:**
-```roc
-    parser = Json.utf8
-```
-             ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:10:14:10:17:**
-```roc
-    helper = Str.trim
-```
-             ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:13:15:13:19:**
-```roc
-    result1 = Json.parse
-```
-              ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:16:15:16:19:**
-```roc
-    result2 = Http.post
-```
-              ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_comprehensive.md:23:16:23:19:**
-```roc
-    combined = Str.concat
-```
-               ^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -187,23 +121,38 @@ This might be a limitation in the current implementation that will be addressed 
     (Expr.block
       (Expr.binop_equals
         (Expr.lookup "client")
-        (Expr.lambda)
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
       )
       (Expr.binop_equals
         (Expr.lookup "parser")
-        (Expr.lambda)
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
       )
       (Expr.binop_equals
         (Expr.lookup "helper")
-        (Expr.lambda)
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
       )
       (Expr.binop_equals
         (Expr.lookup "result1")
-        (Expr.lambda)
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
       )
       (Expr.binop_equals
         (Expr.lookup "result2")
-        (Expr.lambda)
+        (Expr.module_access
+          (Expr.malformed)
+          (Expr.malformed)
+        )
       )
       (Expr.binop_equals
         (Expr.lookup "result3")

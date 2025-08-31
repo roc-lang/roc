@@ -65,17 +65,6 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**hello_world_with_block.md:11:2:11:8:**
-```roc
-	Stdout.line!("Hello, world!")
-```
-	^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -397,28 +397,6 @@ import utils.Result exposing [Result]
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_exposing_types.md:9:21:9:25:**
-```roc
-parseJson = |input| Json.parse(input)
-```
-                    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:14:14:14:18:**
-```roc
-    result = Json.decode(req.body)
-```
-             ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_exposing_types.md:16:9:16:26:**
 ```roc
         Ok(value) => Http.ok(value)
@@ -430,66 +408,11 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_exposing_types.md:17:23:17:27:**
-```roc
-        Err(error) => Http.badRequest(error)
-```
-                      ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:24:5:24:9:**
-```roc
-    List.mapTry(
-```
-    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:26:13:26:17:**
-```roc
-        |v| Json.validateWith(config, v),
-```
-            ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:38:25:38:29:**
-```roc
-createClient = |config| Http.clientWith(config)
-```
-                        ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_exposing_types.md:44:9:44:27:**
 ```roc
         Ok(status) => Http.statusToString(status)
 ```
         ^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:45:23:45:28:**
-```roc
-        Err(error) => Error.toString(error)
-```
-                      ^^^^^
 
 
 **UNSUPPORTED NODE**

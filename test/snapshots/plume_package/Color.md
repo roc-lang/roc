@@ -340,17 +340,6 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
        ^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**Color.md:68:14:68:17:**
-```roc
-    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-```
-             ^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

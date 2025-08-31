@@ -55,17 +55,6 @@ import Json
 ^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**inline_ingested_file.md:6:7:6:11:**
-```roc
-foo = Json.parse(data)
-```
-      ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

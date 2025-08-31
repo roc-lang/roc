@@ -113,17 +113,6 @@ main = Json.NonExistent.method
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_unresolved_qualified.md:11:20:11:24:**
-```roc
-parseData = |data| Json.stringify(data)
-```
-                   ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_unresolved_qualified.md:14:18:14:22:**
 ```roc
 processRequest : Http.Server.Request -> Http.Server.Response
@@ -190,17 +179,6 @@ processRequest = |req| Http.Server.defaultResponse
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_unresolved_qualified.md:18:10:18:14:**
-```roc
-result = Json.prase("test")
-```
-         ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_unresolved_qualified.md:21:10:21:17:**
 ```roc
 config = Unknown.Module.config
@@ -217,17 +195,6 @@ This might be a limitation in the current implementation that will be addressed 
 config = Unknown.Module.config
 ```
                 ^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_unresolved_qualified.md:24:10:24:14:**
-```roc
-client = Http.invalidMethod
-```
-         ^^^^
 
 
 **UNSUPPORTED NODE**
@@ -318,7 +285,10 @@ parser = Json.Parser.Advanced.NonExistent.create
   )
   (Expr.binop_equals
     (Expr.lookup "client")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_equals
     (Expr.lookup "parser")

@@ -246,55 +246,11 @@ import utils.Result exposing [Result]
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_type_annotations.md:8:24:8:28:**
-```roc
-processRequest = |req| Http.defaultResponse
-```
-                       ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:11:21:11:25:**
-```roc
-parseJson = |input| Json.parse(input)
-```
-                    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:15:14:15:18:**
-```roc
-    result = Json.decode(request.body)
-```
-             ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **can_import_type_annotations.md:17:9:17:23:**
 ```roc
         Ok(data) => Ok(Http.success(data))
 ```
         ^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:23:10:23:14:**
-```roc
-config = Json.defaultConfig
-```
-         ^^^^
 
 
 **UNSUPPORTED NODE**
@@ -431,7 +387,10 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Expr.binop_equals
     (Expr.lookup "config")
-    (Expr.lambda)
+    (Expr.module_access
+      (Expr.malformed)
+      (Expr.malformed)
+    )
   )
   (Expr.binop_colon
     (Expr.lookup "advancedParser")
