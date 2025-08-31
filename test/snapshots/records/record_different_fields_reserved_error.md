@@ -56,7 +56,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 # FORMATTED
 ~~~roc
 {
-	if :  "conditional",
+	if : "conditional",
 	when : "pattern match",
 	expect : "test assertion",
 	import : "module load",
@@ -67,26 +67,82 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:7 to 2:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **: ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 4:5 to 4:11
+**record_different_fields_reserved_error.md:2:7:2:9:**
+```roc
+    if: "conditional",
+```
+      ^^
 
-**Parse Error**
-at 5:5 to 5:11
 
-**Parse Error**
-at 6:5 to 6:8
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **expect** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 7:5 to 7:7
+**record_different_fields_reserved_error.md:4:5:4:11:**
+```roc
+    expect: "test assertion",
+```
+    ^^^^^^
 
-**Unsupported Node**
-at 6:10 to 6:14
 
-**Unsupported Node**
-at 7:9 to 7:13
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **import** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_reserved_error.md:5:5:5:11:**
+```roc
+    import: "module load",
+```
+    ^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **and** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_reserved_error.md:6:5:6:8:**
+```roc
+    and: Bool.true,
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **or** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_reserved_error.md:7:5:7:7:**
+```roc
+    or: Bool.false,
+```
+    ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_different_fields_reserved_error.md:6:10:6:14:**
+```roc
+    and: Bool.true,
+```
+         ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_different_fields_reserved_error.md:7:9:7:13:**
+```roc
+    or: Bool.false,
+```
+        ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

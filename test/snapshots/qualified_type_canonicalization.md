@@ -52,7 +52,7 @@ transform = |result|
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent Comma UpperIdent Comma CloseSquare KwImport UpperIdent Dot UpperIdent KwImport UpperIdent KwImport UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare KwImport UpperIdent KwAs UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound Int CloseRound LowerIdent OpColon OpenCurly CloseCurly OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar Underscore OpBar UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound OpArrow UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent CloseCurly ~~~
+KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent Comma UpperIdent Comma CloseSquare BlankLine KwImport UpperIdent Dot UpperIdent KwImport UpperIdent KwImport UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare KwImport UpperIdent KwAs UpperIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent OpenRound Int CloseRound BlankLine LineComment LowerIdent OpColon OpenCurly CloseCurly OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar Underscore OpBar UpperIdent Dot UpperIdent OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound OpArrow UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound UpperIdent Dot UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent Dot LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -66,9 +66,13 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~roc
 module [Color, ModuleA]
 
-.ModuleB.TypeC,
-    Result,
-    ExternalModule,
+.
+ModuleB.TypeC
+,
+Result
+,
+ExternalModule
+,
 ]
 
 import Basics.Result
@@ -89,71 +93,277 @@ processColor : Color.RGB -> Str
 processColor = |color| "Color processed"
 transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
 transform = |result| match result
-	Result.Ok(rgb) => TypeC.fromColor(rgb)
-	Result.Err(err) => TypeC.default
+
+Ok(rgb)
+=> 
+TypeC.fromColor(rgb)
+Result.Err(err)
+=> 
+TypeC.default
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 3:12
+**PARSE ERROR**
+A parsing error occurred: **header_expected_close_square**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 3:12 to 3:13
+**qualified_type_canonicalization.md:1:1:3:12:**
+```roc
+module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+```
 
-**Parse Error**
-at 3:26 to 4:5
 
-**Parse Error**
-at 4:11 to 5:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 5:19 to 6:1
+**qualified_type_canonicalization.md:3:12:3:13:**
+```roc
+    ModuleA.ModuleB.TypeC,
+```
+           ^
 
-**Parse Error**
-at 6:1 to 8:1
 
-**Unsupported Node**
-at 8:1 to 8:21
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 9:1 to 9:13
+**qualified_type_canonicalization.md:3:26:4:5:**
+```roc
+    ModuleA.ModuleB.TypeC,
+    Result,
+```
 
-**Unsupported Node**
-at 10:1 to 10:40
 
-**Unsupported Node**
-at 11:1 to 11:32
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 19:20 to 19:26
+**qualified_type_canonicalization.md:4:11:5:5:**
+```roc
+    Result,
+    ExternalModule,
+```
 
-**Unsupported Node**
-at 19:26 to 19:35
 
-**Unsupported Node**
-at 22:23 to 22:30
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 22:30 to 22:38
+**qualified_type_canonicalization.md:5:19:6:1:**
+```roc
+    ExternalModule,
+]
+```
 
-**Unsupported Node**
-at 23:23 to 23:28
 
-**Unsupported Node**
-at 39:55 to 39:62
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
 
-**Unsupported Node**
-at 39:62 to 39:70
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 42:24 to 42:26
+**qualified_type_canonicalization.md:6:1:8:1:**
+```roc
+]
 
-**Unsupported Node**
-at 43:9 to 43:24
+import Basics.Result
+```
 
-**Unsupported Node**
-at 43:28 to 43:33
+
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
+
+**qualified_type_canonicalization.md:42:15:42:16:**
+```roc
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+```
+              ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**qualified_type_canonicalization.md:42:24:42:27:**
+```roc
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+```
+                       ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**qualified_type_canonicalization.md:43:25:43:28:**
+```roc
+        Result.Err(err) => TypeC.default
+```
+                        ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**qualified_type_canonicalization.md:44:5:44:6:**
+```roc
+    }
+```
+    ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:8:1:8:21:**
+```roc
+import Basics.Result
+```
+^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:9:1:9:13:**
+```roc
+import Color
+```
+^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:10:1:10:40:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:11:1:11:32:**
+```roc
+import ExternalModule as ExtMod
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:19:20:19:26:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                   ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:19:26:19:35:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                         ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:22:23:22:30:**
+```roc
+multiLevelQualified : ModuleA.ModuleB.TypeC
+```
+                      ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:22:30:22:38:**
+```roc
+multiLevelQualified : ModuleA.ModuleB.TypeC
+```
+                             ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:23:23:23:28:**
+```roc
+multiLevelQualified = TypeC.new
+```
+                      ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:39:55:39:62:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                                                      ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:39:62:39:70:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                                                             ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:42:27:42:32:**
+```roc
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+```
+                          ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:43:28:43:33:**
+```roc
+        Result.Err(err) => TypeC.default
+```
+                           ^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -251,6 +461,13 @@ at 43:28 to 43:33
     (Expr.lookup "transform")
     (Expr.lambda)
   )
+  (Expr.apply_tag)
+  (Expr.malformed)
+  (Expr.apply_ident)
+  (Expr.apply_ident)
+  (Expr.malformed)
+  (Expr.lambda)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -19,13 +19,21 @@ LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person.name
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:12
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**field_access.md:1:1:1:12:**
+```roc
+person.name
+```
+^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

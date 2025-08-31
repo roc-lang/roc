@@ -43,7 +43,7 @@ main = {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwAs UpperIdent KwExposing OpenSquare LowerIdent Comma LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpAssign OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign LowerIdent LowerIdent OpAssign LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma CloseRound CloseCurly ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwAs UpperIdent KwExposing OpenSquare LowerIdent Comma LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign LowerIdent LowerIdent OpAssign LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine OpenRound LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent Comma CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -64,54 +64,117 @@ main = {
 	result3 = get
 	result4 = post
 	combined = Str.concat(
-		(
-			client,
-			parser,
-			helper,
-			result1,
-			result2,
-			result3,
-			result4,
-			combined,
-		),
+		(client, parser, helper, result1, result2, result3, result4, combined),
 	)
+
 }
+
+# Test direct module access
+# Test aliased module access
+# Test exposed items (should work without module prefix)
+# Test multiple qualified access
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 34:5 to 35:1
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 23:16 to 35:1
+**can_import_comprehensive.md:3:1:3:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 3:1 to 3:17
 
-**Unsupported Node**
-at 4:1 to 4:48
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 5:1 to 5:27
+**can_import_comprehensive.md:4:1:4:48:**
+```roc
+import http.Client as Http exposing [get, post]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 8:14 to 8:18
 
-**Unsupported Node**
-at 9:14 to 9:18
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 10:14 to 10:17
+**can_import_comprehensive.md:5:1:5:27:**
+```roc
+import utils.String as Str
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 13:15 to 13:19
 
-**Unsupported Node**
-at 16:15 to 16:19
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 23:16 to 23:19
+**can_import_comprehensive.md:8:14:8:18:**
+```roc
+    client = Http.get
+```
+             ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_comprehensive.md:9:14:9:18:**
+```roc
+    parser = Json.utf8
+```
+             ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_comprehensive.md:10:14:10:17:**
+```roc
+    helper = Str.trim
+```
+             ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_comprehensive.md:13:15:13:19:**
+```roc
+    result1 = Json.parse
+```
+              ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_comprehensive.md:16:15:16:19:**
+```roc
+    result2 = Http.post
+```
+              ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_comprehensive.md:23:16:23:19:**
+```roc
+    combined = Str.concat
+```
+               ^^^
+
 
 # CANONICALIZE
 ~~~clojure

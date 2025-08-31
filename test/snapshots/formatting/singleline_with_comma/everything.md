@@ -39,7 +39,7 @@ h = |x, y,| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent Comma UpperIdent KwAs UpperIdent Comma CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma CloseCurly Comma CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign OpenRound LowerIdent Comma LowerIdent Comma CloseRound KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenCurly LowerIdent Comma LowerIdent Comma CloseCurly CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare CloseRound OpFatArrow LowerIdent CloseCurly CloseCurly ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExposing OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent Comma UpperIdent KwAs UpperIdent Comma CloseSquare BlankLine LineComment UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpArrow UpperIdent Comma BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma CloseSquare BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent Comma BlankLine LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpColon LowerIdent Comma CloseCurly Comma CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound LowerIdent OpAssign OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign OpenRound LowerIdent Comma LowerIdent Comma CloseRound BlankLine KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenCurly LowerIdent Comma LowerIdent Comma CloseCurly CloseRound OpFatArrow LowerIdent UpperIdent OpenRound OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare CloseRound OpFatArrow LowerIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -53,30 +53,23 @@ import I1 exposing [
 	I12,
 ]
 import I2 exposing [I21]
-as Ias1, I22
-as Ias2,]
+as 
+Ias1
+, 
+I22
+as 
+Ias2
+,
+]
 
 # Where constraint
-A(a) : a where module(a).a1 : a -> a -> )  -> Str, module(a).a2 : a -> a -> )  -> (Str, B(b)) : b where module(b).b1 : b -> b -> )  -> Str, module(b).b2 : b -> b -> )  -> (
-	Str,
-	C(
-		(
-			a,
-			b,
-		) : (
-			a,
-			b,
-		),
-	),
-)
+A(a) : ((((a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str, B(b)) : b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str, C(
+	(a, b),
+)) : (a, b)
 D(
-	(
-		a,
-		b,
-	) :
-		C(a, b, )
-),
-)
+	(a, b),
+) :
+	C(a, b)
 E :
 	{
 		a : Str,
@@ -99,30 +92,23 @@ g : e -> e where module(e) | A, module(e) | B, h = |
 				h132 : y,
 			},
 	}
+
 	h2 = h(
-		(
-			x,
-			y,
-		),
+		(x, y),
 	)
+
 	h3 = A(
-		(
-			x,
-			y,
-		),
+		(x, y),
 	)
+
 	h4 = [
 		x,
 		y,
 	]
-	h5 = (
-		x,
-		y,
-	)
+
+	h5 = (x, y)
 	match x
-(
-		a => (b => ()  => a)),
-	)
+		Z1(a, b) => a
 	Z3(
 		{
 			a : a,
@@ -140,142 +126,236 @@ g : e -> e where module(e) | A, module(e) | B, h = |
 	=> 
 	a : a
 }
+
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:25 to 5:28
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 5:32 to 5:34
+**everything.md:5:25:5:28:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+                        ^^^
 
-**Parse Error**
-at 5:38 to 5:41
 
-**Parse Error**
-at 5:45 to 5:46
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 5:46 to 8:1
+**everything.md:5:32:5:34:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+                               ^^
 
-**Parse Error**
-at 8:37 to 8:39
 
-**Parse Error**
-at 8:68 to 8:70
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 9:37 to 9:39
+**everything.md:5:38:5:41:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+                                     ^^^
 
-**Parse Error**
-at 9:68 to 9:70
 
-**Parse Error**
-at 11:8 to 11:10
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 11:18 to 12:1
+**everything.md:5:45:5:46:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+                                            ^
 
-**Parse Error**
-at 12:1 to 12:1
 
-**Parse Error**
-at 11:1 to 12:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
 
-**Parse Error**
-at 12:1 to 12:1
+# Where constraint
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 12:1 to 12:1
+**everything.md:5:46:8:1:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
 
-**Parse Error**
-at 12:1 to 12:1
+# Where constraint
+A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
+```
 
-**Parse Error**
-at 12:1 to 12:1
 
-**Parse Error**
-at 12:8 to 12:10
+**UNEXPECTED TOKEN IN PATTERN**
+The token **) ** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
-**Parse Error**
-at 12:19 to 13:1
+**everything.md:27:11:27:13:**
+```roc
+		Z2(a, b,) => a
+```
+		        ^^
 
-**Parse Error**
-at 12:12 to 13:1
 
-**Parse Error**
-at 12:1 to 13:1
+**PARSE ERROR**
+A parsing error occurred: **expected_close_round**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 20:14 to 21:2
+**everything.md:27:13:27:16:**
+```roc
+		Z2(a, b,) => a
+```
+		          ^^^
 
-**Parse Error**
-at 20:7 to 21:2
 
-**Parse Error**
-at 21:14 to 22:2
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 21:7 to 22:2
+**everything.md:27:16:28:3:**
+```roc
+		Z2(a, b,) => a
+		Z3({ a, b, }) => a
+```
 
-**Parse Error**
-at 23:13 to 25:2
 
-**Parse Error**
-at 25:2 to 25:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 26:12 to 26:13
+**everything.md:28:17:28:20:**
+```roc
+		Z3({ a, b, }) => a
+```
+		              ^^^
 
-**Parse Error**
-at 26:3 to 27:3
 
-**Parse Error**
-at 26:3 to 27:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 27:11 to 27:13
+**everything.md:29:15:29:18:**
+```roc
+		Z4([a, b,]) => a
+```
+		            ^^^
 
-**Parse Error**
-at 25:2 to 28:3
 
-**Parse Error**
-at 28:17 to 28:20
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 29:15 to 29:18
+**everything.md:31:1:31:2:**
+```roc
+}
+```
+^
 
-**Parse Error**
-at 31:1 to 31:2
 
-**Unsupported Node**
-at 4:1 to 4:31
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 5:1 to 5:24
+**everything.md:4:1:4:31:**
+```roc
+import I1 exposing [I11, I12,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 8:22 to 8:25
 
-**Unsupported Node**
-at 8:53 to 8:56
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 9:22 to 9:25
+**everything.md:5:1:5:24:**
+```roc
+import I2 exposing [I21 as Ias1, I22 as Ias2,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 9:53 to 9:56
 
-**Unsupported Node**
-at 16:24 to 16:27
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 16:37 to 16:40
+**everything.md:8:22:8:25:**
+```roc
+A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
+```
+                     ^^^
 
-**Unsupported Node**
-at 27:11 to 27:13
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:8:53:8:56:**
+```roc
+A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
+```
+                                                    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:9:22:9:25:**
+```roc
+B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
+```
+                     ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:9:53:9:56:**
+```roc
+B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
+```
+                                                    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:16:24:16:27:**
+```roc
+g : e -> e where module(e).A, module(e).B,
+```
+                       ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:16:37:16:40:**
+```roc
+g : e -> e where module(e).A, module(e).B,
+```
+                                    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**everything.md:26:3:26:19:**
+```roc
+		Z1((a, b,)) => a
+```
+		^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -293,77 +373,74 @@ at 27:11 to 27:13
   (Expr.binop_colon
     (Expr.apply_tag)
     (Expr.binop_colon
-      (Expr.lookup "a")
-      (Expr.binop_colon
-        (Expr.lambda)
+      (Expr.tuple_literal
         (Expr.binop_thin_arrow
-          (Expr.lookup "a")
-          (Expr.binop_thin_arrow
-            (Expr.lookup "a")
-            (Expr.binop_thin_arrow
-              (Expr.malformed)
-              (Expr.binop_colon
-                (Expr.tuple_literal
-                  (Expr.apply_tag)
-                  (Expr.lambda)
-                )
-                (Expr.binop_thin_arrow
-                  (Expr.lookup "a")
-                  (Expr.binop_thin_arrow
-                    (Expr.lookup "a")
-                    (Expr.binop_thin_arrow
-                      (Expr.malformed)
-                      (Expr.binop_colon
+          (Expr.binop_colon
+            (Expr.tuple_literal
+              (Expr.binop_thin_arrow
+                (Expr.binop_colon
+                  (Expr.binop_colon
+                    (Expr.tuple_literal
+                      (Expr.binop_thin_arrow
                         (Expr.binop_colon
                           (Expr.tuple_literal
-                            (Expr.apply_tag)
-                            (Expr.apply_tag)
-                          )
-                          (Expr.lookup "b")
-                        )
-                        (Expr.binop_colon
-                          (Expr.lambda)
-                          (Expr.binop_thin_arrow
-                            (Expr.lookup "b")
                             (Expr.binop_thin_arrow
-                              (Expr.lookup "b")
-                              (Expr.binop_thin_arrow
-                                (Expr.malformed)
+                              (Expr.binop_colon
+                                (Expr.lookup "a")
                                 (Expr.binop_colon
+                                  (Expr.lambda)
                                   (Expr.tuple_literal
-                                    (Expr.apply_tag)
-                                    (Expr.lambda)
-                                  )
-                                  (Expr.binop_thin_arrow
-                                    (Expr.lookup "b")
-                                    (Expr.binop_thin_arrow
-                                      (Expr.lookup "b")
-                                      (Expr.binop_thin_arrow
-                                        (Expr.malformed)
-                                        (Expr.tuple_literal
-                                          (Expr.apply_tag)
-                                          (Expr.apply_tag)
-                                        )
-                                      )
-                                    )
+                                    (Expr.lookup "a")
+                                    (Expr.lookup "a")
                                   )
                                 )
                               )
+                              (Expr.apply_tag)
                             )
+                            (Expr.lambda)
+                          )
+                          (Expr.tuple_literal
+                            (Expr.lookup "a")
+                            (Expr.lookup "a")
                           )
                         )
+                        (Expr.apply_tag)
                       )
+                      (Expr.apply_tag)
+                    )
+                    (Expr.lookup "b")
+                  )
+                  (Expr.binop_colon
+                    (Expr.lambda)
+                    (Expr.tuple_literal
+                      (Expr.lookup "b")
+                      (Expr.lookup "b")
                     )
                   )
                 )
+                (Expr.apply_tag)
               )
+              (Expr.lambda)
+            )
+            (Expr.tuple_literal
+              (Expr.lookup "b")
+              (Expr.lookup "b")
             )
           )
+          (Expr.apply_tag)
         )
+        (Expr.apply_tag)
+      )
+      (Expr.tuple_literal
+        (Expr.lookup "a")
+        (Expr.lookup "b")
       )
     )
   )
-  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.apply_tag)
+  )
   (Expr.binop_colon
     (Expr.apply_tag)
     (Expr.record_literal

@@ -21,54 +21,167 @@ KwPlatform MalformedString KwRequires OpenCurly CloseCurly OpenCurly LowerIdent 
 # FORMATTED
 ~~~roc
 platform "
- requires n : 0 exposes  [import ]
+ requires { n : 0 } exposes [import ]
 
 []
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:9 to 2:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:1 to 2:15
+**fuzz_crash_061.md:1:9:2:1:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
 
-**Expected Exposes**
-at 1:1 to 2:15
 
-**Parse Error**
-at 2:16 to 2:23
+**PARSE ERROR**
+A parsing error occurred: **expected_requires_signatures_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Expected Close Square Bracket**
-at 1:1 to 2:23
+**fuzz_crash_061.md:1:1:2:15:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
 
-**Expected Packages**
-at 1:1 to 2:23
 
-**Parse Error**
-at 1:1 to 2:23
+**EXPECTED EXPOSES**
+Module headers must have an `exposing` section that lists what the module exposes.
+For example:     module [main, add, subtract]
 
-**Parse Error**
-at 2:23 to 2:25
+**fuzz_crash_061.md:1:1:2:15:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
 
-**Expected Close Curly Brace**
-at 1:1 to 2:25
 
-**Parse Error**
-at 1:1 to 2:25
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 2:25
+**fuzz_crash_061.md:2:16:2:23:**
+```roc
+requires{}{n:0[import S	exposing[
+```
+               ^^^^^^^
 
-**Parse Error**
-at 2:25 to 2:33
 
-**Parse Error**
-at 1:1 to 2:33
+**EXPECTED CLOSING BRACKET**
+Module headers must have an `exposing` section that lists what the module exposes.
+For example:     module [main, add, subtract]
 
-**Parse Error**
-at 2:33 to 2:34
+**fuzz_crash_061.md:1:1:2:23:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**EXPECTED PACKAGES**
+A parsing error occurred: **expected_packages**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:23:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_packages_open_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:23:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **S	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_061.md:2:23:2:25:**
+```roc
+requires{}{n:0[import S	exposing[
+```
+                      ^^
+
+
+**EXPECTED CLOSE CURLY BRACE**
+A parsing error occurred: **expected_packages_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:25:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_provides**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:25:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_provides_open_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:25:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:2:25:2:33:**
+```roc
+requires{}{n:0[import S	exposing[
+```
+                       	^^^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_provides_close_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_061.md:1:1:2:33:**
+```roc
+platform"
+requires{}{n:0[import S	exposing[
+```
+
+
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**fuzz_crash_061.md:2:33:2:34:**
+```roc
+requires{}{n:0[import S	exposing[
+```
+                       	        ^
+
 
 # CANONICALIZE
 ~~~clojure

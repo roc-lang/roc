@@ -24,7 +24,7 @@ MultiType(_, _, c) : c
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpenRound Underscore CloseRound OpColon UpperIdent UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon LowerIdent UpperIdent OpenRound LowerIdent Comma Underscore CloseRound OpColon LowerIdent UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound Underscore Comma Underscore Comma LowerIdent CloseRound OpColon LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment UpperIdent OpenRound Underscore CloseRound OpColon UpperIdent BlankLine LineComment UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon LowerIdent BlankLine LineComment UpperIdent OpenRound LowerIdent Comma Underscore CloseRound OpColon LowerIdent BlankLine LineComment UpperIdent OpenRound Underscore Comma LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon LowerIdent CloseCurly BlankLine LineComment UpperIdent OpenRound Underscore Comma Underscore Comma LowerIdent CloseRound OpColon LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -39,28 +39,80 @@ MyType3((a, _)) : a
 ComplexType((_, b)) : {
 	field : b
 }
-MultiType((_, _, c)) : c
+MultiType((_, _, c)) : c# Type with underscore in parameter position
+# Type with underscore and regular parameter
+# Type with parameters where underscore comes second
+# More complex type with underscore parameter
+# Type with multiple underscores
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 4:8 to 4:9
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 7:9 to 7:10
+**underscore_in_type_parameters.md:4:8:4:9:**
+```roc
+MyType(_) : Str
+```
+       ^
 
-**Pattern in Expression Context**
-at 10:12 to 10:13
 
-**Pattern in Expression Context**
-at 13:13 to 13:14
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 16:11 to 16:12
+**underscore_in_type_parameters.md:7:9:7:10:**
+```roc
+MyType2(_, b) : b
+```
+        ^
 
-**Pattern in Expression Context**
-at 16:14 to 16:15
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_parameters.md:10:12:10:13:**
+```roc
+MyType3(a, _) : a
+```
+           ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_parameters.md:13:13:13:14:**
+```roc
+ComplexType(_, b) : { field: b }
+```
+            ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_parameters.md:16:11:16:12:**
+```roc
+MultiType(_, _, c) : c
+```
+          ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_parameters.md:16:14:16:15:**
+```roc
+MultiType(_, _, c) : c
+```
+             ^
+
 
 # CANONICALIZE
 ~~~clojure

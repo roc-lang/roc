@@ -27,10 +27,11 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign OpenRound CloseRound LowerIdent OpAssign OpenRound Int CloseRound LowerIdent OpAssign OpenRound Int Comma Int CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma UpperIdent CloseRound LowerIdent OpAssign OpenRound OpenRound Int Comma Int CloseRound Comma OpenRound Int Comma Int CloseRound CloseRound LowerIdent OpAssign OpenRound LowerIdent OpenRound Int CloseRound Comma String Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int Comma Int CloseRound LowerIdent CloseCurly ~~~
+OpenCurly LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign OpenRound CloseRound LowerIdent OpAssign OpenRound Int CloseRound LowerIdent OpAssign OpenRound Int Comma Int CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma UpperIdent CloseRound LowerIdent OpAssign OpenRound OpenRound Int Comma Int CloseRound Comma OpenRound Int Comma Int CloseRound CloseRound LowerIdent OpAssign OpenRound LowerIdent OpenRound Int CloseRound Comma String Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int Comma Int CloseRound BlankLine LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
+  (malformed malformed:expr_unexpected_token)
   (binop_equals
     (lc "add_one")
     (lambda
@@ -135,7 +136,8 @@ OpenCurly LowerIdent OpAssign OpBar Underscore OpBar OpenCurly CloseCurly LowerI
 ~~~
 # FORMATTED
 ~~~roc
-add_one = |_| {  }
+# define these to avoid runtime errors
+add_one = |_| {}
 x = 10
 y = 20
 z = 30
@@ -147,15 +149,27 @@ nested = ((1, 2), (3, 4))
 mixed = (add_one(5), "world", [1, 2, 3])
 with_vars = (x, y, z)
 with_lambda = |n| (n + 1, 42)
-empty
+empty# example tuples
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **# define these to avoid runtime errors
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tuple_comprehensive.md:2:5:3:5:**
+```roc
+    # define these to avoid runtime errors
+    add_one = |_| {}
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
   (Expr.binop_equals
     (Expr.lookup "add_one")
     (Expr.lambda)

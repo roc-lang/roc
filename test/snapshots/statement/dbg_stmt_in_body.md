@@ -15,7 +15,7 @@ main = {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpAssign Int KwDbg LowerIdent LowerIdent OpPlus Int CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpAssign Int KwDbg LowerIdent LowerIdent OpPlus Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -37,8 +37,16 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:5 to 5:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_in_body.md:5:5:5:9:**
+```roc
+    dbg x
+```
+    ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

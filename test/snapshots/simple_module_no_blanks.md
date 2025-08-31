@@ -17,14 +17,14 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ~~~clojure
 (module-header
   (exposes
-    (lc "hello")
+    (not_lc "hello")
 
     (lc "world")
 ))
 ~~~
 # FORMATTED
 ~~~roc
-module [hello, world]
+module [hello!, world]
 
 import pf.Stdout
 hello! = Stdout.line!("Hello")
@@ -33,11 +33,27 @@ world = "World"
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:1 to 2:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:10 to 3:16
+**simple_module_no_blanks.md:2:1:2:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**simple_module_no_blanks.md:3:10:3:16:**
+```roc
+hello! = Stdout.line!("Hello")
+```
+         ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

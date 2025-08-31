@@ -15,7 +15,7 @@ decodeThings = ...
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent LowerIdent OpAssign TripleDot ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -34,11 +34,27 @@ decodeThings = ...
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:32
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 6:14 to 6:17
+**where_clauses_4.md:3:1:3:32:**
+```roc
+import Decode exposing [Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_4.md:6:14:6:17:**
+```roc
+	where module(a).Decode
+```
+	            ^^^
+
 
 # CANONICALIZE
 ~~~clojure

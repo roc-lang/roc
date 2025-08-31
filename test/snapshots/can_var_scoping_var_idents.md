@@ -18,7 +18,7 @@ testFunc = |input| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign LowerIdent KwVar LowerIdent OpAssign LowerIdent OpStar Int LowerIdent OpAssign LowerIdent OpPlus LowerIdent LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign LowerIdent LineComment KwVar LowerIdent OpAssign LowerIdent OpStar Int LineComment BlankLine LowerIdent OpAssign LowerIdent OpPlus LowerIdent LineComment LowerIdent OpPlus LowerIdent LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -33,6 +33,12 @@ testFunc = |input| {
 	sum_ = sum_ + sum
 	sum + sum_
 }
+
+# Function showing var vs regular identifier independence
+# Regular identifier
+# Var with underscore - should not conflict
+# Reassign var - should work
+# Both should be accessible
 ~~~
 # EXPECTED
 NIL

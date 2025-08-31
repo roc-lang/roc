@@ -11,14 +11,16 @@ module []
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly OpAssign LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly OpAssign LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+{ name, age, email } = person
 ~~~
 # EXPECTED
 NIL

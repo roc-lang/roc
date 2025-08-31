@@ -12,7 +12,7 @@ b! : Str => Str
 ~~~
 # TOKENS
 ~~~text
-KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
+KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare BlankLine LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
 (hosted-header
@@ -29,29 +29,37 @@ hosted [
 	b!,
 ]
 
-[
-	a!,
-	b!,
-]
 a! : Str => Str
 b! : Str => Str
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Expected Exposes**
-at 1:1 to 1:8
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:6 to 3:9
+**hosted.md:3:6:3:9:**
+```roc
+a! : Str => Str
+```
+     ^^^
 
-**Unsupported Node**
-at 4:6 to 4:9
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**hosted.md:4:6:4:9:**
+```roc
+b! : Str => Str
+```
+     ^^^
+
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.list_literal)
   (Expr.binop_colon
     (Expr.not_lookup)
     (Expr.binop_thick_arrow

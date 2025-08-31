@@ -24,11 +24,22 @@ Int OpBar ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:2 to 1:3
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_bar**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:3 to 1:3
+**fuzz_crash_016.md:1:2:1:3:**
+```roc
+0|
+```
+ ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
 
 # CANONICALIZE
 ~~~clojure

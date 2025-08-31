@@ -16,7 +16,7 @@ OpenCurly CloseCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-{  }
+{}
 ~~~
 # EXPECTED
 NIL

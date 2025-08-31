@@ -18,7 +18,7 @@ c = 123.456
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign Float LowerIdent OpColon UpperIdent LowerIdent OpAssign Float LowerIdent OpColon UpperIdent LowerIdent OpAssign Float ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
 (module-header)

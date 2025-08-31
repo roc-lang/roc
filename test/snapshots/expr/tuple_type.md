@@ -14,7 +14,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound OpArrow OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpenRound OpenRound Int Comma Int CloseRound CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound OpArrow OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpenRound OpenRound Int Comma Int CloseRound CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -53,8 +53,7 @@ OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-f :
-	(Str, Str) -> (Str, Str)
+f : (Str, Str) -> (Str, Str)
 f = |x| x
 f((1, 2))
 ~~~

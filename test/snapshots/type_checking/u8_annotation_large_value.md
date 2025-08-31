@@ -12,14 +12,17 @@ x = 500
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
 (module-header)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x : U8
+x = 500
 ~~~
 # EXPECTED
 NIL

@@ -18,7 +18,7 @@ main = {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma LowerIdent KwAs LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma LowerIdent KwAs LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -31,8 +31,13 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Kw
 module [main]
 
 import json.Json exposing [decode]
-as fromJson, encode
-as toJson]
+as 
+fromJson
+, 
+encode
+as 
+toJson
+]
 
 main = {
 	data = { name : "Bob", age : 25 }
@@ -44,20 +49,63 @@ main = {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:35 to 3:38
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 3:46 to 3:48
+**import_exposing_alias.md:3:35:3:38:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                  ^^^
 
-**Parse Error**
-at 3:55 to 3:58
 
-**Parse Error**
-at 3:64 to 5:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 3:1 to 3:34
+**import_exposing_alias.md:3:46:3:48:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                             ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:55:3:58:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                                      ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:64:5:1:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+
+main = {
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**import_exposing_alias.md:3:1:3:34:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

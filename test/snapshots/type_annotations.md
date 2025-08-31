@@ -16,7 +16,7 @@ tag_tuple : Value((_a, _b, _c))
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma Underscore CloseRound LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent OpArrow UpperIdent CloseRound LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma Underscore CloseRound LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent OpArrow UpperIdent CloseRound LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -35,11 +35,27 @@ tag_tuple : Value(_a, _b, _c)
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 4:21 to 4:22
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 7:36 to 7:37
+**type_annotations.md:4:21:4:22:**
+```roc
+bar : Thing(_a, _b, _)
+```
+                    ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**type_annotations.md:7:36:7:37:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+                                   ^
+
 
 # CANONICALIZE
 ~~~clojure

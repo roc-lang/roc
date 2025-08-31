@@ -37,7 +37,7 @@ main = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly LowerIdent OpAssign OpenSquare CloseSquare LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly BlankLine LineComment LowerIdent OpAssign OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound BlankLine LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -76,27 +76,79 @@ main = |_| {
 	len3 = List.len(all_float_list)
 	(len1 + len2) + len3
 }
+
+# Function returning empty list
+# Used at different types
+# Type inference should work correctly
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 12:26 to 12:28
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **+ ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 13:26 to 13:28
+**let_polymorphism_lists.md:12:26:12:28:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+                         ^^
 
-**Parse Error**
-at 14:30 to 14:32
 
-**Unsupported Node**
-at 25:12 to 25:16
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **+ ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 26:12 to 26:16
+**let_polymorphism_lists.md:13:26:13:28:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+                         ^^
 
-**Unsupported Node**
-at 27:12 to 27:16
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **+ ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**let_polymorphism_lists.md:14:30:14:32:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+                             ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**let_polymorphism_lists.md:25:12:25:16:**
+```roc
+    len1 = List.len(all_int_list)
+```
+           ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**let_polymorphism_lists.md:26:12:26:16:**
+```roc
+    len2 = List.len(all_str_list)
+```
+           ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**let_polymorphism_lists.md:27:12:27:16:**
+```roc
+    len3 = List.len(all_float_list)
+```
+           ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

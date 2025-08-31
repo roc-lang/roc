@@ -36,7 +36,6 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comm
 # FORMATTED
 ~~~roc
 app { f: "" platform [], r: "", o: "" }
-
 ~~~
 # EXPECTED
 NIL

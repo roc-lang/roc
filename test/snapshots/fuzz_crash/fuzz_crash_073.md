@@ -9,7 +9,7 @@ module[]!0.t
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare OpBang Int Dot LowerIdent ~~~
+KwModule OpenSquare CloseSquare OpBang Int MalformedUnknownToken Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -18,16 +18,39 @@ KwModule OpenSquare CloseSquare OpBang Int Dot LowerIdent ~~~
 ~~~roc
 module []
 
-!0 | .t
+!0
+ | .t
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_073.md:1:11:1:12:**
+```roc
+module[]!0.t
+```
+          ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_073.md:1:11:1:12:**
+```roc
+module[]!0.t
+```
+          ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Expr.unary_not)
+  (Expr.lambda)
 )
 ~~~
 # SOLVED

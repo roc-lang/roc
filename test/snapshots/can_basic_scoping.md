@@ -24,7 +24,7 @@ outerFunc = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenCurly LowerIdent OpAssign LowerIdent OpPlus LowerIdent LowerIdent OpPlus Int CloseCurly LowerIdent CloseCurly ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign Int LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LineComment LowerIdent OpAssign OpenCurly LineComment LowerIdent OpAssign LowerIdent OpPlus LowerIdent LineComment LowerIdent OpPlus Int CloseCurly LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -41,8 +41,15 @@ outerFunc = |_| {
 		z = x + y
 		z + 1
 	}
+
 	innerResult : innerResult
 }
+
+# Top-level variables
+# Function that shadows outer variable
+# Should shadow top-level x
+# Block scope
+# x should resolve to 20, y to 10
 ~~~
 # EXPECTED
 NIL

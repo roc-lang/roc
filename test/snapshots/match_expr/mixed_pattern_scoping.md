@@ -81,17 +81,49 @@ match data
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:16 to 2:18
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:11
+**mixed_pattern_scoping.md:2:5:2:24:**
+```roc
+    Ok([x, y]) => x + y
+```
+    ^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 4:13 to 4:15
 
-**Unsupported Node**
-at 5:5 to 5:11
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**mixed_pattern_scoping.md:3:5:3:11:**
+```roc
+    Err(x) => x - 1
+```
+    ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**mixed_pattern_scoping.md:4:5:4:21:**
+```roc
+    Ok([x]) => x * 2
+```
+    ^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**mixed_pattern_scoping.md:5:5:5:11:**
+```roc
+    Err(y) => y / 2
+```
+    ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

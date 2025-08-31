@@ -52,8 +52,16 @@ match []
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:11 to 2:13
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**let_polymorphism_expr.md:2:5:2:70:**
+```roc
+    empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

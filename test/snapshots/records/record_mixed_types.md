@@ -49,8 +49,16 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:35 to 1:39
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_mixed_types.md:1:35:1:39:**
+```roc
+{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+```
+                                  ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

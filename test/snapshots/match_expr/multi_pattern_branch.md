@@ -16,33 +16,83 @@ match color {
 KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(match
+  (scrutinee     (lc "color")
+)
+  (branch1     (binop_thick_arrow
+      (binop_or
+        (binop_or
+          (uc "Blue")
+          (uc "Green")
+        )
+        (uc "Red")
+      )
+      (num_literal_i32 1)
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "Black")
+      (num_literal_i32 2)
+    )
+)
+  (branch3     (binop_thick_arrow
+      (uc "White")
+      (num_literal_i32 3)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-Green 
+match color
+	(Blue || Green) || Red => 1
+	Black => 2
+	White => 3
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:5 to 2:12
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 2:12 to 2:18
+**multi_pattern_branch.md:2:5:2:28:**
+```roc
+    Blue | Green | Red => 1
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 2:12 to 2:18
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_pattern_branch.md:3:5:3:10:**
+```roc
+    Black => 2
+```
+    ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_pattern_branch.md:4:5:4:15:**
+```roc
+    White => 3
+```
+    ^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

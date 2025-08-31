@@ -20,7 +20,7 @@ green = Green
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwImport UpperIdent Dot OpStar LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare BlankLine KwImport UpperIdent Dot OpStar BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -36,7 +36,8 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare KwI
 ~~~roc
 module [red, green, blue]
 
-import Color*
+import Color
+*
 
 red : Color
 red = Red
@@ -48,11 +49,30 @@ green = Green
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:14 to 5:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token ***
 
-**Unsupported Node**
-at 3:1 to 3:14
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**nominal_import_wildcard.md:3:14:5:1:**
+```roc
+import Color.*
+
+red : Color
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_import_wildcard.md:3:1:3:14:**
+```roc
+import Color.*
+```
+^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

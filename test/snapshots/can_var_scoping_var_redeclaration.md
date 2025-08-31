@@ -19,7 +19,7 @@ result = redeclareTest({})
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwVar LowerIdent OpAssign Int KwVar LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent CloseCurly LowerIdent OpAssign LowerIdent OpenRound OpenCurly CloseCurly CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenCurly KwVar LowerIdent OpAssign Int KwVar LowerIdent OpAssign Int LineComment LowerIdent OpAssign Int LineComment LowerIdent CloseCurly BlankLine LowerIdent OpAssign LowerIdent OpenRound OpenCurly CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -34,7 +34,10 @@ redeclareTest = |_| {
 	x_ = 15
 	x_ : x_
 }
-result = redeclareTest({  })
+
+result = redeclareTest({})# Test var redeclaration (should produce shadowing warning)
+# Redeclare var - should warn but proceed
+# Reassign - should work without warning
 ~~~
 # EXPECTED
 NIL

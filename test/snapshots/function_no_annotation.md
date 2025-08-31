@@ -22,7 +22,7 @@ main! = process!(42)
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpStar LowerIdent LowerIdent OpBang OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound LowerIdent OpBang OpAssign OpBar LowerIdent OpBar LowerIdent OpBang OpenRound LowerIdent OpenRound LowerIdent Comma Int CloseRound CloseRound LowerIdent OpBang OpAssign LowerIdent OpBang OpenRound Int CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpStar LowerIdent BlankLine LineComment LowerIdent OpBang OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound BlankLine LineComment LowerIdent OpBang OpAssign OpBar LowerIdent OpBar LowerIdent OpBang OpenRound LowerIdent OpenRound LowerIdent Comma Int CloseRound CloseRound BlankLine LowerIdent OpBang OpAssign LowerIdent OpBang OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -32,7 +32,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
         (block
-          (lc "main")
+          (not_lc "main")
         )
       )
     )
@@ -40,22 +40,40 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 multiply = |x, y| x * y
 print_number! = |n| Stdout.line!(n)
 process! = |x| print_number!(multiply((x, 2)))
-main! = process!(42)
+main! = process!(42)# Pure function with no annotation
+# Function with no type annotation - should infer effectfulness from body
+# Another effectful function with no annotation
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 9:21 to 9:27
+**function_no_annotation.md:3:1:3:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**function_no_annotation.md:9:21:9:27:**
+```roc
+print_number! = |n| Stdout.line!(n)
+```
+                    ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

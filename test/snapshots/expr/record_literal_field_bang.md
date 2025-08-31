@@ -24,10 +24,7 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
     (not_lc "launchTheNukes")
     (lambda
       (body
-        (tuple_literal
-          (ellipsis)
-          (malformed malformed:expr_unexpected_token)
-        )
+        (ellipsis)
       )
       (args
         (record_literal)
@@ -38,21 +35,21 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly
 ~~~
 # FORMATTED
 ~~~roc
-{ answer : 42, launchTheNukes! : |{  }| (
-	...,
-) }
+{ answer : 42, launchTheNukes! : |{}| ... }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 4:1 to 4:2
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 1:1 to 4:2
+**record_literal_field_bang.md:3:23:3:25:**
+```roc
+    launchTheNukes!: |{}| ...,
+```
+                      ^^
 
-**Unsupported Node**
-at 3:23 to 3:25
 
 # CANONICALIZE
 ~~~clojure

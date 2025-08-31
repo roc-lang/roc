@@ -26,12 +26,13 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 )
   (branch2     (binop_thick_arrow
       (uc "Zero")
-      (str_literal_small "zero")
-    )
-)
-  (branch3     (binop_thick_arrow
-      (lc "other")
-      (str_literal_big "something else")
+      (block
+        (str_literal_small "zero")
+        (binop_thick_arrow
+          (lc "other")
+          (str_literal_big "something else")
+        )
+      )
     )
 ))
 ~~~
@@ -39,20 +40,34 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~roc
 match value
 	Answer => "the answer"
-	Zero => "zero"
-	other => "something else"
+	Zero => 
+		"zero"
+		other => "something else"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:12 to 2:14
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:9
+**wildcard_patterns.md:2:5:2:27:**
+```roc
+    Answer => "the answer"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 4:11 to 4:13
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**wildcard_patterns.md:3:5:3:9:**
+```roc
+    Zero => "zero"
+```
+    ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

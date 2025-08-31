@@ -17,7 +17,7 @@ foo = |num| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly KwDbg LowerIdent Dot LowerIdent OpenRound CloseRound KwDbg OpenRound LowerIdent CloseRound CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment KwDbg LowerIdent Dot LowerIdent OpenRound CloseRound BlankLine LineComment KwDbg OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -38,11 +38,27 @@ foo = |num| {
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:5 to 5:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 8:5 to 8:8
+**dbg_stmt_block_example.md:5:5:5:9:**
+```roc
+    dbg num.to_str()
+```
+    ^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_block_example.md:8:5:8:8:**
+```roc
+    dbg(num)
+```
+    ^^^
+
 
 # CANONICALIZE
 ~~~clojure

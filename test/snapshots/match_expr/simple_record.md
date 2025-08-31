@@ -19,38 +19,43 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
   (scrutinee     (lc "person")
 )
   (branch1     (binop_thick_arrow
-      (block
+      (record_literal
         (lc "name")
       )
-      (lc "name")
-    )
-)
-  (branch2     (binop_thick_arrow
       (block
-        (lc "age")
+        (lc "name")
+        (binop_thick_arrow
+          (block
+            (lc "age")
+          )
+          (lc "age")
+        )
       )
-      (lc "age")
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match person
-	{
+	{name} => 
 		name
-	} => name
-	{
-		age
-	} => age
+		{
+			age
+		} => age
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:14 to 2:16
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:12
+**simple_record.md:2:5:3:19:**
+```roc
+    { name } => name
+    { age } => age
+```
+
 
 # CANONICALIZE
 ~~~clojure

@@ -14,7 +14,7 @@ foo =
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedString ~~~
+LowerIdent OpenCurly LowerIdent Comma CloseSquare BlankLine LowerIdent OpAssign BlankLine MalformedString ~~~
 # PARSE
 ~~~clojure
 (block
@@ -31,7 +31,8 @@ LowerIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-f{
+f
+{
 	o,
 }
 foo = "onmo %
@@ -39,14 +40,43 @@ foo = "onmo %
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:6 to 4:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
 
-**Parse Error**
-at 1:3 to 4:1
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 6:5 to 6:12
+**fuzz_crash_009.md:2:6:4:1:**
+```roc
+     ]
+
+foo =
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_009.md:1:3:4:1:**
+```roc
+ f{o,
+     ]
+
+foo =
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"onmo %** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_009.md:6:5:6:12:**
+```roc
+    "onmo %
+```
+    ^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

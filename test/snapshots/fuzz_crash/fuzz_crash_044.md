@@ -12,7 +12,7 @@ app[]{f:platform""}{{0
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly OpenCurly OpenCurly Int CloseCurly CloseCurly String ~~~
+KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly OpenCurly OpenCurly Int CloseCurly CloseCurly BlankLine String ~~~
 # PARSE
 ~~~clojure
 (app-header

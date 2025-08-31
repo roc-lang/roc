@@ -22,16 +22,32 @@ OpBackslash LowerIdent OpArrow LowerIdent OpPlus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-x  -> x + 1
+x -> x + 1
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:2 to 1:4
+**PARSE ERROR**
+A parsing error occurred: **backslash_not_valid_lambda_syntax**
+This is an unexpected parsing error. Please check your syntax.
 
-**Unsupported Node**
-at 1:4 to 1:6
+**parse_error_backslash_lambda.md:1:2:1:4:**
+```roc
+\x -> x + 1
+```
+ ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**parse_error_backslash_lambda.md:1:2:1:12:**
+```roc
+\x -> x + 1
+```
+ ^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

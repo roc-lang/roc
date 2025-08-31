@@ -45,14 +45,39 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:15 to 2:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<-
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:3 to 1:6
+**record_builder.md:1:15:2:5:**
+```roc
+{ Foo.Bar.baz <-
+    x: 5,
+```
 
-**Unsupported Node**
-at 1:6 to 1:10
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_builder.md:1:3:1:6:**
+```roc
+{ Foo.Bar.baz <-
+```
+  ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_builder.md:1:6:1:10:**
+```roc
+{ Foo.Bar.baz <-
+```
+     ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

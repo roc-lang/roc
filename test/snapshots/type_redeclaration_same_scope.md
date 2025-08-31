@@ -12,7 +12,7 @@ Maybe(a) : [Ok(a), Err]
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare ~~~
+KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -22,7 +22,10 @@ KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Close
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [Maybe]
+
+Maybe(a) : [Some(a), None]
+Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
 NIL

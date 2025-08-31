@@ -25,7 +25,6 @@ module [
 	something,
 	SomeType,
 ]
-
 ~~~
 # EXPECTED
 NIL

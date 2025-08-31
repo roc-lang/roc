@@ -14,7 +14,7 @@ convert_me = ...
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign TripleDot ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -32,8 +32,16 @@ convert_me = ...
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:9 to 5:12
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_minimal.md:5:9:5:12:**
+```roc
+		module(a).convert : a -> b
+```
+		      ^^^
+
 
 # CANONICALIZE
 ~~~clojure

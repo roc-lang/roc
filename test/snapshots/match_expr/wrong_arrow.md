@@ -19,19 +19,54 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpArrow UpperIdent OpenRound
 ~~~
 # FORMATTED
 ~~~roc
-..
+EmptyList
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:8 to 3:6
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Err** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 3:6 to 3:8
+**wrong_arrow.md:2:11:2:14:**
+```roc
+    [] -> Err(EmptyList)
+```
+          ^^^
 
-**Unsupported Node**
-at 3:6 to 3:8
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **[] -> Err(** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**wrong_arrow.md:2:5:2:15:**
+```roc
+    [] -> Err(EmptyList)
+```
+    ^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **EmptyList** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**wrong_arrow.md:2:15:2:24:**
+```roc
+    [] -> Err(EmptyList)
+```
+              ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**wrong_arrow.md:2:15:2:24:**
+```roc
+    [] -> Err(EmptyList)
+```
+              ^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

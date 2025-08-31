@@ -21,14 +21,38 @@ u8
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:3
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Parse Error**
-at 1:3 to 1:5
+**can_list_number_doesnt_fit.md:1:1:1:3:**
+```roc
+[1u8, 2u8, 300]
+```
+^^
 
-**Unsupported Node**
-at 1:3 to 1:5
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **u8** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_list_number_doesnt_fit.md:1:3:1:5:**
+```roc
+[1u8, 2u8, 300]
+```
+  ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_list_number_doesnt_fit.md:1:3:1:5:**
+```roc
+[1u8, 2u8, 300]
+```
+  ^^
+
 
 # CANONICALIZE
 ~~~clojure

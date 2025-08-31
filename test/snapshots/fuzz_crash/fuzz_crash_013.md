@@ -19,14 +19,22 @@ Int OpenCurly ~~~
 ~~~
 # FORMATTED
 ~~~roc
-0{
-}
+0
+{}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:2 to 1:3
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_013.md:1:2:1:3:**
+```roc
+0{
+```
+ ^
+
 
 # CANONICALIZE
 ~~~clojure

@@ -16,7 +16,7 @@ extract_age = |person| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenCurly LowerIdent CloseCurly OpAssign LowerIdent OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent OpPlus LowerIdent OpBinaryMinus OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly OpenCurly LowerIdent CloseCurly OpAssign LowerIdent BlankLine OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent OpPlus LowerIdent OpBinaryMinus OpenCurly LowerIdent OpColon Int CloseCurly Dot LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -45,11 +45,27 @@ extract_age = |person| {
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 7:2 to 7:10
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 7:21 to 7:29
+**module_record_destructure.md:7:2:7:10:**
+```roc
+	{ a: 0 }.a + age - { a: 0 }.a
+```
+	^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**module_record_destructure.md:7:21:7:29:**
+```roc
+	{ a: 0 }.a + age - { a: 0 }.a
+```
+	                   ^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

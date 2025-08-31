@@ -40,7 +40,6 @@ package [] packages {d, {
 		} | .c
 	}
 }}
-
 ~~~
 # EXPECTED
 NIL

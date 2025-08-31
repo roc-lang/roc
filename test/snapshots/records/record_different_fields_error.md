@@ -28,14 +28,42 @@ $
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 6:10
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 6:10 to 6:11
+**record_different_fields_error.md:1:1:6:10:**
+```roc
+{
+    _privateField: "leading underscore",
+    field_: "trailing underscore",
+    PascalCase: "pascal",
+    kebab-case: "kebab",
+    field$special: "dollar",
+```
 
-**Unsupported Node**
-at 6:10 to 6:11
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **$** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_error.md:6:10:6:11:**
+```roc
+    field$special: "dollar",
+```
+         ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_different_fields_error.md:6:10:6:11:**
+```roc
+    field$special: "dollar",
+```
+         ^
+
 
 # CANONICALIZE
 ~~~clojure

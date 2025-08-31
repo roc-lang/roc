@@ -15,7 +15,7 @@ foo = if 1 A
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign KwIf Int UpperIdent KwElse OpenCurly String CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign KwIf Int UpperIdent BlankLine KwElse OpenCurly String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header

@@ -36,10 +36,8 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
   (branch2     (binop_thick_arrow
       (apply_uc
         (uc "Rectangle")
-        (tuple_literal
-          (lc "width")
-          (lc "height")
-        )
+        (lc "width")
+        (lc "height")
       )
       (binop_star
         (lc "width")
@@ -50,10 +48,8 @@ KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArr
   (branch3     (binop_thick_arrow
       (apply_uc
         (uc "Triangle")
-        (tuple_literal
-          (lc "base")
-          (lc "height")
-        )
+        (lc "base")
+        (lc "height")
       )
       (binop_star
         (binop_star
@@ -75,14 +71,38 @@ match shape
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:20 to 2:22
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:29
+**tag_with_payload.md:2:5:2:45:**
+```roc
+    Circle(radius) => 3.14 * radius * radius
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 4:28 to 4:30
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**tag_with_payload.md:3:5:3:29:**
+```roc
+    Rectangle(width, height) => width * height
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**tag_with_payload.md:4:5:4:50:**
+```roc
+    Triangle(base, height) => 0.5 * base * height
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

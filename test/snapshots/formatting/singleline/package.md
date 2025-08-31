@@ -12,14 +12,14 @@ b! : Str => Str
 ~~~
 # TOKENS
 ~~~text
-KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
+KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String CloseCurly BlankLine LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
 (package-header
   (exposes
-    (lc "a")
+    (not_lc "a")
 
-    (lc "b")
+    (not_lc "b")
 )
   (packages
     (lc "a")
@@ -35,7 +35,7 @@ KwPackage OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare OpenC
 ~~~
 # FORMATTED
 ~~~roc
-package [a, b] packages {a, ("a", b) : "b"}
+package [a!, b!] packages {a, ("a", b) : "b"}
 
 a! : Str => Str
 b! : Str => Str
@@ -43,11 +43,27 @@ b! : Str => Str
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:6 to 3:9
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 4:6 to 4:9
+**package.md:3:6:3:9:**
+```roc
+a! : Str => Str
+```
+     ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**package.md:4:6:4:9:**
+```roc
+b! : Str => Str
+```
+     ^^^
+
 
 # CANONICALIZE
 ~~~clojure

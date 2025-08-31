@@ -16,7 +16,7 @@ blue = CC.Color.RGB(0,0,255)
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent OpenRound Int Comma Int Comma Int CloseRound ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerIdent Dot UpperIdent KwAs UpperIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent OpenRound Int Comma Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -30,19 +30,44 @@ module [blue]
 
 import styles.Color as CC
 blue : CC.Color
-blue = CC.Color | RGB((0, 0, 255))
+blue = CC.Color | RGB((0, 0, 255))# import the Color module from styles package as CC
+# instantiating an RGB nominal tab union from the styles.Color module
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 4:1 to 4:26
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 8:8 to 8:10
+**nominal_tag_package_import.md:4:1:4:26:**
+```roc
+import styles.Color as CC
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 8:10 to 8:16
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_package_import.md:8:8:8:10:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+       ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_package_import.md:8:10:8:16:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+         ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

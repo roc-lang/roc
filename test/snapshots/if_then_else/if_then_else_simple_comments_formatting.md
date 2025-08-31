@@ -11,7 +11,7 @@ if bool { # Comment after then open
 ~~~
 # TOKENS
 ~~~text
-KwIf LowerIdent OpenCurly UpperIdent CloseCurly KwElse UpperIdent ~~~
+KwIf LowerIdent OpenCurly LineComment UpperIdent LineComment CloseCurly KwElse UpperIdent ~~~
 # PARSE
 ~~~clojure
 (if_else
@@ -30,7 +30,8 @@ if bool
 	{
 		A
 	}
-else B
+else B# Comment after then open
+# Comment after expr
 ~~~
 # EXPECTED
 NIL

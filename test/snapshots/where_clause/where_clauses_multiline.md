@@ -15,7 +15,7 @@ process = ...
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign TripleDot ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -33,11 +33,27 @@ process = ...
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:9 to 5:12
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 6:9 to 6:12
+**where_clauses_multiline.md:5:9:5:12:**
+```roc
+		module(a).convert : a -> c,
+```
+		      ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_multiline.md:6:9:6:12:**
+```roc
+		module(b).transform : b -> c
+```
+		      ^^^
+
 
 # CANONICALIZE
 ~~~clojure

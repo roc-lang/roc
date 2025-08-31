@@ -96,37 +96,16 @@ OpenRound Int OpPlus Int Comma Int OpBinaryMinus Int Comma Int OpStar Int Comma 
     (uc "None")
     (num_literal_i32 0)
   )
-  (malformed malformed:expr_unexpected_token)
 )
 ~~~
 # FORMATTED
 ~~~roc
-(
-	4 + 2,
-	4 - 2,
-	4 * 2,
-	4 / 2,
-	4 < 2,
-	4 > 2,
-	4 <= 2,
-	4 >= 2,
-	4 == 2,
-	4 != 2,
-	4 // 2,
-	Bool.True && Bool.False,
-	Bool.False || Bool.True,
-	None ?? 0,
-)
+(4 + 2, 4 - 2, 4 * 2, 4 / 2, 4 < 2, 4 > 2, 4 <= 2, 4 >= 2, 4 == 2, 4 != 2, 4 // 2, Bool.True && Bool.False, Bool.False || Bool.True, None ?? 0)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 16:1 to 16:2
-
-**Parse Error**
-at 16:2 to 16:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.tuple_literal
@@ -198,7 +177,6 @@ at 16:2 to 16:2
     (Expr.apply_tag)
     (Expr.num_literal_i32 0)
   )
-  (Expr.malformed)
 )
 ~~~
 # SOLVED

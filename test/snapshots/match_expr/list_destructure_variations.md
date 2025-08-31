@@ -19,39 +19,212 @@ match list {
 KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare UpperIdent Comma UpperIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(match
+  (scrutinee     (lc "list")
+)
+  (branch1     (binop_thick_arrow
+      (list_literal)
+      (block
+        (num_literal_i32 0)
+        (binop_thick_arrow
+          (list_literal
+            (lc "x")
+          )
+          (lc "x")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (lc "second")
+          )
+          (binop_plus
+            (lc "first")
+            (lc "second")
+          )
+        )
+        (list_literal
+          (lc "head")
+          (unary_double_dot <unary>)
+        )
+        (lc "tail")
+        (binop_thick_arrow
+          (malformed malformed:expr_unexpected_token)
+          (lc "head")
+        )
+        (list_literal
+          (uc "One")
+          (uc "Two")
+          (unary_double_dot <unary>)
+        )
+        (lc "rest")
+        (binop_thick_arrow
+          (malformed malformed:expr_unexpected_token)
+          (num_literal_i32 3)
+        )
+        (list_literal
+          (lc "x")
+          (lc "y")
+          (lc "z")
+          (unary_double_dot <unary>)
+        )
+        (lc "more")
+        (binop_thick_arrow
+          (malformed malformed:expr_unexpected_token)
+          (binop_plus
+            (binop_plus
+              (lc "x")
+              (lc "y")
+            )
+            (lc "z")
+          )
+        )
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-] 
+match list
+	[] => 
+		0
+		[x] => x
+		[first, second] => first + second
+		[head, ..as ]
+		tail
+		] => head
+		[One, Two, ..as ]
+		rest
+		] => 3
+		[x, y, z, ..as ]
+		more
+		] => (x + y) + z
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:15 to 5:18
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 5:5 to 5:18
+**list_destructure_variations.md:5:15:5:18:**
+```roc
+    [head, .. as tail] => head
+```
+              ^^^
 
-**Parse Error**
-at 5:5 to 5:22
 
-**Parse Error**
-at 5:22 to 5:24
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Unsupported Node**
-at 5:22 to 5:24
+**list_destructure_variations.md:5:5:5:18:**
+```roc
+    [head, .. as tail] => head
+```
+    ^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**list_destructure_variations.md:5:22:5:24:**
+```roc
+    [head, .. as tail] => head
+```
+                     ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**list_destructure_variations.md:6:19:6:22:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+                  ^^^
+
+
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**list_destructure_variations.md:6:5:6:22:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+    ^^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**list_destructure_variations.md:6:26:6:28:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+                         ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**list_destructure_variations.md:7:18:7:21:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                 ^^^
+
+
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**list_destructure_variations.md:7:5:7:21:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+    ^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**list_destructure_variations.md:7:25:7:27:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                        ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_destructure_variations.md:2:5:7:39:**
+```roc
+    [] => 0
+    [x] => x
+    [first, second] => first + second
+    [head, .. as tail] => head
+    [One, Two, .. as rest] => 3
+    [x, y, z, .. as more] => x + y + z
+```
+
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

@@ -18,7 +18,7 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound String CloseRound UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound String CloseRound UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -28,7 +28,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
         (block
-          (lc "main")
+          (not_lc "main")
         )
       )
     )
@@ -36,7 +36,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 import json.Json
@@ -44,21 +44,55 @@ main! = |_| {
 	result = Json.utf8("Hello from external module!")
 	Stdout.line!(result)
 }
+
+# This should create an external declaration for json.Json.utf8
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 4:1 to 4:17
+**external_decl_lookup.md:3:1:3:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 8:14 to 8:18
 
-**Unsupported Node**
-at 9:5 to 9:11
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**external_decl_lookup.md:4:1:4:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**external_decl_lookup.md:8:14:8:18:**
+```roc
+    result = Json.utf8("Hello from external module!")
+```
+             ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**external_decl_lookup.md:9:5:9:11:**
+```roc
+    Stdout.line!(result)
+```
+    ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

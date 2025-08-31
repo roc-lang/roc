@@ -24,7 +24,7 @@ Decode(a) : a
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound Comma CloseRound OpArrow LowerIdent ~~~
+KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound LineComment OpColon LineComment LowerIdent LineComment KwWhere LineComment KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent LineComment OpArrow LineComment LowerIdent Comma LineComment KwModule OpenRound LowerIdent CloseRound Dot UpperIdent BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpenRound LineComment UpperIdent OpenRound UpperIdent CloseRound Comma LineComment CloseRound OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -39,25 +39,51 @@ module [Hash]
 Hash((a, hasher)) : 
 	(a where module(a).hash : hasher) -> hasher,
 	module(hasher) | Hasher,
-Decode(a) : a where module(a).decode(List(U8) -> ()  -> a))
+Decode(a) : a where module(a).decode(List(U8)) -> a# After header
+# After colon
+# After var
+# After where
+# After method
+# After arrow
+# After first clause
+# After method args open
+# After method arg
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 16:3 to 16:5
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 14:9 to 16:9
+**where_clauses_7.md:7:11:7:14:**
+```roc
+				module(a).hash : hasher # After method
+```
+				      ^^^
 
-**Unsupported Node**
-at 7:11 to 7:14
 
-**Unsupported Node**
-at 10:11 to 10:19
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 14:9 to 14:12
+**where_clauses_7.md:10:11:10:19:**
+```roc
+				module(hasher).Hasher
+```
+				      ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_7.md:14:9:14:12:**
+```roc
+		module(a).decode( # After method args open
+```
+		      ^^^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -80,9 +106,12 @@ at 14:9 to 14:12
   )
   (Expr.binop_colon
     (Expr.apply_tag)
-    (Expr.binop_colon
+    (Expr.binop_thin_arrow
+      (Expr.binop_colon
+        (Expr.lookup "a")
+        (Expr.apply_ident)
+      )
       (Expr.lookup "a")
-      (Expr.apply_ident)
     )
   )
 )

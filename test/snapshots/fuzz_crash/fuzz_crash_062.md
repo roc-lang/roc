@@ -28,17 +28,44 @@ s ||
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:8 to 1:9
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 1:9
+**fuzz_crash_062.md:1:8:1:9:**
+```roc
+module[}|0
+```
+       ^
 
-**Parse Error**
-at 2:1 to 2:4
 
-**Parse Error**
-at 2:9 to 2:9
+**PARSE ERROR**
+A parsing error occurred: **header_expected_close_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_062.md:1:1:1:9:**
+```roc
+module[}|0
+```
+^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_062.md:2:1:2:4:**
+```roc
+as s|||0
+```
+^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
 
 # CANONICALIZE
 ~~~clojure

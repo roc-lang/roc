@@ -16,40 +16,54 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-Int OpPlus Int OpStar Int ~~~
+Int LineComment OpPlus LineComment BlankLine LineComment BlankLine Int LineComment OpStar LineComment Int ~~~
 # PARSE
 ~~~clojure
-(binop_plus
-  (num_literal_i32 1)
-  (binop_star
-    (num_literal_i32 2)
-    (num_literal_i32 3)
-  )
-)
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-1 + 2 * 3
+# One
+	# Plus
+# A comment in between
+# Two
+# Times
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **# One
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**multiline_binop_1.md:1:3:2:2:**
+```roc
+1 # One
+	+ # Plus
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multiline_binop_1.md:1:3:2:2:**
+```roc
+1 # One
+	+ # Plus
+```
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.num_literal_i32 1)
-  (Expr.binop_star
-    (Expr.num_literal_i32 2)
-    (Expr.num_literal_i32 3)
-  )
-)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag binop_plus :type "Num(_a)")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-Num(_a)
+# No expression found
 ~~~

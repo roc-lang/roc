@@ -15,7 +15,7 @@ var t= 0
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform MalformedString KwVar LowerIdent OpAssign CloseSquare KwVar LowerIdent OpAssign Int ~~~
+KwModule OpenSquare KwModule CloseSquare OpenCurly LowerIdent OpColon KwPlatform MalformedString BlankLine LineComment KwVar LowerIdent OpAssign CloseSquare BlankLine LineComment KwVar LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -35,26 +35,82 @@ module [module ]
 	var t = ]
 
 #el
+
 	var t = 0
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:9 to 1:16
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:24 to 1:33
+**fuzz_crash_024.md:1:9:1:16:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+        ^^^^^^^
 
-**Parse Error**
-at 1:33 to 4:1
 
-**Parse Error**
-at 4:8 to 7:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **platform ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:18 to 7:9
+**fuzz_crash_024.md:1:24:1:33:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+                       ^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **".-/main._]where # A
+
+#el
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_024.md:1:33:4:1:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+
+#el
+var t= ]
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+
+#el
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_024.md:4:8:7:1:**
+```roc
+var t= ]
+
+#el
+var t= 0
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_024.md:1:18:7:9:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+
+#el
+var t= ]
+
+#el
+var t= 0
+```
+
 
 # CANONICALIZE
 ~~~clojure

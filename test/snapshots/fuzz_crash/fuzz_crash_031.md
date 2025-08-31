@@ -12,7 +12,7 @@ vavar t= '
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpenSquare CloseSquare LowerIdent LowerIdent OpAssign MalformedSingleQuoteUnclosed ~~~
+LowerIdent OpenSquare CloseSquare BlankLine LineComment LowerIdent LowerIdent OpAssign MalformedSingleQuoteUnclosed ~~~
 # PARSE
 ~~~clojure
 (block
@@ -35,8 +35,16 @@ t = '
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 4:10 to 4:11
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_031.md:4:10:4:11:**
+```roc
+vavar t= '
+```
+         ^
+
 
 # CANONICALIZE
 ~~~clojure

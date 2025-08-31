@@ -18,13 +18,20 @@ KwModule ~~~
 # FORMATTED
 ~~~roc
 module []
-
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:7
+**PARSE ERROR**
+A parsing error occurred: **header_expected_open_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**header_expected_open_bracket.md:1:1:1:7:**
+```roc
+module
+```
+^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

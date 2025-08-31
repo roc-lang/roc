@@ -13,7 +13,7 @@ module # Comment after module keyword
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare ~~~
+KwModule LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperIdent Comma LineComment CloseSquare ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -30,6 +30,10 @@ module [
 	SomeType,
 ]
 
+# Comment after module keyword
+# Comment After exposes open
+# Comment after exposed item
+# Comment after final exposed item
 ~~~
 # EXPECTED
 NIL

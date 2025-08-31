@@ -23,7 +23,7 @@ TagType := [Some(_), None]
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColon Underscore UpperIdent OpColonEqual Underscore UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpColonEqual Underscore OpArrow Underscore UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent Comma Underscore CloseRound UpperIdent OpColonEqual OpenSquare UpperIdent OpenRound Underscore CloseRound Comma UpperIdent CloseSquare ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon Underscore BlankLine UpperIdent OpColonEqual Underscore BlankLine UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound BlankLine UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly BlankLine UpperIdent OpColonEqual Underscore OpArrow Underscore BlankLine UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent Comma Underscore CloseRound BlankLine UpperIdent OpColonEqual OpenSquare UpperIdent OpenRound Underscore CloseRound Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -43,32 +43,104 @@ TagType := [Some(_), None]
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:10 to 3:11
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 5:14 to 5:15
+**underscore_in_type_alias.md:3:10:3:11:**
+```roc
+MyType : _
+```
+         ^
 
-**Pattern in Expression Context**
-at 7:21 to 7:22
 
-**Pattern in Expression Context**
-at 9:24 to 9:25
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 11:17 to 11:18
+**underscore_in_type_alias.md:5:14:5:15:**
+```roc
+OtherType := _
+```
+             ^
 
-**Pattern in Expression Context**
-at 11:22 to 11:23
 
-**Pattern in Expression Context**
-at 13:15 to 13:16
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 13:23 to 13:24
+**underscore_in_type_alias.md:7:21:7:22:**
+```roc
+ComplexType := List(_)
+```
+                    ^
 
-**Pattern in Expression Context**
-at 15:18 to 15:19
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:9:24:9:25:**
+```roc
+RecordType := { field: _, other: U32 }
+```
+                       ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:11:17:11:18:**
+```roc
+FunctionType := _ -> _
+```
+                ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:11:22:11:23:**
+```roc
+FunctionType := _ -> _
+```
+                     ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:13:15:13:16:**
+```roc
+TupleType := (_, U32, _)
+```
+              ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:13:23:13:24:**
+```roc
+TupleType := (_, U32, _)
+```
+                      ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_type_alias.md:15:18:15:19:**
+```roc
+TagType := [Some(_), None]
+```
+                 ^
+
 
 # CANONICALIZE
 ~~~clojure

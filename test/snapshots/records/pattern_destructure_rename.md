@@ -40,8 +40,16 @@ match person
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:38 to 2:40
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**pattern_destructure_rename.md:2:5:2:92:**
+```roc
+    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

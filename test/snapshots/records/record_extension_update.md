@@ -21,14 +21,38 @@ age
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:13
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:13 to 1:16
+**record_extension_update.md:1:1:1:13:**
+```roc
+{ ..person, age: 31, active: True }
+```
+^^^^^^^^^^^^
 
-**Unsupported Node**
-at 1:13 to 1:16
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **age** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_extension_update.md:1:13:1:16:**
+```roc
+{ ..person, age: 31, active: True }
+```
+            ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_extension_update.md:1:13:1:16:**
+```roc
+{ ..person, age: 31, active: True }
+```
+            ^^^
+
 
 # CANONICALIZE
 ~~~clojure

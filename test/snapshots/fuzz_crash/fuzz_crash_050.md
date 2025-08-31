@@ -23,20 +23,45 @@ module []
 _
 0 = {
 	)
- 
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:1 to 3:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+ ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:12 to 3:2
+**fuzz_crash_050.md:2:1:3:2:**
+```roc
+)
+ 
+```
 
-**Pattern in Expression Context**
-at 1:9 to 1:10
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_050.md:1:12:3:2:**
+```roc
+module[]_0={
+)
+ 
+```
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**fuzz_crash_050.md:1:9:1:10:**
+```roc
+module[]_0={
+```
+        ^
+
 
 # CANONICALIZE
 ~~~clojure

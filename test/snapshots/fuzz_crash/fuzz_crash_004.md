@@ -18,7 +18,7 @@ UpperIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+F
 ~~~
 # EXPECTED
 NIL

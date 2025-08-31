@@ -35,21 +35,49 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 # FORMATTED
 ~~~roc
 0o0.0 | 0
-0_0_0
-0u8 | 0
-0__
+0_0
+_
+0
+0
+u8 | 0
+0_
+_
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:4
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Pattern in Expression Context**
-at 2:2 to 2:3
+**fuzz_crash_015.md:1:1:1:4:**
+```roc
+0o0.0
+```
+^^^
 
-**Pattern in Expression Context**
-at 4:2 to 4:3
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**fuzz_crash_015.md:2:2:2:3:**
+```roc
+0_0
+```
+ ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**fuzz_crash_015.md:4:2:4:3:**
+```roc
+0_
+```
+ ^
+
 
 # CANONICALIZE
 ~~~clojure

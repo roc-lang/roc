@@ -39,7 +39,7 @@ transform = |_, b| b
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpColon Underscore OpArrow Underscore LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpColon UpperIdent OpenRound Underscore CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent LowerIdent OpColon UpperIdent OpenRound Underscore Comma UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent OpenRound Underscore CloseRound OpFatArrow String Comma UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent Comma CloseCurly LowerIdent OpColon OpenRound LowerIdent OpArrow LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar Underscore Comma Underscore OpBar OpenSquare CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar Underscore Comma LowerIdent OpBar LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow Underscore LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound Underscore CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound Underscore Comma UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent OpenRound Underscore CloseRound OpFatArrow String Comma UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent Comma CloseCurly BlankLine LineComment LowerIdent OpColon OpenRound LowerIdent OpArrow LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar Underscore Comma Underscore OpBar OpenSquare CloseSquare BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar Underscore Comma LowerIdent OpBar LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -58,40 +58,87 @@ get_data : {field : _, other : U32} -> U32
 get_data = |record| record.other
 handle_result : Result(_, Str) -> Str
 handle_result = |result| match result
-	Ok(_) => "success" => Err(msg) => (
-		msg,
-	)
- = |_, _| []
+	Ok(_) => "success" => (Err(msg) => msg)
+
+map :
+	(a -> b) -> List a -> List b
+map = |_, _| []
 transform :
 	(_a -> _b) -> _b
-transform = |_, b| b
+transform = |_, b| b# Function with underscore in annotation
+# Record with underscore
+# Pattern matching with underscore type annotation
+# Underscore in function arguments
+# Named underscore type variables
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 23:5 to 26:1
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Parse Error**
-at 26:25 to 27:5
+**underscore_in_regular_annotations.md:3:8:3:9:**
+```roc
+main : _ -> _
+```
+       ^
 
-**Pattern in Expression Context**
-at 3:8 to 3:9
 
-**Pattern in Expression Context**
-at 3:13 to 3:14
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 10:16 to 10:17
+**underscore_in_regular_annotations.md:3:13:3:14:**
+```roc
+main : _ -> _
+```
+            ^
 
-**Pattern in Expression Context**
-at 14:21 to 14:22
 
-**Pattern in Expression Context**
-at 18:24 to 18:25
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Unsupported Node**
-at 22:18 to 22:20
+**underscore_in_regular_annotations.md:10:16:10:17:**
+```roc
+process : List(_) -> Str
+```
+               ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_regular_annotations.md:14:21:14:22:**
+```roc
+get_data : { field: _, other: U32 } -> U32
+```
+                    ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_in_regular_annotations.md:18:24:18:25:**
+```roc
+handle_result : Result(_, Str) -> Str
+```
+                       ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_in_regular_annotations.md:21:9:22:20:**
+```roc
+        Ok(_) => "success",
+        Err(msg) => msg,
+```
+
 
 # CANONICALIZE
 ~~~clojure
@@ -161,6 +208,23 @@ at 22:18 to 22:20
     (Expr.lambda)
   )
   (Expr.binop_colon
+    (Expr.lookup "map")
+    (Expr.binop_thin_arrow
+      (Expr.binop_thin_arrow
+        (Expr.lookup "a")
+        (Expr.lookup "b")
+      )
+      (Expr.binop_thin_arrow
+        (Expr.apply_tag)
+        (Expr.apply_tag)
+      )
+    )
+  )
+  (Expr.binop_equals
+    (Expr.lookup "map")
+    (Expr.lambda)
+  )
+  (Expr.binop_colon
     (Expr.lookup "transform")
     (Expr.binop_thin_arrow
       (Expr.binop_thin_arrow
@@ -187,5 +251,6 @@ identity : _c
 process : _c
 get_data : _c
 handle_result : _c
+map : _c
 transform : _c
 ~~~

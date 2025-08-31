@@ -13,7 +13,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
+OpenSquare Int Comma Int Comma LineComment Int Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
 (list_literal
@@ -28,7 +28,7 @@ OpenSquare Int Comma Int Comma Int Comma CloseSquare ~~~
 	1,
 	2,
 	3,
-]
+]# Foo
 ~~~
 # EXPECTED
 NIL

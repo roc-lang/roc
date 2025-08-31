@@ -22,36 +22,35 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
 )
   (branch1     (binop_thick_arrow
       (list_literal
-        (unary_double_dot <unary>)
+        (double_dot_lc "items")
       )
-      (num_literal_i32 1)
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (lc "first")
-        (unary_double_dot <unary>)
-      )
-      (lc "first")
-    )
-)
-  (branch3     (binop_thick_arrow
-      (list_literal
-        (unary_double_dot <unary>)
-        (lc "last")
-      )
-      (lc "last")
-    )
-)
-  (branch4     (binop_thick_arrow
-      (list_literal
-        (lc "first")
-        (unary_double_dot <unary>)
-        (lc "last")
-      )
-      (binop_plus
-        (lc "first")
-        (lc "last")
+      (block
+        (num_literal_i32 1)
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (unary_double_dot <unary>)
+          )
+          (lc "first")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (unary_double_dot <unary>)
+            (lc "last")
+          )
+          (lc "last")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (unary_double_dot <unary>)
+            (lc "last")
+          )
+          (binop_plus
+            (lc "first")
+            (lc "last")
+          )
+        )
       )
     )
 ))
@@ -59,25 +58,27 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
 # FORMATTED
 ~~~roc
 match data
-	[..] => 1
-	[first, ..] => first
-	[.., last] => last
-	[first, .., last] => first + last
+	[..items] => 
+		1
+		[first, ..items] => first
+		[..items, last] => last
+		[first, ..items, last] => first + last
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:15 to 2:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:21
+**list_rest_scoping_variables.md:2:5:5:43:**
+```roc
+    [..items] => 1
+    [first, ..items] => first
+    [..items, last] => last
+    [first, ..items, last] => first + last
+```
 
-**Unsupported Node**
-at 4:21 to 4:23
-
-**Unsupported Node**
-at 5:5 to 5:27
 
 # CANONICALIZE
 ~~~clojure

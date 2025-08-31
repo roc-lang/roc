@@ -17,7 +17,6 @@ KwModule OpenSquare CloseSquare ~~~
 # FORMATTED
 ~~~roc
 module []
-
 ~~~
 # EXPECTED
 NIL

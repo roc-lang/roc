@@ -37,17 +37,50 @@ app
 # EXPECTED
 NIL
 # PROBLEMS
-**Expected String**
-at 1:1 to 1:22
+**EXPECTED STRING**
+A parsing error occurred: **expected_package_or_platform_string**
+This is an unexpected parsing error. Please check your syntax.
 
-**Expected Close Curly Brace**
-at 1:1 to 1:22
+**fuzz_crash_058.md:1:1:1:22:**
+```roc
+app[]{f:platform"",r:"
+```
+^^^^^^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 1:22 to 2:1
 
-**Parse Error**
-at 2:1 to 2:2
+**EXPECTED CLOSE CURLY BRACE**
+A parsing error occurred: **expected_package_platform_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_058.md:1:1:1:22:**
+```roc
+app[]{f:platform"",r:"
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_058.md:1:22:2:1:**
+```roc
+app[]{f:platform"",r:"
+}
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_058.md:2:1:2:2:**
+```roc
+}
+```
+^
+
 
 # CANONICALIZE
 ~~~clojure

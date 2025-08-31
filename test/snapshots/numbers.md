@@ -36,34 +36,16 @@ OpenRound Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comm
   (num_literal_big big:<idx:44>)
   (num_literal_big big:<idx:55>)
   (num_literal_big big:<idx:66>)
-  (malformed malformed:expr_unexpected_token)
 )
 ~~~
 # FORMATTED
 ~~~roc
-(
-	0x42,
-	0x42,
-	0b01,
-	0b01,
-	0o42,
-	0o42,
-	0.1e42,
-	0.1E42,
-	0xDEADBEEF,
-	0xdeadbeef,
-	0xDeAdBeEf,
-)
+(0x42, 0x42, 0b01, 0b01, 0o42, 0o42, 0.1e42, 0.1E42, 0xDEADBEEF, 0xdeadbeef, 0xDeAdBeEf)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 13:1 to 13:2
-
-**Parse Error**
-at 13:2 to 13:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.tuple_literal
@@ -78,7 +60,6 @@ at 13:2 to 13:2
   (Expr.num_literal_big)
   (Expr.num_literal_big)
   (Expr.num_literal_big)
-  (Expr.malformed)
 )
 ~~~
 # SOLVED

@@ -11,14 +11,16 @@ foo = if tru 0
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign KwIf LowerIdent Int ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign KwIf LowerIdent Int ~~~
 # PARSE
 ~~~clojure
 (module-header)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+foo = if tru 0
 ~~~
 # EXPECTED
 NIL

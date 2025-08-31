@@ -18,7 +18,7 @@ KwModule OpenSquare CloseSquare OpenRound OpenCurly CloseCurly CloseRound OpenRo
 ~~~roc
 module []
 
-{  }(!{
+{}(!{
 	0
 })
 ~~~

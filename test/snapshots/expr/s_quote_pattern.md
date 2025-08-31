@@ -21,20 +21,21 @@ KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow Triple
 )
   (branch1     (binop_thick_arrow
       (list_literal
-        (str_literal_small "#")
+        (malformed malformed:pattern_unexpected_token)
       )
-      (ellipsis)
+      (block
+        (ellipsis)
+        (binop_thick_arrow
+          (list_literal
+            (str_literal_small "a")
+            (str_literal_small "b")
+          )
+          (ellipsis)
+        )
+      )
     )
 )
   (branch2     (binop_thick_arrow
-      (list_literal
-        (str_literal_small "a")
-        (str_literal_small "b")
-      )
-      (ellipsis)
-    )
-)
-  (branch3     (binop_thick_arrow
       (underscore)
       (ellipsis)
     )
@@ -43,28 +44,35 @@ KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow Triple
 # FORMATTED
 ~~~roc
 match ...
-	['#'] => ...
-	['a', 'b'] => ...
-	_ => ...
-}] => ...
-	['a', 'b'] => ...
-	_ => ...
-}, 'b'] => ...
-	_ => ...
-}] => ...
+	['#'] => 
+		...
+		['a', 'b'] => ...
 	_ => ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:8 to 2:10
+**UNEXPECTED TOKEN IN PATTERN**
+The token **'#'** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
-**Unsupported Node**
-at 3:2 to 3:12
+**s_quote_pattern.md:2:3:2:6:**
+```roc
+	['#'] => ...
+```
+	 ^^^
 
-**Unsupported Node**
-at 4:4 to 4:6
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**s_quote_pattern.md:2:2:3:19:**
+```roc
+	['#'] => ...
+	['a', 'b'] => ...
+```
+
 
 # CANONICALIZE
 ~~~clojure

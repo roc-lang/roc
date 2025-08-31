@@ -215,843 +215,42 @@ expect {
 ~~~
 # TOKENS
 ~~~text
-LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang Comma CloseSquare KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent KwAs UpperIdent Comma UpperIdent Dot OpStar CloseSquare KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent KwAs UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LowerIdent Comma LowerIdent Comma CloseRound OpColon UpperIdent OpenRound LowerIdent Comma CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent Comma CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent Comma CloseRound UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent Comma CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent Comma CloseSquare UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg LowerIdent OpenRound CloseRound Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent Comma OpBar KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly LowerIdent OpFatArrow Int String OpFatArrow Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent Comma CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent Comma CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int Comma CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound String Comma UpperIdent OpenRound String CloseRound CloseRound OpFatArrow Int CloseCurly KwExpect LowerIdent OpEquals Int LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LowerIdent TripleDot LowerIdent OpenRound TripleDot Comma CloseRound LowerIdent OpenRound KwDbg Int Comma CloseRound KwCrash String LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LowerIdent Comma CloseRound Comma Int Comma Int Comma CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma MalformedUnknownToken LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseCurly KwAs LowerIdent LowerIdent OpQuestion MalformedString CloseRound CloseCurly LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound KwExpect OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
+LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare BlankLine KwImport LineComment LowerIdent LineComment Dot UpperIdent LineComment KwExposing OpenSquare LineComment LowerIdent OpBang Comma LineComment LowerIdent OpBang Comma LineComment CloseSquare LineComment BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma UpperIdent KwAs UpperIdent Comma UpperIdent Dot OpStar CloseSquare BlankLine KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent KwAs UpperIdent BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LineComment LowerIdent Comma LineComment LowerIdent Comma CloseRound LineComment OpColon LineComment UpperIdent OpenRound LineComment LowerIdent Comma LineComment CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow LineComment UpperIdent OpenRound LineComment LowerIdent Comma CloseRound LineComment BlankLine UpperIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound BlankLine UpperIdent OpColon OpenRound LineComment UpperIdent Comma LineComment UpperIdent Comma LineComment CloseRound LineComment BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpColon UpperIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LineComment LowerIdent OpColon UpperIdent Comma LineComment CloseCurly BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LineComment LowerIdent LineComment OpColon LineComment UpperIdent OpenRound LowerIdent CloseRound Comma LineComment LowerIdent OpColon UpperIdent Comma LineComment CloseCurly LineComment BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare LineComment UpperIdent OpenRound LowerIdent CloseRound Comma LineComment UpperIdent Comma LineComment CloseSquare LineComment BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int KwIf LowerIdent OpenCurly KwDbg LineComment LowerIdent OpenRound CloseRound LineComment Int CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly BlankLine LowerIdent OpAssign OpBar LowerIdent Comma LineComment LowerIdent Comma OpBar LineComment KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly UpperIdent LineComment OpBar LineComment UpperIdent OpBar UpperIdent LineComment OpFatArrow OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly LowerIdent LineComment OpFatArrow Int String OpFatArrow LineComment Int String OpBar String OpFatArrow Int OpenSquare Int Comma Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare LineComment OpFatArrow LineComment Int LineComment BlankLine LineComment BlankLine OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare Int Comma Int OpBar Int Comma Int Comma DoubleDot LineComment KwAs LineComment LowerIdent Comma LineComment CloseSquare OpFatArrow Int Float OpFatArrow Int Float OpBar Float OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound OpFatArrow Int OpenRound Int Comma Int OpBar Int Comma Int CloseRound OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int Comma DoubleDot LowerIdent CloseCurly OpFatArrow Int OpArrow LowerIdent OpenRound Int CloseRound OpenCurly LineComment LowerIdent LineComment OpColon LineComment Int Comma LineComment LowerIdent OpColon Int Comma DoubleDot LineComment LowerIdent Comma LineComment CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int CloseCurly OpFatArrow Int OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int OpBar Int Comma LineComment CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int UpperIdent OpenRound UpperIdent OpenRound LowerIdent CloseRound CloseRound OpFatArrow LowerIdent UpperIdent OpenRound String Comma UpperIdent OpenRound String CloseRound CloseRound OpFatArrow Int CloseCurly BlankLine KwExpect LineComment LowerIdent OpEquals Int LineComment BlankLine LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent OpEquals Int LowerIdent OpAssign UpperIdent KwReturn LineComment LowerIdent LineComment BlankLine LineComment BlankLine TripleDot LowerIdent OpenRound TripleDot Comma LineComment CloseRound LowerIdent OpenRound KwDbg LineComment Int Comma LineComment CloseRound KwCrash LineComment String LineComment LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound KwDbg LineComment LowerIdent Comma LineComment CloseRound Comma LineComment Int Comma LineComment Int Comma LineComment CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma MalformedUnknownToken LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent OpenRound LowerIdent CloseRound Comma LineComment OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpAssign UpperIdent OpenRound LowerIdent CloseRound OpDoubleQuestion Int OpGreaterThan Int OpStar Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int OpSlash Int LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound LowerIdent CloseRound OpQuestion UpperIdent Dot LowerIdent OpBang OpenRound MalformedString UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LineComment CloseCurly KwAs LowerIdent LowerIdent OpQuestion MalformedString CloseRound CloseCurly LineComment BlankLine LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound BlankLine KwExpect OpenCurly LowerIdent OpAssign Int LineComment LowerIdent OpAssign Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (block
+(app-header
+  (packages
     (binop_colon
       (lc "pf")
-      (str_literal_big "../basic-cli/platform.roc")
-    )
-    (malformed malformed:expr_unexpected_token)
-    (list_literal
-      (not_lc "main")
-    )
-  )
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "pf")
-        (uc "Stdout")
-      )
-      (list_literal
-        (lc "line")
-        (lc "write")
-      )
-    )
-  )
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "pf")
-        (uc "StdoutMultiline")
-      )
-      (list_literal
-        (lc "line")
-        (lc "write")
-      )
-    )
-  )
-  (import
-    (binop_exposing
-      (binop_pipe
-        (lc "pkg")
-        (uc "Something")
-      )
-      (list_literal
-        (lc "func")
-      )
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (lc "function")
-  (malformed malformed:expr_unexpected_token)
-  (uc "Type")
-  (malformed malformed:expr_unexpected_token)
-  (uc "ValueCategory")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_dot_suffix_not_allowed)
-  (malformed malformed:expr_unexpected_token)
-  (import
-    (binop_as
-      (uc "BadName")
-      (uc "GoodName")
-    )
-  )
-  (import
-    (binop_as
-      (uc "BadNameMultiline")
-      (uc "GoodNameMultiline")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Map")
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-      )
-    )
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (lc "a")
-      )
-      (binop_thin_arrow
-        (binop_thin_arrow
-          (lc "a")
-          (lc "b")
-        )
-        (apply_uc
-          (uc "List")
-          (lc "b")
-        )
-      )
-    )
-  )
-  (apply_uc
-    (uc "MapML")
-    (binop_colon
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-        (malformed malformed:expr_unexpected_token)
-      )
-      (apply_uc
-        (uc "List")
-        (binop_thin_arrow
-          (lc "a")
-          (binop_thin_arrow
-            (malformed malformed:expr_unexpected_token)
-            (binop_thin_arrow
-              (binop_thin_arrow
-                (lc "a")
-                (lc "b")
-              )
-              (apply_uc
-                (uc "List")
-                (tuple_literal
-                  (lc "b")
-                  (malformed malformed:expr_unexpected_token)
-                )
-              )
-            )
-          )
-        )
-      )
-    )
-  )
-  (binop_colon
-    (uc "Foo")
-    (tuple_literal
-      (uc "Bar")
-      (uc "Baz")
-    )
-  )
-  (binop_colon
-    (uc "FooMultiline")
-    (tuple_literal
-      (uc "Bar")
-      (uc "Baz")
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Some")
-      (lc "a")
-    )
-    (record_literal
-      (binop_colon
-        (lc "foo")
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-      )
-      (binop_colon
-        (lc "bar")
-        (uc "Something")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "SomeMl")
-      (lc "a")
-    )
-    (record_literal
-      (binop_colon
-        (lc "foo")
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-      )
-      (binop_colon
-        (lc "bar")
-        (uc "Something")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "SomeMultiline")
-      (lc "a")
-    )
-    (record_literal
-      (binop_colon
-        (lc "foo")
-        (apply_uc
-          (uc "Ok")
-          (lc "a")
-        )
-      )
-      (binop_colon
-        (lc "bar")
-        (uc "Something")
-      )
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "Maybe")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "MaybeMultiline")
-      (lc "a")
-    )
-    (list_literal
-      (apply_uc
-        (uc "Some")
-        (lc "a")
-      )
-      (uc "None")
-    )
-  )
-  (binop_colon
-    (apply_uc
-      (uc "SomeFunc")
-      (lc "a")
-    )
-    (binop_thin_arrow
-      (apply_uc
-        (uc "Maybe")
-        (lc "a")
-      )
-      (binop_thin_arrow
-        (lc "a")
-        (apply_uc
-          (uc "Maybe")
-          (lc "a")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "add_one_oneline")
-    (lambda
-      (body
-        (if_else
-          (condition             (lc "num")
-)
-          (then             (num_literal_i32 2)
-)
-          (else             (num_literal_i32 5)
-))
-      )
-      (args
-        (lc "num")
-      )
-    )
-  )
-  (binop_colon
-    (lc "add_one")
-    (binop_thin_arrow
-      (uc "U64")
-      (uc "U64")
-    )
-  )
-  (binop_equals
-    (lc "add_one")
-    (lambda
-      (body
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
         (block
-          (binop_equals
-            (lc "other")
-            (num_literal_i32 1)
-          )
-          (if_else
-            (condition               (lc "num")
-)
-            (then               (block
-                (malformed malformed:expr_unexpected_token)
-                (apply_lc
-                  (lc "some_func")
-                )
-                (num_literal_i32 0)
-              )
-)
-            (else               (block
-                (malformed malformed:expr_unexpected_token)
-                (num_literal_i32 123)
-                (binop_colon
-                  (lc "other")
-                  (lc "other")
-                )
-              )
+          (not_lc "main")
+        )
+      )
+    )
 ))
-        )
-      )
-      (args
-        (lc "num")
-      )
-    )
-  )
-  (binop_equals
-    (lc "match_time")
-    (lambda
-      (body
-        (match
-          (scrutinee             (lc "a")
-))
-      )
-      (args
-        (lc "a")
-        (lc "b")
-      )
-    )
-  )
-  (uc "Green")
-  (malformed malformed:expr_unexpected_token)
-  (block
-    (binop_equals
-      (lc "x")
-      (num_literal_i32 12)
-    )
-    (lc "x")
-  )
-  (uc "Blue")
-  (lambda
-    (body
-      (binop_thick_arrow
-        (uc "Red")
-        (block
-          (binop_equals
-            (lc "x")
-            (num_literal_i32 12)
-          )
-          (binop_colon
-            (lc "x")
-            (lc "x")
-          )
-        )
-      )
-    )
-    (args
-      (uc "Green")
-    )
-  )
-  (lc "lower")
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 1)
-  (str_literal_small "foo")
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 100)
-  (str_literal_small "foo")
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 200)
-  (list_literal
-    (num_literal_i32 1)
-    (num_literal_i32 2)
-    (num_literal_i32 3)
-    (unary_double_dot <unary>)
-  )
-  (lc "rest")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 123)
-  (list_literal
-    (num_literal_i32 1)
-    (num_literal_i32 2)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 123)
-  (list_literal
-    (num_literal_i32 1)
-    (num_literal_i32 2)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 123)
-  (frac_literal_small 3.14)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 314)
-  (frac_literal_small 3.14)
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (num_literal_i32 314)
-    (tuple_literal
-      (num_literal_i32 1)
-      (num_literal_i32 2)
-      (num_literal_i32 3)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (num_literal_i32 123)
-    (tuple_literal
-      (num_literal_i32 1)
-      (num_literal_i32 2)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 123)
-  (record_literal
-    (binop_colon
-      (lc "foo")
-      (num_literal_i32 1)
-    )
-    (binop_colon
-      (lc "bar")
-      (num_literal_i32 2)
-    )
-    (double_dot_lc "rest")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 12)
-  (malformed malformed:expr_unexpected_token)
-  (apply_lc
-    (lc "add")
-    (num_literal_i32 34)
-  )
-  (record_literal
-    (binop_colon
-      (lc "foo")
-      (num_literal_i32 1)
-    )
-    (binop_colon
-      (lc "bar")
-      (num_literal_i32 2)
-    )
-    (double_dot_lc "rest")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 12)
-  (record_literal
-    (binop_colon
-      (lc "foo")
-      (num_literal_i32 1)
-    )
-    (binop_colon
-      (lc "bar")
-      (num_literal_i32 2)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 12)
-  (record_literal
-    (binop_colon
-      (lc "foo")
-      (num_literal_i32 1)
-    )
-    (binop_colon
-      (lc "bar")
-      (num_literal_i32 2)
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 12)
-  (apply_uc
-    (uc "Ok")
-    (num_literal_i32 123)
-  )
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 123)
-  (apply_uc
-    (uc "Ok")
-    (apply_uc
-      (uc "Some")
-      (lc "dude")
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (lc "dude")
-  (apply_uc
-    (uc "TwoArgs")
-    (tuple_literal
-      (str_literal_big "hello")
-      (apply_uc
-        (uc "Some")
-        (str_literal_big "world")
-      )
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 1000)
-  (malformed malformed:expr_unexpected_token)
-  (expect
-    (binop_double_equals
-      (lc "blah")
-      (num_literal_i32 1)
-    )
-  )
-  (binop_colon
-    (not_lc "main")
-    (binop_thin_arrow
-      (apply_uc
-        (uc "List")
-        (uc "String")
-      )
-      (apply_uc
-        (uc "Result")
-        (tuple_literal
-          (record_literal)
-          (underscore)
-        )
-      )
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
-        (record_literal
-          (binop_equals
-            (lc "world")
-            (str_literal_big "World")
-          )
-          (binop_equals
-            (var_lc "number")
-            (num_literal_i32 123)
-          )
-          (expect
-            (binop_double_equals
-              (lc "blah")
-              (num_literal_i32 1)
-            )
-          )
-          (binop_equals
-            (lc "tag")
-            (uc "Blue")
-          )
-          (ret <statement>)
-          (ellipsis)
-          (apply_lc
-            (lc "match_time")
-            (tuple_literal
-              (ellipsis)
-              (malformed malformed:expr_unexpected_token)
-            )
-          )
-          (apply_lc
-            (lc "some_func")
-            (malformed malformed:expr_unexpected_token)
-          )
-          (num_literal_i32 42)
-          (malformed malformed:expr_unexpected_token)
-        )
-      )
-      (args
-        (underscore)
-      )
-    )
-  )
-  (crash <statement>)
-  (binop_equals
-    (lc "tag_with_payload")
-    (apply_uc
-      (uc "Ok")
-      (lc "number")
-    )
-  )
-  (binop_equals
-    (lc "interpolated")
-    (str_literal_big "Hello, ${world}")
-  )
-  (binop_equals
-    (lc "list")
-    (list_literal
-      (apply_lc
-        (lc "add_one")
-        (malformed malformed:expr_unexpected_token)
-      )
-    )
-  )
-  (lc "number")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 456)
-  (malformed malformed:expr_unexpected_token)
-  (num_literal_i32 789)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (for_loop
-    (lc "n")
-    (lc "list")
-    (block
-      (apply_anon
-        (binop_pipe
-          (uc "Stdout")
-          (not_lc "line")
-        )
-        (str_literal_big "Adding ${n} to ${number}")
-      )
-      (binop_equals
-        (lc "number")
-        (binop_plus
-          (lc "number")
-          (lc "n")
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "record")
-    (record_literal
-      (binop_colon
-        (lc "foo")
-        (num_literal_i32 123)
-      )
-      (binop_colon
-        (lc "bar")
-        (str_literal_big "Hello")
-      )
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-  (binop_colon
-    (lc "az")
-    (tuple_literal
-      (binop_colon
-        (tuple_literal
-          (lc "tag")
-          (lc "qux")
-        )
-        (apply_uc
-          (uc "Ok")
-          (lc "world")
-        )
-      )
-      (lc "punned")
-    )
-  )
-  (malformed malformed:expr_unexpected_token)
-  (binop_equals
-    (lc "tuple")
-    (tuple_literal
-      (num_literal_i32 123)
-      (str_literal_big "World")
-      (lc "tag")
-      (apply_uc
-        (uc "Ok")
-        (lc "world")
-      )
-      (tuple_literal
-        (lc "nested")
-        (lc "tuple")
-      )
-      (list_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
-    )
-  )
-  (binop_equals
-    (lc "multiline_tuple")
-    (tuple_literal
-      (num_literal_i32 123)
-      (str_literal_big "World")
-      (lc "tag1")
-      (apply_uc
-        (uc "Ok")
-        (lc "world")
-      )
-      (tuple_literal
-        (lc "nested")
-        (lc "tuple")
-      )
-      (list_literal
-        (num_literal_i32 1)
-        (num_literal_i32 2)
-        (num_literal_i32 3)
-      )
-      (malformed malformed:expr_unexpected_token)
-    )
-  )
-  (binop_equals
-    (lc "bin_op_result")
-    (binop_or
-      (binop_or
-        (binop_gt
-          (binop_double_question
-            (apply_uc
-              (uc "Err")
-              (lc "foo")
-            )
-            (num_literal_i32 12)
-          )
-          (binop_star
-            (num_literal_i32 5)
-            (num_literal_i32 5)
-          )
-        )
-        (binop_and
-          (binop_lt
-            (binop_plus
-              (num_literal_i32 13)
-              (num_literal_i32 2)
-            )
-            (num_literal_i32 5)
-          )
-          (binop_gte
-            (binop_minus
-              (num_literal_i32 10)
-              (num_literal_i32 1)
-            )
-            (num_literal_i32 16)
-          )
-        )
-      )
-      (binop_lte
-        (num_literal_i32 12)
-        (binop_slash
-          (num_literal_i32 3)
-          (num_literal_i32 5)
-        )
-      )
-    )
-  )
-  (binop_equals
-    (lc "static_dispatch_style")
-    (apply_lc
-      (lc "some_fn")
-      (lc "arg1")
-    )
-  )
-  (apply_anon
-    (binop_pipe
-      (malformed malformed:expr_unexpected_token)
-      (dot_lc "static_dispatch_method")
-    )
-  )
-  (apply_anon
-    (binop_pipe
-      (malformed malformed:expr_unexpected_token)
-      (dot_lc "next_static_dispatch_method")
-    )
-  )
-  (binop_pipe
-    (malformed malformed:expr_unexpected_token)
-    (dot_lc "record_field")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (binop_pipe
-      (uc "Stdout")
-      (not_lc "line")
-    )
-    (lc "interpolated")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (apply_anon
-    (binop_pipe
-      (uc "Stdout")
-      (not_lc "line")
-    )
-    (malformed malformed:expr_unexpected_token)
-  )
-  (apply_anon
-    (binop_pipe
-      (uc "Num")
-      (dot_lc "toStr")
-    )
-    (lc "number")
-  )
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (lc "a")
-  (lc "string")
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (binop_colon
-    (lc "empty")
-    (record_literal)
-  )
-  (binop_equals
-    (lc "empty")
-    (record_literal)
-  )
-  (binop_colon
-    (lc "tuple")
-    (apply_uc
-      (uc "Value")
-      (tuple_literal
-        (lc "a")
-        (lc "b")
-        (lc "c")
-      )
-    )
-  )
-  (expect
-    (block
-      (binop_equals
-        (lc "foo")
-        (num_literal_i32 1)
-      )
-      (binop_equals
-        (lc "blah")
-        (num_literal_i32 1)
-      )
-      (binop_double_equals
-        (lc "blah")
-        (lc "foo")
-      )
-    )
-  )
-)
 ~~~
 # FORMATTED
 ~~~roc
 # This is a module comment!
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
-app {
-	pf : "../basic-cli/platform.roc"
-	platform 
-	[main!]
-}
-import pf.Stdout exposing [line, write]
+import pf.Stdout exposing [line!, write!]
 import pf.StdoutMultiline exposing [
-	line,
-	write,
+	line!,
+	write!,
 ]
 import pkg.Something exposing [func]
-as function, Type
-as ValueCategory, 
-.*]
+as 
+function
+, 
+Type
+as 
+ValueCategory
+, 
+.*
+]
 
 import BadName as GoodName
 import BadNameMultiline as GoodNameMultiline
@@ -1060,11 +259,8 @@ MapML(
 	(
 		a,
 		b,
-	) :
-		List (a -> ) -> (a -> b) -> List(b, ) # And after the type decl
-
-)),
-)
+	),
+) : List a -> (a -> b) -> List b
 Foo : (Bar, Baz)
 FooMultiline : (
 	Bar,
@@ -1104,57 +300,50 @@ add_one = |num| {
 		other : other
 	}
 }
+
 match_time = |a, b| match a
-Green
-=> {
-	x = 12
-	x
-}
-Blue
-|Green| Red => {
-	x = 12
-	x : x
-}
-lower
-=> 1
-"foo"
-=> # After arrow comment
-			100
-"foo"
-=> 200
-[1, 2, 3, ..as ]rest] # After pattern comment
-			=> # After arrow comment
-				123
-[1, 2]
-rest] => 123
-[1, 2]
-rest, # After last pattern in list
+	(Blue || Green) || Red => 
+		x = 12
+		x : x
+	(Blue || Green) || Red => 
+		{
+			x = 12
+			x : x
+		}
+		lower => 1
+		"foo" => 100
+		"foo"
+		=> 
+		200
+		[1, 2, 3, ..as ]
+		rest
+		] # After pattern comment
+			 => 123
+		[1, 2]
+		rest
 		] => 123
-3.14
-=> 314
-3.14
-=> 314((1, 2, 3))
-=> 123((1, 2))
-) => 123
-{ foo : 1, bar : 2, ..rest }
-=> 12-->add(34)
-{
-	foo : 1,
-	bar : 2,
-	..rest,
-}
-=> 12
-{ foo : 1, bar : 2 }
-} => 12
-{ foo : 1, bar : 2 }
-=> 12
-Ok(123)
-=> 123
-Ok(Some(dude))
-=> dude
-TwoArgs(("hello", Some("world")))
-=> 1000
-}
+		[1, 2]
+		rest
+		] => 123
+		3.14 => 314
+		3.14
+		=> 
+		123((1, 2))
+		) => 123
+		({ foo : 1, bar : 2, ..rest } => 12-) -> add(34)
+		{
+			foo : 1,
+			bar : 2,
+			..rest,
+		} => 12
+		{ foo : 1, bar : 2 }
+		} => 12
+		{ foo : 1, bar : 2 }
+		=> 
+		12
+	Ok(123) => 123
+	Ok(Some(dude)) => dude
+	TwoArgs("hello", Some("world")) => 1000
 
 expect blah == 1
 main! : List String -> Result({}, _)
@@ -1168,14 +357,13 @@ main! = |
 	return tag,
 	...,
 	match_time(
-		(
-			...,
-		),
+		...,
 	),
 	some_func(dbg # After debug
 			),
 	42,
 }
+
 crash "Unreachable!"
 tag_with_payload = Ok(number)
 interpolated = "Hello, ${world}"
@@ -1183,12 +371,22 @@ list = [
 	add_one(dbg # After dbg in list
 				),
 ]
-number, # after dbg expr as arg
-		), # Comment one
-		456, # Comment two
-		789, # Comment three
-	]
-	for n in list {
+
+number
+, # after dbg expr as arg
+		
+)
+, # Comment one
+		
+456
+, # Comment two
+		
+789
+, # Comment three
+	
+]
+	
+for n in list {
 	{
 		Stdout.line!("Adding ${n} to ${number}")
 		number = number + n
@@ -1207,360 +405,1033 @@ multiline_tuple = (
 	(nested, tuple),
 	[1, 2, 3],
 )
+
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
-? | .static_dispatch_method()? | .next_static_dispatch_method()? | .record_field?
-	Stdout.line!(interpolated)?
-	Stdout.line!("How about ${ # Comment after string interpolation open
-			)Num.toStr(number)
-} as a
-string?",
-	)
+? | .static_dispatch_method()
+? | .next_static_dispatch_method()
+? | .record_field
+?
+	
+Stdout.line!(interpolated)
+?
+	
+Stdout.line!("How about ${ # Comment after string interpolation open
+			)
+Num.toStr(number)
+} 
+as 
+a
+string
+?
+",
+	
+)
 } # Comment after top-level decl
 
 empty : {}
-empty = {  }
+empty = {}
 tuple : Value(a, b, c)
 expect {
 	foo = 1
 	blah = 1
 	blah == foo
-}
+}# This should work too
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:28 to 2:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 2:1 to 2:5
+**fuzz_crash_023.md:14:37:14:40:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+                                    ^^^
 
-**Parse Error**
-at 2:39 to 2:48
 
-**Parse Error**
-at 14:37 to 14:40
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 14:48 to 14:50
+**fuzz_crash_023.md:14:48:14:50:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+                                               ^^
 
-**Parse Error**
-at 14:55 to 14:58
 
-**Parse Error**
-at 14:71 to 14:73
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 14:79 to 14:81
+**fuzz_crash_023.md:14:55:14:58:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+                                                      ^^^
 
-**Parse Error**
-at 14:81 to 16:1
 
-**Parse Error**
-at 26:1 to 27:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 30:3 to 30:4
+**fuzz_crash_023.md:14:71:14:73:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+                                                                      ^^
 
-**Parse Error**
-at 34:4 to 36:1
 
-**Parse Error**
-at 32:4 to 36:1
+**PARSE ERROR**
+A parsing error occurred: **expr_dot_suffix_not_allowed**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 28:3 to 36:1
+**fuzz_crash_023.md:14:79:14:81:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+                                                                              ^^
 
-**Parse Error**
-at 23:1 to 36:1
 
-**Parse Error**
-at 41:1 to 43:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
 
-**Parse Error**
-at 43:1 to 43:1
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 71:3 to 72:4
+**fuzz_crash_023.md:14:81:16:1:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
 
-**Parse Error**
-at 75:3 to 75:7
+import BadName as GoodName
+```
 
-**Parse Error**
-at 85:3 to 85:10
 
-**Parse Error**
-at 85:22 to 85:25
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg # After debug
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 98:4 to 98:7
+**fuzz_crash_023.md:71:3:72:4:**
+```roc
+		dbg # After debug
+			some_func() # After debug expr
+```
 
-**Parse Error**
-at 99:9 to 100:4
 
-**Parse Error**
-at 101:17 to 101:20
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 102:16 to 102:19
+**fuzz_crash_023.md:75:3:75:7:**
+```roc
+		dbg 123
+```
+		^^^^
 
-**Parse Error**
-at 102:3 to 102:19
 
-**Parse Error**
-at 102:23 to 103:4
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 103:4 to 104:5
+**fuzz_crash_023.md:101:17:101:20:**
+```roc
+		"foo" | "bar" => 200
+```
+		              ^^^
 
-**Parse Error**
-at 108:3 to 108:9
 
-**Parse Error**
-at 108:20 to 108:23
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 108:23 to 108:27
+**fuzz_crash_023.md:102:16:102:19:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+```
+		             ^^^
 
-**Parse Error**
-at 108:27 to 108:29
 
-**Parse Error**
-at 108:29 to 108:32
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Parse Error**
-at 109:3 to 111:6
+**fuzz_crash_023.md:102:3:102:19:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+```
+		^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 114:5 to 115:6
 
-**Parse Error**
-at 115:6 to 115:10
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] # After pattern comment
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 115:10 to 116:3
+**fuzz_crash_023.md:102:23:103:4:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+			=> # After arrow comment
+```
 
-**Parse Error**
-at 116:3 to 116:5
 
-**Parse Error**
-at 116:5 to 116:8
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Parse Error**
-at 117:8 to 117:11
+**fuzz_crash_023.md:108:3:108:9:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		^^^^^^
 
-**Parse Error**
-at 118:15 to 118:18
 
-**Parse Error**
-at 119:13 to 119:16
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 119:16 to 120:9
+**fuzz_crash_023.md:108:20:108:23:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		                 ^^^
 
-**Parse Error**
-at 120:15 to 120:17
 
-**Parse Error**
-at 120:17 to 120:20
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **rest** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 121:30 to 121:33
+**fuzz_crash_023.md:108:23:108:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		                    ^^^^
 
-**Parse Error**
-at 121:35 to 121:37
 
-**Parse Error**
-at 129:5 to 129:8
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 130:3 to 130:20
+**fuzz_crash_023.md:108:27:108:29:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		                        ^^
 
-**Parse Error**
-at 130:24 to 130:26
 
-**Parse Error**
-at 130:26 to 130:29
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Parse Error**
-at 131:3 to 133:11
+**fuzz_crash_023.md:109:3:111:6:**
+```roc
+		[
+			1,
+			2 | 5,
+```
 
-**Parse Error**
-at 134:3 to 134:5
 
-**Parse Error**
-at 134:5 to 134:8
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as # Before alias
+					** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 135:11 to 135:14
+**fuzz_crash_023.md:114:5:115:6:**
+```roc
+				as # Before alias
+					rest, # After last pattern in list
+```
 
-**Parse Error**
-at 136:18 to 136:21
 
-**Parse Error**
-at 137:35 to 137:38
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **rest** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 138:2 to 140:1
+**fuzz_crash_023.md:115:6:115:10:**
+```roc
+					rest, # After last pattern in list
+```
+					^^^^
 
-**Parse Error**
-at 157:2 to 158:2
 
-**Parse Error**
-at 155:2 to 158:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 159:3 to 160:4
+**fuzz_crash_023.md:116:3:116:5:**
+```roc
+		] => 123
+```
+		^^
 
-**Parse Error**
-at 158:2 to 160:4
 
-**Parse Error**
-at 161:2 to 162:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 144:13 to 162:2
+**fuzz_crash_023.md:118:15:118:18:**
+```roc
+		3.14 | 6.28 => 314
+```
+		            ^^^
 
-**Parse Error**
-at 168:4 to 169:5
 
-**Parse Error**
-at 167:3 to 169:5
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 166:9 to 169:5
+**fuzz_crash_023.md:119:16:120:9:**
+```roc
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+```
 
-**Parse Error**
-at 169:11 to 170:3
 
-**Parse Error**
-at 170:3 to 170:4
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **) ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 170:4 to 171:3
+**fuzz_crash_023.md:120:15:120:17:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		            ^^
 
-**Parse Error**
-at 171:6 to 172:3
 
-**Parse Error**
-at 172:6 to 173:2
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 173:2 to 174:2
+**fuzz_crash_023.md:130:3:130:20:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		^^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 178:37 to 178:38
 
-**Parse Error**
-at 178:11 to 178:38
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 178:70 to 179:2
+**fuzz_crash_023.md:130:24:130:26:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		                     ^^
 
-**Parse Error**
-at 187:2 to 188:2
 
-**Parse Error**
-at 188:2 to 188:2
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 189:39 to 189:40
+**fuzz_crash_023.md:131:3:133:11:**
+```roc
+		{
+			foo: 1,
+			bar: 2 | 7, # After last record field
+```
 
-**Parse Error**
-at 189:65 to 189:66
 
-**Parse Error**
-at 189:96 to 189:97
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 189:110 to 190:2
+**fuzz_crash_023.md:134:3:134:5:**
+```roc
+		} => 12
+```
+		^^
 
-**Parse Error**
-at 190:28 to 191:2
 
-**Parse Error**
-at 192:3 to 193:4
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 191:2 to 193:4
+**fuzz_crash_023.md:134:5:134:8:**
+```roc
+		} => 12
+```
+		  ^^^
 
-**Parse Error**
-at 194:3 to 194:5
 
-**Parse Error**
-at 194:5 to 194:8
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg # After debug
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 194:16 to 194:17
+**fuzz_crash_023.md:159:3:160:4:**
+```roc
+		dbg # After debug
+			42, # After debug expr
+```
 
-**Parse Error**
-at 194:17 to 195:2
 
-**Parse Error**
-at 195:2 to 196:1
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 196:1 to 198:1
+**fuzz_crash_023.md:158:2:160:4:**
+```roc
+	some_func(
+		dbg # After debug
+			42, # After debug expr
+```
 
-**Unsupported Node**
-at 4:1 to 4:42
 
-**Unsupported Node**
-at 6:1 to 12:4
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 14:1 to 14:36
+**fuzz_crash_023.md:161:2:162:2:**
+```roc
+	)
+	crash # Comment after crash keyword
+```
 
-**Unsupported Node**
-at 16:1 to 16:27
 
-**Unsupported Node**
-at 17:1 to 20:20
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Unsupported Node**
-at 92:5 to 92:8
+**fuzz_crash_023.md:144:13:162:2:**
+```roc
+main! = |_| { # Yeah I can leave a comment here
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comment after return keyword
+		tag # Comment after return statement
 
-**Unsupported Node**
-at 91:4 to 91:9
+	# Just a random comment!
 
-**Pattern in Expression Context**
-at 143:36 to 143:37
+	...
+	match_time(
+		..., # Single args with comment
+	)
+	some_func(
+		dbg # After debug
+			42, # After debug expr
+	)
+	crash # Comment after crash keyword
+```
 
-**Unsupported Node**
-at 175:3 to 175:9
 
-**Unsupported Node**
-at 189:39 to 189:40
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg # After dbg in list
+				** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 189:65 to 189:66
+**fuzz_crash_023.md:168:4:169:5:**
+```roc
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+```
 
-**Unsupported Node**
-at 189:96 to 189:97
 
-**Unsupported Node**
-at 190:2 to 190:8
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
 
-**Unsupported Node**
-at 191:2 to 191:8
+**fuzz_crash_023.md:167:3:169:5:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+```
 
-**Unsupported Node**
-at 193:4 to 193:7
+
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**fuzz_crash_023.md:166:9:169:5:**
+```roc
+	list = [
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, # after dbg expr as arg
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:169:11:170:3:**
+```roc
+				number, # after dbg expr as arg
+		), # Comment one
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:170:3:170:4:**
+```roc
+		), # Comment one
+```
+		^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, # Comment one
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:170:4:171:3:**
+```roc
+		), # Comment one
+		456, # Comment two
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, # Comment two
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:171:6:172:3:**
+```roc
+		456, # Comment two
+		789, # Comment three
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, # Comment three
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:172:6:173:2:**
+```roc
+		789, # Comment three
+	]
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:173:2:174:2:**
+```roc
+	]
+	for n in list {
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **;** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:178:37:178:38:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_023.md:178:11:178:38:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:178:70:179:2:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:39:189:40:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                     ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:65:189:66:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                               ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:96:189:97:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                                                              ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:110:190:2:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	Stdout.line!(interpolated)?
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:190:28:191:2:**
+```roc
+	Stdout.line!(interpolated)?
+	Stdout.line!(
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"How about ${ # Comment after string interpolation open
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:192:3:193:4:**
+```roc
+		"How about ${ # Comment after string interpolation open
+			Num.toStr(number) # Comment after string interpolation expr
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_023.md:191:2:193:4:**
+```roc
+	Stdout.line!(
+		"How about ${ # Comment after string interpolation open
+			Num.toStr(number) # Comment after string interpolation expr
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:194:3:194:5:**
+```roc
+		} as a string?",
+```
+		^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:194:5:194:8:**
+```roc
+		} as a string?",
+```
+		  ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:194:16:194:17:**
+```roc
+		} as a string?",
+```
+		             ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **",
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:194:17:195:2:**
+```roc
+		} as a string?",
+	)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:195:2:196:1:**
+```roc
+	)
+} # Comment after top-level decl
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} # Comment after top-level decl
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:196:1:198:1:**
+```roc
+} # Comment after top-level decl
+
+empty : {}
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:4:1:4:42:**
+```roc
+import pf.Stdout exposing [line!, write!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:14:1:14:36:**
+```roc
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:85:3:88:4:**
+```roc
+		Blue | Green | Red => {
+			x = 12
+			x
+		}
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:89:3:92:8:**
+```roc
+		Blue # After pattern in alt
+		| # Before pattern in alt
+			Green
+		| Red # After alt pattern
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:99:3:99:8:**
+```roc
+		"foo" => # After arrow comment
+```
+		^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:102:23:103:4:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+			=> # After arrow comment
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:108:27:108:29:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		                        ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:116:3:116:5:**
+```roc
+		] => 123
+```
+		^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:117:3:117:7:**
+```roc
+		3.14 => 314
+```
+		^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:120:15:120:17:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		            ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:121:3:121:29:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+		^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:122:3:129:4:**
+```roc
+		{ # After pattern record open
+			foo # After pattern record field name
+				: # Before pattern record field value
+					1, # After pattern record field
+			bar: 2,
+			.. # After spread operator
+				rest, # After last field
+		} => 12
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:130:24:130:26:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		                     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:135:3:135:17:**
+```roc
+		Ok(123) => 123
+```
+		^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:136:3:136:17:**
+```roc
+		Ok(Some(dude)) => dude
+```
+		^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:137:3:137:42:**
+```roc
+		TwoArgs("hello", Some("world")) => 1000
+```
+		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**fuzz_crash_023.md:143:36:143:37:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+                                   ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:175:3:175:9:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:189:39:189:40:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                     ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:189:65:189:66:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                               ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:189:96:189:97:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                                                              ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:190:2:190:8:**
+```roc
+	Stdout.line!(interpolated)?
+```
+	^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:191:2:191:8:**
+```roc
+	Stdout.line!(
+```
+	^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_023.md:193:4:193:7:**
+```roc
+			Num.toStr(number) # Comment after string interpolation expr
+```
+			^^^
+
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "pf")
-      (Expr.str_literal_big)
-    )
-    (Expr.malformed)
-    (Expr.list_literal)
-  )
   (Expr.malformed)
   (Expr.malformed)
   (Expr.malformed)
@@ -1588,7 +1459,19 @@ at 193:4 to 193:7
       )
     )
   )
-  (Expr.apply_tag)
+  (Expr.binop_colon
+    (Expr.apply_tag)
+    (Expr.binop_thin_arrow
+      (Expr.apply_tag)
+      (Expr.binop_thin_arrow
+        (Expr.binop_thin_arrow
+          (Expr.lookup "a")
+          (Expr.lookup "b")
+        )
+        (Expr.apply_tag)
+      )
+    )
+  )
   (Expr.binop_colon
     (Expr.apply_tag)
     (Expr.tuple_literal
@@ -1601,7 +1484,6 @@ at 193:4 to 193:7
     (Expr.tuple_literal
       (Expr.apply_tag)
       (Expr.apply_tag)
-      (Expr.malformed)
     )
   )
   (Expr.binop_colon
@@ -1680,116 +1562,6 @@ at 193:4 to 193:7
     (Expr.lookup "match_time")
     (Expr.lambda)
   )
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.block
-    (Expr.binop_equals
-      (Expr.lookup "x")
-      (Expr.num_literal_i32 12)
-    )
-    (Expr.lookup "x")
-  )
-  (Expr.apply_tag)
-  (Expr.lambda)
-  (Expr.lookup "lower")
-  (Expr.malformed)
-  (Expr.num_literal_i32 1)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.num_literal_i32 100)
-  (Expr.str_literal_small)
-  (Expr.malformed)
-  (Expr.num_literal_i32 200)
-  (Expr.list_literal)
-  (Expr.lookup "rest")
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.list_literal)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.list_literal)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.frac_literal_small 3.14)
-  (Expr.malformed)
-  (Expr.num_literal_i32 314)
-  (Expr.frac_literal_small 3.14)
-  (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-    (Expr.unary_double_dot)
-  )
-  (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.malformed)
-  (Expr.apply_ident)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-    (Expr.unary_double_dot)
-  )
-  (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-  )
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.record_literal
-    (Expr.binop_colon
-      (Expr.lookup "foo")
-      (Expr.num_literal_i32 1)
-    )
-    (Expr.binop_colon
-      (Expr.lookup "bar")
-      (Expr.num_literal_i32 2)
-    )
-  )
-  (Expr.malformed)
-  (Expr.num_literal_i32 12)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.num_literal_i32 123)
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.lookup "dude")
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.num_literal_i32 1000)
-  (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.not_lookup)
@@ -1894,7 +1666,6 @@ at 193:4 to 193:7
         (Expr.lookup "tuple")
       )
       (Expr.list_literal)
-      (Expr.malformed)
     )
   )
   (Expr.binop_equals

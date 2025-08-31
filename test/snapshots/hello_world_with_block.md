@@ -20,101 +20,65 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound CloseCurly ~~~
+LineComment BlankLine LineComment KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign String LineComment UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(block
-  (malformed malformed:expr_unexpected_token)
-  (malformed malformed:expr_unexpected_token)
-  (block
+(app-header
+  (packages
     (binop_colon
       (lc "pf")
-      (str_literal_big "../basic-cli/platform.roc")
-    )
-    (malformed malformed:expr_unexpected_token)
-    (list_literal
-      (not_lc "main")
-    )
-  )
-  (import
-    (binop_pipe
-      (lc "pf")
-      (uc "Stdout")
-    )
-  )
-  (binop_equals
-    (not_lc "main")
-    (lambda
-      (body
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
         (block
-          (binop_equals
-            (lc "world")
-            (str_literal_big "World")
-          )
-          (apply_anon
-            (binop_pipe
-              (uc "Stdout")
-              (not_lc "line")
-            )
-            (str_literal_big "Hello, world!")
-          )
+          (not_lc "main")
         )
       )
-      (args
-        (underscore)
-      )
     )
-  )
-)
+))
 ~~~
 # FORMATTED
 ~~~roc
 # Hello world!
 
-
 # Multiline comments?
-app {
-	pf : "../basic-cli/platform.roc"
-	platform 
-	[main!]
-}
+app { pf: "../basic-cli/platform.roc" platform [main!] }
+
 import pf.Stdout
 main! = |_| {
 	world = "World"
 	Stdout.line!("Hello, world!")
 }
+
+# Hello
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:15 to 4:1
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 4:1 to 4:5
+**hello_world_with_block.md:6:1:6:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 4:39 to 4:48
 
-**Unsupported Node**
-at 6:1 to 6:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 11:2 to 11:8
+**hello_world_with_block.md:11:2:11:8:**
+```roc
+	Stdout.line!("Hello, world!")
+```
+	^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.malformed)
-  (Expr.block
-    (Expr.binop_colon
-      (Expr.lookup "pf")
-      (Expr.str_literal_big)
-    )
-    (Expr.malformed)
-    (Expr.list_literal)
-  )
   (Expr.malformed)
   (Expr.binop_equals
     (Expr.not_lookup)

@@ -19,13 +19,21 @@ UpperIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+List.map
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:9
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**simple_external_lookup.md:1:1:1:9:**
+```roc
+List.map
+```
+^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

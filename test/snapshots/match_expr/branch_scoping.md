@@ -76,17 +76,49 @@ match result
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:15 to 2:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:15
+**branch_scoping.md:2:5:2:27:**
+```roc
+    Ok(value) => value + 1
+```
+    ^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 4:19 to 4:21
 
-**Unsupported Node**
-at 5:5 to 5:19
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**branch_scoping.md:3:5:3:15:**
+```roc
+    Err(value) => value - 1
+```
+    ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**branch_scoping.md:4:5:4:35:**
+```roc
+    Ok(different) => different * 2
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**branch_scoping.md:5:5:5:19:**
+```roc
+    Err(different) => different / 2
+```
+    ^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

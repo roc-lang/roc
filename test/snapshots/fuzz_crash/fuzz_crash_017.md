@@ -26,13 +26,22 @@ LowerIdent OpAssign String LowerIdent OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+me = "luc"
+foo = "hello ${namF
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:7 to 2:20
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"hello ${namF** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_017.md:2:7:2:20:**
+```roc
+foo = "hello ${namF
+```
+      ^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

@@ -12,7 +12,7 @@ some_fn(arg1)? # Comment 1
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion ~~~
+LowerIdent OpenRound LowerIdent CloseRound OpQuestion LineComment Dot LowerIdent OpenRound CloseRound OpQuestion LineComment Dot LowerIdent OpenRound CloseRound OpQuestion LineComment Dot LowerIdent OpQuestion ~~~
 # PARSE
 ~~~clojure
 (malformed malformed:expr_unexpected_token)
@@ -20,16 +20,34 @@ LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound C
 # FORMATTED
 ~~~roc
 ? # Comment 1
-	
+	# Comment 2
+# Comment 3
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:14 to 2:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **? # Comment 1
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:14 to 2:2
+**record_access_multiline_formatting_4.md:1:14:2:2:**
+```roc
+some_fn(arg1)? # Comment 1
+	.static_dispatch_method()? # Comment 2
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_access_multiline_formatting_4.md:1:14:2:2:**
+```roc
+some_fn(arg1)? # Comment 1
+	.static_dispatch_method()? # Comment 2
+```
+
 
 # CANONICALIZE
 ~~~clojure

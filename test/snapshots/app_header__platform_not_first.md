@@ -25,7 +25,7 @@ KwApp OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String KwPlat
       (binop_platform
         (str_literal_big "../main.roc")
         (block
-          (lc "main")
+          (not_lc "main")
         )
       )
     )
@@ -36,9 +36,8 @@ KwApp OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String KwPlat
 app
 {
 	somePkg: "../main.roc",
-	pf: "../main.roc" platform [main],
+	pf: "../main.roc" platform [main!],
 }
-
 ~~~
 # EXPECTED
 NIL

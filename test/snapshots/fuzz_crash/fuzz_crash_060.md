@@ -21,24 +21,32 @@ KwModule OpenSquare CloseSquare UpperIdent OpColon LowerIdent OpOr KwMatch Int O
 module []
 
 C : k || match 0
-#
-0"
 }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:22 to 1:24
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:24 to 2:1
+**fuzz_crash_060.md:2:2:3:1:**
+```roc
+0"
+}
+```
 
-**Parse Error**
-at 2:2 to 3:1
 
-**Parse Error**
-at 3:1 to 3:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_060.md:3:1:3:2:**
+```roc
+}
+```
+^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -50,9 +58,6 @@ at 3:1 to 3:2
       (Expr.match)
     )
   )
-  (Expr.malformed)
-  (Expr.num_literal_i32 0)
-  (Expr.malformed)
   (Expr.malformed)
 )
 ~~~

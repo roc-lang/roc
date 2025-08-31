@@ -9,7 +9,7 @@ app[]{f:platform""}import fS
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent UpperIdent ~~~
+KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport LowerIdent MalformedUnknownToken UpperIdent ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -28,17 +28,38 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 app { f: "" platform [] }
 
 import f
+
 S
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:20 to 1:28
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_046.md:1:28:1:29:**
+```roc
+app[]{f:platform""}import fS
+```
+                           ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_046.md:1:20:1:28:**
+```roc
+app[]{f:platform""}import fS
+```
+                   ^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.apply_tag)
 )

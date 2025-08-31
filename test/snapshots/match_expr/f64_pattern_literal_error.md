@@ -25,14 +25,38 @@ KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:5 to 2:13
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 3:5 to 3:8
+**f64_pattern_literal_error.md:2:9:2:13:**
+```roc
+    3.14f64 => "pi"
+```
+        ^^^^
 
-**Unsupported Node**
-at 3:5 to 3:8
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **0.0** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**f64_pattern_literal_error.md:3:5:3:8:**
+```roc
+    0.0f64 => "zero"
+```
+    ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**f64_pattern_literal_error.md:3:5:3:8:**
+```roc
+    0.0f64 => "zero"
+```
+    ^^^
+
 
 # CANONICALIZE
 ~~~clojure

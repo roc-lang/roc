@@ -15,36 +15,80 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(match
+  (scrutinee     (lc "person")
+)
+  (branch1     (binop_thick_arrow
+      (binop_as
+        (record_literal
+          (lc "name")
+          (binop_colon
+            (lc "address")
+            (binop_as
+              (record_literal
+                (lc "city")
+              )
+              (lc "addr")
+            )
+          )
+        )
+        (lc "fullPerson")
+      )
+      (block
+        (tuple_literal
+          (lc "fullPerson")
+          (lc "addr")
+          (lc "city")
+        )
+        (binop_thick_arrow
+          (binop_as
+            (block
+              (lc "name")
+            )
+            (lc "simplePerson")
+          )
+          (tuple_literal
+            (lc "simplePerson")
+            (lc "name")
+            (str_literal_big "unknown")
+          )
+        )
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-{ 
+match person
+	{name, address: {city} as addr} as fullPerson => 
+		(fullPerson, addr, city)
+		{
+			name
+		} as simplePerson => (simplePerson, name, "unknown")
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:5 to 2:31
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 2:31 to 2:41
+**pattern_as_nested.md:2:5:3:63:**
+```roc
+    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
+    { name } as simplePerson => (simplePerson, name, "unknown")
+```
 
-**Parse Error**
-at 3:5 to 3:7
-
-**Unsupported Node**
-at 3:5 to 3:7
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

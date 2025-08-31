@@ -21,14 +21,38 @@ Int OpPlus OpPlus Int ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:4 to 1:6
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **+ ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:6 to 1:7
+**unknown_operator.md:1:4:1:6:**
+```roc
+1 ++ 2
+```
+   ^^
 
-**Unsupported Node**
-at 1:6 to 1:7
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **2** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unknown_operator.md:1:6:1:7:**
+```roc
+1 ++ 2
+```
+     ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**unknown_operator.md:1:6:1:7:**
+```roc
+1 ++ 2
+```
+     ^
+
 
 # CANONICALIZE
 ~~~clojure

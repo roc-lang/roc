@@ -12,7 +12,7 @@ var topLevelVar_ = 0
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwVar LowerIdent OpAssign Int ~~~
+KwModule OpenSquare CloseSquare BlankLine LineComment KwVar LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -21,7 +21,7 @@ KwModule OpenSquare CloseSquare KwVar LowerIdent OpAssign Int ~~~
 ~~~roc
 module []
 
-var topLevelVar_ = 0
+var topLevelVar_ = 0# This should cause an error - var not allowed at top level
 ~~~
 # EXPECTED
 NIL

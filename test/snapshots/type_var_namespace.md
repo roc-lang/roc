@@ -24,7 +24,7 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign Int LowerIdent OpColon LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpBar OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpColon LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpBar OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -34,7 +34,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
         (block
-          (lc "main")
+          (not_lc "main")
         )
       )
     )
@@ -42,7 +42,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 process : List elem -> elem
 process = |list| {
@@ -52,22 +52,55 @@ process = |list| {
 	Result | .withDefault(elem)
 	result
 }
-main! = |_| {  }
+
+main! = |_| {}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 11:32 to 11:34
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 11:34 to 11:40
+**type_var_namespace.md:11:32:11:34:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+                               ^^
 
-**Unsupported Node**
-at 11:14 to 11:18
 
-**Unsupported Node**
-at 11:34 to 11:40
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Result** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**type_var_namespace.md:11:34:11:40:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+                                 ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_var_namespace.md:11:14:11:18:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+             ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_var_namespace.md:11:34:11:40:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+                                 ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

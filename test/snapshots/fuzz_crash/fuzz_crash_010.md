@@ -13,7 +13,7 @@ foo =
 ~~~
 # TOKENS
 ~~~text
-UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedString ~~~
+UpperIdent OpenCurly LowerIdent Comma MalformedUnknownToken CloseSquare LowerIdent OpAssign BlankLine MalformedString ~~~
 # PARSE
 ~~~clojure
 (block
@@ -22,6 +22,7 @@ UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
     (lc "o")
     (malformed malformed:expr_unexpected_token)
   )
+  (malformed malformed:expr_unexpected_token)
   (binop_equals
     (lc "foo")
     (malformed malformed:expr_unexpected_token)
@@ -30,22 +31,58 @@ UpperIdent OpenCurly LowerIdent Comma CloseSquare LowerIdent OpAssign MalformedS
 ~~~
 # FORMATTED
 ~~~roc
-H{
-	o,
-}
+H
+{ o }
+]
 foo = "on        (string 'onmo %')))
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:6 to 3:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **  ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:2 to 3:1
+**fuzz_crash_010.md:2:3:2:6:**
+```roc
+    ]
+```
+  ^^^
 
-**Parse Error**
-at 5:5 to 5:35
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_010.md:1:2:2:6:**
+```roc
+H{o,
+    ]
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_010.md:2:6:3:1:**
+```roc
+    ]
+foo =
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"on        (string 'onmo %')))** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_010.md:5:5:5:35:**
+```roc
+    "on        (string 'onmo %')))
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -55,6 +92,7 @@ at 5:5 to 5:35
     (Expr.lookup "o")
     (Expr.malformed)
   )
+  (Expr.malformed)
   (Expr.binop_equals
     (Expr.lookup "foo")
     (Expr.malformed)

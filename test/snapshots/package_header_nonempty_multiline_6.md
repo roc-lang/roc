@@ -17,7 +17,7 @@ package # Comment after keyword
 ~~~
 # TOKENS
 ~~~text
-KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon String Comma CloseCurly ~~~
+KwPackage LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperIdent Comma LineComment CloseSquare OpenCurly LineComment LowerIdent OpColon String Comma LineComment LowerIdent OpColon String Comma LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (package-header
@@ -29,15 +29,12 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
   (packages
     (lc "somePkg")
 
-    (tuple_literal
-      (binop_colon
-        (tuple_literal
-          (str_literal_big "../main.roc")
-          (lc "other")
-        )
-        (str_literal_big "../../other/main.roc")
+    (binop_colon
+      (tuple_literal
+        (str_literal_big "../main.roc")
+        (lc "other")
       )
-      (malformed malformed:expr_unexpected_token)
+      (str_literal_big "../../other/main.roc")
     )
 ))
 ~~~
@@ -47,22 +44,22 @@ package [
 	something,
 	SomeType,
 ] packages {somePkg, (
-	(
-		"../main.roc",
-		other,
-	) : "../../other/main.roc",
-)}
+	"../main.roc",
+	other,
+) : "../../other/main.roc"}
 
+# Comment after keyword
+# Comment after exposes open
+# Comment after exposed item
+# Comment after last exposed item
+# Comment after packages open
+# Comment after package
+# Comment after last package
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 9:2 to 9:3
-
-**Expected Close Curly Brace**
-at 1:1 to 9:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

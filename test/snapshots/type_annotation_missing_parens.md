@@ -11,7 +11,7 @@ nums : List U8
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent UpperIdent ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header

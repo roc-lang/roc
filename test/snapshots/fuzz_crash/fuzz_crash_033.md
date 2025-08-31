@@ -21,14 +21,38 @@ OpenCurly LowerIdent Comma UpperIdent CloseSquare ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:14
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:14 to 1:15
+**fuzz_crash_033.md:1:1:1:14:**
+```roc
+{ i, Complete]
+```
+^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 1:14 to 1:15
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_033.md:1:14:1:15:**
+```roc
+{ i, Complete]
+```
+             ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_033.md:1:14:1:15:**
+```roc
+{ i, Complete]
+```
+             ^
+
 
 # CANONICALIZE
 ~~~clojure

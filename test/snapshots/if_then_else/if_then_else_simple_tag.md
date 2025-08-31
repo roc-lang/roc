@@ -21,11 +21,27 @@ else
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:20 to 1:25
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **else ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:20 to 1:25
+**if_then_else_simple_tag.md:1:20:1:25:**
+```roc
+if Bool.True Ok(0) else Err(1)
+```
+                   ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**if_then_else_simple_tag.md:1:20:1:25:**
+```roc
+if Bool.True Ok(0) else Err(1)
+```
+                   ^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

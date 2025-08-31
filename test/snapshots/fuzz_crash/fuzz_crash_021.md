@@ -11,7 +11,7 @@ Pair(a, b+ : (
 ~~~
 # TOKENS
 ~~~text
-UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString UpperIdent OpenRound LowerIdent Comma LowerIdent OpPlus OpColon OpenRound ~~~
+UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent OpPlus OpColon OpenRound ~~~
 # PARSE
 ~~~clojure
 (block
@@ -47,17 +47,52 @@ Pair((a, b + : ()))
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:13 to 3:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **" }
 
-**Parse Error**
-at 3:12 to 3:14
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 3:12 to 3:15
+**fuzz_crash_021.md:1:13:3:1:**
+```roc
+Fli/main.roc" }
 
-**Parse Error**
-at 3:1 to 3:15
+Pair(a, b+ : (
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **: ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_021.md:3:12:3:14:**
+```roc
+Pair(a, b+ : (
+```
+           ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_021.md:3:12:3:15:**
+```roc
+Pair(a, b+ : (
+```
+           ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_021.md:3:1:3:15:**
+```roc
+Pair(a, b+ : (
+```
+^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

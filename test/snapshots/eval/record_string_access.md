@@ -31,8 +31,16 @@ OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:1 to 1:19
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_string_access.md:1:1:1:19:**
+```roc
+{foo: "Hello"}.foo
+```
+^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

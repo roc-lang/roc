@@ -17,7 +17,7 @@ decodeThings # After member name
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound KwWhere KwModule OpenRound LowerIdent CloseRound Dot UpperIdent ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare BlankLine LowerIdent LineComment OpColon LineComment UpperIdent OpenRound UpperIdent OpenRound UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LineComment KwWhere LineComment KwModule OpenRound LowerIdent CloseRound Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -30,16 +30,35 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport UpperIdent KwExposing OpenSq
 module [decode]
 
 import Decode exposing [Decode]
-decodeThings : List List U8 -> List a where module(a) | Decode
+decodeThings : List List U8 -> List a where module(a) | Decode# After member name
+# After colon
+# After anno
+# after where
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:32
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 9:11 to 9:14
+**where_clauses_10.md:3:1:3:32:**
+```roc
+import Decode exposing [Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_10.md:9:11:9:14:**
+```roc
+				module(a).Decode
+```
+				      ^^^
+
 
 # CANONICALIZE
 ~~~clojure

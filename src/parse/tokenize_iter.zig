@@ -51,9 +51,10 @@ pub const Token = struct {
     pub const Tag = enum(u8) {
         EndOfFile,
 
-        // Comments
+        // Comments and whitespace
         LineComment, // # comment text
         DocComment, // ## doc comment text
+        BlankLine, // A line with only whitespace (spaces/tabs)
 
         // primitives
         Float,
@@ -328,6 +329,7 @@ pub const Token = struct {
                 .KwWhere,
                 .KwWhile,
                 .KwWith,
+                .BlankLine,
                 => false,
 
                 .MalformedDotUnicodeIdent,
@@ -2286,6 +2288,10 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwWith => {
                 try buf2.appendSlice(alloc, "with");
             },
+            .BlankLine => {
+                // Blank lines are represented as newlines in the normalized output
+                try buf2.append(alloc, '\n');
+            },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
             .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .MalformedUnicodeIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedUnknownToken, .MalformedNamedUnderscoreUnicode, .MalformedNominalNameUnicode, .MalformedNominalNameWithoutName, .String => {
@@ -2538,7 +2544,7 @@ pub const TokenIterator = struct {
             };
         }
 
-        // Skip whitespace but emit comment tokens
+        // Skip whitespace but emit comment and blank line tokens
         while (self.cursor.pos < self.cursor.buf.len) {
             const b = self.cursor.buf[self.cursor.pos];
             if (b == '#') {
@@ -2569,8 +2575,103 @@ pub const TokenIterator = struct {
                     },
                     .extra = .{ .none = 0 },
                 };
-            } else if (b <= 32) {
-                self.cursor.chompTrivia();
+            } else if (b == '\n' or b == '\r') {
+                // Check if this starts a blank line sequence
+                const first_newline_start = self.cursor.pos;
+                self.cursor.pos += 1;
+
+                // Handle \r\n as a single newline
+                if (b == '\r' and self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '\n') {
+                    self.cursor.pos += 1;
+                }
+
+                // Now check if we have a blank line (another newline with only spaces/tabs before it)
+                var scan_pos = self.cursor.pos;
+                var found_blank_line = false;
+
+                // Skip spaces and tabs to see if there's another newline
+                while (scan_pos < self.cursor.buf.len) {
+                    const ch = self.cursor.buf[scan_pos];
+                    if (ch == ' ' or ch == '\t') {
+                        scan_pos += 1;
+                    } else if (ch == '\n' or ch == '\r') {
+                        // Found another newline - we have at least one blank line!
+                        found_blank_line = true;
+                        scan_pos += 1;
+                        // Handle \r\n
+                        if (ch == '\r' and scan_pos < self.cursor.buf.len and self.cursor.buf[scan_pos] == '\n') {
+                            scan_pos += 1;
+                        }
+                        break;
+                    } else {
+                        // Found non-whitespace - not a blank line
+                        break;
+                    }
+                }
+
+                if (found_blank_line) {
+                    // We found at least one blank line. Now consume ALL consecutive blank lines
+                    // and emit just ONE BlankLine token
+                    var last_newline_end = scan_pos; // Track the end of the last newline
+
+                    while (scan_pos < self.cursor.buf.len) {
+                        // Skip spaces and tabs
+                        while (scan_pos < self.cursor.buf.len and (self.cursor.buf[scan_pos] == ' ' or self.cursor.buf[scan_pos] == '\t')) {
+                            scan_pos += 1;
+                        }
+
+                        // Check if we hit another newline (continuing the blank lines)
+                        if (scan_pos < self.cursor.buf.len and (self.cursor.buf[scan_pos] == '\n' or self.cursor.buf[scan_pos] == '\r')) {
+                            // Consume this newline
+                            const nl = self.cursor.buf[scan_pos];
+                            scan_pos += 1;
+                            if (nl == '\r' and scan_pos < self.cursor.buf.len and self.cursor.buf[scan_pos] == '\n') {
+                                scan_pos += 1;
+                            }
+                            last_newline_end = scan_pos; // Update where the last newline ends
+                        } else {
+                            // No more blank lines
+                            break;
+                        }
+                    }
+
+                    // Update cursor to after all blank lines
+                    self.cursor.pos = scan_pos;
+
+                    // Debug assertions for BlankLine tokens
+                    if (std.debug.runtime_safety) {
+                        // BlankLine regions should start with a newline
+                        if (first_newline_start < self.cursor.buf.len) {
+                            const start_char = self.cursor.buf[first_newline_start];
+                            if (start_char != '\n' and start_char != '\r') {
+                                std.debug.panic("BlankLine token doesn't start with newline at offset {}, starts with '{c}'\n", .{ first_newline_start, start_char });
+                            }
+                        }
+
+                        // BlankLine regions should end with a newline (last_newline_end is right after the last newline)
+                        if (last_newline_end > 0 and last_newline_end <= self.cursor.buf.len) {
+                            const end_char = self.cursor.buf[last_newline_end - 1];
+                            if (end_char != '\n' and end_char != '\r') {
+                                std.debug.panic("BlankLine token doesn't end with newline at offset {}, ends with '{c}'\n", .{ last_newline_end - 1, end_char });
+                            }
+                        }
+                    }
+
+                    // Emit a single BlankLine token for all the blank lines we consumed
+                    return Token{
+                        .tag = .BlankLine,
+                        .region = base.Region{
+                            .start = base.Region.Position{ .offset = @intCast(first_newline_start) },
+                            .end = base.Region.Position{ .offset = @intCast(last_newline_end) },
+                        },
+                        .extra = .{ .none = 0 },
+                    };
+                }
+
+                // Not a blank line - just normal whitespace (single newline)
+                self.saw_whitespace = true;
+            } else if (b == ' ' or b == '\t') {
+                self.cursor.pos += 1;
                 self.saw_whitespace = true;
             } else {
                 break;
@@ -3091,6 +3192,76 @@ pub const TokenIterator = struct {
             '\'' => {
                 // Single quote character literal
                 return try self.tokenizeSingleQuote(gpa, start);
+            },
+
+            '#' => {
+                // Comment token - handle inline comments
+                self.cursor.pos += 1;
+
+                // Check if it's a doc comment (##)
+                const is_doc = self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '#';
+                if (is_doc) {
+                    self.cursor.pos += 1;
+                }
+
+                // Find the end of the comment (newline or EOF)
+                while (self.cursor.pos < self.cursor.buf.len and
+                    self.cursor.buf[self.cursor.pos] != '\n' and
+                    self.cursor.buf[self.cursor.pos] != '\r')
+                {
+                    self.cursor.pos += 1;
+                }
+
+                // The comment ends BEFORE the newline - we don't include it
+                const end = self.cursor.pos;
+
+                // Now consume the newline so cursor moves past it, but don't include it in the region
+                if (self.cursor.pos < self.cursor.buf.len) {
+                    if (self.cursor.buf[self.cursor.pos] == '\n') {
+                        self.cursor.pos += 1;
+                    } else if (self.cursor.buf[self.cursor.pos] == '\r') {
+                        self.cursor.pos += 1;
+                        if (self.cursor.pos < self.cursor.buf.len and self.cursor.buf[self.cursor.pos] == '\n') {
+                            self.cursor.pos += 1;
+                        }
+                    }
+                }
+
+                // Debug checks for token regions
+                if (std.debug.runtime_safety) {
+                    // Check that the comment starts with '#'
+                    if (start < self.cursor.buf.len) {
+                        const start_char = self.cursor.buf[start];
+                        if (start_char != '#') {
+                            std.debug.panic("Comment token doesn't start with # at offset {}, starts with '{c}'\n", .{ start, start_char });
+                        }
+                    }
+
+                    // Check that the comment doesn't end with whitespace
+                    if (end > start and end <= self.cursor.buf.len) {
+                        const end_char = self.cursor.buf[end - 1];
+                        if (end_char == ' ' or end_char == '\t') {
+                            std.debug.panic("Comment token ends with whitespace at offset {}, ends with '{c}'\n", .{ end, end_char });
+                        }
+                    }
+
+                    // Check the entire region doesn't include newlines
+                    const region = self.cursor.buf[start..end];
+                    for (region, 0..) |c, i| {
+                        if (c == '\n' or c == '\r') {
+                            std.debug.panic("Comment token includes newline at position {} in region\n", .{i});
+                        }
+                    }
+                }
+
+                return Token{
+                    .tag = if (is_doc) .DocComment else .LineComment,
+                    .region = base.Region{
+                        .start = base.Region.Position{ .offset = @intCast(start) },
+                        .end = base.Region.Position{ .offset = @intCast(end) },
+                    },
+                    .extra = .{ .none = 0 },
+                };
             },
 
             // Anything else is an unknown token

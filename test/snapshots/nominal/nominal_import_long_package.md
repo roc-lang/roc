@@ -14,7 +14,7 @@ red = ... # not implemented
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign TripleDot ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent KwAs UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign TripleDot LineComment ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -27,22 +27,51 @@ KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Do
 module [red]
 
 import design.Styles | Color exposing [Encoder]
-as CE]
+as 
+CE
+]
 
 red : CE
-red = ...
+red = ...# not implemented
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:46 to 3:49
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 3:51 to 5:1
+**nominal_import_long_package.md:3:46:3:49:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                                             ^^^
 
-**Unsupported Node**
-at 3:1 to 3:45
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**nominal_import_long_package.md:3:51:5:1:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+
+red : CE
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_import_long_package.md:3:1:3:45:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

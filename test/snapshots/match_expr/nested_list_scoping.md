@@ -28,35 +28,35 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
           (lc "y")
         )
       )
-      (binop_plus
-        (lc "x")
-        (lc "y")
-      )
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (list_literal
+      (block
+        (binop_plus
           (lc "x")
           (lc "y")
         )
-      )
-      (binop_minus
-        (lc "x")
-        (lc "y")
-      )
-    )
-)
-  (branch3     (binop_thick_arrow
-      (list_literal
-        (lc "x")
-        (list_literal
-          (lc "y")
+        (binop_thick_arrow
+          (list_literal
+            (list_literal
+              (lc "x")
+              (lc "y")
+            )
+          )
+          (binop_minus
+            (lc "x")
+            (lc "y")
+          )
         )
-      )
-      (binop_star
-        (lc "x")
-        (lc "y")
+        (binop_thick_arrow
+          (list_literal
+            (lc "x")
+            (list_literal
+              (lc "y")
+            )
+          )
+          (binop_star
+            (lc "x")
+            (lc "y")
+          )
+        )
       )
     )
 ))
@@ -64,21 +64,25 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
 # FORMATTED
 ~~~roc
 match nestedList
-	[[x], [y]] => x + y
-	[[x, y]] => x - y
-	[x, [y]] => x * y
+	[[x], [y]] => 
+		x + y
+		[[x, y]] => x - y
+		[x, [y]] => x * y
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:16 to 2:18
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:13
+**nested_list_scoping.md:2:5:4:22:**
+```roc
+    [[x], [y]] => x + y
+    [[x, y]] => x - y  
+    [x, [y]] => x * y
+```
 
-**Unsupported Node**
-at 4:14 to 4:16
 
 # CANONICALIZE
 ~~~clojure

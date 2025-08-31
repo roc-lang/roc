@@ -21,7 +21,7 @@ Baz : Foo
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent ~~~
+KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LineComment UpperIdent OpColon UpperIdent BlankLine LineComment UpperIdent OpColon UpperIdent BlankLine LineComment UpperIdent OpColon UpperIdent BlankLine LineComment UpperIdent OpColon UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -38,7 +38,10 @@ module [Foo, Bar]
 Foo : U64
 Foo : Str
 Bar : SomeUndeclaredType
-Baz : Foo
+Baz : Foo# First declare a type
+# Try to redeclare the same type (should error)
+# Declare another type that uses an undeclared type
+# Declare a type that properly uses a declared type
 ~~~
 # EXPECTED
 NIL

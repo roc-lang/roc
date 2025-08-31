@@ -34,8 +34,16 @@ match person
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:19 to 2:21
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**pattern_destructure_simple.md:2:5:2:26:**
+```roc
+    { name, age } => name
+```
+    ^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

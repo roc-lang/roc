@@ -31,7 +31,7 @@ y = 'u
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence Comma MalformedSingleQuoteInvalidEscapeSequence CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound Int UpperIdent CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound UpperIdent CloseRound MalformedSingleQuoteUnclosed SingleQuote Comma SingleQuote Comma MalformedSingleQuoteEmpty Comma MalformedSingleQuoteUnclosed LowerIdent MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed Comma CloseRound LowerIdent OpAssign MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound SingleQuote Comma MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence Comma MalformedSingleQuoteInvalidEscapeSequence CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound Int UpperIdent CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound UpperIdent CloseRound MalformedSingleQuoteUnclosed SingleQuote Comma SingleQuote Comma MalformedSingleQuoteEmpty Comma MalformedSingleQuoteUnclosed LowerIdent MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed Comma CloseRound BlankLine LowerIdent OpAssign MalformedSingleQuoteUnclosed BlankLine LineComment MalformedSingleQuoteUnclosed ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -40,175 +40,462 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound SingleQuote Comma 
 ~~~roc
 module []
 
-x = ('a',
-    'Ã©',
-    'ðŸš€',
-    '\u',
-    '\u)',
-    '\u(',
-    '\u()',
-    '\u(1F680)',
-    '\u(K)',
-    '\\',
-    '\'',
-    '',
-    'long',
-    '\',
+x = ('a')
+©
+',
+'ð
+Ÿ
+š
+€
+',
+'\u'
+,
+'\u
+)
+',
+'\u(',
+)
+'\u()
+',
+'\u(1F680)
+F680
+)
+',
+'\u(K)
+',
+'\\'
+,
+'\'
+,
+''
+,
+'l
+ong
+',
+'\'
+,
 )
 
 y = 'u
 
 # Test backslash before EOF
-'\)
-©',
-    'ðŸš€',
-    '\u',
-    '\u)',
-    '\u(',
-    )'\u()',
-    '\u(1F680)F680)',
-    '\u(K)',
-    '\\',
-    '\'',
-    '',
-    'long',
-    '\',
-)
 
-y = 'u
-
-# Test backslash before EOF
-'\,
-    '\'',
-    '',
-    'long',
-    '\',
-)
-
-y = 'u
-
-# Test backslash before EOF
-'\,
-    '',
-    'long',
-    '\',
-)
-
-y = 'u
-
-# Test backslash before EOF
 '\
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 5:5 to 5:7
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'Ã** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 5:7 to 5:7
+**unicode_single_quotes.md:5:5:5:7:**
+```roc
+    'Ã©',
+```
+    ^^
 
-**Parse Error**
-at 5:7 to 5:8
 
-**Parse Error**
-at 5:8 to 6:5
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_round_or_comma**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 6:5 to 6:7
 
-**Parse Error**
-at 6:7 to 6:8
 
-**Parse Error**
-at 6:8 to 6:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **©** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 6:9 to 6:10
+**unicode_single_quotes.md:5:7:5:8:**
+```roc
+    'Ã©',
+```
+      ^
 
-**Parse Error**
-at 6:10 to 7:5
 
-**Parse Error**
-at 7:5 to 7:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 7:9 to 8:5
+**unicode_single_quotes.md:5:8:6:5:**
+```roc
+    'Ã©',
+    'ðŸš€',
+```
 
-**Parse Error**
-at 8:5 to 8:8
 
-**Parse Error**
-at 8:8 to 8:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'ð** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 8:9 to 9:5
+**unicode_single_quotes.md:6:5:6:7:**
+```roc
+    'ðŸš€',
+```
+    ^^
 
-**Parse Error**
-at 9:5 to 9:8
 
-**Parse Error**
-at 9:9 to 10:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Ÿ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 9:5 to 10:5
+**unicode_single_quotes.md:6:7:6:8:**
+```roc
+    'ðŸš€',
+```
+      ^
 
-**Parse Error**
-at 10:5 to 10:8
 
-**Parse Error**
-at 10:10 to 11:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **š** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 11:5 to 11:8
+**unicode_single_quotes.md:6:8:6:9:**
+```roc
+    'ðŸš€',
+```
+       ^
 
-**Parse Error**
-at 11:5 to 11:10
 
-**Parse Error**
-at 11:14 to 11:15
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **€** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 11:15 to 12:5
+**unicode_single_quotes.md:6:9:6:10:**
+```roc
+    'ðŸš€',
+```
+        ^
 
-**Parse Error**
-at 12:5 to 12:8
 
-**Parse Error**
-at 12:11 to 13:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 13:9 to 14:5
+**unicode_single_quotes.md:6:10:7:5:**
+```roc
+    'ðŸš€',
+    '\u',
+```
 
-**Parse Error**
-at 14:9 to 15:5
 
-**Parse Error**
-at 15:5 to 15:7
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u'** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 15:7 to 16:5
+**unicode_single_quotes.md:7:5:7:9:**
+```roc
+    '\u',
+```
+    ^^^^
 
-**Parse Error**
-at 16:5 to 16:7
 
-**Parse Error**
-at 16:10 to 17:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 17:5 to 17:8
+**unicode_single_quotes.md:7:9:8:5:**
+```roc
+    '\u',
+    '\u)',
+```
 
-**Parse Error**
-at 17:8 to 18:1
 
-**Parse Error**
-at 18:1 to 20:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 20:5 to 23:1
+**unicode_single_quotes.md:8:5:8:8:**
+```roc
+    '\u)',
+```
+    ^^^
 
-**Parse Error**
-at 23:1 to 23:3
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:8:8:8:9:**
+```roc
+    '\u)',
+```
+       ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:8:9:9:5:**
+```roc
+    '\u)',
+    '\u(',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:9:5:9:8:**
+```roc
+    '\u(',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:9:9:10:5:**
+```roc
+    '\u(',
+    '\u()',
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**unicode_single_quotes.md:9:5:10:5:**
+```roc
+    '\u(',
+    '\u()',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:10:5:10:8:**
+```roc
+    '\u()',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:10:10:11:5:**
+```roc
+    '\u()',
+    '\u(1F680)',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:11:5:11:8:**
+```roc
+    '\u(1F680)',
+```
+    ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**unicode_single_quotes.md:11:5:11:10:**
+```roc
+    '\u(1F680)',
+```
+    ^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:11:14:11:15:**
+```roc
+    '\u(1F680)',
+```
+             ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:11:15:12:5:**
+```roc
+    '\u(1F680)',
+    '\u(K)',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:12:5:12:8:**
+```roc
+    '\u(K)',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:12:11:13:5:**
+```roc
+    '\u(K)',
+    '\\',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:13:9:14:5:**
+```roc
+    '\\',
+    '\'',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:14:9:15:5:**
+```roc
+    '\'',
+    '',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **''** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:15:5:15:7:**
+```roc
+    '',
+```
+    ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:15:7:16:5:**
+```roc
+    '',
+    'long',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'l** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:16:5:16:7:**
+```roc
+    'long',
+```
+    ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:16:10:17:5:**
+```roc
+    'long',
+    '\',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\'** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:17:5:17:8:**
+```roc
+    '\',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:17:8:18:1:**
+```roc
+    '\',
+)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:18:1:20:1:**
+```roc
+)
+
+y = 'u
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'u
+
+# Test backslash before EOF
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:20:5:23:1:**
+```roc
+y = 'u
+
+# Test backslash before EOF
+'\
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:23:1:23:3:**
+```roc
+'\
+```
+^^
+
 
 # CANONICALIZE
 ~~~clojure

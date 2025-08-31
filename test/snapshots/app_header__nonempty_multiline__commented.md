@@ -15,42 +15,37 @@ app # Comment after keyword
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang Comma CloseSquare Comma LowerIdent OpColon String Comma CloseCurly ~~~
+KwApp LineComment OpenCurly LineComment LowerIdent OpColon String KwPlatform OpenSquare LineComment LowerIdent OpBang Comma LineComment CloseSquare Comma LineComment LowerIdent OpColon String Comma LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
-  (packages
-    (binop_colon
-      (lc "pf")
-      (binop_platform
-        (str_literal_big "../main.roc")
-        (block
-          (lc "main")
-        )
-      )
-    )
-
-    (binop_colon
-      (lc "other")
-      (str_literal_big "../../other/main.roc")
-    )
-))
+  (packages))
 ~~~
 # FORMATTED
 ~~~roc
-app
-{
-	pf: "../main.roc" platform [
-		main
-	],
-	other: "../../other/main.roc",
-}
+app { }
 
+# Comment after keyword
+# Comment after packages open
+# Comment after provides open
+# Comment after exposed item
+# Comment after platform
+# Comment after last package
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPECTED OPEN CURLY BRACE**
+A parsing error occurred: **expected_package_platform_open_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**app_header__nonempty_multiline__commented.md:1:1:1:5:**
+```roc
+app # Comment after keyword
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (empty)
@@ -61,5 +56,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

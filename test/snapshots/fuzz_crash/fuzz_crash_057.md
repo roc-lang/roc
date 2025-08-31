@@ -24,8 +24,16 @@ s : (b -> c where module(a).t : c, u) : o
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:28 to 1:31
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_057.md:1:28:1:31:**
+```roc
+module[]s:b->c where module(a).t:c,u:o...
+```
+                           ^^^
+
 
 # CANONICALIZE
 ~~~clojure

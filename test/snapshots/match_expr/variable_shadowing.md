@@ -22,14 +22,14 @@ KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound Upp
     )
 )
   (branch1     (binop_thick_arrow
-      (binop_thick_arrow
-        (tuple_literal
-          (apply_uc
-            (uc "Some")
-            (lc "x")
-          )
-          (lc "y")
+      (tuple_literal
+        (apply_uc
+          (uc "Some")
+          (lc "x")
         )
+        (lc "y")
+      )
+      (binop_thick_arrow
         (binop_plus
           (lc "x")
           (apply_lc
@@ -40,10 +40,10 @@ KwMatch OpenRound LowerIdent Comma LowerIdent CloseRound OpenCurly OpenRound Upp
             )
           )
         )
-      )
-      (binop_star
-        (lc "x")
-        (num_literal_i32 2)
+        (binop_star
+          (lc "x")
+          (num_literal_i32 2)
+        )
       )
     )
 ))
@@ -56,8 +56,16 @@ match (value, other)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:15 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**variable_shadowing.md:2:5:3:23:**
+```roc
+    (Some(x), y) => x + y
+    (None, x) => x * 2
+```
+
 
 # CANONICALIZE
 ~~~clojure

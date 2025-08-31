@@ -20,7 +20,7 @@ OpenSquare Int Comma String Comma Float CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[42, "world", 3.14]
 ~~~
 # EXPECTED
 NIL

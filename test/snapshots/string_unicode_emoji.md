@@ -15,7 +15,7 @@ greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ 
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign String LowerIdent OpAssign String ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineComment LowerIdent OpAssign String BlankLine LineComment LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -30,7 +30,8 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign 
 module [message, greet]
 
 message = "Hello! Here are some emojis: 👻 🎉 🚀"
-greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"
+greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"# Test that Unicode emojis are properly handled in string literals
+# Test other Unicode characters
 ~~~
 # EXPECTED
 NIL

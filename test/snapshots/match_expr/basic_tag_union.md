@@ -45,14 +45,38 @@ match color
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:6 to 2:8
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:2 to 3:6
+**basic_tag_union.md:2:2:2:10:**
+```roc
+	Red => 1
+```
+	^^^^^^^^
 
-**Unsupported Node**
-at 4:8 to 4:10
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**basic_tag_union.md:3:2:3:6:**
+```roc
+	Blue => 2
+```
+	^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**basic_tag_union.md:4:2:4:14:**
+```roc
+	Green => "3"
+```
+	^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

@@ -13,7 +13,7 @@ main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly KwImport LowerIdent Dot UpperIdent LowerIdent OpBang OpAssign OpBar Underscore OpBar UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound ~~~
+KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar UpperIdent Dot LowerIdent OpBang OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
 (app-header
@@ -23,7 +23,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
         (block
-          (lc "main")
+          (not_lc "main")
         )
       )
     )
@@ -31,7 +31,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app { pf: "../basic-cli/platform.roc" platform [main!] }
 
 import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
@@ -39,11 +39,27 @@ main! = |_| Stdout.line!("Hello, world!")
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 5:13 to 5:19
+**hello_world.md:3:1:3:17:**
+```roc
+import pf.Stdout
+```
+^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**hello_world.md:5:13:5:19:**
+```roc
+main! = |_| Stdout.line!("Hello, world!")
+```
+            ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

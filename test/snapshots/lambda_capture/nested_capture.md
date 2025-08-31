@@ -13,7 +13,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpenRound Int CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpenRound Int CloseRound LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -55,7 +55,7 @@ OpenCurly LowerIdent OpAssign OpenRound OpBar LowerIdent OpBar OpBar LowerIdent 
 ~~~roc
 f = |a| |b| a + b
 g = f(10)
-g(5)
+g(5)# Expect: 15
 ~~~
 # EXPECTED
 NIL

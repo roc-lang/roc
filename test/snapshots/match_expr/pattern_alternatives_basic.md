@@ -17,7 +17,7 @@ kind = |color| match color {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow String UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow String CloseCurly ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow String UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -32,29 +32,33 @@ module [kind]
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 kind : Color -> Str
 kind = |color| match color
-Green
-=> "primary"
-Yellow
-|Orange| Purple => "secondary"
-}
+	(Red || Green) || Blue => "primary"
+	(Yellow || Orange) || Purple => "secondary"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 7:5 to 7:11
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 7:24 to 7:27
+**pattern_alternatives_basic.md:7:5:7:36:**
+```roc
+    Red | Green | Blue => "primary"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 9:1 to 9:2
 
-**Unsupported Node**
-at 8:23 to 8:29
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 8:14 to 8:20
+**pattern_alternatives_basic.md:8:5:8:29:**
+```roc
+    Yellow | Orange | Purple => "secondary"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure
@@ -74,12 +78,6 @@ at 8:14 to 8:20
     (Expr.lookup "kind")
     (Expr.lambda)
   )
-  (Expr.apply_tag)
-  (Expr.malformed)
-  (Expr.str_literal_big)
-  (Expr.apply_tag)
-  (Expr.lambda)
-  (Expr.malformed)
 )
 ~~~
 # SOLVED

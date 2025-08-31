@@ -13,7 +13,7 @@ main = Json.utf8
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent BlankLine LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -28,11 +28,27 @@ main = Json.utf8
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 5:8 to 5:12
+**can_import_json.md:3:1:3:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_json.md:5:8:5:12:**
+```roc
+main = Json.utf8
+```
+       ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

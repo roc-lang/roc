@@ -18,7 +18,7 @@ MyType : [A, B, C]
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIdent Comma LowerIdent Comma UpperIdent CloseSquare LowerIdent OpAssign Int UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIdent Comma LowerIdent Comma UpperIdent CloseSquare BlankLine LineComment LineComment LineComment LineComment BlankLine LowerIdent OpAssign Int BlankLine UpperIdent OpColon OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent CloseSquare ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -41,7 +41,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 module [foo, bar, MyType, OtherType, foo, MyType]
 
 foo = 42
-MyType : [A, B, C]
+MyType : [A, B, C]# This module exposes foo, bar, MyType, and OtherType
+# but only implements foo and MyType
+# This should generate "exposed but not implemented" errors for bar and OtherType
+# Also tests redundant exposed entries for foo and MyType
 ~~~
 # EXPECTED
 NIL

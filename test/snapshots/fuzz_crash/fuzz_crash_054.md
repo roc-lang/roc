@@ -30,19 +30,45 @@ app { f: "" platform [] }
 
 import S exposing [c]
 as
-f]
+f
+]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:40 to 2:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 2:2 to 2:3
+**fuzz_crash_054.md:1:40:2:1:**
+```roc
+app[]{f:platform""}import S exposing[c as
+f]
+```
 
-**Unsupported Node**
-at 1:20 to 1:39
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_054.md:2:2:2:3:**
+```roc
+f]
+```
+ ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_054.md:1:20:1:39:**
+```roc
+app[]{f:platform""}import S exposing[c as
+```
+                   ^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

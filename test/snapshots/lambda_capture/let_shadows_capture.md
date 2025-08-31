@@ -16,7 +16,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly CloseRound OpenRound OpenCurly CloseCurly CloseRound LowerIdent CloseCurly ~~~
+OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore OpBar OpenCurly LowerIdent OpAssign Int LowerIdent CloseCurly CloseRound OpenRound OpenCurly CloseCurly CloseRound LineComment LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -56,8 +56,9 @@ x = 5
 y = (|_| {
 	x = 10
 	x : x
-})({  })
-y
+})({})
+
+y# Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
 ~~~
 # EXPECTED
 NIL

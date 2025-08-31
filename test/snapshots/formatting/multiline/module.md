@@ -15,7 +15,7 @@ b = 'a'
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign SingleQuote LowerIdent OpAssign SingleQuote ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare BlankLine LowerIdent OpAssign SingleQuote LowerIdent OpAssign SingleQuote ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -33,7 +33,6 @@ module [
 ]
 
 a = 'a'
-b = 'a'
 b = 'a'
 ~~~
 # EXPECTED

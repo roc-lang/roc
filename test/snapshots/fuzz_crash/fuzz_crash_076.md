@@ -32,9 +32,8 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwIf Int Int KwEls
 package [] packages {d, if 0
 	0
 else {
-	{  }
+	{}
 }}
-
 ~~~
 # EXPECTED
 NIL

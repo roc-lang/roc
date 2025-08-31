@@ -23,7 +23,7 @@ broken_fn3 : a -> b
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpArrow LowerIdent LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpArrow LowerIdent BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -40,16 +40,34 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Low
 module [broken_fn1, broken_fn2, broken_fn3]
 
 broken_fn1 : a -> b where module(a).method -> b
-broken_fn2 : a -> b where broken_fn3 : a -> b where module(c).method : c -> d
+broken_fn2 : a -> b where broken_fn3 : a -> b where module(c).method : c -> d# Missing colon in constraint
+# Empty where clause
+# Referencing undefined type variable
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 6:11 to 6:14
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 15:11 to 15:14
+**where_clauses_error_cases.md:6:11:6:14:**
+```roc
+    module(a).method -> b
+```
+          ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_error_cases.md:15:11:15:14:**
+```roc
+    module(c).method : c -> d
+```
+          ^^^
+
 
 # CANONICALIZE
 ~~~clojure

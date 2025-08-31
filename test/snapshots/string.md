@@ -23,7 +23,7 @@ x = (
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma String Comma String Comma String Comma String Comma String Comma String Comma String Comma CloseRound MalformedString ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound String Comma String Comma String Comma String Comma String Comma String Comma String Comma String Comma CloseRound BlankLine LineComment MalformedString ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -32,29 +32,22 @@ KwModule OpenSquare CloseSquare LowerIdent OpAssign OpenRound String Comma Strin
 ~~~roc
 module []
 
-x = (
-	"one",
-	"two",
-	"\u",
-	"\u)",
-	"\u(",
-	"\u()",
-	"\u(K)",
-	"\u(1F680)",
-)
+x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")
 "\
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 12:1 to 15:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"\** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 15:1 to 15:1
+**string.md:15:1:15:3:**
+```roc
+"\
+```
+^^
 
-**Parse Error**
-at 15:1 to 15:3
 
 # CANONICALIZE
 ~~~clojure
@@ -70,7 +63,6 @@ at 15:1 to 15:3
       (Expr.str_literal_small)
       (Expr.str_literal_small)
       (Expr.str_literal_big)
-      (Expr.malformed)
     )
   )
   (Expr.malformed)

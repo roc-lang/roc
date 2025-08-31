@@ -41,8 +41,16 @@ match person
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:50 to 2:52
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**pattern_destructure_nested.md:2:5:2:92:**
+```roc
+    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

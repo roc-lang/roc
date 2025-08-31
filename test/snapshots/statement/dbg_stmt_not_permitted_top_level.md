@@ -14,7 +14,7 @@ foo = ...
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign TripleDot ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwDbg String BlankLine LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -26,14 +26,23 @@ KwModule OpenSquare LowerIdent CloseSquare KwDbg String LowerIdent OpAssign Trip
 ~~~roc
 module [foo]
 
-dbg "foo"
+dbg 
+"foo"
 foo = ...
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 4:1 to 4:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_not_permitted_top_level.md:4:1:4:5:**
+```roc
+dbg "foo"
+```
+^^^^
+
 
 # CANONICALIZE
 ~~~clojure

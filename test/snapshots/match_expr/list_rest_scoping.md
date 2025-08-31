@@ -22,34 +22,34 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
   (branch1     (binop_thick_arrow
       (list_literal
         (lc "first")
-        (unary_double_dot <unary>)
+        (double_dot_lc "rest")
       )
-      (binop_plus
-        (lc "first")
-        (num_literal_i32 1)
-      )
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (unary_double_dot <unary>)
-        (lc "last")
-      )
-      (binop_plus
-        (lc "last")
-        (num_literal_i32 2)
-      )
-    )
-)
-  (branch3     (binop_thick_arrow
-      (list_literal
-        (lc "x")
-        (unary_double_dot <unary>)
-        (lc "y")
-      )
-      (binop_plus
-        (lc "x")
-        (lc "y")
+      (block
+        (binop_plus
+          (lc "first")
+          (num_literal_i32 1)
+        )
+        (binop_thick_arrow
+          (list_literal
+            (unary_double_dot <unary>)
+            (lc "last")
+          )
+          (binop_plus
+            (lc "last")
+            (num_literal_i32 2)
+          )
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "x")
+            (unary_double_dot <unary>)
+            (lc "y")
+          )
+          (binop_plus
+            (lc "x")
+            (lc "y")
+          )
+        )
       )
     )
 ))
@@ -57,21 +57,25 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 # FORMATTED
 ~~~roc
 match items
-	[first, ..] => first + 1
-	[.., last] => last + 2
-	[x, .., y] => x + y
+	[first, ..rest] => 
+		first + 1
+		[..rest, last] => last + 2
+		[x, ..rest, y] => x + y
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:21 to 2:23
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:19
+**list_rest_scoping.md:2:5:4:28:**
+```roc
+    [first, ..rest] => first + 1
+    [..rest, last] => last + 2
+    [x, ..rest, y] => x + y
+```
 
-**Unsupported Node**
-at 4:20 to 4:22
 
 # CANONICALIZE
 ~~~clojure

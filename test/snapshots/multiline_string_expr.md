@@ -22,11 +22,27 @@ This
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:4 to 1:9
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **This ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:4 to 1:9
+**multiline_string_expr.md:1:4:1:9:**
+```roc
+"""This is a string
+```
+   ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multiline_string_expr.md:1:4:1:9:**
+```roc
+"""This is a string
+```
+   ^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

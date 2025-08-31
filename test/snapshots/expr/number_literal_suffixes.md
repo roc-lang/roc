@@ -54,14 +54,39 @@ u16
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 3:12
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 3:12 to 3:15
+**number_literal_suffixes.md:1:1:3:12:**
+```roc
+{
+  u8:   123u8,
+  u16:  123u16,
+```
 
-**Unsupported Node**
-at 3:12 to 3:15
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **u16** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**number_literal_suffixes.md:3:12:3:15:**
+```roc
+  u16:  123u16,
+```
+           ^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**number_literal_suffixes.md:3:12:3:15:**
+```roc
+  u16:  123u16,
+```
+           ^^^
+
 
 # CANONICALIZE
 ~~~clojure

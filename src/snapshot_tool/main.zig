@@ -508,39 +508,231 @@ fn convertParser2DiagnosticToReport(
     env: *const base.CommonEnv,
     snapshot_path: []const u8,
 ) !Report {
-    _ = snapshot_path;
     _ = parser;
 
     const title = switch (diag.tag) {
-        .multiple_platforms => "Multiple Platforms",
-        .no_platform => "No Platform",
-        .missing_header => "Missing Header",
-        .missing_arrow => "Missing Arrow",
-        .expected_exposes => "Expected Exposes",
-        .expected_exposes_close_square => "Expected Close Square Bracket",
-        .expected_exposes_open_square => "Expected Open Square Bracket",
-        .expected_imports => "Expected Imports",
-        .expected_package_or_platform_name => "Expected Package or Platform Name",
-        .expected_package_or_platform_colon => "Expected Colon",
-        .expected_package_or_platform_string => "Expected String",
-        .expected_package_platform_close_curly => "Expected Close Curly Brace",
-        .expected_package_platform_open_curly => "Expected Open Curly Brace",
-        .expected_packages => "Expected Packages",
-        .expected_packages_close_curly => "Expected Close Curly Brace",
-        else => "Parse Error",
+        .multiple_platforms => "MULTIPLE PLATFORMS",
+        .no_platform => "NO PLATFORM",
+        .missing_header => "MISSING HEADER",
+        .missing_arrow => "MISSING ARROW",
+        .expected_exposes => "EXPECTED EXPOSES",
+        .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
+        .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
+        .expected_imports => "EXPECTED IMPORTS",
+        .expected_package_or_platform_name => "EXPECTED PACKAGE OR PLATFORM NAME",
+        .expected_package_or_platform_colon => "EXPECTED COLON",
+        .expected_package_or_platform_string => "EXPECTED STRING",
+        .expected_package_platform_close_curly => "EXPECTED CLOSE CURLY BRACE",
+        .expected_package_platform_open_curly => "EXPECTED OPEN CURLY BRACE",
+        .expected_packages => "EXPECTED PACKAGES",
+        .expected_packages_close_curly => "EXPECTED CLOSE CURLY BRACE",
+        .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
+        .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
+        .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+        .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
+        .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
+        .where_expected_mod_open => "WHERE CLAUSE ERROR",
+        .where_expected_var => "WHERE CLAUSE ERROR",
+        .where_expected_mod_close => "WHERE CLAUSE ERROR",
+        .where_expected_arg_open => "WHERE CLAUSE ERROR",
+        .where_expected_arg_close => "WHERE CLAUSE ERROR",
+        .where_expected_method_arrow => "WHERE CLAUSE ERROR",
+        .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
+        .where_expected_module => "WHERE CLAUSE ERROR",
+        .where_expected_colon => "WHERE CLAUSE ERROR",
+        .where_expected_constraints => "WHERE CLAUSE ERROR",
+        .no_else => "IF WITHOUT ELSE",
+        else => "PARSE ERROR",
     };
 
     var report = Report.init(allocator, title, .runtime_error);
 
-    // Convert offsets to line/column using CommonEnv
-    const region_info = env.calcRegionInfo(diag.region);
-    const start_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
-    defer allocator.free(start_str);
-    const end_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
-    defer allocator.free(end_str);
-    const region_text = try std.fmt.allocPrint(allocator, "at {s} to {s}", .{ start_str, end_str });
-    defer allocator.free(region_text);
-    try report.document.addText(region_text);
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(diag.region.start.offset, env.source.len) },
+        .end = .{ .offset = @min(@max(diag.region.end.offset, diag.region.start.offset), env.source.len) },
+    };
+
+    // Add detailed error message based on the diagnostic type
+    switch (diag.tag) {
+        .missing_header => {
+            try report.document.addReflowingText("Roc files must start with a module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module [main]");
+            try report.document.addLineBreak();
+            try report.document.addText("or for an app:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .multiple_platforms => {
+            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Remove the duplicate platform declaration.");
+        },
+        .no_platform => {
+            try report.document.addReflowingText("App files must specify a platform.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a platform specification like:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .missing_arrow => {
+            try report.document.addText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
+        },
+        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
+            try report.document.addReflowingText("Module headers must have an ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" section that lists what the module exposes.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module [main, add, subtract]");
+        },
+        .expected_imports => {
+            try report.document.addReflowingText("Import statements must specify what is being imported.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
+        },
+        .pattern_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a pattern.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+        },
+        .pattern_list_rest_old_syntax => {
+            try report.document.addReflowingText("List rest patterns should use the `.. as name` syntax, not `..name`.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("For example, use `[first, .. as rest]` instead of `[first, ..rest]`.");
+        },
+        .pattern_unexpected_eof => {
+            try report.document.addReflowingText("The pattern appears to be incomplete.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure all patterns are complete and properly closed.");
+        },
+        .ty_anno_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a type annotation.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should contain types like ");
+            try report.document.addType("Str");
+            try report.document.addText(", ");
+            try report.document.addType("Num a");
+            try report.document.addText(", or ");
+            try report.document.addType("List U64");
+            try report.document.addText(".");
+        },
+        .string_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a string literal.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String literals should be enclosed in double quotes.");
+        },
+        .expr_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in an expression.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
+        },
+        .import_must_be_top_level => {
+            try report.document.addReflowingText("Import statements must appear at the top level of a module.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
+        },
+        .expected_expr_close_square_or_comma => {
+            try report.document.addReflowingText("This list is not properly closed.");
+            try report.document.addLineBreak();
+            try report.document.addText("Expected either a comma ");
+            try report.document.addAnnotated(",", .emphasized);
+            try report.document.addText(" to continue the list or a closing bracket ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" to end it.");
+        },
+        .where_expected_mod_open, .where_expected_var, .where_expected_mod_close, .where_expected_arg_open, .where_expected_arg_close, .where_expected_method_arrow, .where_expected_method_or_alias_name, .where_expected_module, .where_expected_colon, .where_expected_constraints => {
+            try report.document.addReflowingText("There's a problem with this where clause.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses should have the form:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("where module(a).method : args -> ret");
+        },
+        .no_else => {
+            try report.document.addReflowingText("This `if` expression is missing an `else` branch.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("All `if` expressions in Roc must have an `else` branch to ensure they always return a value.");
+        },
+        else => {
+            // Generic parse error message
+            try report.document.addText("A parsing error occurred: ");
+            try report.document.addAnnotated(@tagName(diag.tag), .error_highlight);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
+        },
+    }
+
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Add the source context with line numbers
+    if (diag.region.start.offset < diag.region.end.offset and
+        diag.region.end.offset <= env.source.len)
+    {
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            env.source,
+            env.line_starts.items.items,
+            diag.region.start.offset,
+            diag.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            snapshot_path,
+            env.source,
+            env.line_starts.items.items,
+        );
+    }
 
     return report;
 }
@@ -552,32 +744,139 @@ fn convertCIR2DiagnosticToReport(
     env: *const base.CommonEnv,
     snapshot_path: []const u8,
 ) !Report {
-    _ = snapshot_path;
-
     const title = switch (diag.tag) {
-        .pattern_in_expr_context => "Pattern in Expression Context",
-        .expr_in_pattern_context => "Expression in Pattern Context",
-        .stmt_in_expr_context => "Statement in Expression Context",
-        .expr_in_stmt_context => "Expression in Statement Context",
-        .type_in_expr_context => "Type in Expression Context",
-        .ident_not_in_scope => "Identifier Not in Scope",
-        .ident_already_defined => "Identifier Already Defined",
-        .type_not_in_scope => "Type Not in Scope",
-        .unsupported_node => "Unsupported Node",
-        .malformed_ast => "Malformed AST",
+        .pattern_in_expr_context => "PATTERN IN EXPRESSION CONTEXT",
+        .expr_in_pattern_context => "EXPRESSION IN PATTERN CONTEXT",
+        .stmt_in_expr_context => "STATEMENT IN EXPRESSION CONTEXT",
+        .expr_in_stmt_context => "EXPRESSION IN STATEMENT CONTEXT",
+        .type_in_expr_context => "TYPE IN EXPRESSION CONTEXT",
+        .ident_not_in_scope => "UNDEFINED VARIABLE",
+        .ident_already_defined => "IDENTIFIER ALREADY DEFINED",
+        .type_not_in_scope => "TYPE NOT IN SCOPE",
+        .unsupported_node => "UNSUPPORTED NODE",
+        .malformed_ast => "MALFORMED AST",
     };
 
     var report = Report.init(allocator, title, .runtime_error);
 
-    // Convert offsets to line/column using CommonEnv
-    const region_info = env.calcRegionInfo(diag.region);
-    const start_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.start_line_idx + 1, region_info.start_col_idx + 1 });
-    defer allocator.free(start_str);
-    const end_str = try std.fmt.allocPrint(allocator, "{}:{}", .{ region_info.end_line_idx + 1, region_info.end_col_idx + 1 });
-    defer allocator.free(end_str);
-    const region_text = try std.fmt.allocPrint(allocator, "at {s} to {s}", .{ start_str, end_str });
-    defer allocator.free(region_text);
-    try report.document.addText(region_text);
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(diag.region.start.offset, env.source.len) },
+        .end = .{ .offset = @min(@max(diag.region.end.offset, diag.region.start.offset), env.source.len) },
+    };
+
+    // Add detailed error message based on the diagnostic type
+    switch (diag.tag) {
+        .pattern_in_expr_context => {
+            try report.document.addReflowingText("Found a pattern where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can only appear in specific contexts like function parameters, ");
+            try report.document.addText("destructuring assignments, or ");
+            try report.document.addAnnotated("when", .emphasized);
+            try report.document.addText(" branches.");
+        },
+        .expr_in_pattern_context => {
+            try report.document.addReflowingText("Found an expression where a pattern was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This location requires a pattern for matching or destructuring, not a computed value.");
+        },
+        .stmt_in_expr_context => {
+            try report.document.addReflowingText("Found a statement where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Statements like ");
+            try report.document.addAnnotated("return", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("dbg", .emphasized);
+            try report.document.addText(", or ");
+            try report.document.addAnnotated("expect", .emphasized);
+            try report.document.addText(" cannot be used in expression contexts.");
+        },
+        .expr_in_stmt_context => {
+            try report.document.addReflowingText("Found an expression where a statement was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This might be a missing semicolon or an incorrectly placed expression.");
+        },
+        .type_in_expr_context => {
+            try report.document.addReflowingText("Found a type annotation where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should appear after a colon in declarations, not in expression contexts.");
+        },
+        .ident_not_in_scope => {
+            const ident_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("Nothing is named ");
+            try report.document.addAnnotated(ident_text, .error_highlight);
+            try report.document.addText(" in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Is there an ");
+            try report.document.addAnnotated("import", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("exposing", .emphasized);
+            try report.document.addText(" missing up-top?");
+        },
+        .ident_already_defined => {
+            const ident_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("The identifier ");
+            try report.document.addAnnotated(ident_text, .error_highlight);
+            try report.document.addText(" has already been defined in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Each identifier can only be defined once. Consider using a different name.");
+        },
+        .type_not_in_scope => {
+            const type_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("The type ");
+            try report.document.addAnnotated(type_text, .error_highlight);
+            try report.document.addText(" is not in scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure it's imported or defined in this module.");
+        },
+        .unsupported_node => {
+            try report.document.addReflowingText("This syntax is not yet supported by the compiler.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This might be a limitation in the current implementation that will be addressed in a future update.");
+        },
+        .malformed_ast => {
+            try report.document.addReflowingText("The Abstract Syntax Tree is malformed at this location.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This usually indicates a parsing error that wasn't properly recovered from.");
+        },
+    }
+
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Add the source context with line numbers
+    if (diag.region.start.offset < diag.region.end.offset and
+        diag.region.end.offset <= env.source.len)
+    {
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            env.source,
+            env.line_starts.items.items,
+            diag.region.start.offset,
+            diag.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            snapshot_path,
+            env.source,
+            env.line_starts.items.items,
+        );
+    }
 
     return report;
 }
@@ -2753,16 +3052,42 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
                 else => unreachable,
             };
 
-            // Check if ByteSlices is empty or index is out of bounds (happens after CIR2 mutation)
-            const byte_slices_len = ast.byte_slices.entries.items.items.len;
-            const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
-            if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
-                // ByteSlices is empty or index is invalid - this happens when outputting AST after CIR2 mutation
-                // CIR2 may create new nodes with ByteSlices indices but doesn't populate the ByteSlices
-                try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
+            // Check if we can safely read from ByteSlices
+            const idx_val = @intFromEnum(idx);
+            const idx_usize = @as(usize, @intCast(idx_val));
+            const items = ast.byte_slices.entries.items.items;
+
+            // First check if index is even in bounds
+            if (items.len == 0 or idx_usize >= items.len) {
+                try writer.print(" big:<idx:{}>", .{idx_val});
             } else {
-                const slice = ast.byte_slices.slice(idx);
-                try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+                // Now check if we can actually read the slice at this index
+                // The ByteSlices format is: [length_byte(s)] [data...]
+                const first_byte = items[idx_usize];
+
+                const can_read = blk: {
+                    if (first_byte < 128) {
+                        // Single-byte length encoding
+                        const slice_len = first_byte;
+                        const slice_start = idx_usize + 1;
+                        break :blk (slice_start + slice_len <= items.len);
+                    } else {
+                        // Multi-byte length encoding (4 bytes for length)
+                        if (idx_usize + 5 > items.len) break :blk false;
+                        const len_bytes = items[idx_usize + 1 .. idx_usize + 5];
+                        const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
+                        const slice_start = idx_usize + 5;
+                        break :blk (slice_start + @as(usize, @intCast(slice_len)) <= items.len);
+                    }
+                };
+
+                if (can_read) {
+                    const slice = ast.byte_slices.slice(idx);
+                    try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+                } else {
+                    // Index is valid but data extends beyond buffer
+                    try writer.print(" big:<invalid:{}>", .{idx_val});
+                }
             }
         },
 
@@ -3508,10 +3833,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
     // Check our file starts with the metadata section
     if (!std.mem.startsWith(u8, file_content, "# META")) {
-        // Skip invalid snapshot files silently (or with debug message)
-        // These are likely corrupted or placeholder files
-        std.log.debug("skipping invalid snapshot file '{s}' (doesn't start with '# META')", .{snapshot_path});
-        return true; // Return true to indicate we "processed" it (by skipping)
+        // Fail on invalid snapshot files
+        std.log.err("invalid snapshot file '{s}' (doesn't start with '# META')", .{snapshot_path});
+        return false; // Return false to indicate failure
     }
 
     // Parse the file to find section boundaries

@@ -38,11 +38,27 @@ match isReady
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:7 to 2:9
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:2 to 3:7
+**boolean_patterns.md:2:2:2:24:**
+```roc
+	True => "ready to go!"
+```
+	^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**boolean_patterns.md:3:2:3:7:**
+```roc
+	False => "not ready yet"
+```
+	^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

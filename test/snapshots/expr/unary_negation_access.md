@@ -16,7 +16,7 @@ OpUnaryMinus LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+-rec1.field
 ~~~
 # EXPECTED
 NIL

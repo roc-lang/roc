@@ -34,7 +34,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwAs UpperIdent KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent OpArrow UpperIdent OpenRound UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma UpperIdent Dot LowerIdent CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwAs UpperIdent KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare LowerIdent CloseSquare BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent OpArrow UpperIdent OpenRound UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpenRound LowerIdent Comma UpperIdent Dot LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -55,52 +55,168 @@ processData = |advancedConfig, input| Config.Parser | Advanced | .parseWith((adv
 formatOutput : Str -> Str
 formatOutput = |text| padLeft((text, Config.defaultPadding))
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-validateAuth = |creds| HttpAuth.validate(creds)
+validateAuth = |creds| HttpAuth.validate(creds)# Test multi-level type qualification
+# Test multi-level value qualification
+# Test deeply nested qualification
+# Test mixed qualification (exposed item + qualified)
+# Test qualified type in function signature
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:26
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 4:1 to 4:36
+**can_import_nested_modules.md:3:1:3:26:**
+```roc
+import json.Parser.Config
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 5:1 to 5:46
 
-**Unsupported Node**
-at 9:26 to 9:32
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 13:29 to 13:37
+**can_import_nested_modules.md:4:1:4:36:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 16:15 to 16:21
 
-**Unsupported Node**
-at 16:21 to 16:28
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 16:58 to 16:64
+**can_import_nested_modules.md:5:1:5:46:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 16:64 to 16:71
 
-**Unsupported Node**
-at 18:5 to 18:11
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 18:11 to 18:18
+**can_import_nested_modules.md:9:26:9:32:**
+```roc
+parseConfig = |settings| Config.toString(settings)
+```
+                         ^^^^^^
 
-**Unsupported Node**
-at 18:18 to 18:27
 
-**Unsupported Node**
-at 22:37 to 22:43
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 26:24 to 26:32
+**can_import_nested_modules.md:13:29:13:37:**
+```roc
+authenticate = |user, pass| HttpAuth.login(user, pass)
+```
+                            ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:16:15:16:21:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+              ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:16:21:16:28:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                    ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:16:58:16:64:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                                         ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:16:64:16:71:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                                               ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:18:5:18:11:**
+```roc
+    Config.Parser.Advanced.parseWith(advancedConfig, input)
+```
+    ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:18:11:18:18:**
+```roc
+    Config.Parser.Advanced.parseWith(advancedConfig, input)
+```
+          ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:18:18:18:27:**
+```roc
+    Config.Parser.Advanced.parseWith(advancedConfig, input)
+```
+                 ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:22:37:22:43:**
+```roc
+formatOutput = |text| padLeft(text, Config.defaultPadding)
+```
+                                    ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:26:24:26:32:**
+```roc
+validateAuth = |creds| HttpAuth.validate(creds)
+```
+                       ^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

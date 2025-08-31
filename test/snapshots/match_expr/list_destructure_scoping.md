@@ -22,17 +22,18 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
       (list_literal
         (lc "first")
       )
-      (lc "first")
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
+      (block
         (lc "first")
-        (lc "second")
-      )
-      (binop_plus
-        (lc "first")
-        (lc "second")
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (lc "second")
+          )
+          (binop_plus
+            (lc "first")
+            (lc "second")
+          )
+        )
       )
     )
 ))
@@ -40,17 +41,23 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
 # FORMATTED
 ~~~roc
 match list
-	[first] => first
-	[first, second] => first + second
+	[first] => 
+		first
+		[first, second] => first + second
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:13 to 2:15
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:20
+**list_destructure_scoping.md:2:5:3:38:**
+```roc
+    [first] => first
+    [first, second] => first + second
+```
+
 
 # CANONICALIZE
 ~~~clojure

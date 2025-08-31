@@ -25,11 +25,28 @@ LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound C
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:14 to 2:2
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:14 to 2:2
+**record_access_multiline_formatting_1.md:1:14:2:2:**
+```roc
+some_fn(arg1)?
+	.static_dispatch_method()?
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_access_multiline_formatting_1.md:1:14:2:2:**
+```roc
+some_fn(arg1)?
+	.static_dispatch_method()?
+```
+
 
 # CANONICALIZE
 ~~~clojure

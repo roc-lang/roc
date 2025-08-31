@@ -24,48 +24,52 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpF
         (lc "name")
         (lc "age")
       )
-      (str_literal_big "${name} is ${age.to_str()} years old")
-    )
-)
-  (branch2     (binop_thick_arrow
-      (record_literal
-        (lc "name")
-        (binop_colon
-          (lc "address")
-          (block
-            (lc "city")
+      (block
+        (str_literal_big "${name} is ${age.to_str()} years old")
+        (binop_thick_arrow
+          (record_literal
+            (lc "name")
+            (binop_colon
+              (lc "address")
+              (block
+                (lc "city")
+              )
+            )
           )
+          (str_literal_big "${city} is the city of ${name}")
+        )
+        (binop_thick_arrow
+          (record_literal)
+          (str_literal_big "empty")
         )
       )
-      (str_literal_big "${city} is the city of ${name}")
-    )
-)
-  (branch3     (binop_thick_arrow
-      (record_literal)
-      (str_literal_big "empty")
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match ...
-	{name, age} => "${name} is ${age.to_str()} years old"
-	{name, address: {
-		city
-	}} => "${city} is the city of ${name}"
-	{} => "empty"
+	{name, age} => 
+		"${name} is ${age.to_str()} years old"
+		{ name, address : {
+			city
+		} } => "${city} is the city of ${name}"
+		{} => "empty"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:19 to 2:21
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:32
+**record_destructure.md:2:5:4:18:**
+```roc
+    { name, age } => "${name} is ${age.to_str()} years old"
+    { name, address: { city } } => "${city} is the city of ${name}"
+    {} => "empty"
+```
 
-**Unsupported Node**
-at 4:8 to 4:10
 
 # CANONICALIZE
 ~~~clojure

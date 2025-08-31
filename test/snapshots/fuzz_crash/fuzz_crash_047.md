@@ -13,7 +13,7 @@ updated = { ..person,
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -35,11 +35,27 @@ age : 31
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 4:11 to 5:2
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 5:10 to 5:11
+**fuzz_crash_047.md:4:11:5:2:**
+```roc
+updated = { ..person,
+ age: 31 }
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_047.md:5:10:5:11:**
+```roc
+ age: 31 }
+```
+         ^
+
 
 # CANONICALIZE
 ~~~clojure

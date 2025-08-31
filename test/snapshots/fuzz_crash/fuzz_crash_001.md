@@ -24,11 +24,22 @@ mo
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:4 to 1:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **%** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:5 to 1:5
+**fuzz_crash_001.md:1:4:1:5:**
+```roc
+mo|%
+```
+   ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
 
 # CANONICALIZE
 ~~~clojure

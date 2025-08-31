@@ -92,7 +92,7 @@ const Formatter = struct {
         return @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(payload_u32));
     }
 
-    /// Flush any comment tokens before the given position
+    /// Flush any comment and blank line tokens before the given position
     fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
         var found_any = false;
 
@@ -106,24 +106,46 @@ const Formatter = struct {
 
             switch (token.tag) {
                 .LineComment, .DocComment => {
-                    // Output the comment text
-                    const comment_text = self.source[token.region.start.offset..token.region.end.offset];
-
-                    // Preserve indentation for inline comments
+                    // Ensure we're on a new line before outputting the comment
                     if (!self.has_newline) {
                         try self.pushAll(" ");
                     } else {
                         try self.pushIndent();
                     }
 
-                    try self.pushAll(comment_text);
+                    // Output the comment text (doesn't include newline)
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
+
+                    // Add newline after comment
                     try self.newline();
+
+                    found_any = true;
+                    self.token_cursor += 1;
+                },
+                .BlankLine => {
+                    // When we encounter a BlankLine while flushing comments, we need to handle it
+                    // A blank line after a comment should be output as just a newline
+                    // (the previous comment already added one newline, so we just need one more)
+
+                    // Debug: Make sure we're not copying the source content with spaces
+                    if (std.debug.runtime_safety) {
+                        const region = self.source[token.region.start.offset..token.region.end.offset];
+                        var space_count: usize = 0;
+                        for (region) |c| {
+                            if (c == ' ') space_count += 1;
+                        }
+                        if (space_count >= 4) {
+                            std.debug.print("WARNING: BlankLine token contains {} spaces, but we're NOT copying them\n", .{space_count});
+                        }
+                    }
+
+                    // Output a clean newline for the blank line (no spaces!)
+                    try self.newline();
+                    self.token_cursor += 1;
                     found_any = true;
                 },
-                else => {}, // Skip non-comment tokens
+                else => break, // Stop at non-comment/blank tokens
             }
-
-            self.token_cursor += 1;
         }
 
         return found_any;
@@ -228,7 +250,8 @@ const Formatter = struct {
                             if (pkg_node.tag == .binop_colon) {
                                 const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
                                 try self.formatNode(binop.lhs);
-                                try self.pushAll(": ");
+                                try self.push(':');
+                                try self.ensureSpace();
 
                                 const value_node = self.getNode(binop.rhs);
                                 if (value_node.tag == .binop_platform) {
@@ -256,7 +279,8 @@ const Formatter = struct {
                     try self.push('}');
                 } else {
                     // Single line format (simpler case)
-                    try self.pushAll(" { ");
+                    try self.ensureSpace();
+                    try self.pushAll("{ ");
                     if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
                         var it = self.ast.node_slices.nodes(&packages_idx);
                         var first = true;
@@ -268,7 +292,8 @@ const Formatter = struct {
                                 const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
 
                                 try self.formatNode(binop.lhs);
-                                try self.pushAll(": ");
+                                try self.push(':');
+                                try self.ensureSpace();
                                 const value_node = self.getNode(binop.rhs);
                                 if (value_node.tag == .binop_platform) {
                                     const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
@@ -286,7 +311,8 @@ const Formatter = struct {
                             }
                         }
                     }
-                    try self.pushAll(" }");
+                    try self.ensureSpace();
+                    try self.push('}');
                 }
             },
             .package => |p| {
@@ -346,7 +372,7 @@ const Formatter = struct {
                 }
 
                 // Format exposes
-                try self.pushAll(" exposes ");
+                try self.pushAll(" exposes");
                 try self.formatExposedList(p.exposes);
 
                 // Format packages
@@ -386,7 +412,8 @@ const Formatter = struct {
     }
 
     fn formatExposedList(self: *Formatter, exposes_idx: collections.NodeSlices(Node.Idx).Idx) !void {
-        try self.pushAll(" [");
+        try self.ensureSpace();
+        try self.pushAll("[");
 
         // Check if we have exposed items
         // NodeSlices uses NIL (minInt(i32)) for empty, all other values are valid indices
@@ -521,32 +548,86 @@ const Formatter = struct {
         // Flush any comments before this node
         _ = try self.flushCommentsBeforePosition(node.region.start);
 
+        try self.formatNodeWithoutCommentFlush(node_idx);
+
+        // Check for blank lines after this node (for separating statement groups)
+        try self.flushBlankLinesAfterPosition(node.region.end);
+    }
+
+    fn formatNodeInBlock(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        // Flush any comments before this node
+        _ = try self.flushCommentsBeforePosition(node.region.start);
+
+        // After flushing comments (which end with a newline) or if no comments,
+        // we're at the start of a line and just need indentation
+        try self.pushIndent();
+
+        try self.formatNodeWithoutCommentFlush(node_idx);
+
+        // Check for blank lines after this node (for separating statement groups)
+        try self.flushBlankLinesAfterPosition(node.region.end);
+    }
+
+    fn flushBlankLinesAfterPosition(self: *Formatter, pos: Position) !void {
+        // Look ahead for blank line tokens immediately after this position
+        if (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+            if (token.tag == .BlankLine and token.region.start.offset >= pos.offset) {
+                // Found a blank line token after this statement
+                // Add an extra newline to create the blank line
+
+                // Debug: Make sure we just add a clean newline, nothing else
+                if (std.debug.runtime_safety) {
+                    const output_before = self.output.items.len;
+                    try self.newline();
+                    const output_after = self.output.items.len;
+
+                    // Check what was added
+                    if (output_after > output_before) {
+                        const added = self.output.items[output_before..output_after];
+                        if (added.len != 1 or added[0] != '\n') {
+                            std.debug.panic("ERROR: flushBlankLinesAfterPosition added more than just newline: {s}\n", .{added});
+                        }
+                    }
+                } else {
+                    try self.newline();
+                }
+                self.token_cursor += 1;
+            }
+        }
+    }
+
+    fn formatNodeWithoutCommentFlush(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
         switch (node.tag) {
             // Binary operations
-            .binop_equals => try self.formatBinOp(node_idx, " = "),
-            .binop_double_equals => try self.formatBinOp(node_idx, " == "),
-            .binop_not_equals => try self.formatBinOp(node_idx, " != "),
+            .binop_equals => try self.formatBinOp(node_idx, "="),
+            .binop_double_equals => try self.formatBinOp(node_idx, "=="),
+            .binop_not_equals => try self.formatBinOp(node_idx, "!="),
             .binop_colon => try self.formatTypeAnnotation(node_idx),
             .binop_colon_equals => try self.formatNominalTypeDefinition(node_idx),
-            .binop_dot => try self.formatBinOp(node_idx, "."),
-            .binop_plus => try self.formatBinOp(node_idx, " + "),
-            .binop_minus => try self.formatBinOp(node_idx, " - "),
-            .binop_star => try self.formatBinOp(node_idx, " * "),
-            .binop_slash => try self.formatBinOp(node_idx, " / "),
-            .binop_double_slash => try self.formatBinOp(node_idx, " // "),
-            .binop_double_question => try self.formatBinOp(node_idx, " ?? "),
-            .binop_gt => try self.formatBinOp(node_idx, " > "),
-            .binop_gte => try self.formatBinOp(node_idx, " >= "),
-            .binop_lt => try self.formatBinOp(node_idx, " < "),
-            .binop_lte => try self.formatBinOp(node_idx, " <= "),
-            .binop_thick_arrow => try self.formatBinOp(node_idx, " => "),
-            .binop_thin_arrow => try self.formatBinOp(node_idx, " -> "),
-            .binop_and => try self.formatBinOp(node_idx, " && "),
-            .binop_or => try self.formatBinOp(node_idx, " || "),
-            .binop_as => try self.formatBinOp(node_idx, " as "),
-            .binop_exposing => try self.formatBinOp(node_idx, " exposing "),
+            .binop_dot => try self.formatDotAccess(node_idx),
+            .binop_plus => try self.formatBinOp(node_idx, "+"),
+            .binop_minus => try self.formatBinOp(node_idx, "-"),
+            .binop_star => try self.formatBinOp(node_idx, "*"),
+            .binop_slash => try self.formatBinOp(node_idx, "/"),
+            .binop_double_slash => try self.formatBinOp(node_idx, "//"),
+            .binop_double_question => try self.formatBinOp(node_idx, "??"),
+            .binop_gt => try self.formatBinOp(node_idx, ">"),
+            .binop_gte => try self.formatBinOp(node_idx, ">="),
+            .binop_lt => try self.formatBinOp(node_idx, "<"),
+            .binop_lte => try self.formatBinOp(node_idx, "<="),
+            .binop_thick_arrow => try self.formatBinOp(node_idx, "=>"),
+            .binop_thin_arrow => try self.formatBinOp(node_idx, "->"),
+            .binop_and => try self.formatBinOp(node_idx, "&&"),
+            .binop_or => try self.formatBinOp(node_idx, "||"),
+            .binop_as => try self.formatBinOp(node_idx, "as"),
+            .binop_exposing => try self.formatBinOp(node_idx, "exposing"),
             .binop_where => try self.formatWhereClause(node_idx),
-            .binop_platform => try self.formatBinOp(node_idx, " platform "),
+            .binop_platform => try self.formatBinOp(node_idx, "platform"),
             .binop_pipe => {
                 // Check if this is a module field access pattern
                 const pipe_node = self.getNode(node_idx);
@@ -560,7 +641,7 @@ const Formatter = struct {
                     try self.formatNode(binop.rhs);
                 } else {
                     // Regular pipe for pattern alternatives
-                    try self.formatBinOp(node_idx, " | ");
+                    try self.formatBinOp(node_idx, "|");
                 }
             },
 
@@ -688,23 +769,92 @@ const Formatter = struct {
                     };
 
                     if (needs_space) {
-                        try self.push(' ');
+                        try self.ensureSpace();
                     }
 
                     try self.formatNode(expr_idx);
                 }
             },
 
-            // Malformed nodes - preserve source bytes
+            // Malformed nodes - preserve source bytes but skip pure whitespace
             .malformed => |_| {
-                // For malformed nodes, we preserve the original source text
-                // Parser ensures regions are always valid (end >= start)
+                // For malformed nodes, we need to be careful not to output raw whitespace
+                // from the source, as that violates our formatting rules
                 const start = node.region.start.offset;
                 const end = node.region.end.offset;
 
                 if (end <= self.source.len) {
                     const source_text = self.source[start..end];
-                    try self.pushAll(source_text);
+
+                    // Check if this is just whitespace - if so, skip it
+                    var is_all_whitespace = true;
+                    for (source_text) |c| {
+                        if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
+                            is_all_whitespace = false;
+                            break;
+                        }
+                    }
+
+                    // Only output non-whitespace malformed content
+                    if (!is_all_whitespace) {
+                        // For malformed content, we need to replace source indentation with tabs
+                        // Split the content by lines and re-indent with tabs
+
+                        var line_start = start;
+                        var i = start;
+                        while (i < end) : (i += 1) {
+                            if (self.source[i] == '\n') {
+                                // Output this line with tab indentation
+                                const line_end = i;
+
+                                // Count leading spaces
+                                var space_count: usize = 0;
+                                var content_start = line_start;
+                                while (content_start < line_end and self.source[content_start] == ' ') {
+                                    content_start += 1;
+                                    space_count += 1;
+                                }
+
+                                // If the line had indentation, add a single tab
+                                if (space_count > 0 and content_start < line_end) {
+                                    try self.push('\t');
+                                }
+
+                                // Output the content without leading spaces
+                                if (content_start < line_end) {
+                                    try self.pushLiteralFromRegion(content_start, line_end);
+                                }
+
+                                // Add the newline
+                                try self.newline();
+
+                                // Move to next line
+                                line_start = i + 1;
+                            }
+                        }
+
+                        // Handle last line if it doesn't end with newline
+                        if (line_start < end) {
+                            // Count leading spaces
+                            var space_count: usize = 0;
+                            var content_start = line_start;
+                            while (content_start < end and self.source[content_start] == ' ') {
+                                content_start += 1;
+                                space_count += 1;
+                            }
+
+                            // If the line had indentation, add a single tab
+                            if (space_count > 0 and content_start < end) {
+                                try self.push('\t');
+                            }
+
+                            // Output the content without leading spaces
+                            if (content_start < end) {
+                                try self.pushLiteralFromRegion(content_start, end);
+                            }
+                        }
+                    }
+
                     // Update token cursor to skip past this malformed region
                     while (self.token_cursor < self.tokens.len and
                         self.tokens[self.token_cursor].region.start.offset < end)
@@ -718,7 +868,30 @@ const Formatter = struct {
         // Comments after nodes will be handled when we flush before the next token
     }
 
+    fn formatDotAccess(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        // Format dot access without spaces
+        try self.formatNode(binop.lhs);
+        try self.push('.');
+        try self.formatNode(binop.rhs);
+    }
+
     fn formatBinOp(self: *Formatter, node_idx: Node.Idx, op_str: []const u8) !void {
+        // Debug check: operators should never have leading or trailing whitespace
+        if (std.debug.runtime_safety) {
+            if (op_str.len > 0) {
+                if (op_str[0] == ' ' or op_str[0] == '\t') {
+                    std.debug.panic("ERROR: Operator has leading whitespace: '{s}'\n", .{op_str});
+                }
+                if (op_str[op_str.len - 1] == ' ' or op_str[op_str.len - 1] == '\t') {
+                    std.debug.panic("ERROR: Operator has trailing whitespace: '{s}'\n", .{op_str});
+                }
+            }
+        }
+
         const node = self.getNode(node_idx);
         const binop_idx = node.payload.binop;
         const binop = self.ast.node_slices.binOp(binop_idx);
@@ -729,7 +902,9 @@ const Formatter = struct {
         // Special case for binop_platform: format as "string" platform [provides]
         if (node.tag == .binop_platform) {
             try self.formatNode(lhs); // The platform string
-            try self.pushAll(" platform ");
+            try self.ensureSpace();
+            try self.pushAll(op_str); // "platform"
+            try self.ensureSpace();
 
             // The RHS is a block containing the provides list - format it as a list
             const rhs_node = self.getNode(rhs);
@@ -841,7 +1016,11 @@ const Formatter = struct {
             try self.formatNode(lhs);
             if (needs_lhs_parens) try self.push(')');
 
-            try self.pushAll(" = ");
+            try self.ensureSpace();
+            try self.pushAll("=");
+
+            // Remember where we are before formatting RHS to detect if it's multiline
+            const output_len_before_rhs = self.output.items.len;
 
             // Check for comments before RHS
             const rhs_node = self.getNode(rhs);
@@ -866,10 +1045,29 @@ const Formatter = struct {
                 try self.formatNode(rhs);
                 if (needs_rhs_parens) try self.push(')');
                 self.curr_indent_level -= 1;
+
+                // Add a blank line after multiline assignment expressions
+                try self.ensureBlankLine();
             } else {
+                try self.ensureSpace();
                 if (needs_rhs_parens) try self.push('(');
                 try self.formatNode(rhs);
                 if (needs_rhs_parens) try self.push(')');
+
+                // Check if the RHS actually formatted as multiline
+                // by checking if any newlines were added
+                var formatted_multiline = false;
+                for (self.output.items[output_len_before_rhs..]) |c| {
+                    if (c == '\n') {
+                        formatted_multiline = true;
+                        break;
+                    }
+                }
+
+                // If the RHS formatted as multiline, add a blank line after it
+                if (formatted_multiline) {
+                    try self.ensureBlankLine();
+                }
             }
         } else {
             // Normal binary operator
@@ -879,7 +1077,20 @@ const Formatter = struct {
 
             // Comments around operators will be handled when we flush before the RHS
 
+            // Add space before operator if needed
+            // Debug check first
+            if (std.debug.runtime_safety) {
+                // Check that operator doesn't start or end with spaces
+                if (op_str.len > 0) {
+                    if (op_str[0] == ' ' or op_str[op_str.len - 1] == ' ') {
+                        std.debug.panic("ERROR: Operator '{s}' starts or ends with whitespace!\n", .{op_str});
+                    }
+                }
+            }
+
+            try self.ensureSpace();
             try self.pushAll(op_str);
+            try self.ensureSpace();
 
             // Check for comments after operator using token-based approach
             const rhs_node = self.getNode(rhs);
@@ -905,12 +1116,12 @@ const Formatter = struct {
         // Check if this is a complex type that should be multiline
         const rhs_node = self.getNode(rhs);
         const is_complex_type = switch (rhs_node.tag) {
-            // Function types with multiple arrows
+            // Only make function types multiline if they have nested arrows (curried functions)
             .binop_thin_arrow => blk: {
                 const arrow_binop = self.ast.node_slices.binOp(rhs_node.payload.binop);
                 const arrow_lhs_node = self.getNode(arrow_binop.lhs);
-                // Check if the function has multiple parameters (tuple) or nested arrows
-                break :blk arrow_lhs_node.tag == .tuple_literal or arrow_lhs_node.tag == .binop_thin_arrow;
+                // Only multiline for nested arrows, not simple tuples
+                break :blk arrow_lhs_node.tag == .binop_thin_arrow;
             },
             // Record types with many fields
             .record_literal => self.collectionIsMultiline(rhs),
@@ -920,14 +1131,17 @@ const Formatter = struct {
         };
 
         if (is_complex_type) {
-            try self.pushAll(" :");
+            try self.ensureSpace();
+            try self.push(':');
             try self.ensureNewline();
             self.curr_indent_level += 1;
             try self.pushIndent();
             try self.formatTypeExpression(rhs);
             self.curr_indent_level -= 1;
         } else {
-            try self.pushAll(" : ");
+            try self.ensureSpace();
+            try self.push(':');
+            try self.ensureSpace();
             try self.formatTypeExpression(rhs);
         }
     }
@@ -943,7 +1157,9 @@ const Formatter = struct {
         // Format the left side (type name with parameters)
         try self.formatNode(lhs);
 
-        try self.pushAll(" := ");
+        try self.ensureSpace();
+        try self.pushAll(":=");
+        try self.ensureSpace();
 
         // Format the implementation type
         try self.formatTypeExpression(rhs);
@@ -1015,7 +1231,9 @@ const Formatter = struct {
             if (field_node.tag == .binop_colon) {
                 const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
                 try self.formatNode(field_binop.lhs);
-                try self.pushAll(" : ");
+                try self.ensureSpace();
+                try self.push(':');
+                try self.ensureSpace();
                 try self.formatTypeExpression(field_binop.rhs);
             } else {
                 try self.formatNode(field);
@@ -1080,7 +1298,7 @@ const Formatter = struct {
         _ = it.next(); // Skip constructor again
 
         while (it.next()) |elem| {
-            try self.push(' ');
+            try self.ensureSpace();
 
             // Check if argument needs parentheses (e.g., function types as arguments)
             const elem_node = self.getNode(elem);
@@ -1193,7 +1411,7 @@ const Formatter = struct {
         }
 
         if (end > start) {
-            try self.pushAll(self.source[start..end]);
+            try self.pushLiteralFromRegion(start, end);
         }
     }
 
@@ -1202,8 +1420,7 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         // The node region includes the dot and the identifier
-        const text = self.source[node.region.start.offset..node.region.end.offset];
-        try self.pushAll(text);
+        try self.pushLiteralFromRegion(node.region.start.offset, node.region.end.offset);
     }
 
     fn formatUnaryNot(self: *Formatter, node_idx: Node.Idx) !void {
@@ -1434,7 +1651,7 @@ const Formatter = struct {
     fn formatRecord(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // Special case: single-field record with just identifier and comma e.g. { foo, }
+        // Count fields and check for special cases
         var field_count: usize = 0;
         var is_single_ident_with_comma = false;
         var field_iter = self.ast.node_slices.nodes(&node.payload.nodes);
@@ -1445,6 +1662,40 @@ const Formatter = struct {
                 // Check if it's just an identifier (not field:value)
                 is_single_ident_with_comma = (field_node.tag == .lc or field_node.tag == .var_lc) and self.hasTrailingComma(node_idx);
             }
+        }
+
+        // Special case: empty record - format as {} with no space
+        if (field_count == 0) {
+            // Check if there are any comments inside the empty record
+            const has_internal_comments = blk: {
+                var scan = self.token_cursor;
+                while (scan < self.tokens.len) {
+                    const token = self.tokens[scan];
+                    if (token.region.start.offset >= node.region.end.offset) break;
+                    if (token.region.start.offset > node.region.start.offset and
+                        (token.tag == .LineComment or token.tag == .DocComment))
+                    {
+                        break :blk true;
+                    }
+                    scan += 1;
+                }
+                break :blk false;
+            };
+
+            if (has_internal_comments) {
+                // Format with comments preserved
+                try self.push('{');
+                self.curr_indent_level += 1;
+                _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(node.region.end.offset) });
+                self.curr_indent_level -= 1;
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.push('}');
+            } else {
+                // Simple empty record - no space
+                try self.pushAll("{}");
+            }
+            return;
         }
 
         // Check if this record should be multiline
@@ -1505,7 +1756,8 @@ const Formatter = struct {
             try self.pushIndent();
             try self.pushAll("}");
         } else {
-            try self.pushAll(" }");
+            try self.ensureSpace();
+            try self.push('}');
         }
     }
 
@@ -1609,41 +1861,14 @@ const Formatter = struct {
         const nodes_idx = node.payload.nodes;
         var iter = self.ast.node_slices.nodes(&nodes_idx);
 
-        var prev_stmt_end: usize = 0;
         var first = true;
-
         while (iter.next()) |stmt_idx| {
-            const stmt_node = self.getNode(stmt_idx);
-            const stmt_start = stmt_node.region.start.offset;
-
             if (!first) {
-                // Check source between statements for blank lines
-                if (prev_stmt_end < stmt_start and stmt_start < self.source.len) {
-                    const between = self.source[prev_stmt_end..stmt_start];
-
-                    // Count newlines to determine if there was a blank line
-                    var newline_count: u32 = 0;
-                    for (between) |c| {
-                        if (c == '\n') {
-                            newline_count += 1;
-                        }
-                    }
-
-                    // If there were 2+ newlines (blank line), preserve one blank line
-                    // Otherwise just one newline
-                    try self.ensureNewline();
-                    if (newline_count >= 2) {
-                        try self.ensureNewline(); // Add blank line
-                    }
-                }
+                // Always add a newline between statements
+                try self.ensureNewline();
             }
 
             try self.formatNode(stmt_idx);
-
-            // Check for trailing comment on the same line as this statement
-            // Comments after statements will be handled when we flush before the next statement
-
-            prev_stmt_end = stmt_node.region.end.offset;
             first = false;
         }
     }
@@ -1652,15 +1877,105 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
         const nodes_idx = node.payload.nodes;
 
+        // Count statements
+        var stmt_count: usize = 0;
+        var count_iter = self.ast.node_slices.nodes(&nodes_idx);
+        while (count_iter.next()) |_| {
+            stmt_count += 1;
+        }
+
+        // Special case: empty block - format as {} with no space
+        if (stmt_count == 0) {
+            // Check if there are any comments inside the empty block
+            const has_internal_comments = blk: {
+                var scan = self.token_cursor;
+                while (scan < self.tokens.len) {
+                    const token = self.tokens[scan];
+                    if (token.region.start.offset >= node.region.end.offset) break;
+                    if (token.region.start.offset > node.region.start.offset and
+                        (token.tag == .LineComment or token.tag == .DocComment))
+                    {
+                        break :blk true;
+                    }
+                    scan += 1;
+                }
+                break :blk false;
+            };
+
+            if (has_internal_comments) {
+                // Format with comments preserved
+                try self.push('{');
+                self.curr_indent_level += 1;
+                _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(node.region.end.offset) });
+                self.curr_indent_level -= 1;
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.push('}');
+            } else {
+                // Simple empty block - no space
+                try self.pushAll("{}");
+            }
+            return;
+        }
+
         try self.push('{');
         self.curr_indent_level += 1;
 
         var iter = self.ast.node_slices.nodes(&nodes_idx);
         var first = true;
         while (iter.next()) |stmt_idx| {
-            try self.ensureNewline();
+            const stmt_node = self.getNode(stmt_idx);
+
+            // Add newline before each statement
+            if (!first) {
+                try self.ensureNewline();
+            } else {
+                // For the first statement, we need a newline after the opening brace
+                try self.newline();
+            }
+
+            // Flush any comments before this statement (they handle their own indentation and newlines)
+            _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+
+            // Add indentation for the statement
+            // Debug: Check what we're about to indent
+            if (std.debug.runtime_safety) {
+                if (self.output.items.len > 0) {
+                    // Count how many chars back to the last newline
+                    var chars_since_newline: usize = 0;
+                    var i = self.output.items.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.output.items[i] == '\n') {
+                            break;
+                        }
+                        chars_since_newline += 1;
+                    }
+
+                    // If we have exactly 4 spaces after the last newline, that's our bug!
+                    if (chars_since_newline == 4) {
+                        // Check if they're all spaces
+                        var all_spaces = true;
+                        for (self.output.items[self.output.items.len - 4 ..]) |c| {
+                            if (c != ' ') {
+                                all_spaces = false;
+                                break;
+                            }
+                        }
+                        if (all_spaces) {
+                            std.debug.panic("ERROR: About to add indentation when we already have 4 spaces on the line!\nOutput: {s}\n", .{self.output.items});
+                        }
+                    }
+                }
+            }
             try self.pushIndent();
-            try self.formatNode(stmt_idx);
+
+            // Format the statement itself
+            try self.formatNodeWithoutCommentFlush(stmt_idx);
+
+            // Check for blank lines after this node
+            try self.flushBlankLinesAfterPosition(stmt_node.region.end);
+
             first = false;
         }
 
@@ -1684,7 +1999,8 @@ const Formatter = struct {
             try self.formatNode(condition);
         }
 
-        try self.pushAll(" ");
+        // Space between condition and body
+        try self.ensureSpace();
 
         // Body (single statement/expression)
         if (it.next()) |body| {
@@ -1817,7 +2133,9 @@ const Formatter = struct {
                     try self.formatPattern(binop.lhs);
                 }
 
-                try self.pushAll(" => ");
+                try self.ensureSpace();
+                try self.pushAll("=>");
+                try self.ensureSpace();
 
                 // Format body
                 const body_node = self.getNode(binop.rhs);
@@ -1831,8 +2149,27 @@ const Formatter = struct {
                 if (needs_block_indent) {
                     try self.ensureNewline();
                     self.curr_indent_level += 1;
-                    try self.pushIndent();
-                    try self.formatNode(binop.rhs);
+
+                    // For blocks in match branches, format contents without braces
+                    if (body_node.tag == .block) {
+                        // Format block contents with proper indentation
+                        const block_node = body_node;
+                        const block_nodes_idx = block_node.payload.nodes;
+                        var block_it = self.ast.node_slices.nodes(&block_nodes_idx);
+
+                        var first_stmt = true;
+                        while (block_it.next()) |stmt_idx| {
+                            if (!first_stmt) {
+                                try self.ensureNewline();
+                            }
+                            try self.pushIndent();
+                            try self.formatNode(stmt_idx);
+                            first_stmt = false;
+                        }
+                    } else {
+                        try self.pushIndent();
+                        try self.formatNode(binop.rhs);
+                    }
                     self.curr_indent_level -= 1;
                 } else {
                     try self.formatNode(binop.rhs);
@@ -1925,7 +2262,8 @@ const Formatter = struct {
 
             // Guard patterns (pattern if condition)
             .if_without_else => {
-                const nodes_idx = node.payload.nodes;
+                const nodes_idx_val = @as(u32, @bitCast(node.payload.if_branches));
+                const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(nodes_idx_val));
                 var it = self.ast.node_slices.nodes(&nodes_idx);
 
                 // First node is the pattern
@@ -2290,7 +2628,8 @@ const Formatter = struct {
             try self.formatNode(iterator);
         }
 
-        try self.pushAll(" {");
+        try self.ensureSpace();
+        try self.push('{');
 
         // Format the loop body
         try self.formatLoopBody(&it);
@@ -2309,7 +2648,8 @@ const Formatter = struct {
             try self.formatNode(condition);
         }
 
-        try self.pushAll(" {");
+        try self.ensureSpace();
+        try self.push('{');
 
         // Format the loop body
         try self.formatLoopBody(&it);
@@ -2330,9 +2670,10 @@ const Formatter = struct {
 
         if (single_line) {
             // Single line: { expr }
-            try self.push(' ');
+            try self.ensureSpace();
             try self.formatNode(body_nodes.items[0]);
-            try self.pushAll(" }");
+            try self.ensureSpace();
+            try self.push('}');
         } else {
             // Multi-line body
             self.curr_indent_level += 1;
@@ -2582,6 +2923,22 @@ const Formatter = struct {
 
         // Find the string in the source - it starts with a quote
         const start = node.region.start.offset;
+
+        // Handle single-quoted strings (single characters)
+        if (start < self.source.len and self.source[start] == '\'') {
+            // Single-quoted string - output until closing quote
+            var end = start + 1;
+            while (end < self.source.len and self.source[end] != '\'') {
+                end += 1;
+            }
+            if (end < self.source.len) {
+                end += 1; // Include closing quote
+            }
+            const string_text = self.source[start..end];
+            try self.pushAll(string_text);
+            return;
+        }
+
         var end = start + 1; // Skip opening quote
 
         // Find the closing quote, handling escapes
@@ -2598,7 +2955,7 @@ const Formatter = struct {
         }
 
         // Output the string as-is from source
-        try self.pushAll(self.source[start..end]);
+        try self.pushLiteralFromRegion(start, end);
     }
 
     fn nodeRegion(self: *const Formatter, node_idx: Node.Idx) base.Region {
@@ -2838,12 +3195,106 @@ const Formatter = struct {
     }
 
     fn push(self: *Formatter, c: u8) !void {
+        // Debug check for consecutive spaces
+        if (std.debug.runtime_safety) {
+            if (c == ' ' and self.output.items.len > 0) {
+                const prev = self.output.items[self.output.items.len - 1];
+                if (prev == '\n') {
+                    // Track consecutive spaces after newline
+                    var consecutive_spaces: usize = 1;
+
+                    // Look ahead in the current output to see if we're building up spaces
+                    if (self.output.items.len >= 2) {
+                        var i = self.output.items.len - 2;
+                        while (i > 0) : (i -= 1) {
+                            if (self.output.items[i] == ' ') {
+                                consecutive_spaces += 1;
+                            } else if (self.output.items[i] == '\n') {
+                                // Found the newline, stop counting
+                                break;
+                            } else {
+                                // Hit non-space, non-newline
+                                break;
+                            }
+                        }
+                    }
+
+                    if (consecutive_spaces >= 4) {
+                        std.debug.panic("ERROR: push() is adding space #{} after a newline! Output so far:\n{s}\n", .{ consecutive_spaces, self.output.items });
+                    }
+                } else if (prev == ' ') {
+                    // Check if we're adding consecutive spaces
+                    var space_count: usize = 1;
+                    var i = self.output.items.len - 1;
+                    while (i > 0 and self.output.items[i] == ' ') : (i -= 1) {
+                        space_count += 1;
+                    }
+                    if (space_count >= 2) {
+                        std.debug.panic("ERROR: push() is adding consecutive space #{} at output position {}! Preceding context: {s}\n", .{ space_count + 1, self.output.items.len, self.output.items[std.math.sub(usize, self.output.items.len, 50) catch 0 ..] });
+                    }
+                }
+            }
+        }
+
         self.has_newline = c == '\n';
         try self.output.append(c);
     }
 
     fn pushAll(self: *Formatter, str: []const u8) !void {
         if (str.len == 0) return;
+
+        // Debug checks in debug builds only
+        if (std.debug.runtime_safety) {
+            // Check for consecutive spaces
+            var prev_was_space = false;
+            for (str, 0..) |c, i| {
+                if (c == ' ') {
+                    if (prev_was_space) {
+                        std.debug.panic("ERROR: Multiple consecutive spaces in pushAll at position {}: {s}\n", .{ i, str });
+                    }
+                    prev_was_space = true;
+                } else {
+                    prev_was_space = false;
+                }
+
+                // Check tab placement - tabs should only come after newline or another tab
+                if (c == '\t') {
+                    if (i > 0) {
+                        const prev = str[i - 1];
+                        if (prev != '\n' and prev != '\t') {
+                            std.debug.panic("ERROR: Tab not after newline or tab at position {} in: {s}\n", .{ i, str });
+                        }
+                    } else if (self.output.items.len > 0) {
+                        // Check what's at the end of output
+                        const last = self.output.items[self.output.items.len - 1];
+                        if (last != '\n' and last != '\t') {
+                            std.debug.panic("ERROR: Tab not after newline or tab (from output) in: {s}\n", .{str});
+                        }
+                    }
+                }
+            }
+
+            // Check if output ends in space and str starts with space
+            if (self.output.items.len > 0 and str.len > 0) {
+                if (self.output.items[self.output.items.len - 1] == ' ' and str[0] == ' ') {
+                    std.debug.panic("ERROR: Output ends in space and pushAll starts with space: {s}\n", .{str});
+                }
+            }
+        }
+        self.has_newline = str[str.len - 1] == '\n';
+        try self.output.appendSlice(str);
+    }
+
+    /// Push literal content from source (e.g., string literals, number literals, malformed content)
+    /// This doesn't check for formatting violations since we're preserving source content
+    fn pushLiteralFromRegion(self: *Formatter, start: usize, end: usize) !void {
+        if (std.debug.runtime_safety) {
+            std.debug.assert(end > start); // Should not be empty
+            std.debug.assert(end <= self.source.len); // Should be within bounds
+        }
+
+        const str = self.source[start..end];
+
         self.has_newline = str[str.len - 1] == '\n';
         try self.output.appendSlice(str);
     }
@@ -2851,6 +3302,19 @@ const Formatter = struct {
     fn ensureNewline(self: *Formatter) !void {
         if (!self.has_newline) {
             try self.newline();
+        }
+    }
+
+    fn ensureSpace(self: *Formatter) !void {
+        // Don't add a space if we're at the beginning of a line (after newline)
+        if (self.output.items.len > 0 and self.output.items[self.output.items.len - 1] == '\n') {
+            // We're at the start of a line, don't add a space
+            return;
+        }
+
+        // Only add a space if the output doesn't already end with one
+        if (self.output.items.len == 0 or self.output.items[self.output.items.len - 1] != ' ') {
+            try self.push(' ');
         }
     }
 
@@ -2869,6 +3333,7 @@ const Formatter = struct {
         if (self.curr_indent_level == 0) {
             return;
         }
+
         // Use TABS for indentation, not spaces!
         // OPTIMIZATION: Pre-allocated string of 32 tabs for common cases.
         // This avoids dynamic allocation for indentation levels 1-32 (covers 99.9% of real code).
@@ -2924,9 +3389,8 @@ const Formatter = struct {
             const token = self.tokens[self.token_cursor];
             switch (token.tag) {
                 .LineComment, .DocComment => {
-                    const comment_text = self.source[token.region.start.offset..token.region.end.offset];
                     try self.pushIndent();
-                    try self.pushAll(comment_text);
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
                     try self.newline();
                     found_any = true;
                 },
@@ -2973,10 +3437,66 @@ pub fn formatAst(
 
     try formatter.format(root_node);
 
+    // Ensure the output ends with exactly one newline
+    // Remove any trailing blank lines, then ensure we have exactly one newline
+    while (formatter.output.items.len > 1 and
+        formatter.output.items[formatter.output.items.len - 1] == '\n' and
+        formatter.output.items[formatter.output.items.len - 2] == '\n')
+    {
+        _ = formatter.output.pop();
+    }
+
+    // Ensure we end with a newline if we don't already
+    if (formatter.output.items.len == 0 or formatter.output.items[formatter.output.items.len - 1] != '\n') {
+        try formatter.output.append('\n');
+    }
+
     // Transfer ownership to caller by moving the items
-    const output = try formatter.output.toOwnedSlice();
+    const result = try formatter.output.toOwnedSlice();
 
-    return output;
+    // Debug: Check for lines with exactly 4 spaces
+    if (std.debug.runtime_safety) {
+        var i: usize = 0;
+        var line_start: usize = 0;
+        var line_num: usize = 1;
+
+        while (i < result.len) : (i += 1) {
+            if (result[i] == '\n') {
+                const line = result[line_start..i];
+                if (line.len == 4) {
+                    var all_spaces = true;
+                    for (line) |c| {
+                        if (c != ' ') {
+                            all_spaces = false;
+                            break;
+                        }
+                    }
+                    if (all_spaces) {
+                        std.debug.panic("ERROR: Formatter is returning line {} with exactly 4 spaces!\n", .{line_num});
+                    }
+                }
+                line_num += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+
+    // Debug assertion: Ensure file ends with exactly one newline
+    if (std.debug.runtime_safety) {
+        if (result.len == 0) {
+            std.debug.panic("ERROR: Formatter returned empty output!\n", .{});
+        }
+
+        // Check that file ends with exactly one newline
+        if (result[result.len - 1] != '\n') {
+            std.debug.panic("ERROR: Formatted file does not end with a newline! Last char: '{c}'\n", .{result[result.len - 1]});
+        }
+
+        // Check that there's no blank line at the end (no double newline)
+        if (result.len > 1 and result[result.len - 2] == '\n') {
+            std.debug.panic("ERROR: Formatted file ends with a blank line (double newline)!\n", .{});
+        }
+    }
+
+    return result;
 }
-
-// Keep the old interface for compatibility

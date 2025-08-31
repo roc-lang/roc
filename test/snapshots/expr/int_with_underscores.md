@@ -21,11 +21,27 @@ _
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:2 to 1:3
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **_** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:2 to 1:3
+**int_with_underscores.md:1:2:1:3:**
+```roc
+1_000_000
+```
+ ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**int_with_underscores.md:1:2:1:3:**
+```roc
+1_000_000
+```
+ ^
+
 
 # CANONICALIZE
 ~~~clojure

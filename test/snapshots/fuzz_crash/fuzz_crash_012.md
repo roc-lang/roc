@@ -33,17 +33,34 @@ OpOr OpenRound OpBar OpenRound LowerIdent OpBar ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:3 to 1:3
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:16 to 1:16
 
-**Parse Error**
-at 1:17 to 1:17
 
-**Parse Error**
-at 1:3 to 1:17
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_round_or_comma**
+This is an unexpected parsing error. Please check your syntax.
+
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_012.md:1:3:1:17:**
+```roc
+||(|(l888888888|
+```
+  ^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

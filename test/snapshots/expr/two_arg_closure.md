@@ -24,7 +24,7 @@ OpBar Underscore Comma Underscore OpBar Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+|_, _| 42
 ~~~
 # EXPECTED
 NIL

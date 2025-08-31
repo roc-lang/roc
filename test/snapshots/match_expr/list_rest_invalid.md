@@ -13,7 +13,7 @@ match items {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int LineComment OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int LineComment OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -22,47 +22,54 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
   (branch1     (binop_thick_arrow
       (list_literal
         (lc "first")
-        (unary_double_dot <unary>)
+        (double_dot_lc "rest")
       )
-      (num_literal_i32 0)
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (unary_double_dot <unary>)
-        (lc "last")
+      (block
+        (num_literal_i32 0)
+        (binop_thick_arrow
+          (list_literal
+            (unary_double_dot <unary>)
+            (lc "last")
+          )
+          (num_literal_i32 1)
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "x")
+            (unary_double_dot <unary>)
+            (lc "y")
+          )
+          (num_literal_i32 2)
+        )
       )
-      (num_literal_i32 1)
-    )
-)
-  (branch3     (binop_thick_arrow
-      (list_literal
-        (lc "x")
-        (unary_double_dot <unary>)
-        (lc "y")
-      )
-      (num_literal_i32 2)
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match items
-	[first, ..] => 0
-	[.., last] => 1
-	[x, .., y] => 2
+	[first, ..rest] => 
+		0
+		[..rest, last] => 1
+		[x, ..rest, y] => 2
+# invalid rest pattern should error
+# invalid rest pattern should error
+# invalid rest pattern should error
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:21 to 2:23
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:19
+**list_rest_invalid.md:2:5:4:24:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+    [..rest, last] => 1 # invalid rest pattern should error
+    [x, ..rest, y] => 2 # invalid rest pattern should error
+```
 
-**Unsupported Node**
-at 4:20 to 4:22
 
 # CANONICALIZE
 ~~~clojure

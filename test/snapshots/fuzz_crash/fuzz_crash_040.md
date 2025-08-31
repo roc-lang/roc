@@ -36,11 +36,27 @@ app { f: "" platform [] }
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:4 to 2:5
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:20 to 2:5
+**fuzz_crash_040.md:2:4:2:5:**
+```roc
+o:0)
+```
+   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_040.md:1:20:2:5:**
+```roc
+app[]{f:platform""}{
+o:0)
+```
+
 
 # CANONICALIZE
 ~~~clojure

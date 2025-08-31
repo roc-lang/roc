@@ -26,7 +26,6 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly Int Clos
 package [] packages {d, {
 	0
 }}
-
 ~~~
 # EXPECTED
 NIL

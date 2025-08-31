@@ -12,7 +12,7 @@ foo = "one"
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -22,7 +22,10 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent LowerId
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [foo]
+
+foo : Str
+foo = "one"
 ~~~
 # EXPECTED
 NIL

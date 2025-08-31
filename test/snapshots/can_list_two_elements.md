@@ -19,7 +19,7 @@ OpenSquare Int Comma String CloseSquare ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[1, "hello"]
 ~~~
 # EXPECTED
 NIL

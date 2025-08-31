@@ -25,7 +25,7 @@ bar = # comment after equals
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare LowerIdent OpAssign Int LowerIdent OpAssign Int ~~~
+KwModule OpenSquare LineComment LowerIdent Comma LineComment LowerIdent Comma LineComment CloseSquare BlankLine LineComment LowerIdent OpAssign LineComment Int LineComment BlankLine LineComment BlankLine LowerIdent OpAssign LineComment Int BlankLine LineComment ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -43,7 +43,15 @@ module [
 ]
 
 foo = 42
-bar = 100
+bar = 100# First comment
+# inline comment after foo
+# inline comment after bar
+# Comment before function
+# Comment in function body
+# inline comment after value
+# Comment between functions
+# comment after equals
+# Trailing comment at end of file
 ~~~
 # EXPECTED
 NIL

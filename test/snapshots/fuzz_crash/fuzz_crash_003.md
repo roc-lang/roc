@@ -19,16 +19,32 @@ OpAssign MalformedString ~~~
 ~~~
 # FORMATTED
 ~~~roc
- "te
+"te
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:2 to 1:3
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token ** ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:3 to 1:6
+**fuzz_crash_003.md:1:2:1:3:**
+```roc
+= "te
+```
+ ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"te** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_003.md:1:3:1:6:**
+```roc
+= "te
+```
+  ^^^
+
 
 # CANONICALIZE
 ~~~clojure

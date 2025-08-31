@@ -23,7 +23,7 @@ goodValue = "test"
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore UpperIdent OpColonEqual UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign String UpperIdent OpColonEqual UpperIdent UpperIdent OpColonEqual UpperIdent LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore BlankLine UpperIdent OpColonEqual UpperIdent BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign String BlankLine UpperIdent OpColonEqual UpperIdent BlankLine UpperIdent OpColonEqual UpperIdent BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -44,8 +44,16 @@ goodValue = "test"
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:12 to 3:13
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_error_propagation.md:3:12:3:13:**
+```roc
+BadBase := _
+```
+           ^
+
 
 # CANONICALIZE
 ~~~clojure

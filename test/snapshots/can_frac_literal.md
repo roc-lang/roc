@@ -13,14 +13,18 @@ z = 0.5
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign Float LowerIdent OpAssign Float LowerIdent OpAssign Float ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign Float LowerIdent OpAssign Float LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
 (module-header)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x = 3.14
+y = 1.23e45
+z = 0.5
 ~~~
 # EXPECTED
 NIL

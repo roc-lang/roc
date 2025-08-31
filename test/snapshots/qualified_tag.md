@@ -13,7 +13,7 @@ test = Color.Red
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent CloseSquare UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
+KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpAssign UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header

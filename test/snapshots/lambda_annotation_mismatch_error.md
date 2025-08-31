@@ -17,7 +17,7 @@ wrong_type_function = |x| x * 3.14
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Float ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LineComment LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int BlankLine LineComment LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpStar Float ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -34,7 +34,8 @@ module [string_function, wrong_type_function]
 string_function : Str -> Str
 string_function = |x| x + 42
 wrong_type_function : I64 -> I64
-wrong_type_function = |x| x * 3.14
+wrong_type_function = |x| x * 3.14# Annotation says it takes and returns strings, but implementation uses number addition
+# Annotation says function returns I64, but implementation returns Frac(_prec)
 ~~~
 # EXPECTED
 NIL

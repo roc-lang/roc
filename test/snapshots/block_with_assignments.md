@@ -109,8 +109,16 @@ y = x + 10
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:16 to 5:20
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**block_with_assignments.md:5:16:5:20:**
+```roc
+    isActive = Bool.true
+```
+               ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

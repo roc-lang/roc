@@ -549,6 +549,8 @@ pub const Diagnostic = struct {
         pattern_list_rest_old_syntax,
         pattern_unexpected_eof,
         bad_as_pattern_name,
+        expected_arrow_after_pattern,
+        expected_identifier_after_as,
         expected_lower_ident_pat_field_name,
         expected_colon_after_pat_field_name,
 
@@ -766,6 +768,8 @@ pub fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diag
         .missing_arrow => "MISSING ARROW",
         .expected_exposes => "EXPECTED EXPOSES",
         .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .expected_arrow_after_pattern => "EXPECTED ARROW AFTER PATTERN",
+        .expected_identifier_after_as => "EXPECTED IDENTIFIER AFTER 'AS'",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .state_not_implemented => "PARSER STATE NOT IMPLEMENTED",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",

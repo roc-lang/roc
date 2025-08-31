@@ -13,7 +13,7 @@ f = || {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign OpOr OpenCurly KwCrash Int CloseCurly ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpOr OpenCurly KwCrash Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -30,8 +30,16 @@ f = ||
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 3:5 to 3:8
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **|| ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_067.md:3:5:3:8:**
+```roc
+f = || {
+```
+    ^^^
+
 
 # CANONICALIZE
 ~~~clojure

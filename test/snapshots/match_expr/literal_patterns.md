@@ -32,12 +32,13 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 )
   (branch3     (binop_thick_arrow
       (uc "Greeting")
-      (num_literal_i32 3)
-    )
-)
-  (branch4     (binop_thick_arrow
-      (num_literal_i32 10)
-      (num_literal_i32 4)
+      (block
+        (num_literal_i32 3)
+        (binop_thick_arrow
+          (num_literal_i32 10)
+          (num_literal_i32 4)
+        )
+      )
     )
 ))
 ~~~
@@ -46,20 +47,45 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 match Answer
 	Answer => 1
 	Zero => "hello"
-	Greeting => 3
-	10 => 4
+	Greeting => 
+		3
+		10 => 4
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:12 to 2:14
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:9
+**literal_patterns.md:2:5:2:16:**
+```roc
+    Answer => 1
+```
+    ^^^^^^^^^^^
 
-**Unsupported Node**
-at 4:14 to 4:16
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**literal_patterns.md:3:5:3:9:**
+```roc
+    Zero => "hello"
+```
+    ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**literal_patterns.md:4:5:5:12:**
+```roc
+    Greeting => 3
+    10 => 4
+```
+
 
 # CANONICALIZE
 ~~~clojure

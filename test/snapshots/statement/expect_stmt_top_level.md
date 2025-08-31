@@ -13,7 +13,7 @@ expect foo != Bool.False
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign UpperIdent Dot UpperIdent KwExpect LowerIdent OpNotEquals UpperIdent Dot UpperIdent ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperIdent Dot UpperIdent BlankLine KwExpect LowerIdent OpNotEquals UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header

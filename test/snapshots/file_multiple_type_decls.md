@@ -13,7 +13,7 @@ ThirdType : List(U8)
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent OpenRound UpperIdent CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent UpperIdent OpColon UpperIdent OpenRound UpperIdent CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)

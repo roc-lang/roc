@@ -30,7 +30,8 @@ app { f: "" platform [] }
 
 {
 	o : 0
-}0
+}
+0
 ~~~
 # EXPECTED
 NIL

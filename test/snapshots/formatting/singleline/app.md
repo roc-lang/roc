@@ -19,8 +19,8 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
         (block
-          (lc "a1")
-          (lc "a2")
+          (not_lc "a1")
+          (not_lc "a2")
         )
       )
     )
@@ -33,8 +33,7 @@ KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBan
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [a1, a2], a: "a" }
-
+app { pf: "../basic-cli/main.roc" platform [a1!, a2!], a: "a" }
 ~~~
 # EXPECTED
 NIL

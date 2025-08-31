@@ -14,7 +14,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpenRound Int Comma String CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LowerIdent OpenRound Int Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (malformed malformed:expr_unexpected_token)
@@ -26,14 +26,38 @@ pair
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 2:17
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 3:5 to 3:10
+**test_instantiated_arg_mismatch.md:1:1:2:17:**
+```roc
+{
+    pair : a, a -> (a, a)
+```
 
-**Unsupported Node**
-at 3:5 to 3:10
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **pair ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**test_instantiated_arg_mismatch.md:3:5:3:10:**
+```roc
+    pair = |x, y| (x, y)
+```
+    ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**test_instantiated_arg_mismatch.md:3:5:3:10:**
+```roc
+    pair = |x, y| (x, y)
+```
+    ^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

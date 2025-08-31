@@ -27,7 +27,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound Int Comma Int CloseRound OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound OpAssign OpenRound OpenRound Int Comma Int CloseRound Comma OpenRound Int Comma Int CloseRound CloseRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound Int Comma Int Comma Int CloseRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound String Comma String Comma UpperIdent CloseRound OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound OpenSquare Int Comma Int Comma Int CloseSquare Comma String CloseRound OpenCurly CloseCurly CloseCurly ~~~
+OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound Int Comma Int CloseRound BlankLine LineComment OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound OpAssign OpenRound OpenRound Int Comma Int CloseRound Comma OpenRound Int Comma Int CloseRound CloseRound BlankLine LineComment OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound Int Comma Int Comma Int CloseRound BlankLine LineComment OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound String Comma String Comma UpperIdent CloseRound BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound OpenSquare Int Comma Int Comma Int CloseSquare Comma String CloseRound BlankLine OpenCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -36,9 +36,12 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
       (binop_equals
         (binop_equals
           (binop_equals
-            (tuple_literal
-              (lc "x")
-              (lc "y")
+            (apply_anon
+              (malformed malformed:expr_unexpected_token)
+              (tuple_literal
+                (lc "x")
+                (lc "y")
+              )
             )
             (apply_anon
               (tuple_literal
@@ -114,13 +117,34 @@ OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound OpAssign OpenRound In
 ~~~
 # FORMATTED
 ~~~roc
-(((((x, y) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([1, 2, 3], "hello")
-{  }
+((((
+
+	# Simple tuple destructuring
+((x, y)) = (1, 2)(((a, b), (c, d)))) = ((10, 20), (30, 40))((first, second, third))) = (100, 42, 200)((name, string, boolean))) = ("Alice", "fixed", True)((list, hello))) = ([1, 2, 3], "hello")
+{}# Nested tuple patterns
+# Mixed patterns with literals
+# Tuple with string and tag patterns
+# Tuple with list pattern
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **
+
+    # Simple tuple destructuring
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tuple_patterns.md:1:2:4:5:**
+```roc
+{
+
+    # Simple tuple destructuring
+    (x, y) = (1, 2)
+```
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -129,10 +153,7 @@ NIL
       (Expr.binop_equals
         (Expr.binop_equals
           (Expr.binop_equals
-            (Expr.tuple_literal
-              (Expr.lookup "x")
-              (Expr.lookup "y")
-            )
+            (Expr.apply_ident)
             (Expr.apply_ident)
           )
           (Expr.apply_ident)

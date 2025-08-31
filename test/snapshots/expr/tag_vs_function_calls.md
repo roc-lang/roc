@@ -51,56 +51,53 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
     (lc "addOne")
     (lambda
       (body
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (binop_colon
-                (tuple_literal
-                  (binop_colon
-                    (tuple_literal
-                      (binop_plus
-                        (lc "x")
-                        (num_literal_i32 1)
-                      )
-                      (lc "result")
+        (binop_colon
+          (tuple_literal
+            (binop_colon
+              (tuple_literal
+                (binop_colon
+                  (tuple_literal
+                    (binop_plus
+                      (lc "x")
+                      (num_literal_i32 1)
                     )
-                    (apply_lc
-                      (lc "addOne")
-                      (num_literal_i32 5)
-                    )
+                    (lc "result")
                   )
-                  (lc "nested")
+                  (apply_lc
+                    (lc "addOne")
+                    (num_literal_i32 5)
+                  )
                 )
+                (lc "nested")
+              )
+              (apply_uc
+                (uc "Some")
                 (apply_uc
-                  (uc "Some")
+                  (uc "Ok")
                   (apply_uc
-                    (uc "Ok")
-                    (apply_uc
-                      (uc "Just")
-                      (num_literal_i32 42)
-                    )
+                    (uc "Just")
+                    (num_literal_i32 42)
                   )
                 )
               )
-              (lc "tagList")
             )
-            (list_literal
-              (apply_uc
-                (uc "Some")
-                (num_literal_i32 1)
-              )
-              (apply_uc
-                (uc "Some")
-                (num_literal_i32 2)
-              )
-              (uc "None")
-              (apply_uc
-                (uc "Some")
-                (num_literal_i32 3)
-              )
+            (lc "tagList")
+          )
+          (list_literal
+            (apply_uc
+              (uc "Some")
+              (num_literal_i32 1)
+            )
+            (apply_uc
+              (uc "Some")
+              (num_literal_i32 2)
+            )
+            (uc "None")
+            (apply_uc
+              (uc "Some")
+              (num_literal_i32 3)
             )
           )
-          (malformed malformed:expr_unexpected_token)
         )
       )
       (args
@@ -112,17 +109,12 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{ someTag : Some 42, noneTag : None, okTag : Ok "hello", errTag : Err "oops", addOne : |x| ((((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)]) }
+{ someTag : Some 42, noneTag : None, okTag : Ok "hello", errTag : Err "oops", addOne : |x| (((x + 1, result) : addOne(5), nested) : Some Ok Just 42, tagList) : [Some(1), Some(2), None, Some(3)] }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 10:1 to 10:2
-
-**Parse Error**
-at 1:1 to 10:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal

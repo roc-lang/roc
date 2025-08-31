@@ -10,36 +10,32 @@ app # This comment is here
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare Comma LowerIdent OpColon String CloseCurly ~~~
+KwApp LineComment OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
-  (packages
-    (binop_colon
-      (lc "pf")
-      (binop_platform
-        (str_literal_big "../main.roc")
-        (block
-          (lc "main")
-        )
-      )
-    )
-
-    (binop_colon
-      (lc "somePkg")
-      (str_literal_big "../main.roc")
-    )
-))
+  (packages))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../main.roc" platform [main], somePkg: "../main.roc" }
+app { }
 
+# This comment is here
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPECTED OPEN CURLY BRACE**
+A parsing error occurred: **expected_package_platform_open_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**app_header__nonempty_multiline.md:1:1:1:5:**
+```roc
+app # This comment is here
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (empty)
@@ -50,5 +46,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

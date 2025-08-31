@@ -29,16 +29,33 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 app { f: "" platform [] }
 
 import B as G
-if 0 {  } else ||0
+if 0 {} else ||
+0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:13 to 2:15
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **||** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 1:20 to 2:2
+**fuzz_crash_059.md:2:13:2:15:**
+```roc
+G	if 0{}else||0
+```
+ 	          ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_059.md:1:20:2:2:**
+```roc
+app[]{f:platform""}import	B	as
+G	if 0{}else||0
+```
+
 
 # CANONICALIZE
 ~~~clojure

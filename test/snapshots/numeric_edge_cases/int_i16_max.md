@@ -16,7 +16,7 @@ Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+32767
 ~~~
 # EXPECTED
 NIL

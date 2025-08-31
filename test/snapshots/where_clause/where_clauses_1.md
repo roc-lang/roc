@@ -16,7 +16,7 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow LowerIdent ~~~
+KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -36,14 +36,38 @@ Decode(a) : a where module(a).decode : List U8 -> a
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:9 to 5:12
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 6:9 to 6:17
+**where_clauses_1.md:5:9:5:12:**
+```roc
+		module(a).hash : hasher -> hasher,
+```
+		      ^^^
 
-**Unsupported Node**
-at 8:27 to 8:30
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_1.md:6:9:6:17:**
+```roc
+		module(hasher).Hasher
+```
+		      ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_1.md:8:27:8:30:**
+```roc
+Decode(a) : a where module(a).decode : List(U8) -> a
+```
+                          ^^^
+
 
 # CANONICALIZE
 ~~~clojure

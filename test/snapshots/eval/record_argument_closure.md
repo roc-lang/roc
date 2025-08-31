@@ -52,8 +52,16 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:3 to 1:11
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_argument_closure.md:1:3:1:11:**
+```roc
+(|{ x, y }| x * y)({ x: 10, y: 20 })
+```
+  ^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

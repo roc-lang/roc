@@ -26,66 +26,64 @@ KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatAr
         (num_literal_i32 0)
         (lc "count")
       )
-      (lc "count")
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (num_literal_i32 1)
-        (lc "x")
-        (num_literal_i32 3)
+      (block
+        (lc "count")
+        (binop_thick_arrow
+          (list_literal
+            (num_literal_i32 1)
+            (lc "x")
+            (num_literal_i32 3)
+          )
+          (lc "x")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (num_literal_i32 42)
+            (lc "value")
+          )
+          (lc "value")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (num_literal_i32 99)
+          )
+          (lc "first")
+        )
+        (binop_thick_arrow
+          (list_literal)
+          (num_literal_i32 0)
+        )
       )
-      (lc "x")
-    )
-)
-  (branch3     (binop_thick_arrow
-      (list_literal
-        (num_literal_i32 42)
-        (lc "value")
-      )
-      (lc "value")
-    )
-)
-  (branch4     (binop_thick_arrow
-      (list_literal
-        (lc "first")
-        (num_literal_i32 99)
-      )
-      (lc "first")
-    )
-)
-  (branch5     (binop_thick_arrow
-      (list_literal)
-      (num_literal_i32 0)
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match sequence
-	[0, count] => count
-	[1, x, 3] => x
-	[42, value] => value
-	[first, 99] => first
-	[] => 0
+	[0, count] => 
+		count
+		[1, x, 3] => x
+		[42, value] => value
+		[first, 99] => first
+		[] => 0
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:16 to 2:18
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:14
+**list_mixed_literals.md:2:5:6:12:**
+```roc
+    [0, count] => count
+    [1, x, 3] => x
+    [42, value] => value
+    [first, 99] => first
+    [] => 0
+```
 
-**Unsupported Node**
-at 4:17 to 4:19
-
-**Unsupported Node**
-at 5:5 to 5:16
-
-**Unsupported Node**
-at 6:8 to 6:10
 
 # CANONICALIZE
 ~~~clojure

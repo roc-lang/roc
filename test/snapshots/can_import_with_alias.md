@@ -13,7 +13,7 @@ main = MyJson.decode
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwAs UpperIdent BlankLine LowerIdent OpAssign UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -28,11 +28,27 @@ main = MyJson.decode
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:27
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 5:8 to 5:14
+**can_import_with_alias.md:3:1:3:27:**
+```roc
+import json.Json as MyJson
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_with_alias.md:5:8:5:14:**
+```roc
+main = MyJson.decode
+```
+       ^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

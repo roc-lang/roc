@@ -35,7 +35,7 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwAs UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot LowerIdent LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent OpArrow UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound String CloseRound LowerIdent OpAssign UpperIdent Dot UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwAs UpperIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent OpArrow UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound String CloseRound BlankLine LineComment LowerIdent OpAssign UpperIdent Dot UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -54,67 +54,225 @@ processRequest = |req| Http.Server | .defaultResponse
 result = Json.prase("test")
 config = (Unknown.Module | .config)
 client = Http.invalidMethod
-parser = (Json.Parser | Advanced | NonExistent | .create)
+parser = (Json.Parser | Advanced | NonExistent | .create)# Test unresolved qualified value
+# Test unresolved qualified type in annotation
+# Test unresolved nested qualification
+# Test typo in qualified name
+# Test unknown module qualification
+# Test valid module but invalid member
+# Test deeply nested invalid qualification
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 4:1 to 4:27
+**can_import_unresolved_qualified.md:3:1:3:17:**
+```roc
+import json.Json
+```
+^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 7:8 to 7:12
 
-**Unsupported Node**
-at 7:12 to 7:24
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 11:20 to 11:24
+**can_import_unresolved_qualified.md:4:1:4:27:**
+```roc
+import http.Client as Http
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 14:18 to 14:22
 
-**Unsupported Node**
-at 14:22 to 14:29
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 14:41 to 14:45
+**can_import_unresolved_qualified.md:7:8:7:12:**
+```roc
+main = Json.NonExistent.method
+```
+       ^^^^
 
-**Unsupported Node**
-at 14:45 to 14:52
 
-**Unsupported Node**
-at 15:24 to 15:28
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 15:28 to 15:35
+**can_import_unresolved_qualified.md:7:12:7:24:**
+```roc
+main = Json.NonExistent.method
+```
+           ^^^^^^^^^^^^
 
-**Unsupported Node**
-at 18:10 to 18:14
 
-**Unsupported Node**
-at 21:10 to 21:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 21:17 to 21:24
+**can_import_unresolved_qualified.md:11:20:11:24:**
+```roc
+parseData = |data| Json.stringify(data)
+```
+                   ^^^^
 
-**Unsupported Node**
-at 24:10 to 24:14
 
-**Unsupported Node**
-at 27:10 to 27:14
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 27:14 to 27:21
+**can_import_unresolved_qualified.md:14:18:14:22:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                 ^^^^
 
-**Unsupported Node**
-at 27:21 to 27:30
 
-**Unsupported Node**
-at 27:30 to 27:42
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:14:22:14:29:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                     ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:14:41:14:45:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                                        ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:14:45:14:52:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+                                            ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:15:24:15:28:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                       ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:15:28:15:35:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                           ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:18:10:18:14:**
+```roc
+result = Json.prase("test")
+```
+         ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:21:10:21:17:**
+```roc
+config = Unknown.Module.config
+```
+         ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:21:17:21:24:**
+```roc
+config = Unknown.Module.config
+```
+                ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:24:10:24:14:**
+```roc
+client = Http.invalidMethod
+```
+         ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:27:10:27:14:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+         ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:27:14:27:21:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+             ^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:27:21:27:30:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+                    ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:27:30:27:42:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+                             ^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

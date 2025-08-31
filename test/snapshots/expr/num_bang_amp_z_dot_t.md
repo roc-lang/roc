@@ -23,11 +23,28 @@ Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:1 to 3:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **!
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Unsupported Node**
-at 2:1 to 3:1
+**num_bang_amp_z_dot_t.md:2:1:3:1:**
+```roc
+!
+&z.t
+```
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**num_bang_amp_z_dot_t.md:2:1:3:1:**
+```roc
+!
+&z.t
+```
+
 
 # CANONICALIZE
 ~~~clojure

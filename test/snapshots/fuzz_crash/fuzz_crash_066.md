@@ -11,7 +11,7 @@ C:[0]
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColon OpenSquare Int CloseSquare ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon OpenSquare Int CloseSquare ~~~
 # PARSE
 ~~~clojure
 (module-header)

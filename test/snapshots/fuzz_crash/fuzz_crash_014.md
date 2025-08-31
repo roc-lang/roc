@@ -28,20 +28,36 @@ MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIden
 # FORMATTED
 ~~~roc
  | 0
-0bu22
-0u22
+0b
+u22
+0
+u22
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:3 to 1:3
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 2:1 to 2:3
 
-**Unsupported Node**
-at 1:3 to 1:3
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **0b** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_014.md:2:1:2:3:**
+```roc
+0bu22
+```
+^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+
 
 # CANONICALIZE
 ~~~clojure

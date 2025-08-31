@@ -12,14 +12,17 @@ x = -1
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign OpUnaryMinus Int ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpUnaryMinus Int ~~~
 # PARSE
 ~~~clojure
 (module-header)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x : U8
+x = -1
 ~~~
 # EXPECTED
 NIL

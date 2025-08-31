@@ -15,7 +15,7 @@ if bool {
 ~~~
 # TOKENS
 ~~~text
-KwIf LowerIdent OpenCurly Int CloseCurly KwElse KwIf Int OpenCurly UpperIdent CloseCurly KwElse OpenCurly Int CloseCurly ~~~
+KwIf LowerIdent OpenCurly Int CloseCurly KwElse KwIf Int OpenCurly LineComment UpperIdent CloseCurly KwElse OpenCurly LineComment Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (if_else
@@ -50,7 +50,8 @@ else if 10
 	}
 else {
 	3
-}
+}# Comment after else open
+# Comment after else open
 ~~~
 # EXPECTED
 NIL

@@ -34,7 +34,7 @@ quux = ("hello", 42)
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign Int UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly UpperIdent OpColonEqual Underscore OpArrow Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent CloseRound LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenRound String Comma Int CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Int BlankLine UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare BlankLine UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly BlankLine UpperIdent OpColonEqual Underscore OpArrow Underscore BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent CloseRound BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpenRound String Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -62,23 +62,71 @@ quux = ("hello", 42)
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:12 to 3:13
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 8:17 to 8:18
+**underscore_error_type.md:3:12:3:13:**
+```roc
+BadType := _
+```
+           ^
 
-**Pattern in Expression Context**
-at 13:23 to 13:24
 
-**Pattern in Expression Context**
-at 18:16 to 18:17
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**Pattern in Expression Context**
-at 18:21 to 18:22
+**underscore_error_type.md:8:17:8:18:**
+```roc
+BadList := List(_)
+```
+                ^
 
-**Pattern in Expression Context**
-at 23:14 to 23:15
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_error_type.md:13:23:13:24:**
+```roc
+BadRecord := { field: _, other: U32 }
+```
+                      ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_error_type.md:18:16:18:17:**
+```roc
+BadFunction := _ -> _
+```
+               ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_error_type.md:18:21:18:22:**
+```roc
+BadFunction := _ -> _
+```
+                    ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**underscore_error_type.md:23:14:23:15:**
+```roc
+BadTuple := (_, U32)
+```
+             ^
+
 
 # CANONICALIZE
 ~~~clojure

@@ -14,7 +14,7 @@ foo = Json.parse(data)
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport String KwAs LowerIdent OpColon UpperIdent KwImport UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport String KwAs LowerIdent OpColon UpperIdent KwImport UpperIdent BlankLine LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -33,14 +33,38 @@ foo = Json.parse(data)
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:34
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 4:1 to 4:12
+**inline_ingested_file.md:3:1:3:34:**
+```roc
+import "users.json" as data : Str
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 6:7 to 6:11
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**inline_ingested_file.md:4:1:4:12:**
+```roc
+import Json
+```
+^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**inline_ingested_file.md:6:7:6:11:**
+```roc
+foo = Json.parse(data)
+```
+      ^^^^
+
 
 # CANONICALIZE
 ~~~clojure

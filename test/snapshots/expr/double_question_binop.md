@@ -22,13 +22,21 @@ LowerIdent OpBang OpenRound OpenCurly CloseCurly CloseRound OpDoubleQuestion Str
 ~~~
 # FORMATTED
 ~~~roc
-get_name!({  }) ?? "Bob"
+get_name!({}) ?? "Bob"
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:15 to 1:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**double_question_binop.md:1:1:1:23:**
+```roc
+get_name!({}) ?? "Bob"
+```
+^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

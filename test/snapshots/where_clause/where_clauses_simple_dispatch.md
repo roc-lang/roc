@@ -12,7 +12,7 @@ stringify = |value| value.to_str()
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow UpperIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIdent OpArrow UpperIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -22,13 +22,24 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [stringify]
+
+stringify : a -> Str where module(a).to_str : a -> Str
+stringify = |value| value.to_str()
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:34 to 3:37
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_simple_dispatch.md:3:34:3:37:**
+```roc
+stringify : a -> Str where module(a).to_str : a -> Str
+```
+                                 ^^^
+
 
 # CANONICALIZE
 ~~~clojure

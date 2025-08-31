@@ -20,19 +20,12 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes
 ~~~
 # FORMATTED
 ~~~roc
-platform "foo" requires }
-	 exposes  []
-
+platform "foo" requires {} exposes []
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:15 to 3:2
-
-**Parse Error**
-at 1:1 to 3:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

@@ -28,10 +28,7 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
   (packages
     (lc "somePkg")
 
-    (tuple_literal
-      (str_literal_big "../main.roc")
-      (malformed malformed:expr_unexpected_token)
-    )
+    (str_literal_big "../main.roc")
 ))
 ~~~
 # FORMATTED
@@ -39,20 +36,12 @@ KwPackage OpenSquare LowerIdent Comma UpperIdent Comma CloseSquare OpenCurly Low
 package [
 	something,
 	SomeType,
-] packages {somePkg, (
-	"../main.roc",
-)}
-
+] packages {somePkg, "../main.roc"}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 8:2 to 8:3
-
-**Expected Close Curly Brace**
-at 1:1 to 8:3
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)

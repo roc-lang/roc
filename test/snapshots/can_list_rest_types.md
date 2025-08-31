@@ -24,20 +24,49 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIde
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:16 to 2:19
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
 
-**Parse Error**
-at 2:5 to 2:19
+**can_list_rest_types.md:2:16:2:19:**
+```roc
+    [first, .. as restNums] => restNums
+```
+               ^^^
 
-**Parse Error**
-at 2:5 to 2:27
 
-**Parse Error**
-at 2:27 to 2:29
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
 
-**Unsupported Node**
-at 2:27 to 2:29
+**can_list_rest_types.md:2:19:2:27:**
+```roc
+    [first, .. as restNums] => restNums
+```
+                  ^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **] ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_list_rest_types.md:2:27:2:29:**
+```roc
+    [first, .. as restNums] => restNums
+```
+                          ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_list_rest_types.md:2:27:2:29:**
+```roc
+    [first, .. as restNums] => restNums
+```
+                          ^^
+
 
 # CANONICALIZE
 ~~~clojure

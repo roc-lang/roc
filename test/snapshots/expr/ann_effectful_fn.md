@@ -14,7 +14,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot BlankLine LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -50,18 +50,34 @@ OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent OpenRoun
 ~~~
 # FORMATTED
 ~~~roc
-launchTheNukes : {  } => Result((Bool, LaunchNukeErr))
-launchTheNukes = |{  }| ...
-launchTheNukes({  })
+launchTheNukes : {} => Result((Bool, LaunchNukeErr))
+launchTheNukes = |{}| ...
+launchTheNukes({})
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:22 to 2:24
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:23 to 3:25
+**ann_effectful_fn.md:2:22:2:24:**
+```roc
+    launchTheNukes : {} => Result(Bool, LaunchNukeErr)
+```
+                     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**ann_effectful_fn.md:3:23:3:25:**
+```roc
+    launchTheNukes = |{}| ...
+```
+                      ^^
+
 
 # CANONICALIZE
 ~~~clojure

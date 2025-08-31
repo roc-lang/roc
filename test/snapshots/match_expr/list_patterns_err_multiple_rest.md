@@ -11,45 +11,51 @@ match numbers {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleDot CloseSquare OpFatArrow TripleDot CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare DoubleDot Comma LowerIdent Comma DoubleDot CloseSquare OpFatArrow TripleDot LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed malformed:expr_unexpected_token)
+(match
+  (scrutinee     (lc "numbers")
+)
+  (branch1     (binop_thick_arrow
+      (list_literal
+        (unary_double_dot <unary>)
+        (lc "middle")
+        (unary_double_dot <unary>)
+      )
+      (ellipsis)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-}
+match numbers
+	[.., middle, ..] => ...
+# error, multiple rest patterns not allowed
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 2:8 to 2:10
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Parse Error**
-at 2:5 to 2:10
+**list_patterns_err_multiple_rest.md:2:5:2:28:**
+```roc
+    [.., middle, ..] => ... # error, multiple rest patterns not allowed
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 2:5 to 2:16
-
-**Parse Error**
-at 2:20 to 2:22
-
-**Parse Error**
-at 3:1 to 3:2
-
-**Unsupported Node**
-at 3:1 to 3:2
 
 # CANONICALIZE
 ~~~clojure
-(Stmt.malformed)
+(Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
+(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-# No expression found
+_a
 ~~~

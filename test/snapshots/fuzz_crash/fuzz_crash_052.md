@@ -26,8 +26,16 @@ import S
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:9 to 2:2
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_052.md:1:9:2:2:**
+```roc
+module[]import
+S
+```
+
 
 # CANONICALIZE
 ~~~clojure

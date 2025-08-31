@@ -11,7 +11,7 @@ foo = asd.0
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare LowerIdent OpAssign LowerIdent Dot Int ~~~
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int ~~~
 # PARSE
 ~~~clojure
 (module-header)

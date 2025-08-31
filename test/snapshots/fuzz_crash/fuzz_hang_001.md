@@ -25,8 +25,16 @@ Int OpenRound ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:1 to 1:4
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_hang_001.md:1:1:1:4:**
+```roc
+0 (
+```
+^^^
+
 
 # CANONICALIZE
 ~~~clojure

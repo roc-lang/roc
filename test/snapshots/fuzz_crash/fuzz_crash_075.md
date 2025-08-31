@@ -39,13 +39,20 @@ package [] packages {d, {
 		}
 	}
 }}
-
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:17 to 1:19
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **||** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_075.md:1:17:1:19:**
+```roc
+package[]{d:{{d:||{0}}}}
+```
+                ^^
+
 
 # CANONICALIZE
 ~~~clojure

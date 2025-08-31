@@ -16,20 +16,21 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly CloseCurly KwExposes
 ~~~
 # FORMATTED
 ~~~roc
-platform "" requires } exposes  []
-
+platform "" requires {} exposes []
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:22 to 1:23
+**PARSE ERROR**
+A parsing error occurred: **expected_provides_close_square**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 1:23
+**fuzz_crash_045.md:1:1:1:51:**
+```roc
+platform""requires{}{}exposes[]packages{}provides[
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Parse Error**
-at 1:1 to 1:51
 
 # CANONICALIZE
 ~~~clojure

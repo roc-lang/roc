@@ -14,56 +14,79 @@ match person {
 KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpFatArrow UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent Dot LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(match
-  (scrutinee     (lc "person")
-)
-  (branch1     (binop_thick_arrow
-      (record_literal
-        (lc "first_name")
-        (double_dot_lc "others")
-      )
-      (binop_gt
-        (apply_anon
-          (binop_pipe
-            (uc "Str")
-            (dot_lc "len")
-          )
-          (lc "first_name")
-        )
-        (apply_anon
-          (binop_pipe
-            (uc "Str")
-            (dot_lc "len")
-          )
-          (binop_pipe
-            (lc "others")
-            (dot_lc "last_name")
-          )
-        )
-      )
-    )
-))
+(malformed malformed:expr_unexpected_token)
 ~~~
 # FORMATTED
 ~~~roc
-match person
-	{first_name, ..others} => Str.len(first_name) > Str.len(others.last_name)
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:30 to 2:32
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Str** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**pattern_destructure_with_rest.md:2:33:2:36:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                ^^^
+
+
+**UNEXPECTED TOKEN IN PATTERN**
+The token **.** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
+
+**pattern_destructure_with_rest.md:2:36:2:37:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
+
+**pattern_destructure_with_rest.md:2:37:2:40:**
+```roc
+    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
+```
+                                    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**pattern_destructure_with_rest.md:3:1:3:2:**
+```roc
+}
+```
+^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**pattern_destructure_with_rest.md:3:1:3:2:**
+```roc
+}
+```
+^
+
 
 # CANONICALIZE
 ~~~clojure
-(Expr.match)
+(Stmt.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
+; No expression to type check
 ~~~
 # TYPES
 ~~~roc
-_a
+# No expression found
 ~~~

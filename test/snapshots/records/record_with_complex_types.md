@@ -96,53 +96,50 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
     (lc "callback")
     (lambda
       (body
-        (tuple_literal
-          (binop_colon
-            (tuple_literal
-              (binop_plus
-                (lc "x")
-                (num_literal_i32 1)
-              )
-              (lc "nested")
+        (binop_colon
+          (tuple_literal
+            (binop_plus
+              (lc "x")
+              (num_literal_i32 1)
             )
-            (record_literal
-              (binop_colon
-                (lc "items")
-                (list_literal
-                  (apply_uc
-                    (uc "Some")
-                    (str_literal_big "first")
-                  )
-                  (uc "None")
-                  (apply_uc
-                    (uc "Some")
-                    (str_literal_big "third")
-                  )
+            (lc "nested")
+          )
+          (record_literal
+            (binop_colon
+              (lc "items")
+              (list_literal
+                (apply_uc
+                  (uc "Some")
+                  (str_literal_big "first")
+                )
+                (uc "None")
+                (apply_uc
+                  (uc "Some")
+                  (str_literal_big "third")
                 )
               )
-              (binop_colon
-                (lc "result")
-                (apply_uc
-                  (uc "Success")
-                  (record_literal
-                    (binop_colon
-                      (lc "data")
-                      (list_literal
-                        (num_literal_i32 1)
-                        (num_literal_i32 2)
-                        (num_literal_i32 3)
-                      )
+            )
+            (binop_colon
+              (lc "result")
+              (apply_uc
+                (uc "Success")
+                (record_literal
+                  (binop_colon
+                    (lc "data")
+                    (list_literal
+                      (num_literal_i32 1)
+                      (num_literal_i32 2)
+                      (num_literal_i32 3)
                     )
-                    (binop_colon
-                      (lc "timestamp")
-                      (str_literal_big "2024-01-01")
-                    )
+                  )
+                  (binop_colon
+                    (lc "timestamp")
+                    (str_literal_big "2024-01-01")
                   )
                 )
               )
             )
           )
-          (malformed malformed:expr_unexpected_token)
         )
       )
       (args
@@ -156,17 +153,12 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 ~~~roc
 { name : "Alice", scores : [95, 87, 92, 78], status : Active {
 	since : "2023-01-15"
-}, preferences : {theme : Dark, notifications : Email "alice@example.com"}, metadata : Ok {tags : ["developer", "senior", "fullstack"], permissions : [Read, Write, Admin]}, callback : |x| ((x + 1, nested) : {items : [Some("first"), None, Some("third")], result : Success {data : [1, 2, 3], timestamp : "2024-01-01"}}) }
+}, preferences : {theme : Dark, notifications : Email "alice@example.com"}, metadata : Ok {tags : ["developer", "senior", "fullstack"], permissions : [Read, Write, Admin]}, callback : |x| (x + 1, nested) : {items : [Some("first"), None, Some("third")], result : Success {data : [1, 2, 3], timestamp : "2024-01-01"}} }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 15:1 to 15:2
-
-**Parse Error**
-at 1:1 to 15:2
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal

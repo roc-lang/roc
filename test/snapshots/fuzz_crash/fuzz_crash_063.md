@@ -21,22 +21,55 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 ~~~roc
 module [}]
 
-0} | .a
+0
+} | .a
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:8 to 1:9
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 1:9
+**fuzz_crash_063.md:1:8:1:9:**
+```roc
+module[}0}.a
+```
+       ^
 
-**Parse Error**
-at 1:10 to 1:11
 
-**Unsupported Node**
-at 1:10 to 1:11
+**PARSE ERROR**
+A parsing error occurred: **header_expected_close_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_063.md:1:1:1:9:**
+```roc
+module[}0}.a
+```
+^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_063.md:1:10:1:11:**
+```roc
+module[}0}.a
+```
+         ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_063.md:1:10:1:11:**
+```roc
+module[}0}.a
+```
+         ^
+
 
 # CANONICALIZE
 ~~~clojure

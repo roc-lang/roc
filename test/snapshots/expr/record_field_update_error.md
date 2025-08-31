@@ -30,8 +30,16 @@ age : 31
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:10 to 1:12
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **& ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_field_update_error.md:1:10:1:12:**
+```roc
+{ person & age: 31 }
+```
+         ^^
+
 
 # CANONICALIZE
 ~~~clojure

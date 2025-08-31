@@ -22,7 +22,7 @@ data = json.Core.Utf8.encode("hello")
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent LowerIdent OpColon LowerIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpColon LowerIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign LowerIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent OpenRound String CloseRound ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpColon LowerIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon LowerIdent Dot UpperIdent Dot UpperIdent Dot UpperIdent LowerIdent OpAssign LowerIdent Dot UpperIdent Dot UpperIdent Dot LowerIdent OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -40,40 +40,121 @@ json_encoder = (Json.Core | Utf8 | .defaultEncoder)
 process : json.Core | Utf8 | Encoder -> Str
 process = |encoder| "processing"
 data : json.Core | Utf8 | EncodedData
-data = json.Core | Utf8 | .encode("hello")
+data = json.Core | Utf8 | .encode("hello")# Test with qualified type in annotation
+# Test with multiple qualifiers
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:41
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 6:16 to 6:20
+**multi_qualified_import.md:3:1:3:41:**
+```roc
+import json.Core.Utf8 exposing [Encoder]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Unsupported Node**
-at 6:20 to 6:25
 
-**Unsupported Node**
-at 6:25 to 6:30
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 9:15 to 9:20
+**multi_qualified_import.md:6:16:6:20:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+               ^^^^
 
-**Unsupported Node**
-at 9:20 to 9:25
 
-**Unsupported Node**
-at 13:12 to 13:17
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 13:17 to 13:22
+**multi_qualified_import.md:6:20:6:25:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+                   ^^^^^
 
-**Unsupported Node**
-at 14:12 to 14:17
 
-**Unsupported Node**
-at 14:17 to 14:22
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:6:25:6:30:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+                        ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:9:15:9:20:**
+```roc
+process : json.Core.Utf8.Encoder -> Str
+```
+              ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:9:20:9:25:**
+```roc
+process : json.Core.Utf8.Encoder -> Str
+```
+                   ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:13:12:13:17:**
+```roc
+data : json.Core.Utf8.EncodedData
+```
+           ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:13:17:13:22:**
+```roc
+data : json.Core.Utf8.EncodedData
+```
+                ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:14:12:14:17:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+           ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:14:17:14:22:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+                ^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

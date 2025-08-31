@@ -24,7 +24,6 @@ KwPackage OpenSquare UpperIdent Comma CloseSquare OpenCurly CloseCurly ~~~
 package [
 	Color,
 ]
-
 ~~~
 # EXPECTED
 NIL

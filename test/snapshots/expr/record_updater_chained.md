@@ -14,7 +14,7 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String CloseCurly LowerIdent OpAssign OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -42,23 +42,73 @@ name : ("Alice Smith", age) : 32
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 4:15 to 4:27
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 4:35 to 5:1
+**record_updater_chained.md:4:15:4:27:**
+```roc
+updated_one = { ..person, age: 31 }
+```
+              ^^^^^^^^^^^^
 
-**Parse Error**
-at 5:12 to 5:29
 
-**Parse Error**
-at 5:46 to 6:1
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 6:9 to 6:23
+**record_updater_chained.md:4:35:5:1:**
+```roc
+updated_one = { ..person, age: 31 }
+updated2 = { ..updated_one, city: "New York" }
+```
 
-**Parse Error**
-at 6:52 to 6:53
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_updater_chained.md:5:12:5:29:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+```
+           ^^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_updater_chained.md:5:46:6:1:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_updater_chained.md:6:9:6:23:**
+```roc
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+        ^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_updater_chained.md:6:52:6:53:**
+```roc
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+                                                   ^
+
 
 # CANONICALIZE
 ~~~clojure

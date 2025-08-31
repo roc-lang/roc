@@ -12,7 +12,7 @@ convert = |a| a.to_b()
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -22,13 +22,24 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpColon LowerIdent OpArrow
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [convert]
+
+convert : a -> b where module(a).to_b : a -> b
+convert = |a| a.to_b()
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:30 to 3:33
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_type_annotation.md:3:30:3:33:**
+```roc
+convert : a -> b where module(a).to_b : a -> b
+```
+                             ^^^
+
 
 # CANONICALIZE
 ~~~clojure

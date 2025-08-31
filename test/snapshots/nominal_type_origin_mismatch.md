@@ -18,7 +18,7 @@ main =
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String LowerIdent OpAssign LowerIdent OpenRound String CloseRound ~~~
+KwModule OpenSquare CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSquare UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LowerIdent OpAssign LineComment LowerIdent OpenRound String CloseRound ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -30,13 +30,21 @@ module []
 import Data exposing [Person]
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
-main = expectsPerson("not a person")
+main = expectsPerson("not a person")# This will cause a type mismatch
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 3:1 to 3:30
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_type_origin_mismatch.md:3:1:3:30:**
+```roc
+import Data exposing [Person]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

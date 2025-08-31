@@ -37,8 +37,16 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 1:2 to 1:15
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**function_record_parameter.md:1:2:1:15:**
+```roc
+|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
+```
+ ^^^^^^^^^^^^^
+
 
 # CANONICALIZE
 ~~~clojure

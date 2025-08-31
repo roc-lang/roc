@@ -14,7 +14,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent LowerIdent OpenRound Int Comma Int CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpenRound Int Comma Int CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block
@@ -53,8 +53,7 @@ OpenCurly LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent CloseRound Op
 ~~~
 # FORMATTED
 ~~~roc
-identity :
-	(a, b) -> (a, b)
+identity : (a, b) -> (a, b)
 identity = |pair| pair
 identity((1, 2))
 ~~~

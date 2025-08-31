@@ -25,8 +25,16 @@ module []
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:9 to 1:11
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_036.md:1:9:1:11:**
+```roc
+module[]{B
+```
+        ^^
+
 
 # CANONICALIZE
 ~~~clojure

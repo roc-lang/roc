@@ -26,22 +26,21 @@ KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Clos
 # FORMATTED
 ~~~roc
 app { f: "" platform [] }
-
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:24 to 1:25
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**Parse Error**
-at 1:29 to 1:29
 
-**Parse Error**
-at 1:29 to 1:29
 
-**Parse Error**
-at 1:29 to 1:29
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
 
 # CANONICALIZE
 ~~~clojure

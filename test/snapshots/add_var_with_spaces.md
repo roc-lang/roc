@@ -11,7 +11,7 @@ add2 = x +      2
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign LowerIdent OpPlus Int ~~~
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign LowerIdent OpPlus Int ~~~
 # PARSE
 ~~~clojure
 (module-header

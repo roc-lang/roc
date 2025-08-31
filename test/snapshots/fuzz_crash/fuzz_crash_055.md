@@ -24,8 +24,16 @@ r : a where module(a).h : s
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:7 to 2:10
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**fuzz_crash_055.md:2:7:2:10:**
+```roc
+module(a).h:s
+```
+      ^^^
+
 
 # CANONICALIZE
 ~~~clojure

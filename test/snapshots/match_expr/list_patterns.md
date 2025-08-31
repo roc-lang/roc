@@ -12,7 +12,7 @@ match numbers {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -20,32 +20,40 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
 )
   (branch1     (binop_thick_arrow
       (list_literal)
-      (lc "acc")
-    )
-)
-  (branch2     (binop_thick_arrow
-      (list_literal
-        (lc "first")
-        (unary_double_dot <unary>)
+      (block
+        (lc "acc")
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (unary_double_dot <unary>)
+          )
+          (num_literal_i32 0)
+        )
       )
-      (num_literal_i32 0)
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match numbers
-	[] => acc
-	[first, ..] => 0
+	[] => 
+		acc
+		[first, ..rest] => 0
+# invalid rest pattern should error
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 2:8 to 2:10
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Unsupported Node**
-at 3:5 to 3:20
+**list_patterns.md:2:5:3:25:**
+```roc
+    [] => acc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+
 
 # CANONICALIZE
 ~~~clojure

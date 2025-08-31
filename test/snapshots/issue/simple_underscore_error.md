@@ -14,7 +14,7 @@ foo = 42
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare CloseSquare UpperIdent OpColonEqual Underscore LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
 (module-header)
@@ -30,8 +30,16 @@ foo = 42
 # EXPECTED
 NIL
 # PROBLEMS
-**Pattern in Expression Context**
-at 3:12 to 3:13
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+**simple_underscore_error.md:3:12:3:13:**
+```roc
+BadType := _
+```
+           ^
+
 
 # CANONICALIZE
 ~~~clojure

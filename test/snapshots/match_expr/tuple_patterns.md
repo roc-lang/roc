@@ -21,13 +21,13 @@ KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound Op
   (scrutinee     (lc "coord")
 )
   (branch1     (binop_thick_arrow
+      (tuple_literal
+        (uc "Zero")
+        (uc "Zero")
+      )
       (binop_thick_arrow
         (binop_thick_arrow
           (binop_thick_arrow
-            (tuple_literal
-              (uc "Zero")
-              (uc "Zero")
-            )
             (apply_anon
               (str_literal_big "origin")
               (tuple_literal
@@ -35,37 +35,47 @@ KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound Op
                 (uc "Zero")
               )
             )
+            (apply_lc
+              (lc "x")
+              (tuple_literal
+                (uc "Zero")
+                (lc "y")
+              )
+            )
           )
           (apply_lc
-            (lc "x")
+            (lc "y")
             (tuple_literal
-              (uc "Zero")
+              (lc "x")
               (lc "y")
             )
           )
         )
-        (apply_lc
-          (lc "y")
-          (tuple_literal
-            (lc "x")
-            (lc "y")
-          )
-        )
+        (lc "x")
       )
-      (lc "x")
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
 match coord
-	(((Zero, Zero) => "origin"((x, Zero))) => x((Zero, y))) => y((x, y)) => x
+	(Zero, Zero) => (("origin"((x, Zero)) => x((Zero, y))) => y((x, y))) => x
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Unsupported Node**
-at 5:12 to 5:14
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**tuple_patterns.md:2:5:5:16:**
+```roc
+    (Zero, Zero) => "origin"
+    (x, Zero) => x
+    (Zero, y) => y
+    (x, y) => x
+```
+
 
 # CANONICALIZE
 ~~~clojure

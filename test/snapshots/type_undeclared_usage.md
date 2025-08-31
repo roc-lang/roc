@@ -18,7 +18,7 @@ AnotherType : SomeModule.MissingType
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare UpperIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly String CloseCurly UpperIdent OpColon UpperIdent Dot UpperIdent ~~~
+KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent OpColon UpperIdent BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly String CloseCurly BlankLine UpperIdent OpColon UpperIdent Dot UpperIdent ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -37,6 +37,7 @@ processValue : UndeclaredResult -> Str
 processValue = |value| {
 	"processed"
 }
+
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED

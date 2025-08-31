@@ -16,14 +16,14 @@ entrypoint = main
 ~~~
 # TOKENS
 ~~~text
-KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent CloseCurly KwExposes OpenSquare CloseSquare KwPackages OpenCurly CloseCurly KwProvides OpenSquare LowerIdent CloseSquare LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign LowerIdent ~~~
+KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon UpperIdent OpArrow UpperIdent CloseCurly KwExposes OpenSquare CloseSquare KwPackages OpenCurly CloseCurly KwProvides OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign LowerIdent ~~~
 # PARSE
 ~~~clojure
 (platform-header)
 ~~~
 # FORMATTED
 ~~~roc
-platform "" requires main : Str -> Str exposes  []
+platform "" requires { main : Str -> Str } exposes []
 
 entrypoint : Str -> Str
 entrypoint = main

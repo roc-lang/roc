@@ -21,28 +21,74 @@ KwModule OpenSquare CloseRound OpenCurly DoubleDot Int Comma CloseRound ~~~
 ~~~roc
 module [)]
 
-{ _ }0,)
+{ _ }
+0
+,
+)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:8 to 1:9
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 1:9
+**fuzz_crash_053.md:1:8:1:9:**
+```roc
+module[){..0,)
+```
+       ^
 
-**Parse Error**
-at 1:9 to 1:12
 
-**Parse Error**
-at 1:13 to 1:14
+**PARSE ERROR**
+A parsing error occurred: **header_expected_close_square**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:14 to 1:15
+**fuzz_crash_053.md:1:1:1:9:**
+```roc
+module[){..0,)
+```
+^^^^^^^^
 
-**Pattern in Expression Context**
-at 1:10 to 1:10
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_053.md:1:9:1:12:**
+```roc
+module[){..0,)
+```
+        ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_053.md:1:13:1:14:**
+```roc
+module[){..0,)
+```
+            ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_053.md:1:14:1:15:**
+```roc
+module[){..0,)
+```
+             ^
+
+
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
+
+
 
 # CANONICALIZE
 ~~~clojure

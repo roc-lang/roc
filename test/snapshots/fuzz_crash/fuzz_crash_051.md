@@ -30,17 +30,49 @@ module [}]
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:8 to 1:9
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
 
-**Parse Error**
-at 1:1 to 1:9
+**fuzz_crash_051.md:1:8:1:9:**
+```roc
+module[}{0      0)(0}
+```
+       ^
 
-**Parse Error**
-at 1:18 to 1:19
 
-**Parse Error**
-at 1:18 to 1:21
+**PARSE ERROR**
+A parsing error occurred: **header_expected_close_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_051.md:1:1:1:9:**
+```roc
+module[}{0      0)(0}
+```
+^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_051.md:1:18:1:19:**
+```roc
+module[}{0      0)(0}
+```
+                 ^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_051.md:1:18:1:21:**
+```roc
+module[}{0      0)(0}
+```
+                 ^^^
+
 
 # CANONICALIZE
 ~~~clojure

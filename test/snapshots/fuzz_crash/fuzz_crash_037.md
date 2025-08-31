@@ -23,8 +23,16 @@ module []
 # EXPECTED
 NIL
 # PROBLEMS
-**Parse Error**
-at 1:9 to 1:11
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"\** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_037.md:1:9:1:11:**
+```roc
+module[]"\
+```
+        ^^
+
 
 # CANONICALIZE
 ~~~clojure
