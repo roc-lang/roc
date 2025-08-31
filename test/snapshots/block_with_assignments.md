@@ -110,17 +110,6 @@ y = x + 10
 NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Bool.true** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**block_with_assignments.md:5:16:5:25:**
-```roc
-    isActive = Bool.true
-```
-               ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **age** in this scope.
 Is there an **import** or **exposing** missing up-top?
 

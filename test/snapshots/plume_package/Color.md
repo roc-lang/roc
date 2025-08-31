@@ -600,17 +600,6 @@ Is there an **import** or **exposing** missing up-top?
            ^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **Set.from_list** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**Color.md:68:14:68:27:**
-```roc
-    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
-```
-             ^^^^^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable **colors** is not used anywhere in your code.
 

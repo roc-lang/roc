@@ -157,39 +157,6 @@ all_float_list = float_list ++ my_empty_list
                                ^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **List.len** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**let_polymorphism_lists.md:25:12:25:20:**
-```roc
-    len1 = List.len(all_int_list)
-```
-           ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **List.len** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**let_polymorphism_lists.md:26:12:26:20:**
-```roc
-    len2 = List.len(all_str_list)
-```
-           ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **List.len** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**let_polymorphism_lists.md:27:12:27:20:**
-```roc
-    len3 = List.len(all_float_list)
-```
-           ^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

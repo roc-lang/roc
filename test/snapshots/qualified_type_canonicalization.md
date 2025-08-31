@@ -324,17 +324,6 @@ import Basics.Result
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **Color.RGB** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:15:19:15:28:**
-```roc
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-```
-                  ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **r** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -376,28 +365,6 @@ Is there an **import** or **exposing** missing up-top?
 multiLevelQualified = TypeC.new
 ```
                       ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **Result.Ok** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:27:14:27:23:**
-```roc
-resultType = Result.Ok(42)
-```
-             ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **Color.RGB** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:31:16:31:25:**
-```roc
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-```
-               ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

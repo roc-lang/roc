@@ -36,17 +36,6 @@ foo = |a| {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **Bool.True** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**expect_stmt_block_assertion.md:5:17:5:26:**
-```roc
-    expect a == Bool.True
-```
-                ^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable **a** is not used anywhere in your code.
 

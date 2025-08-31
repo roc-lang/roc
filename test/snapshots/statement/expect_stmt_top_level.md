@@ -32,17 +32,6 @@ expect foo != Bool.False
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **Bool.True** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**expect_stmt_top_level.md:3:7:3:16:**
-```roc
-foo = Bool.True
-```
-      ^^^^^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

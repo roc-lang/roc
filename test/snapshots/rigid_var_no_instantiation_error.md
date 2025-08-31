@@ -77,17 +77,6 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **Bool.true** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**rigid_var_no_instantiation_error.md:17:21:17:30:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-                    ^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable **result1** is not used anywhere in your code.
 

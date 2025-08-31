@@ -1795,9 +1795,34 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 // This is module access like Bool.True or Bool.true or Bool.isTrue
                 // The left side is uppercase (module name), right side can be any valid field
 
-                // Report module access as undefined when module imports are not yet implemented
-                // Module import verification will be added when import resolution is complete
-                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+                // Get module and field names
+                const lhs_node = self.getNode(ast_binop.lhs);
+                const rhs_node = self.getNode(ast_binop.rhs);
+
+                // Extract module name from lhs
+                // We know lhs is .uc, so it has an ident payload
+                const module_ident_idx = lhs_node.payload.ident;
+                const module_name = idents.getText(module_ident_idx);
+
+                // Extract field name from rhs - handle different node types
+                var field_name: []const u8 = "";
+                switch (rhs_node.tag) {
+                    .lc, .uc, .dot_lc, .not_lc => {
+                        const field_ident_idx = rhs_node.payload.ident;
+                        field_name = idents.getText(field_ident_idx);
+                    },
+                    else => {},
+                }
+
+                // Check if module access is valid
+                if (module_name.len > 0 and field_name.len > 0) {
+                    if (!self.scope_state.isValidModuleAccess(module_name, field_name)) {
+                        try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+                    }
+                } else {
+                    // Couldn't extract names, report as undefined
+                    try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+                }
 
                 self.mutateToExpr(node_idx, .module_access);
                 try self.ensureTypeVarExists(node_idx);
@@ -2516,8 +2541,41 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
         // Import statements
         .import => {
-            // Import statement: import module.name
-            // Mark as import statement - module resolution handled in later phase
+            // Import statement: import module.name [exposing (...)]
+            // Process the import and register it in scope
+            const nodes_idx = node.payload.import_nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+
+                // First node should be the module identifier or path
+                if (iter.next()) |module_node_idx| {
+                    const module_node = self.getNode(module_node_idx);
+
+                    // Extract module name
+                    var module_name: []const u8 = "";
+                    if (module_node.tag == .lc or module_node.tag == .uc) {
+                        // Access ident field directly since we know the tag
+                        const ident_idx = module_node.payload.ident;
+                        module_name = idents.getText(ident_idx);
+                    }
+
+                    // Check for exposing clause
+                    const exposed_items: ?[]const []const u8 = null;
+                    if (iter.next()) |exposing_node_idx| {
+                        const exposing_node = self.getNode(exposing_node_idx);
+                        if (exposing_node.tag == .binop_exposing) {
+                            // TODO: Parse the exposed items list
+                            // For now, import everything
+                        }
+                    }
+
+                    // Register the import
+                    if (module_name.len > 0) {
+                        try self.scope_state.addImportedModule(allocator, module_name, exposed_items);
+                    }
+                }
+            }
+
             self.mutateToStmt(node_idx, .import);
             return asStmtIdx(node_idx);
         },
@@ -3008,6 +3066,21 @@ pub fn canonicalizeHeader(self: *CIR, allocator: Allocator, raw_src: []const u8,
     }
 }
 
+/// Represents an imported module and its exposed items
+pub const ImportedModule = struct {
+    /// The module's name
+    name: []const u8,
+    /// Set of exposed identifiers from this module (if exposing specific items)
+    /// If null, all items are exposed
+    exposed_items: ?std.StringHashMapUnmanaged(void) = null,
+
+    pub fn deinit(self: *ImportedModule, allocator: Allocator) void {
+        if (self.exposed_items) |*items| {
+            items.deinit(allocator);
+        }
+    }
+};
+
 /// Scope management during canonicalization - follows the pattern from Can.zig
 pub const ScopeState = struct {
     /// Stack of scopes for nested blocks
@@ -3023,6 +3096,10 @@ pub const ScopeState = struct {
     /// Symbol table mapping identifier indices to their definition node indices
     /// This allows lookups to find their corresponding definitions for type checking
     symbol_table: std.AutoHashMapUnmanaged(Ident.Idx, AST2.Node.Idx) = .{},
+
+    /// Module imports - maps module names to their exposed items
+    /// Key is the module name (e.g., "Bool"), value is a set of exposed identifiers
+    imported_modules: std.StringHashMapUnmanaged(ImportedModule) = .{},
 
     /// Push a new scope onto the stack
     pub fn pushScope(self: *ScopeState, allocator: Allocator, is_function_boundary: bool) !void {
@@ -3106,6 +3183,49 @@ pub const ScopeState = struct {
             }
         }
         return null;
+    }
+
+    /// Register an imported module
+    pub fn addImportedModule(self: *ScopeState, allocator: Allocator, module_name: []const u8, exposed_items: ?[]const []const u8) !void {
+        var module = ImportedModule{
+            .name = module_name,
+            .exposed_items = null,
+        };
+
+        // If specific items are exposed, add them to the set
+        if (exposed_items) |items| {
+            module.exposed_items = std.StringHashMapUnmanaged(void){};
+            for (items) |item| {
+                try module.exposed_items.?.put(allocator, item, {});
+            }
+        }
+
+        try self.imported_modules.put(allocator, module_name, module);
+    }
+
+    /// Check if a module.field access is valid
+    pub fn isValidModuleAccess(self: *const ScopeState, module_name: []const u8, field_name: []const u8) bool {
+        if (self.imported_modules.get(module_name)) |module| {
+            // If no specific items are exposed, all are available
+            if (module.exposed_items == null) return true;
+
+            // Otherwise check if this field is exposed
+            return module.exposed_items.?.contains(field_name);
+        }
+
+        // Check if it's a built-in module (Bool, Num, Str, List, etc.)
+        return isBuiltinModule(module_name);
+    }
+
+    fn isBuiltinModule(name: []const u8) bool {
+        return std.mem.eql(u8, name, "Bool") or
+            std.mem.eql(u8, name, "Num") or
+            std.mem.eql(u8, name, "Str") or
+            std.mem.eql(u8, name, "List") or
+            std.mem.eql(u8, name, "Dict") or
+            std.mem.eql(u8, name, "Set") or
+            std.mem.eql(u8, name, "Result") or
+            std.mem.eql(u8, name, "Task");
     }
 
     /// Add an identifier to the current scope

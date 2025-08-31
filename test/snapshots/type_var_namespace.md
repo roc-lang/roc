@@ -85,17 +85,6 @@ Expressions can be identifiers, literals, function calls, or operators.
                                  ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **List.first** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_var_namespace.md:11:14:11:24:**
-```roc
-    result = List.first(list) |> Result.withDefault(elem)
-```
-             ^^^^^^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

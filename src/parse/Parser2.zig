@@ -173,6 +173,11 @@ pub const ParseState = enum {
     list_elements_cont,
     list_complete,
 
+    // Parenthesized/Tuple parsing
+    paren_content,
+    paren_check_comma,
+    paren_complete,
+
     // Record parsing
     record_fields,
     record_field_start,
@@ -1307,14 +1312,17 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
                 .OpenRound => {
                     // Could be tuple or parenthesized expression
+                    const start_region = self.currentRegion();
                     self.advance();
 
-                    // Handle parenthesized expressions and tuples
-                    // Create malformed node when parsing is incomplete
-                    const region = self.currentRegion();
-                    const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
-                    try self.value_stack.append(self.gpa, node);
-                    return .need_token;
+                    // Save start position for region calculation
+                    try self.value_stack.append(self.gpa, @enumFromInt(@as(i32, @intCast(start_region.start.offset))));
+
+                    // Push states to parse parenthesized content
+                    try self.state_stack.append(self.gpa, .paren_complete);
+                    try self.state_stack.append(self.gpa, .paren_content);
+
+                    return .continue_processing;
                 },
 
                 .OpenSquare => {
@@ -2870,6 +2878,105 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             const list_node = try self.ast.appendNode(self.gpa, region, .list_literal, .{ .nodes = nodes_idx });
 
             try self.value_stack.append(self.gpa, list_node);
+
+            return .continue_processing;
+        },
+
+        .paren_content => {
+            // Parse content inside parentheses
+            _ = self.state_stack.pop();
+
+            // Check for empty tuple ()
+            if (self.peek() == .CloseRound) {
+                // Empty tuple
+                try self.state_stack.append(self.gpa, .paren_complete);
+                return .continue_processing;
+            }
+
+            // Parse first expression
+            try self.state_stack.append(self.gpa, .paren_check_comma);
+            try self.state_stack.append(self.gpa, .expr_start);
+
+            return .continue_processing;
+        },
+
+        .paren_check_comma => {
+            // Check if this is a tuple (has comma) or parenthesized expression
+            _ = self.state_stack.pop();
+
+            if (self.peek() == .Comma) {
+                // It's a tuple - collect more elements
+                self.advance(); // consume comma
+
+                // Continue parsing tuple elements
+                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                    // Parse next element
+                    try self.state_stack.append(self.gpa, .expr_start);
+
+                    // Process the expression synchronously since we're in a loop
+                    while (self.state_stack.items.len > 0 and self.state_stack.getLast() == .expr_start) {
+                        const action = try self.processState(.expr_start);
+                        if (action == .need_token) {
+                            return .need_token;
+                        }
+                    }
+
+                    // Check for another comma
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // If no comma, it's a parenthesized expression (single element already on stack)
+
+            try self.state_stack.append(self.gpa, .paren_complete);
+            return .continue_processing;
+        },
+
+        .paren_complete => {
+            // Complete parenthesized expression or tuple
+            _ = self.state_stack.pop();
+
+            // Get start position
+            const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.items[self.value_stack.items.len - 2] else null;
+            const start_pos = if (start_pos_val) |val| intToPosition(nodeIdxToInt(val)) else self.currentPosition();
+
+            // Expect closing )
+            const end_pos = if (self.peek() == .CloseRound) blk: {
+                const r = self.currentRegion();
+                self.advance();
+                break :blk r.end;
+            } else self.currentPosition();
+
+            // Remove start position marker from value stack
+            if (self.value_stack.items.len >= 2) {
+                // Get the expression(s) between the start marker and now
+                const expr_count = self.value_stack.items.len - 1; // -1 for start marker
+
+                if (expr_count == 2) {
+                    // Single expression - just parenthesized, return it as-is
+                    const expr = self.value_stack.items[self.value_stack.items.len - 1];
+                    self.value_stack.items.len -= 2; // Remove expr and start marker
+                    try self.value_stack.append(self.gpa, expr);
+                } else {
+                    // Multiple expressions or empty - create tuple
+                    const start_idx = self.value_stack.items.len - expr_count;
+                    const elements = self.value_stack.items[start_idx + 1 ..]; // Skip start marker
+
+                    const elements_slice = try self.gpa.alloc(Node.Idx, elements.len);
+                    @memcpy(elements_slice, elements);
+                    const nodes_idx = try self.ast.node_slices.append(self.gpa, elements_slice);
+
+                    // Clear value stack of elements and start marker
+                    self.value_stack.items.len = start_idx;
+
+                    const region = makeRegion(start_pos, end_pos);
+                    const tuple_node = try self.ast.appendNode(self.gpa, region, .tuple_literal, .{ .nodes = nodes_idx });
+                    try self.value_stack.append(self.gpa, tuple_node);
+                }
+            }
 
             return .continue_processing;
         },

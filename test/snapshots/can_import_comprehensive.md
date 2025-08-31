@@ -105,17 +105,6 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **Str.trim** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_comprehensive.md:10:14:10:22:**
-```roc
-    helper = Str.trim
-```
-             ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **Json.parse** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -157,17 +146,6 @@ Is there an **import** or **exposing** missing up-top?
     result4 = post
 ```
               ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **Str.concat** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_comprehensive.md:23:16:23:26:**
-```roc
-    combined = Str.concat
-```
-               ^^^^^^^^^^
 
 
 # CANONICALIZE

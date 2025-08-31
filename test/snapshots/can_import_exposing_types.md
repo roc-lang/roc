@@ -487,17 +487,6 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **List.mapTry** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:24:5:24:16:**
-```roc
-    List.mapTry(
-```
-    ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **Json.validateWith** in this scope.
 Is there an **import** or **exposing** missing up-top?
 

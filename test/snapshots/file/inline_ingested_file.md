@@ -35,17 +35,6 @@ foo = Json.parse(data)
 NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Json.parse** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**inline_ingested_file.md:6:7:6:17:**
-```roc
-foo = Json.parse(data)
-```
-      ^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **data** in this scope.
 Is there an **import** or **exposing** missing up-top?
 

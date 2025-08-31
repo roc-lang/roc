@@ -24,17 +24,7 @@ List.map
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **List.map** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**simple_external_lookup.md:1:1:1:9:**
-```roc
-List.map
-```
-^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.module_access

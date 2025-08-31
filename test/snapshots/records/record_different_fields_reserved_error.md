@@ -133,28 +133,6 @@ Is there an **import** or **exposing** missing up-top?
     ^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **Bool.true** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_different_fields_reserved_error.md:6:10:6:19:**
-```roc
-    and: Bool.true,
-```
-         ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **Bool.false** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_different_fields_reserved_error.md:7:9:7:19:**
-```roc
-    or: Bool.false,
-```
-        ^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal

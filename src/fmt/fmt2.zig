@@ -25,6 +25,7 @@ const Formatter = struct {
     ident_store: *const Ident.Store,
     tokens: []const Token, // Now includes comment tokens!
     output: std.ArrayList(u8),
+    scratch_nodes: std.ArrayList(Node.Idx), // Scratch buffer for temporary node collections
 
     // Formatting state
     curr_indent_level: u32 = 0,
@@ -40,6 +41,7 @@ const Formatter = struct {
             .ident_store = ident_store,
             .tokens = tokens, // Use pre-collected tokens including comments
             .output = std.ArrayList(u8).init(allocator),
+            .scratch_nodes = std.ArrayList(Node.Idx).init(allocator),
             .token_cursor = 0,
         };
     }
@@ -47,6 +49,7 @@ const Formatter = struct {
     fn deinit(self: *Formatter) void {
         // tokens are now owned externally, don't deinit them
         self.output.deinit();
+        self.scratch_nodes.deinit();
     }
 
     fn format(self: *Formatter, root_node: ?Node.Idx) !void {
@@ -153,15 +156,6 @@ const Formatter = struct {
     fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
         var found_any = false;
 
-        // Debug: log what we're looking for
-        if (std.debug.runtime_safety and false) { // Disabled by default
-            std.debug.print("flushCommentsBeforePosition: pos.offset={}, cursor={}\n", .{ pos.offset, self.token_cursor });
-            if (self.token_cursor < self.tokens.len) {
-                const token = self.tokens[self.token_cursor];
-                std.debug.print("  Current token at cursor: tag={s}, offset={}\n", .{ @tagName(token.tag), token.region.start.offset });
-            }
-        }
-
         while (self.token_cursor < self.tokens.len) {
             const token = self.tokens[self.token_cursor];
 
@@ -215,6 +209,34 @@ const Formatter = struct {
         return found_any;
     }
 
+    /// Helper function to check if there's a trailing comma after a given offset
+    /// Uses binary search to efficiently find the position in the tokens array
+    fn hasTrailingCommaAfterOffset(self: *const Formatter, offset: usize) bool {
+        // Binary search to find first token after the offset
+        var cursor: usize = 0;
+        var search_end = self.tokens.len;
+        while (cursor < search_end) {
+            const mid = cursor + (search_end - cursor) / 2;
+            if (self.tokens[mid].region.start.offset < offset) {
+                cursor = mid + 1;
+            } else {
+                search_end = mid;
+            }
+        }
+
+        // Look for a comma token after the offset
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+            switch (token.tag) {
+                .Comma => return true,
+                .CloseCurly => return false, // Found the closing brace
+                .LineComment, .DocComment => continue, // Skip comments
+                else => return false, // Any other token means no trailing comma
+            }
+        }
+        return false;
+    }
+
     fn formatHeader(self: *Formatter, header: AST2.Header) !void {
         switch (header) {
             .module => |m| {
@@ -262,31 +284,7 @@ const Formatter = struct {
 
                     // Also check for trailing comma after last package using tokens
                     if (!needs_multiline and prev_end > 0) {
-                        // Binary search to find tokens after the last package
-                        var cursor: usize = 0;
-                        var search_end = self.tokens.len;
-                        while (cursor < search_end) {
-                            const mid = cursor + (search_end - cursor) / 2;
-                            if (self.tokens[mid].region.start.offset < prev_end) {
-                                cursor = mid + 1;
-                            } else {
-                                search_end = mid;
-                            }
-                        }
-
-                        // Look for a comma token after the last package
-                        while (cursor < self.tokens.len) : (cursor += 1) {
-                            const token = self.tokens[cursor];
-                            switch (token.tag) {
-                                .Comma => {
-                                    needs_multiline = true;
-                                    break;
-                                },
-                                .CloseCurly => break, // Found the closing brace
-                                .LineComment, .DocComment => continue, // Skip comments
-                                else => break, // Any other token means no trailing comma
-                            }
-                        }
+                        needs_multiline = self.hasTrailingCommaAfterOffset(prev_end);
                     }
                 }
 
@@ -1120,13 +1118,7 @@ const Formatter = struct {
 
                 // Check if the RHS actually formatted as multiline
                 // by checking if any newlines were added
-                var formatted_multiline = false;
-                for (self.output.items[output_len_before_rhs..]) |c| {
-                    if (c == '\n') {
-                        formatted_multiline = true;
-                        break;
-                    }
-                }
+                const formatted_multiline = std.mem.indexOf(u8, self.output.items[output_len_before_rhs..], "\n") != null;
 
                 // If the RHS formatted as multiline, add a blank line after it
                 if (formatted_multiline) {
@@ -2716,34 +2708,36 @@ const Formatter = struct {
     }
 
     fn formatLoopBody(self: *Formatter, it: *collections.NodeSlices(Node.Idx).Iterator) !void {
-        // Collect body nodes to check if single-line is appropriate
-        var body_nodes = std.ArrayList(Node.Idx).init(self.allocator);
-        defer body_nodes.deinit();
+        // Use scratch buffer to collect body nodes
+        const scratch_start = self.scratch_nodes.items.len;
+        defer self.scratch_nodes.items.len = scratch_start;
 
         while (it.next()) |stmt| {
-            try body_nodes.append(stmt);
+            try self.scratch_nodes.append(stmt);
         }
 
+        const body_nodes = self.scratch_nodes.items[scratch_start..];
+
         // Check if body should be single-line
-        const single_line = body_nodes.items.len == 1 and
-            !self.nodeWillBeMultiline(body_nodes.items[0]);
+        const single_line = body_nodes.len == 1 and
+            !self.nodeWillBeMultiline(body_nodes[0]);
 
         if (single_line) {
             // Single line: { expr }
             try self.ensureSpace();
-            try self.formatNode(body_nodes.items[0]);
+            try self.formatNode(body_nodes[0]);
             try self.ensureSpace();
             try self.push('}');
         } else {
             // Multi-line body
             self.curr_indent_level += 1;
-            for (body_nodes.items, 0..) |stmt, idx| {
+            for (body_nodes, 0..) |stmt, idx| {
                 try self.ensureNewline();
                 try self.pushIndent();
                 try self.formatNode(stmt);
 
                 // Add blank line between complex statements
-                if (idx < body_nodes.items.len - 1) {
+                if (idx < body_nodes.len - 1) {
                     const stmt_node = self.getNode(stmt);
                     const is_complex = switch (stmt_node.tag) {
                         .binop_equals, .if_else, .match, .for_loop, .while_loop => true,
