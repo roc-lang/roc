@@ -33,7 +33,7 @@ module [main]
 import json.Json exposing [decode, encode]
 
 main = {
-	data = { name : "Alice", age : 30 }
+	data = { name: "Alice", age: 30 }
 	encoded = encode(data)
 	decoded = decode(encoded)
 	decoded
@@ -75,11 +75,11 @@ Is there an **import** or **exposing** missing up-top?
         (pattern (Patt.ident "data"))
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "name")
             (Expr.str_literal_big)
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "age")
             (Expr.num_literal_i32 30)
           )
         )

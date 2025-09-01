@@ -44,7 +44,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{ name : "Alice", age : 30, active : Bool.true, scores : [95, 87, 92], balance : 1250.75 }
+{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
 NIL
@@ -80,9 +80,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{ name: Str, age: Num(_size), active: _field, scores: List(Num(_size2)), balance: F64 }")
+(expr :tag record_literal :type "{ name:Str, age:Num(_size), active:_field, scores:List(Num(_size2)), balance:F64 }")
 ~~~
 # TYPES
 ~~~roc
-{ name: Str, age: Num(_size), active: _field, scores: List(Num(_size2)), balance: F64 }
+{ name:Str, age:Num(_size), active:_field, scores:List(Num(_size2)), balance:F64 }
 ~~~

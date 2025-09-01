@@ -210,7 +210,7 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 
 /// Unify two variables where the second represents an annotation type.
 /// This sets from_annotation=true to ensure proper error region highlighting.
-pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
+fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -244,7 +244,7 @@ pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!
 
 /// Unify two variables with a specific constraint origin for better error reporting.
 /// The constraint_origin_var should point to the expression that created the constraint.
-pub fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -552,7 +552,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 // annotations //
 
 /// Check the types for the provided pattern
-pub fn checkAnnotation(self: *Self, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
+fn checkAnnotation(self: *Self, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -639,7 +639,7 @@ pub fn checkAnnotation(self: *Self, anno_idx: CIR.TypeAnno.Idx) std.mem.Allocato
 /// * `anno_var` - Variable for the annotation (initially points to the type definition)
 /// * `anno_region` - Source region for error reporting
 /// * `anno_args_span` - The type arguments in the annotation (e.g., 'x' in Maybe(x))
-pub fn checkApplyAnno(
+fn checkApplyAnno(
     self: *Self,
     anno_var: Var,
     anno_region: Region,
@@ -749,7 +749,7 @@ fn buildRigidVarMapping(
 // pattern //
 
 /// Check the types for the provided pattern
-pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -824,7 +824,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 }
 
 /// Check expression with an optional expected type for bidirectional type checking
-pub fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var) std.mem.Allocator.Error!bool {
+fn checkExprWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_type: ?Var) std.mem.Allocator.Error!bool {
     return self.checkExprWithExpectedAndAnnotation(expr_idx, expected_type, false);
 }
 
@@ -2835,7 +2835,6 @@ pub fn initForCIR2(
 /// Check types for a CIR2 expression
 pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_idx: CIR2.Expr.Idx) std.mem.Allocator.Error!Var {
     const expr = cir2.getExpr(expr_idx);
-    std.debug.print("DEBUG checkCIR2Expr: expr_idx={}, tag={}\n", .{ @intFromEnum(expr_idx), expr.tag });
 
     // Check for malformed expressions
     if (expr.tag == .malformed) {
@@ -3123,20 +3122,14 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
             }
 
             // Create the actual record type
-            std.debug.print("DEBUG: Creating record type with {} fields\n", .{fields.items.len});
             if (fields.items.len > 0) {
                 const record_fields = try self.types.appendRecordFields(fields.items);
-                std.debug.print("DEBUG: appendRecordFields returned start={}, count={}\n", .{ record_fields.start, record_fields.count });
                 const record_ext = try self.types.fresh(); // Extension variable for open records
                 const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
                 const record_var = try self.types.freshFromContent(record_content);
-                std.debug.print("DEBUG: Created record_var={} with record content\n", .{@intFromEnum(record_var)});
                 _ = try self.unify(expr_var, record_var);
-                std.debug.print("DEBUG: Unified expr_var={} with record_var={}\n", .{ @intFromEnum(expr_var), @intFromEnum(record_var) });
 
                 // Check what the type is after unification
-                const resolved_check = self.types.resolveVar(expr_var);
-                std.debug.print("DEBUG: After unify, expr_var={} resolves to content={}\n", .{ @intFromEnum(expr_var), resolved_check.desc.content });
             } else {
                 // Empty record
                 const empty_content = Content{ .structure = .{ .empty_record = {} } };
@@ -3342,7 +3335,7 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
 
 /// Check types for a CIR2 statement
 /// Check a pattern and return its type
-pub fn checkCIR2Pattern(
+fn checkCIR2Pattern(
     self: *Self,
     comptime CIR2: type,
     cir2: *const CIR2,

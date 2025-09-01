@@ -1567,7 +1567,6 @@ fn processSnapshotContent(
             maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents);
         } else if (isExpressionNode(node.tag)) {
             maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
-            std.debug.print("DEBUG: canonicalizeExpr returned maybe_expr_idx={}\n", .{maybe_expr_idx != null});
         } else if (isStatementNode(node.tag)) {
             maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
         } else if (isPatternNode(node.tag)) {
@@ -2172,7 +2171,7 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 /// Generate EXPECTED section for both markdown and HTML
 fn generateExpectedSection(
     output: *DualOutput,
-    snapshot_path: []const u8,
+    _: []const u8,
     content: *const Content,
     reports: *const std.ArrayList(reporting.Report),
     config: *const Config,
@@ -2200,10 +2199,6 @@ fn generateExpectedSection(
 
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs, we need to update the expected section
-                std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                std.debug.print("Expected:\n{s}\n", .{expected_content.?});
-                std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations", .{});
 
                 success = false;
             }
@@ -2219,8 +2214,6 @@ fn generateExpectedSection(
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs,
                 // Disabled for now to reduce output spam
-                // std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                // std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
             }
         },
     }
@@ -3699,14 +3692,10 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
-        std.debug.print("DEBUG: Calling checkCIR2Expr with expr_idx={}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch |err| {
-            std.debug.print("DEBUG: Type checking failed: {}\n", .{err});
             try output.md_writer.print("; Type checking failed: {}\n", .{err});
         };
-    } else {
-        std.debug.print("DEBUG: maybe_expr_idx is null!\n", .{});
-    }
+    } else {}
 
     // Create type inference context using the passed-in types store
     const InferContext = infer_cir2.InferContext(CIR);
@@ -3752,7 +3741,6 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
 /// Generate TYPES section with pretty-printed user-facing type annotations
 fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    std.debug.print("DEBUG: Entering generateTypesSection2, maybe_expr_idx={}\n", .{maybe_expr_idx != null});
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
 
@@ -3768,11 +3756,8 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
-        std.debug.print("DEBUG generateTypesSection2: Calling checkCIR2Expr with expr_idx={}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch {};
-    } else {
-        std.debug.print("DEBUG generateTypesSection2: maybe_expr_idx is null!\n", .{});
-    }
+    } else {}
 
     // Create type inference context using the passed-in types store
     const InferContext = infer_cir2.InferContext(CIR);
@@ -4293,7 +4278,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+fn generateReplOutputSection(output: *DualOutput, _: []const u8, content: *const Content, config: *const Config) !bool {
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
     var inputs = std.ArrayList([]const u8).init(output.gpa);
@@ -4387,20 +4372,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
                 // Verify the outputs match
                 if (actual_outputs.items.len != expected_outputs.items.len) {
-                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
-                        actual_outputs.items.len,
-                        expected_outputs.items.len,
-                        snapshot_path,
-                    });
+                    // Output count mismatch
                     success = success and !emit_error;
                 } else {
-                    for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                    for (actual_outputs.items, expected_outputs.items) |actual, expected_output| {
                         if (!std.mem.eql(u8, actual, expected_output)) {
                             success = success and !emit_error;
-                            std.debug.print(
-                                "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
-                                .{ i, actual, expected_output, snapshot_path },
-                            );
                         }
                     }
                 }

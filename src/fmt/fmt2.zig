@@ -1302,10 +1302,9 @@ const Formatter = struct {
             if (field_node.tag == .binop_colon) {
                 const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
                 try self.formatNode(field_binop.lhs);
+                try self.push(':'); // No space before colon in record fields
                 try self.ensureSpace();
-                try self.push(':');
-                try self.ensureSpace();
-                try self.formatTypeExpression(field_binop.rhs);
+                try self.formatNode(field_binop.rhs); // Use formatNode, not formatTypeExpression
             } else {
                 try self.formatNode(field);
             }
@@ -1807,7 +1806,19 @@ const Formatter = struct {
                 }
             }
             first_field = false;
-            try self.formatNode(field);
+
+            // Handle record fields specially
+            if (field_node.tag == .binop_colon) {
+                // Field with explicit value: { name: value }
+                const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(field_binop.lhs);
+                try self.push(':'); // No space before colon in record fields
+                try self.ensureSpace();
+                try self.formatNode(field_binop.rhs);
+            } else {
+                // Shorthand field: { name }
+                try self.formatNode(field);
+            }
 
             // After formatting the field, check for inline comments
             if (multiline) {

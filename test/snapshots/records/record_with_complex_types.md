@@ -151,9 +151,9 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 ~~~
 # FORMATTED
 ~~~roc
-{ name : "Alice", scores : [95, 87, 92, 78], status : Active {
+{ name: "Alice", scores: [95, 87, 92, 78], status: Active({
 	since : "2023-01-15"
-}, preferences : {theme : Dark, notifications : Email "alice@example.com"}, metadata : Ok {tags : ["developer", "senior", "fullstack"], permissions : [Read, Write, Admin]}, callback : |x| (x + 1, nested) : {items : [Some("first"), None, Some("third")], result : Success {data : [1, 2, 3], timestamp : "2024-01-01"}} }
+}), preferences: { theme: Dark, notifications: Email("alice@example.com") }, metadata: Ok({ tags: ["developer", "senior", "fullstack"], permissions: [Read, Write, Admin] }), callback: |x| (x + 1, nested) : {items: [Some("first"), None, Some("third")], result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" })} }
 ~~~
 # EXPECTED
 NIL
@@ -236,9 +236,9 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{ name: Str, scores: List(Num(_size)), status: _field, preferences: { theme: _field2, notifications: _field3 }, metadata: _field4, callback: _field5 }")
+(expr :tag record_literal :type "{ name:Str, scores:List(Num(_size)), status:_field, preferences:{ theme:_field2, notifications:_field3 }, metadata:_field4, callback:_field5 }")
 ~~~
 # TYPES
 ~~~roc
-{ name: Str, scores: List(Num(_size)), status: _field, preferences: { theme: _field2, notifications: _field3 }, metadata: _field4, callback: _field5 }
+{ name:Str, scores:List(Num(_size)), status:_field, preferences:{ theme:_field2, notifications:_field3 }, metadata:_field4, callback:_field5 }
 ~~~

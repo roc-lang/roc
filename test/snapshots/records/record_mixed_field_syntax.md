@@ -28,7 +28,7 @@ OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerId
 ~~~
 # FORMATTED
 ~~~roc
-{ name, age : 30, email, status : "active", balance }
+{ name, age: 30, email, status: "active", balance }
 ~~~
 # EXPECTED
 NIL
@@ -71,12 +71,12 @@ Is there an **import** or **exposing** missing up-top?
 (Expr.record_literal
   (Expr.lookup "name")
   (Expr.binop_colon
-    (Expr.malformed)
+    (lc "age")
     (Expr.num_literal_i32 30)
   )
   (Expr.lookup "email")
   (Expr.binop_colon
-    (Expr.malformed)
+    (lc "status")
     (Expr.str_literal_big)
   )
   (Expr.lookup "balance")
@@ -84,9 +84,9 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{ name: _field, age: Num(_size), email: _field2, status: Str, balance: _field3 }")
+(expr :tag record_literal :type "{ name:_field, age:Num(_size), email:_field2, status:Str, balance:_field3 }")
 ~~~
 # TYPES
 ~~~roc
-{ name: _field, age: Num(_size), email: _field2, status: Str, balance: _field3 }
+{ name:_field, age:Num(_size), email:_field2, status:Str, balance:_field3 }
 ~~~

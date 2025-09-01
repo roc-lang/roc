@@ -89,7 +89,7 @@ OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon String Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{ person : {name : "Alice", age : 30}, address : {street : "123 Main St", city : "Springfield", coordinates : {lat : 42.1234, lng : -71.5678}}, contact : {email : "alice@example.com", phone : {home : "555-1234", work : "555-5678"}} }
+{ person: { name: "Alice", age: 30 }, address: { street: "123 Main St", city: "Springfield", coordinates: { lat: 42.1234, lng: -71.5678 } }, contact: { email: "alice@example.com", phone: { home: "555-1234", work: "555-5678" } } }
 ~~~
 # EXPECTED
 NIL
@@ -99,38 +99,38 @@ NIL
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.malformed)
+    (lc "person")
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "name")
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "age")
         (Expr.num_literal_i32 30)
       )
     )
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (lc "address")
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "street")
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "city")
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "coordinates")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "lat")
             (Expr.frac_literal_big big:<idx:112>)
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "lng")
             (Expr.unary_neg)
           )
         )
@@ -138,21 +138,21 @@ NIL
     )
   )
   (Expr.binop_colon
-    (Expr.malformed)
+    (lc "contact")
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "email")
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "phone")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "home")
             (Expr.str_literal_big)
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "work")
             (Expr.str_literal_big)
           )
         )
@@ -163,9 +163,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag record_literal :type "{ person:{ name:Str, age:Num(_size) }, address:{ street:Str, city:Str, coordinates:{ lat:F64, lng:F64 } }, contact:{ email:Str, phone:{ home:Str, work:Str } } }")
 ~~~
 # TYPES
 ~~~roc
-{}
+{ person:{ name:Str, age:Num(_size) }, address:{ street:Str, city:Str, coordinates:{ lat:F64, lng:F64 } }, contact:{ email:Str, phone:{ home:Str, work:Str } } }
 ~~~

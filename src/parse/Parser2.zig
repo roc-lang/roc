@@ -220,7 +220,7 @@ fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []cons
 
 /// Parse and collect tokens - this is the main driver for token-fed parsing
 /// Returns all tokens encountered during parsing (including comments)
-fn parseAndCollectTokens(
+pub fn parseAndCollectTokens(
     env: *base.CommonEnv,
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -2113,7 +2113,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
             // Parse platform name (lowercase identifier or string)
             const name_node = if (self.peek() == .LowerIdent) blk: {
-                const ident = self.currentLowerIdent();
+                const ident = self.currentIdent() orelse unreachable;
                 const node = try self.ast.appendNode(self.gpa, self.currentRegion(), .lc, .{ .ident = ident });
                 self.advance();
                 break :blk node;
@@ -2141,7 +2141,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
                     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                         if (self.peek() == .LowerIdent) {
-                            const ident = self.currentLowerIdent();
+                            const ident = self.currentIdent() orelse unreachable;
                             const node = try self.ast.appendNode(self.gpa, self.currentRegion(), .lc, .{ .ident = ident });
                             try self.scratch_nodes.append(self.gpa, node);
                             self.advance();

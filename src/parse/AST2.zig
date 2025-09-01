@@ -119,7 +119,7 @@ fn nodesInBlock(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx
 }
 
 /// Get a pointer to the payload (for the optimization where we pass pointers to nodes())
-fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
+pub fn payloadPtr(self: *const Ast, idx: Node.Idx) *const Node.Payload {
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     return &self.nodes.fieldItem(.payload, multi_list_idx);
 }
@@ -166,7 +166,7 @@ pub const LambdaArgsIterator = struct {
 };
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .lambda node.
-fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
+pub fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
     std.debug.assert(self.tag(idx) == .lambda);
 
     const body_then_args_idx = self.payload(idx).body_then_args;
@@ -184,7 +184,7 @@ fn lambda(self: *const Ast, idx: Node.Idx) Lambda {
 }
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .while_loop node.
-fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
+pub fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
     std.debug.assert(self.tag(idx) == .while_loop);
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(&nodes_idx);
@@ -201,7 +201,7 @@ fn whileLoop(self: *const Ast, idx: Node.Idx) WhileLoop {
 }
 
 /// Panics in debug builds if the given Node.Idx does not refer to a .for_loop node.
-fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
+pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
     std.debug.assert(self.tag(idx) == .for_loop);
     const nodes_idx = self.payload(idx).nodes;
     var iter = self.node_slices.nodes(&nodes_idx);

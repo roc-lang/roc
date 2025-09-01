@@ -88,9 +88,6 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
 
-    const resolved = self.types.resolveVar(var_);
-    std.debug.print("DEBUG TypeWriter.write: var_={}, resolved content={}\n", .{ @intFromEnum(var_), resolved.desc.content });
-
     try self.writeVar(var_, var_);
 }
 
@@ -495,14 +492,14 @@ fn writeRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range,
 
     // Write first field - we already verified that there's at least one field
     _ = try self.buf.writer().write(self.getIdent(fields_slice.items(.name)[0]));
-    _ = try self.buf.writer().write(": ");
+    _ = try self.buf.writer().write(":");
     try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
     // Write remaining fields
     for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
         _ = try self.buf.writer().write(", ");
         _ = try self.buf.writer().write(self.getIdent(name));
-        _ = try self.buf.writer().write(": ");
+        _ = try self.buf.writer().write(":");
         try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
     }
 
@@ -533,14 +530,12 @@ fn writeFuncWithArrow(self: *TypeWriter, func: Func, arrow: []const u8, root_var
 /// Write a record type
 fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocator.Error!void {
     const fields = self.types.getRecordFieldsSlice(record.fields);
-    std.debug.print("DEBUG writeRecord: fields.len={}, record.fields.start={}, count={}\n", .{ fields.len, record.fields.start, record.fields.count });
 
     _ = try self.buf.writer().write("{ ");
     for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
-        std.debug.print("DEBUG writeRecord field {}: name.idx={}, var={}\n", .{ i, field_name.idx, @intFromEnum(field_var) });
         if (i > 0) _ = try self.buf.writer().write(", ");
         _ = try self.buf.writer().write(self.getIdent(field_name));
-        _ = try self.buf.writer().write(": ");
+        _ = try self.buf.writer().write(":");
         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
     }
 
@@ -555,7 +550,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
                 for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                     if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
                     _ = try self.buf.writer().write(self.getIdent(field_name));
-                    _ = try self.buf.writer().write(": ");
+                    _ = try self.buf.writer().write(":");
                     try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                 }
                 // Recursively handle the extension's extension
@@ -601,7 +596,7 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
                 for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
                     _ = try self.buf.writer().write(", ");
                     _ = try self.buf.writer().write(self.getIdent(field_name));
-                    _ = try self.buf.writer().write(": ");
+                    _ = try self.buf.writer().write(":");
                     try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
                 }
                 // Recursively handle the extension's extension
