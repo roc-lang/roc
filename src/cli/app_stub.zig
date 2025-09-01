@@ -73,6 +73,8 @@ pub fn generateAppStubObject(
         .output_path = object_path,
         .optimization = .size,
         .target = target,
+        .cpu = "generic",
+        .features = "",
     };
 
     const success = try builder.compileBitcodeToObject(allocator, compile_config);
