@@ -100,9 +100,6 @@ jobs:
         run: |
           zig build -Dfuzz -Dsystem-afl=false
 
-      - name: print all supported CPU instructions
-        run: cat /proc/cpuinfo | grep flags
-
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
