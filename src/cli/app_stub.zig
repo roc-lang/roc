@@ -68,17 +68,27 @@ pub fn generateAppStubObject(
     try bc_file.writeAll(bytes);
 
     // Compile bitcode to object file using LLVM
+    // For native compilation, use empty CPU to let LLVM choose the default
+    // For cross-compilation, use "generic" for maximum compatibility
+    const is_native = target == target_mod.RocTarget.detectNative();
+    const cpu_name = if (is_native) "" else "generic";
+
     const compile_config = builder.CompileConfig{
         .input_path = bitcode_path,
         .output_path = object_path,
         .optimization = .size,
         .target = target,
-        .cpu = "generic",
+        .cpu = cpu_name,
         .features = "",
     };
 
-    const success = try builder.compileBitcodeToObject(allocator, compile_config);
+    const success = builder.compileBitcodeToObject(allocator, compile_config) catch |err| {
+        std.log.err("Failed to compile bitcode to object: {}", .{err});
+        allocator.free(object_path);
+        return err;
+    };
     if (!success) {
+        std.log.err("Bitcode compilation returned false without error", .{});
         allocator.free(object_path);
         return error.CompilationFailed;
     }

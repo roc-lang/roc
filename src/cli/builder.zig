@@ -131,20 +131,31 @@ pub fn initializeLLVM() void {
 /// Compile LLVM bitcode file to object file
 pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     if (comptime !llvm_available) {
+        std.log.err("LLVM is not available at compile time", .{});
         return error.LLVMNotAvailable;
     }
 
     const externs = llvm_externs;
 
-    std.log.debug("Compiling bitcode to object file", .{});
+    std.log.debug("Starting bitcode to object compilation", .{});
     std.log.debug("Input: {s} -> Output: {s}", .{ config.input_path, config.output_path });
     std.log.debug("Target: {} ({s})", .{ config.target, config.target.toTriple() });
     std.log.debug("Optimization: {}", .{config.optimization});
+    std.log.debug("CPU: '{s}', Features: '{s}'", .{ config.cpu, config.features });
+
+    // Verify input file exists
+    std.fs.cwd().access(config.input_path, .{}) catch |err| {
+        std.log.err("Input bitcode file does not exist or is not accessible: {s}, error: {}", .{ config.input_path, err });
+        return false;
+    };
 
     // 1. Initialize LLVM targets
+    std.log.debug("Initializing LLVM targets...", .{});
     initializeLLVM();
+    std.log.debug("LLVM targets initialized successfully", .{});
 
     // 2. Load bitcode file
+    std.log.debug("Loading bitcode file: {s}", .{config.input_path});
     var mem_buf: ?*anyopaque = null;
     var error_message: [*:0]u8 = undefined;
 
@@ -157,8 +168,10 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         return false;
     }
     defer if (mem_buf) |buf| externs.LLVMDisposeMemoryBuffer(buf);
+    std.log.debug("Bitcode file loaded successfully", .{});
 
     // 3. Parse bitcode into module
+    std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
         std.log.err("Failed to parse bitcode: {s}", .{error_message});
@@ -166,22 +179,26 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         return false;
     }
     defer if (module) |mod| externs.LLVMDisposeModule(mod);
+    std.log.debug("Bitcode parsed successfully", .{});
 
     // 4. Get target triple and set it on the module
     const target_triple = config.target.toTriple();
     const target_triple_z = try gpa.dupeZ(u8, target_triple);
     defer gpa.free(target_triple_z);
 
-    std.log.debug("Using target triple: {s}", .{target_triple});
+    std.log.debug("Setting target triple on module: {s}", .{target_triple});
     externs.LLVMSetTarget(module, target_triple_z.ptr);
+    std.log.debug("Target triple set successfully", .{});
 
     // 5. Create target
+    std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
     if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
         std.log.err("Failed to get target from triple: {s}", .{error_message});
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
+    std.log.debug("LLVM target obtained successfully", .{});
 
     // 6. Create target machine
     const cpu_z = try gpa.dupeZ(u8, config.cpu);
@@ -189,6 +206,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     const features_z = try gpa.dupeZ(u8, config.features);
     defer gpa.free(features_z);
 
+    std.log.debug("Creating target machine with CPU='{s}', Features='{s}'", .{ config.cpu, config.features });
     const target_machine = externs.ZigLLVMCreateTargetMachine(
         llvm_target,
         target_triple_z.ptr,
@@ -203,18 +221,20 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         null, // abi_name
     );
     if (target_machine == null) {
-        std.log.err("Failed to create target machine", .{});
+        std.log.err("Failed to create target machine for triple='{s}', cpu='{s}', features='{s}'", .{ target_triple, config.cpu, config.features });
         return false;
     }
     defer externs.LLVMDisposeTargetMachine(target_machine);
+    std.log.debug("Target machine created successfully", .{});
 
     // 7. Prepare output path
     const object_path_z = try gpa.dupeZ(u8, config.output_path);
     defer gpa.free(object_path_z);
 
     // 8. Emit object file
+    std.log.debug("Emitting object file to: {s}", .{config.output_path});
     var emit_error_message: [*:0]u8 = undefined;
-    if (externs.ZigLLVMTargetMachineEmitToFile(
+    const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
         target_machine,
         module,
         &emit_error_message,
@@ -227,13 +247,15 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         object_path_z.ptr, // bin_filename
         null, // llvm_ir_filename
         null, // bitcode_filename
-    )) {
-        std.log.err("Failed to emit object file: {s}", .{emit_error_message});
+    );
+
+    if (emit_result) {
+        std.log.err("Failed to emit object file to '{s}': {s}", .{ config.output_path, emit_error_message });
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
     }
 
-    std.log.debug("Successfully compiled bitcode to object file", .{});
+    std.log.debug("Successfully compiled bitcode to object file: {s}", .{config.output_path});
     return true;
 }
 
