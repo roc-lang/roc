@@ -104,10 +104,11 @@ pub const RocTarget = enum {
         };
     }
 
-    /// Detect the current system's Roc target (defaults to musl for static linking)
+    /// Detect the current system's Roc target
     pub fn detectNative() RocTarget {
         const os = builtin.target.os.tag;
         const arch = builtin.target.cpu.arch;
+        const abi = builtin.target.abi;
 
         // Handle architecture first
         switch (arch) {
@@ -119,8 +120,12 @@ pub const RocTarget = enum {
                     .openbsd => return .x64openbsd,
                     .netbsd => return .x64netbsd,
                     .linux => {
-                        // Default to musl for static linking
-                        return .x64musl;
+                        // Check ABI to determine musl vs glibc
+                        return switch (abi) {
+                            .musl, .musleabi, .musleabihf => .x64musl,
+                            .gnu, .gnueabi, .gnueabihf, .gnux32 => .x64glibc,
+                            else => .x64musl, // Default to musl for static linking
+                        };
                     },
                     else => return .x64elf, // Generic fallback
                 }
@@ -130,8 +135,12 @@ pub const RocTarget = enum {
                     .macos => return .arm64mac,
                     .windows => return .arm64win,
                     .linux => {
-                        // Default to musl for static linking
-                        return .arm64musl;
+                        // Check ABI to determine musl vs glibc
+                        return switch (abi) {
+                            .musl, .musleabi, .musleabihf => .arm64musl,
+                            .gnu, .gnueabi, .gnueabihf => .arm64glibc,
+                            else => .arm64musl, // Default to musl for static linking
+                        };
                     },
                     else => return .arm64linux, // Generic ARM64 Linux
                 }
