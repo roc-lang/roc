@@ -284,7 +284,7 @@ pub const Interpreter = struct {
     /// Indentation level for nested debug output
     trace_indent: u32,
     /// Writer interface for trace output (null when no trace active)
-    trace_writer: ?std.io.AnyWriter,
+    trace_writer: ?std.io.Writer,
 
     /// Flag indicating if the program has crashed
     has_crashed: bool,
@@ -599,7 +599,8 @@ pub const Interpreter = struct {
     }
 
     fn schedule_work(self: *Interpreter, work: WorkItem) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             // For w_block_cleanup, expr_idx is not a real expression index, so we can't trace it.
             if (work.kind == .w_block_cleanup) {
                 self.printTraceIndent();
@@ -622,7 +623,8 @@ pub const Interpreter = struct {
 
     fn take_work(self: *Interpreter) ?WorkItem {
         const maybe_work = self.work_stack.pop();
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             if (maybe_work) |work| {
                 if (work.kind == .w_block_cleanup) {
                     self.printTraceIndent();
@@ -2419,10 +2421,11 @@ pub const Interpreter = struct {
 
     /// Start a debug trace session with a given name and writer
     /// Only has effect if DEBUG_ENABLED is true
-    pub fn startTrace(self: *Interpreter, writer: std.io.AnyWriter) void {
+    pub fn startTrace(self: *Interpreter, w: std.io.Writer) void {
         if (!DEBUG_ENABLED) return;
         self.trace_indent = 0;
-        self.trace_writer = writer;
+        self.trace_writer = w;
+        var writer = w;
         writer.print("\n...", .{}) catch {};
         writer.print("\n\n== TRACE START ===================================\n", .{}) catch {};
     }
@@ -2431,8 +2434,10 @@ pub const Interpreter = struct {
     /// Only has effect if DEBUG_ENABLED is true
     pub fn endTrace(self: *Interpreter) void {
         if (!DEBUG_ENABLED) return;
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             writer.print("== TRACE END =====================================\n", .{}) catch {};
+            writer.flush() catch {};
         }
         self.trace_indent = 0;
         self.trace_writer = null;
@@ -2440,7 +2445,8 @@ pub const Interpreter = struct {
 
     /// Print indentation for current trace level
     fn printTraceIndent(self: *const Interpreter) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             var i: u32 = 0;
             while (i < self.trace_indent) : (i += 1) {
                 writer.writeAll("  ") catch {};
@@ -2450,7 +2456,8 @@ pub const Interpreter = struct {
 
     /// Enter a traced function/method with formatted message
     pub fn traceEnter(self: *Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print(">> " ++ fmt ++ "\n", args) catch {};
             self.trace_indent += 1;
@@ -2459,7 +2466,8 @@ pub const Interpreter = struct {
 
     /// Exit a traced function/method
     pub fn traceExit(self: *Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             if (self.trace_indent > 0) self.trace_indent -= 1;
             self.printTraceIndent();
             writer.print("<< " ++ fmt ++ "\n", args) catch {};
@@ -2468,7 +2476,8 @@ pub const Interpreter = struct {
 
     /// Print a general trace message
     pub fn tracePrint(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("* " ++ fmt ++ "\n", args) catch {};
         }
@@ -2476,7 +2485,8 @@ pub const Interpreter = struct {
 
     /// Print trace information (data/state)
     pub fn traceInfo(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("  " ++ fmt ++ "\n", args) catch {};
         }
@@ -2484,7 +2494,8 @@ pub const Interpreter = struct {
 
     /// Print trace warning
     pub fn traceWarn(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("! " ++ fmt ++ "\n", args) catch {};
         }
@@ -2492,7 +2503,8 @@ pub const Interpreter = struct {
 
     /// Print trace error
     pub fn traceError(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("ERROR: " ++ fmt ++ "\n", args) catch {};
         }
@@ -2500,7 +2512,8 @@ pub const Interpreter = struct {
 
     /// Helper to pretty print a CIR.Expression in a trace
     pub fn traceExpression(self: *const Interpreter, expression_idx: CIR.Expr.Idx) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             const expression = self.env.store.getExpr(expression_idx);
 
             var tree = SExprTree.init(self.env.gpa);
@@ -2518,7 +2531,8 @@ pub const Interpreter = struct {
 
     /// Helper to pretty print a CIR.Pattern in a trace
     pub fn tracePattern(self: *const Interpreter, pattern_idx: CIR.Pattern.Idx) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             const pattern = self.env.store.getPattern(pattern_idx);
 
             var tree = SExprTree.init(self.env.gpa);
@@ -2538,7 +2552,8 @@ pub const Interpreter = struct {
 
     /// Print trace success
     pub fn traceSuccess(self: *const Interpreter, comptime fmt: []const u8, args: anytype) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("[OK] " ++ fmt ++ "\n", args) catch {};
         }
@@ -2546,7 +2561,8 @@ pub const Interpreter = struct {
 
     /// Trace stack memory state
     pub fn traceStackState(self: *const Interpreter) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             // Original trace line
             self.printTraceIndent();
 
@@ -2569,7 +2585,8 @@ pub const Interpreter = struct {
 
     /// Trace layout information
     pub fn traceLayout(self: *const Interpreter, label: []const u8, layout_val: Layout) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             const size = self.layout_cache.layoutSize(layout_val);
             writer.print("  LAYOUT ({s}): tag={s}, size={}\n", .{ label, @tagName(layout_val.tag), size }) catch {};
@@ -2578,7 +2595,8 @@ pub const Interpreter = struct {
 
     /// Helper to print layout stack information
     pub fn traceLayoutStackSummary(self: *const Interpreter) void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("LAYOUT STACK items={}\n", .{self.value_stack.items.len}) catch {};
         }
@@ -2586,7 +2604,8 @@ pub const Interpreter = struct {
 
     /// Trace a value on the stack
     pub fn traceValue(self: *const Interpreter, label: []const u8, value: StackValue) !void {
-        if (self.trace_writer) |writer| {
+        if (self.trace_writer) |w| {
+            var writer = w;
             self.printTraceIndent();
             writer.print("VAL ({s}): ", .{label}) catch {};
             switch (value.layout.tag) {

@@ -33,7 +33,7 @@ eval_stack: eval_mod.Stack,
 /// Operations for the Roc runtime
 roc_ops: *RocOps,
 /// Optional trace writer for debugging evaluation
-trace_writer: ?std.io.AnyWriter,
+trace_writer: ?std.Io.Writer,
 /// ModuleEnv from last successful evaluation (for snapshot generation)
 last_module_env: ?*ModuleEnv,
 /// Debug flag to store rendered HTML for snapshot generation
@@ -60,7 +60,7 @@ pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
 }
 
 /// Set the trace writer for the REPL.
-pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+pub fn setTraceWriter(self: *Repl, trace_writer: std.io.Writer) void {
     self.trace_writer = trace_writer;
 }
 
@@ -111,7 +111,7 @@ fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: can.
 
         var can_buffer = std.array_list.Managed(u8).init(self.allocator);
         defer can_buffer.deinit();
-        try tree.toStringPretty(can_buffer.writer().any());
+        try tree.toStringPretty(can_buffer.writer().adaptToNewApi(&.{}).new_interface);
 
         const can_html = try self.allocator.dupe(u8, can_buffer.items);
         try self.debug_can_html.append(can_html);
@@ -125,7 +125,7 @@ fn generateAndStoreDebugHtml(self: *Repl, module_env: *ModuleEnv, expr_idx: can.
 
         var types_buffer = std.array_list.Managed(u8).init(self.allocator);
         defer types_buffer.deinit();
-        try tree.toStringPretty(types_buffer.writer().any());
+        try tree.toStringPretty(types_buffer.writer().adaptToNewApi(&.{}).new_interface);
 
         const types_html = try self.allocator.dupe(u8, types_buffer.items);
         try self.debug_types_html.append(types_html);

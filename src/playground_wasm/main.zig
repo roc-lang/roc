@@ -961,42 +961,29 @@ fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) Resp
 
 /// Writer that tracks bytes written and fails if buffer is exceeded.
 const ResponseWriter = struct {
-    buffer: []u8,
-    pos: usize = 0,
+    writer: std.io.Writer,
+    pub fn init(buffer: []u8) Self {
+        var writer = std.io.Writer.fixed(&buffer);
+        // reserve space for the data length at the beginning of the buffer which will be set in finalize
+        try writer.writeInt(u32, 0, .little);
+        return .{ .writer = writer };
+    }
 
     const Self = @This();
-    pub const Error = ResponseWriteError;
-    pub const Writer = std.io.Writer(*Self, Error, write);
-
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        if (self.pos + bytes.len > self.buffer.len) {
-            return error.OutOfBufferSpace;
-        }
-        @memcpy(self.buffer[self.pos..][0..bytes.len], bytes);
-        self.pos += bytes.len;
-        return bytes.len;
-    }
-
-    fn writer(self: *Self) Writer {
-        return .{ .context = self };
-    }
 
     /// Finalizes the response by writing the length prefix at the beginning.
     /// This assumes all data has been written *after* the length prefix space.
-    fn finalize(self: *Self) ResponseWriteError!void {
-        if (self.pos < @sizeOf(u32)) return error.OutOfBufferSpace; // Not enough space for length prefix itself
+    fn finalize(self: *Self) std.io.Writer.Error!void {
         const data_len = self.pos - @sizeOf(u32);
         std.mem.writeInt(u32, self.buffer[0..@sizeOf(u32)], @intCast(data_len), .little);
+        try self.writer.flush();
     }
 };
 
 /// Write an error response.
 fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    // Advance past length prefix, will be written by finalize
-    resp_writer.pos = @sizeOf(u32);
-
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
     try w.print("{{\"status\":\"{s}\",\"message\":\"", .{status.toString()});
     try writeJsonString(w, message);
     try w.writeAll("\"}");
@@ -1006,10 +993,8 @@ fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []
 
 /// Write a success response
 fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"");
     try writeJsonString(w, message);
     try w.writeAll("\"");
@@ -1026,10 +1011,8 @@ fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]con
 
 /// Write response for LOADED state with diagnostics
 fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
     var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
@@ -1099,9 +1082,8 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
 /// Write REPL initialization response
 fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
     try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
@@ -1181,9 +1163,8 @@ fn extractErrorDetails(message: []const u8) ?[]const u8 {
 
 /// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"result\":{");
 
@@ -1217,9 +1198,8 @@ fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) Respon
 
 /// Write REPL clear response
 fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
     try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
@@ -1231,9 +1211,8 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
 
 /// Write tokens response with direct HTML generation
 fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1249,9 +1228,8 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
 /// Write parse AST response in S-expression format
 fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1267,9 +1245,8 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 
 /// Write canonicalized CIR response for REPL mode using ModuleEnv directly
 fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1304,9 +1281,8 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1356,9 +1332,8 @@ const HoverInfo = struct {
 
 /// Write hover info response for a specific position
 fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     const line_val = message_json.object.get("line") orelse {
         try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing line parameter");
@@ -1508,9 +1483,8 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 
 /// Write types response in S-expression format
 fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
-    resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    var resp_writer = ResponseWriter.init(response_buffer);
+    var w = resp_writer.writer;
 
     if (data.solver == null) {
         try writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");

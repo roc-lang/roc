@@ -767,7 +767,7 @@ test {
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
-pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: std.io.AnyWriter) !void {
+pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: std.io.Writer) !void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(gpa);
@@ -775,7 +775,7 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
 
     try file.pushToSExprTree(gpa, env, ast, &tree);
 
-    try tree.toStringPretty(writer);
+    try tree.toStringPretty(writer.adaptToNewApi(&.{}).new_interface);
 }
 
 /// The kind of the type declaration represented, either:

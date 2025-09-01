@@ -34,7 +34,7 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 
 /// Plain text writer implementation
 const PlainTextSExprWriter = struct {
-    writer: std.io.AnyWriter,
+    writer: std.io.Writer,
 
     pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
         try self.writer.print(fmt, args);
@@ -338,7 +338,7 @@ pub fn printTree(self: *const SExprTree, writer: anytype) !void {
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: std.io.Writer) !void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter{ .writer = writer };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);

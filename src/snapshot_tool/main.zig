@@ -1137,7 +1137,7 @@ fn processSnapshotContent(
 
         var original_sexpr = std.array_list.Managed(u8).init(allocator);
         defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
+        try original_tree.toStringPretty(original_sexpr.writer().adaptToNewApi(&.{}).new_interface);
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1165,7 +1165,7 @@ fn processSnapshotContent(
 
         var restored_sexpr = std.array_list.Managed(u8).init(allocator);
         defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
+        try restored_tree.toStringPretty(restored_sexpr.writer().adaptToNewApi(&.{}).new_interface);
 
         // Compare S-expressions - crash if they don't match
         if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
@@ -2004,7 +2004,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        try tree.toStringPretty(output.md_writer.any());
+        try tree.toStringPretty(output.md_writer.adaptToNewApi(&.{}).new_interface);
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
@@ -2030,28 +2030,30 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
     var formatted = std.array_list.Managed(u8).init(output.gpa);
     defer formatted.deinit();
+    var buffer: [1024 * 16]u8 = undefined;
+    const formatted_writer = formatted.writer().adaptToNewApi(&buffer).new_interface;
 
     switch (content.meta.node_type) {
         .file => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_writer);
         },
         .header => {
-            try fmt.formatHeader(parse_ast.*, formatted.writer().any());
+            try fmt.formatHeader(parse_ast.*, formatted_writer);
         },
         .expr => {
-            try fmt.formatExpr(parse_ast.*, formatted.writer().any());
+            try fmt.formatExpr(parse_ast.*, formatted_writer);
         },
         .statement => {
-            try fmt.formatStatement(parse_ast.*, formatted.writer().any());
+            try fmt.formatStatement(parse_ast.*, formatted_writer);
         },
         .package => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_writer);
         },
         .platform => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_writer);
         },
         .app => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_writer);
         },
         .repl => {
             // REPL doesn't use formatting
@@ -2069,7 +2071,8 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     try output.md_writer.writeAll("\n");
 
     // HTML FORMATTED section
-    if (output.html_writer) |writer| {
+    if (output.html_writer) |w| {
+        var writer = w;
         try writer.writeAll(
             \\                <pre>
         );
@@ -2097,7 +2100,7 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    try tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.adaptToNewApi(&.{}).new_interface);
     try output.md_writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
@@ -2123,7 +2126,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    try tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.adaptToNewApi(&.{}).new_interface);
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
@@ -2275,7 +2278,10 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ar
         return;
     };
     defer html_file.close();
-    try html_file.writer().writeAll(html_buffer.items);
+    var buffer: [4096]u8 = undefined;
+    var writer = html_file.writer(&buffer).interface;
+    try writer.writeAll(html_buffer.items);
+    try writer.flush();
 
     log("generated HTML version: {s}", .{html_path});
 }
@@ -2367,7 +2373,10 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         };
         defer corpus_file.close();
 
-        try corpus_file.writer().writeAll(content.source);
+        var buffer: [4096]u8 = undefined;
+        var writer = corpus_file.writer(&buffer).interface;
+        try writer.writeAll(content.source);
+        try writer.flush();
     }
 
     return success;
@@ -2518,7 +2527,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Enable tracing if requested
     if (config.trace_eval) {
-        repl_instance.setTraceWriter(std.io.getStdErr().writer().any());
+        var stderr_buffer: [1024]u8 = undefined;
+        const stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        repl_instance.setTraceWriter(stderr_writer.interface);
     }
 
     // Process each input and generate output
