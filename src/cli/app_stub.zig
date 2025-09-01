@@ -66,12 +66,17 @@ pub fn generateAppStubObject(
     // Convert u32 array to bytes for writing
     const bytes = std.mem.sliceAsBytes(bitcode);
     try bc_file.writeAll(bytes);
+    std.log.debug("Wrote bitcode file: {s} ({} bytes)", .{ bitcode_path, bytes.len });
 
     // Compile bitcode to object file using LLVM
     // For native compilation, use empty CPU to let LLVM choose the default
     // For cross-compilation, use "generic" for maximum compatibility
-    const is_native = target == target_mod.RocTarget.detectNative();
+    const detected_native = target_mod.RocTarget.detectNative();
+    const is_native = target == detected_native;
     const cpu_name = if (is_native) "" else "generic";
+
+    std.log.debug("Native target: {}, Request target: {}, Is native: {}", .{ detected_native, target, is_native });
+    std.log.debug("Using CPU: '{s}'", .{cpu_name});
 
     const compile_config = builder.CompileConfig{
         .input_path = bitcode_path,
@@ -82,11 +87,16 @@ pub fn generateAppStubObject(
         .features = "",
     };
 
+    std.log.debug("About to call compileBitcodeToObject...", .{});
+
     const success = builder.compileBitcodeToObject(allocator, compile_config) catch |err| {
         std.log.err("Failed to compile bitcode to object: {}", .{err});
         allocator.free(object_path);
         return err;
     };
+
+    std.log.debug("compileBitcodeToObject returned: {}", .{success});
+
     if (!success) {
         std.log.err("Bitcode compilation returned false without error", .{});
         allocator.free(object_path);
