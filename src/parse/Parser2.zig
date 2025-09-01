@@ -2159,7 +2159,8 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 // Parse requires signatures as record expressions
                 // The signatures are represented as record syntax during parsing
                 if (self.peek() == .OpenCurly) {
-                    requires_signatures = try self.parseRecordExpr();
+                    // Parse record literal for requires signatures
+                    requires_signatures = try self.parseBlockOrRecord();
                 }
             }
 

@@ -3249,12 +3249,35 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
 
             // Check all branches - they must all have the same type
             var branch_type: ?Var = null;
-            while (iter.next()) |pattern_idx| {
+            while (iter.next()) |pattern_or_guard_idx| {
                 const body_idx = iter.next() orelse break;
 
-                // Check the pattern against the scrutinee type
-                const pattern_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(pattern_idx)));
-                _ = try self.unify(pattern_var, scrutinee_var);
+                // Check if this is a guarded pattern (if_without_else node)
+                const pattern_node = cir2.getNode(@enumFromInt(@intFromEnum(pattern_or_guard_idx)));
+
+                if (pattern_node.tag == .if_without_else) {
+                    // This is a guarded pattern: pattern if guard_condition
+                    // The if_without_else node contains [pattern, guard_condition]
+                    const branches_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(pattern_node.payload.if_branches));
+                    var guard_iter = cir2.ast.node_slices.nodes(&branches_idx);
+
+                    // Extract pattern and guard
+                    const pattern_idx = guard_iter.next() orelse break;
+                    const guard_idx = guard_iter.next() orelse break;
+
+                    // Check the pattern against the scrutinee type
+                    const pattern_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(pattern_idx)));
+                    _ = try self.unify(pattern_var, scrutinee_var);
+
+                    // Check the guard condition - must be Bool
+                    const guard_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(guard_idx)));
+                    // For now, just ensure guard type exists - proper Bool type checking coming later
+                    _ = guard_var;
+                } else {
+                    // Regular pattern without guard
+                    const pattern_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(pattern_or_guard_idx)));
+                    _ = try self.unify(pattern_var, scrutinee_var);
+                }
 
                 // Check the body
                 const body_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(body_idx)));
@@ -3341,6 +3364,24 @@ fn checkCIR2Pattern(
     cir2: *const CIR2,
     patt_idx: CIR2.Patt.Idx,
 ) !Var {
+    const patt_node = cir2.getNode(patt_idx.toNodeIdx());
+
+    // Handle pattern alternatives (binop_or for pattern1 | pattern2)
+    if (patt_node.tag == .binop_or) {
+        const binop = cir2.ast.node_slices.binOp(patt_node.payload.binop);
+
+        // Check both alternatives against the same type
+        const lhs_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(binop.lhs)));
+        const rhs_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(binop.rhs)));
+
+        // Both alternatives must have the same type
+        _ = try self.unify(lhs_var, rhs_var);
+
+        const patt_var = @as(Var, @enumFromInt(@intFromEnum(patt_idx.toNodeIdx())));
+        _ = try self.unify(patt_var, lhs_var);
+        return patt_var;
+    }
+
     const patt = cir2.getPatt(patt_idx);
 
     // Get the type variable for this pattern (should already exist from canonicalization)
@@ -3389,19 +3430,54 @@ fn checkCIR2Pattern(
             // Tag pattern with optional payload
             var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
 
-            // Skip tag constructor
-            _ = iter.next();
+            // First element is the tag constructor
+            const tag_idx = iter.next();
 
-            // Check payload pattern if present
-            if (iter.next()) |payload_idx| {
-                // Payload should be a pattern
-                const payload_patt = cir2.getPatt(@enumFromInt(@intFromEnum(payload_idx)));
-                if (payload_patt.tag != .malformed) {
-                    _ = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(payload_idx)));
+            // Collect payload pattern types
+            var payload_types = std.ArrayList(Var).init(self.gpa);
+            defer payload_types.deinit();
+
+            while (iter.next()) |payload_idx| {
+                // Check nested patterns in payload
+                const payload_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(payload_idx)));
+                try payload_types.append(payload_var);
+            }
+
+            // Create tag union type with this tag
+            if (tag_idx) |tag_node_idx| {
+                const tag_node = cir2.getNode(@enumFromInt(@intFromEnum(tag_node_idx)));
+                if (tag_node.tag == .uc) {
+                    // Get tag name
+                    const tag_name = tag_node.payload.ident;
+
+                    // Create a tag with payload types
+                    const payload_range = if (payload_types.items.len > 0)
+                        try self.types.appendVars(payload_types.items)
+                    else
+                        types_mod.Var.SafeList.Range.empty();
+
+                    const tag = types_mod.Tag{ .name = tag_name, .args = payload_range };
+                    const tag_idx_new = try self.types.tags.append(self.gpa, tag);
+
+                    // Create tag union with this single tag
+                    const tag_range = types_mod.Tag.SafeMultiList.Range{
+                        .start = tag_idx_new,
+                        .count = 1,
+                    };
+
+                    // Extension is unbound for now
+                    const ext_var = try self.types.fresh();
+
+                    const tag_union_content = Content{ .structure = .{ .tag_union = .{
+                        .tags = tag_range,
+                        .ext = ext_var,
+                    } } };
+
+                    const tag_union_var = try self.types.freshFromContent(tag_union_content);
+                    _ = try self.unify(patt_var, tag_union_var);
                 }
             }
 
-            // Pattern has tag union type
             return patt_var;
         },
 
@@ -3413,28 +3489,43 @@ fn checkCIR2Pattern(
 
             var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
             while (iter.next()) |elem_idx| {
-                // Elements should be patterns
-                const elem_patt = cir2.getPatt(@enumFromInt(@intFromEnum(elem_idx)));
-                if (elem_patt.tag != .malformed) {
-                    const elem_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
-                    try elem_vars.append(elem_var);
-                }
+                // Recursively check nested patterns
+                const elem_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+                try elem_vars.append(elem_var);
             }
 
             // Create tuple type from element types
-            // For now, just use a fresh variable
+            if (elem_vars.items.len > 0) {
+                const elems_range = try self.types.appendVars(elem_vars.items);
+                const tuple_content = Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
+                const tuple_var = try self.types.freshFromContent(tuple_content);
+                _ = try self.unify(patt_var, tuple_var);
+            }
+
             return patt_var;
         },
 
         .list_destructure => {
-            // List pattern - all elements must have same type
+            // List pattern - all non-rest elements must have same type
             var elem_type: ?Var = null;
+            var has_rest = false;
 
             var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
             while (iter.next()) |elem_idx| {
-                // Elements should be patterns
                 const elem_patt = cir2.getPatt(@enumFromInt(@intFromEnum(elem_idx)));
-                if (elem_patt.tag != .malformed) {
+
+                if (elem_patt.tag == .double_dot_ident) {
+                    // Rest pattern in list: [first, ..rest]
+                    has_rest = true;
+                    // Rest pattern binds to a list of the element type
+                    if (elem_type) |et| {
+                        const rest_list_content = Content{ .structure = .{ .list = et } };
+                        const rest_list_var = try self.types.freshFromContent(rest_list_content);
+                        const rest_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+                        _ = try self.unify(rest_var, rest_list_var);
+                    }
+                } else if (elem_patt.tag != .malformed) {
+                    // Regular element pattern
                     const elem_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
 
                     if (elem_type) |expected| {
@@ -3450,17 +3541,28 @@ fn checkCIR2Pattern(
                 const list_content = Content{ .structure = .{ .list = et } };
                 const list_var = try self.types.freshFromContent(list_content);
                 _ = try self.unify(patt_var, list_var);
+            } else if (!has_rest) {
+                // Empty list pattern []
+                const unbound_elem = try self.types.fresh();
+                const list_content = Content{ .structure = .{ .list = unbound_elem } };
+                const list_var = try self.types.freshFromContent(list_content);
+                _ = try self.unify(patt_var, list_var);
             }
 
             return patt_var;
         },
 
         .record_destructure => {
-            // Record pattern - check field patterns
-            // Fields can be binop_colon (field: pattern) or direct patterns
+            // Record pattern - check field patterns and build record type
+            var fields = std.ArrayList(types_mod.RecordField).init(self.gpa);
+            defer fields.deinit();
+
+            var has_rest = false;
+            var rest_var: ?Var = null;
+
             var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
             while (iter.next()) |field_idx| {
-                const field_node = cir2.getNode(field_idx);
+                const field_node = cir2.getNode(@enumFromInt(@intFromEnum(field_idx)));
                 const tag_value = @as(u8, @intFromEnum(field_node.tag));
 
                 // Check if it's an expression (binop_colon for field: pattern)
@@ -3469,16 +3571,59 @@ fn checkCIR2Pattern(
                     const expr_view = cir2.getExpr(@enumFromInt(@intFromEnum(field_idx)));
                     if (expr_view.tag == .binop_colon) {
                         const binop = cir2.getBinOp(CIR2.Patt.Idx, expr_view.payload.binop);
-                        // RHS is the pattern
-                        _ = try self.checkCIR2Pattern(CIR2, cir2, binop.rhs);
+
+                        // LHS is field name, RHS is the pattern
+                        const name_node = cir2.getNode(@enumFromInt(@intFromEnum(binop.lhs)));
+                        if (name_node.tag == .lc) {
+                            const field_name = name_node.payload.ident;
+                            const field_type = try self.checkCIR2Pattern(CIR2, cir2, binop.rhs);
+
+                            try fields.append(.{
+                                .name = field_name,
+                                .var_ = field_type,
+                            });
+                        }
                     }
                 } else if (tag_value >= CIR2.PATT_TAG_START) {
-                    // It's a pattern node - check it directly
-                    _ = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(field_idx)));
+                    // It's a pattern node - could be shorthand field or rest pattern
+                    const field_patt = cir2.getPatt(@enumFromInt(@intFromEnum(field_idx)));
+
+                    if (field_patt.tag == .ident) {
+                        // Shorthand field pattern: { x } means { x: x }
+                        const field_name = field_patt.payload.ident;
+                        const field_type = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(field_idx)));
+
+                        try fields.append(.{
+                            .name = field_name,
+                            .var_ = field_type,
+                        });
+                    } else if (field_patt.tag == .double_dot_ident) {
+                        // Rest pattern: { ..rest }
+                        has_rest = true;
+                        rest_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(field_idx)));
+                    } else {
+                        // Other pattern types in record context
+                        _ = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(field_idx)));
+                    }
                 }
             }
 
-            // Record type - for now use fresh variable
+            // Create record type with collected fields
+            if (fields.items.len > 0 or has_rest) {
+                const record_fields = if (fields.items.len > 0)
+                    try self.types.appendRecordFields(fields.items)
+                else
+                    types_mod.RecordField.SafeMultiList.Range.empty();
+
+                // Extension is the rest pattern variable or unbound
+                const record_ext = rest_var orelse try self.types.fresh();
+
+                const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
+
+                const record_var = try self.types.freshFromContent(record_content);
+                _ = try self.unify(patt_var, record_var);
+            }
+
             return patt_var;
         },
 

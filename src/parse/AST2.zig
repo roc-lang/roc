@@ -220,7 +220,7 @@ pub fn forLoop(self: *const Ast, idx: Node.Idx) ForLoop {
 }
 
 /// Get an iterator for lambda args
-fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
+pub fn lambdaArgs(self: *const Ast, lambda_val: Lambda) LambdaArgsIterator {
     return LambdaArgsIterator{
         .iter = self.node_slices.nodes(&lambda_val.args_idx),
         .skipped_body = false,

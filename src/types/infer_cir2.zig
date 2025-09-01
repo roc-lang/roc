@@ -39,6 +39,17 @@ pub fn InferContext(comptime CIR2: type) type {
             // It was created and populated during type checking
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 
+            // Ensure the variable exists in the store
+            const var_idx = @intFromEnum(expr_var);
+            const current_len = self.store.len();
+            if (var_idx >= current_len) {
+                // Variable doesn't exist - create fresh variables up to this index
+                var i = current_len;
+                while (i <= var_idx) : (i += 1) {
+                    _ = try self.store.fresh();
+                }
+            }
+
             // Check if this variable has content - if it does, return it
             const resolved = self.store.resolveVar(expr_var);
             if (resolved.desc.content != .flex_var) {
@@ -425,16 +436,37 @@ pub fn InferContext(comptime CIR2: type) type {
 
         /// Infer the type of a CIR2 pattern
         pub fn inferPattern(self: *Self, patt_idx: CIR2.Patt.Idx) !Var {
+            // Patterns should also use their index as the type variable
+            const patt_var = @as(Var, @enumFromInt(@intFromEnum(patt_idx)));
+
+            // Ensure the variable exists in the store
+            const var_idx = @intFromEnum(patt_var);
+            const current_len = self.store.len();
+            if (var_idx >= current_len) {
+                // Variable doesn't exist - create fresh variables up to this index
+                var i = current_len;
+                while (i <= var_idx) : (i += 1) {
+                    _ = try self.store.fresh();
+                }
+            }
+
+            // Check if this variable has content - if it does, return it
+            const resolved = self.store.resolveVar(patt_var);
+            if (resolved.desc.content != .flex_var) {
+                // Already has a type from type checking, return it
+                return patt_var;
+            }
+
             const patt = self.cir.getPatt(patt_idx);
 
             switch (patt.tag) {
                 .identifier => {
-                    // Simple identifier binding - create fresh type variable
-                    return try self.store.fresh();
+                    // Simple identifier binding - return the pattern's variable
+                    return patt_var;
                 },
                 .underscore => {
                     // Underscore pattern - matches anything
-                    return try self.store.fresh();
+                    return patt_var;
                 },
                 .num_literal => {
                     // Number pattern
@@ -480,7 +512,7 @@ pub fn InferContext(comptime CIR2: type) type {
                                 const binop = self.cir.ast.*.node_slices.binOp(self.cir.ast.*.payload(field_node).binop);
                                 // Right side is the pattern for the field value
                                 const value_patt_idx = @as(CIR2.Patt.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-                                const field_type = try self.inferPatt(value_patt_idx);
+                                const field_type = try self.inferPattern(value_patt_idx);
 
                                 // Get field name from left side
                                 const name_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
@@ -532,7 +564,7 @@ pub fn InferContext(comptime CIR2: type) type {
                         const patt_idx = @as(CIR2.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
                         const expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
 
-                        const patt_type = try self.inferPatt(patt_idx);
+                        const patt_type = try self.inferPattern(patt_idx);
                         const expr_type = try self.inferExpr(expr_idx);
 
                         // Type checking would unify pattern and expression types
