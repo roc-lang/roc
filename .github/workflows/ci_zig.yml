@@ -1,5 +1,4 @@
 on:
-  #workflow_call:
   pull_request:
 
 name: CI New Compiler
@@ -74,14 +73,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [
-            #macos-13,
-            #macos-15,
+            macos-13,
+            macos-15,
             ubuntu-22.04,
-            ubuntu-24.04,
-            #ubuntu-24.04-arm,
-            #windows-2022,
-            #windows-2025,
-            #windows-11-arm,
+            ubuntu-24.04-arm,
+            windows-2022,
+            windows-2025,
+            windows-11-arm,
           ] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
