@@ -597,7 +597,7 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
 
     // Create command line with handle and size as arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintZ(gpa, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    const cmd_line = try std.fmt.allocPrint(gpa, "\"{s}\" {} {}\x00", .{ exe_path, handle_uint, shm_handle.size });
     defer gpa.free(cmd_line);
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(gpa, cmd_line);
     defer gpa.free(cmd_line_w);
