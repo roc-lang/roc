@@ -1077,7 +1077,7 @@ fn checkExprWithExpectedAndAnnotation(self: *Self, expr_idx: CIR.Expr.Idx, expec
 
                 // We didn't handle the function call above (either because it wasn't a function
                 // or it didn't need instantiation), so fall back on this logic.
-                const arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
+                const arg_vars: []Var = @ptrCast(@alignCast(@constCast(call_args)));
 
                 // Create an unbound function type with the call result as return type
                 // The unification will propagate the actual return type to the call
@@ -1561,7 +1561,7 @@ fn unifyFunctionCall(
 
         // Fall back to normal unification to get proper error message
         // Use the original func_var to avoid issues with instantiated variables in error reporting
-        const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(call_args)));
+        const actual_arg_vars: []Var = @ptrCast(@alignCast(@constCast(call_args)));
         const func_content = try self.types.mkFuncUnbound(actual_arg_vars, call_var);
         const expected_func_var = try self.freshFromContent(func_content, region);
         _ = try self.unify(call_func_var, expected_func_var);
@@ -1598,7 +1598,7 @@ fn unifyFunctionCall(
 fn checkLambdaForClosure(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
-    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    lambda: @FieldType(CIR.Expr, "e_lambda"),
     anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -1671,7 +1671,7 @@ fn checkLambdaWithAnno(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     _: Region,
-    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    lambda: @FieldType(CIR.Expr, "e_lambda"),
     anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -2032,7 +2032,7 @@ fn checkIfElseExpr(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
-    if_: std.meta.FieldType(CIR.Expr, .e_if),
+    if_: @FieldType(CIR.Expr, "e_if"),
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
