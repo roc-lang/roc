@@ -118,8 +118,9 @@ run_test() {
             else
                 print_error "$test_name - Expected output not found"
                 echo "  Expected: $expected_output"
-                echo "  Got:"
+                echo "  Got (first 5 lines):"
                 cat "$TEST_OUTPUT_DIR/test_$TESTS_RUN.out" | head -5
+                echo "  NOTE: For complete output, run: cat $TEST_OUTPUT_DIR/test_$TESTS_RUN.out"
                 TESTS_FAILED=$((TESTS_FAILED + 1))
                 FAILED_TESTS+=("$test_name")
                 return 1
@@ -131,8 +132,18 @@ run_test() {
         fi
     else
         print_error "$test_name - Command failed"
-        echo "  Error output:"
-        cat "$TEST_OUTPUT_DIR/test_$TESTS_RUN.out" | head -10
+        
+        # Show more complete output for arm64glibc debugging
+        if [[ "$test_name" == *"arm64glibc"* ]]; then
+            echo "  Complete error output for arm64glibc debugging:"
+            cat "$TEST_OUTPUT_DIR/test_$TESTS_RUN.out"
+        else
+            echo "  Error output (first 10 lines):"
+            cat "$TEST_OUTPUT_DIR/test_$TESTS_RUN.out" | head -10
+            echo "  NOTE: This is a summary of the error output."
+            echo "  For complete output, run: cat $TEST_OUTPUT_DIR/test_$TESTS_RUN.out"
+        fi
+        
         TESTS_FAILED=$((TESTS_FAILED + 1))
         FAILED_TESTS+=("$test_name")
         return 1
@@ -185,15 +196,17 @@ test_native_execution() {
             TESTS_PASSED=$((TESTS_PASSED + 1))
         else
             print_error "Native executable exited with code $exit_code"
-            echo "  Output:"
+            echo "  Output (first 10 lines):"
             head -10 "$exec_output" | sed 's/^/    /'
+            echo "  NOTE: For complete output, run: cat $exec_output"
             TESTS_FAILED=$((TESTS_FAILED + 1))
             FAILED_TESTS+=("native execution exit code")
         fi
     else
         print_error "Native executable timed out or crashed"
-        echo "  Output:"
+        echo "  Output (first 10 lines):"
         head -10 "$exec_output" | sed 's/^/    /'
+        echo "  NOTE: For complete output, run: cat $exec_output"
         TESTS_FAILED=$((TESTS_FAILED + 1))
         FAILED_TESTS+=("native execution timeout")
     fi
