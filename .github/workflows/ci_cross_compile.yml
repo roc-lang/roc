@@ -42,7 +42,12 @@ jobs:
 
       - name: Build roc compiler
         run: |
-          zig build
+          # remove this retry mechanism when ziglang/zig#21316 is fixed
+          for i in {1..3}; do
+            if zig build 2>&1; then exit 0; fi
+            if [[ $i -eq 3 || ! $(zig build 2>&1) =~ "EndOfStream" ]]; then exit 1; fi
+            sleep 10 # give network some time to recover
+          done
 
       - name: Cross-compile int platform (Unix)
         if: runner.os != 'Windows'
