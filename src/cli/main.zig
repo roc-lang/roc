@@ -2265,6 +2265,8 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             const common_lib_paths = [_][]const u8{
                 "/lib/x86_64-linux-gnu",
                 "/usr/lib/x86_64-linux-gnu",
+                "/lib/aarch64-linux-gnu",
+                "/usr/lib/aarch64-linux-gnu",
                 "/lib64",
                 "/usr/lib64",
                 "/lib",
