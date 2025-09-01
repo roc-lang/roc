@@ -20,6 +20,7 @@ const Ident = base.Ident;
 /// Main formatter struct for AST2
 const Formatter = struct {
     allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator, // For temporary allocations
     ast: *const AST2,
     source: []const u8,
     ident_store: *const Ident.Store,
@@ -33,15 +34,23 @@ const Formatter = struct {
     token_cursor: usize = 0, // Current position in tokens array for efficient traversal
     consecutive_newlines: u32 = 0, // Track consecutive newlines to prevent multiple blank lines
 
-    fn init(allocator: std.mem.Allocator, ast: *const AST2, source: []const u8, ident_store: *const Ident.Store, tokens: []const Token) !Formatter {
+    fn init(
+        allocator: std.mem.Allocator,
+        scratch_allocator: std.mem.Allocator,
+        ast: *const AST2,
+        source: []const u8,
+        ident_store: *const Ident.Store,
+        tokens: []const Token,
+    ) !Formatter {
         return Formatter{
             .allocator = allocator,
+            .scratch_allocator = scratch_allocator,
             .ast = ast,
             .source = source,
             .ident_store = ident_store,
             .tokens = tokens, // Use pre-collected tokens including comments
             .output = std.ArrayList(u8).init(allocator),
-            .scratch_nodes = std.ArrayList(Node.Idx).init(allocator),
+            .scratch_nodes = std.ArrayList(Node.Idx).init(scratch_allocator),
             .token_cursor = 0,
         };
     }
@@ -209,20 +218,26 @@ const Formatter = struct {
         return found_any;
     }
 
+    /// Binary search to find the first token at or after the given offset
+    fn findFirstTokenAtOrAfter(self: *const Formatter, offset: usize) usize {
+        var left: usize = 0;
+        var right = self.tokens.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < offset) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        return left;
+    }
+
     /// Helper function to check if there's a trailing comma after a given offset
     /// Uses binary search to efficiently find the position in the tokens array
     fn hasTrailingCommaAfterOffset(self: *const Formatter, offset: usize) bool {
-        // Binary search to find first token after the offset
-        var cursor: usize = 0;
-        var search_end = self.tokens.len;
-        while (cursor < search_end) {
-            const mid = cursor + (search_end - cursor) / 2;
-            if (self.tokens[mid].region.start.offset < offset) {
-                cursor = mid + 1;
-            } else {
-                search_end = mid;
-            }
-        }
+        // Find first token at or after the offset
+        var cursor = self.findFirstTokenAtOrAfter(offset);
 
         // Look for a comma token after the offset
         while (cursor < self.tokens.len) : (cursor += 1) {
@@ -1856,6 +1871,7 @@ const Formatter = struct {
         }
 
         if (multiline) {
+            try self.ensureNewline();
             self.curr_indent_level += 1;
         }
 
@@ -3021,7 +3037,7 @@ const Formatter = struct {
     fn formatStringFromSource(self: *Formatter, node_idx: Node.Idx) !void {
         const node = self.getNode(node_idx);
 
-        // Find the string in the source - it starts with a quote
+        // Find the string in the source
         const start = node.region.start.offset;
 
         // Handle single-quoted strings (single characters)
@@ -3039,6 +3055,36 @@ const Formatter = struct {
             return;
         }
 
+        // Check for multiline string (triple quotes)
+        if (start + 2 < self.source.len and
+            self.source[start] == '"' and
+            self.source[start + 1] == '"' and
+            self.source[start + 2] == '"')
+        {
+            // Multiline string - find the closing triple quotes
+            var end = start + 3; // Skip opening triple quotes
+
+            while (end + 2 < self.source.len) {
+                if (self.source[end] == '"' and
+                    self.source[end + 1] == '"' and
+                    self.source[end + 2] == '"')
+                {
+                    end += 3; // Include closing triple quotes
+                    break;
+                }
+                end += 1;
+            }
+
+            // Output the multiline string as-is from source
+            // Can't use pushLiteralFromRegion since it doesn't allow newlines
+            const multiline_str = self.source[start..end];
+            for (multiline_str) |c| {
+                try self.push(c);
+            }
+            return;
+        }
+
+        // Regular double-quoted string
         var end = start + 1; // Skip opening quote
 
         // Find the closing quote, handling escapes
@@ -3112,14 +3158,19 @@ const Formatter = struct {
             return true;
         }
 
-        // Check if the collection contains any comments
+        // Check if the collection contains any comments using our token list
         const node = self.getNode(node_idx);
-        if (node.region.start.offset < node.region.end.offset and
-            node.region.end.offset <= self.source.len)
-        {
-            const collection_text = self.source[node.region.start.offset..node.region.end.offset];
-            // If there's a comment inside the collection, use multiline formatting
-            if (std.mem.indexOf(u8, collection_text, "#") != null) {
+        const start_offset = node.region.start.offset;
+        const end_offset = node.region.end.offset;
+
+        // Find first token that could be inside this collection
+        const start_token_idx = self.findFirstTokenAtOrAfter(start_offset);
+
+        // Check tokens within the collection's range for comments
+        var i = start_token_idx;
+        while (i < self.tokens.len and self.tokens[i].region.start.offset < end_offset) : (i += 1) {
+            if (self.tokens[i].tag == .LineComment or self.tokens[i].tag == .DocComment) {
+                // Found a comment inside the collection
                 return true;
             }
         }
@@ -3557,29 +3608,117 @@ pub fn formatAst(
     ident_store: *const Ident.Store,
     root_node: ?Node.Idx,
 ) ![]u8 {
+    // Create a scratch arena for temporary allocations
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const scratch = scratch_arena.allocator();
+
     // Just tokenize - we don't need to parse since we already have an AST
-    var env = try CommonEnv.init(allocator, source);
-    defer env.deinit(allocator);
+    var env = try CommonEnv.init(scratch, source);
+    defer env.deinit(scratch);
 
     var byte_slices = collections.ByteSlices{ .entries = .{} };
-    defer byte_slices.entries.deinit(allocator);
+    defer byte_slices.entries.deinit(scratch);
 
     var messages: [256]tokenize_iter.Diagnostic = undefined;
 
     // Tokenize without parsing
-    var tokens = std.ArrayList(tokenize_iter.Token).init(allocator);
+    var tokens = std.ArrayList(tokenize_iter.Token).init(scratch);
     defer tokens.deinit();
 
-    var token_iter = try tokenize_iter.TokenIterator.init(&env, allocator, source, &messages, &byte_slices);
-    defer token_iter.deinit(allocator);
+    var token_iter = try tokenize_iter.TokenIterator.init(&env, scratch, source, &messages, &byte_slices);
+    defer token_iter.deinit(scratch);
 
     // Collect all tokens
-    while (try token_iter.next(allocator)) |token| {
+    while (try token_iter.next(scratch)) |token| {
         try tokens.append(token);
         if (token.tag == .EndOfFile) break;
     }
 
-    var formatter = try Formatter.init(allocator, ast, source, ident_store, tokens.items);
+    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, tokens.items);
+    defer formatter.deinit();
+
+    try formatter.format(root_node);
+
+    // Ensure the output ends with exactly one newline
+    // Remove any trailing blank lines, then ensure we have exactly one newline
+    while (formatter.output.items.len > 1 and
+        formatter.output.items[formatter.output.items.len - 1] == '\n' and
+        formatter.output.items[formatter.output.items.len - 2] == '\n')
+    {
+        _ = formatter.output.pop();
+    }
+
+    // Ensure we end with a newline if we don't already
+    if (formatter.output.items.len == 0 or formatter.output.items[formatter.output.items.len - 1] != '\n') {
+        try formatter.output.append('\n');
+    }
+
+    // Transfer ownership to caller by moving the items
+    const result = try formatter.output.toOwnedSlice();
+
+    // Debug: Check for lines with exactly 4 spaces
+    if (std.debug.runtime_safety) {
+        var i: usize = 0;
+        var line_start: usize = 0;
+        var line_num: usize = 1;
+
+        while (i < result.len) : (i += 1) {
+            if (result[i] == '\n') {
+                const line = result[line_start..i];
+                if (line.len == 4) {
+                    var all_spaces = true;
+                    for (line) |c| {
+                        if (c != ' ') {
+                            all_spaces = false;
+                            break;
+                        }
+                    }
+                    if (all_spaces) {
+                        std.debug.panic("ERROR: Formatter is returning line {} with exactly 4 spaces!\n", .{line_num});
+                    }
+                }
+                line_num += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+
+    // Debug assertion: Ensure file ends with exactly one newline
+    if (std.debug.runtime_safety) {
+        if (result.len == 0) {
+            std.debug.panic("ERROR: Formatter returned empty output!\n", .{});
+        }
+
+        // Check that file ends with exactly one newline
+        if (result[result.len - 1] != '\n') {
+            std.debug.panic("ERROR: Formatted file does not end with a newline! Last char: '{c}'\n", .{result[result.len - 1]});
+        }
+
+        // Check that there's no blank line at the end (no double newline)
+        if (result.len > 1 and result[result.len - 2] == '\n') {
+            std.debug.panic("ERROR: Formatted file ends with a blank line (double newline)!\n", .{});
+        }
+    }
+
+    return result;
+}
+
+/// Formats AST2 with pre-tokenized source
+pub fn formatAstWithTokens(
+    allocator: std.mem.Allocator,
+    ast: *const AST2,
+    source: []const u8,
+    ident_store: *const Ident.Store,
+    tokens: []const tokenize_iter.Token,
+    root_node: ?Node.Idx,
+) ![]u8 {
+    // Create a scratch arena for temporary allocations
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const scratch = scratch_arena.allocator();
+
+    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, tokens);
     defer formatter.deinit();
 
     try formatter.format(root_node);

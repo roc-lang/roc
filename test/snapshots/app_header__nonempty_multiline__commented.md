@@ -19,29 +19,49 @@ KwApp LineComment OpenCurly LineComment LowerIdent OpColon String KwPlatform Ope
 # PARSE
 ~~~clojure
 (app-header
-  (packages))
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../main.roc")
+        (block
+          (not_lc "main")
+        )
+      )
+    )
+
+    (binop_colon
+      (lc "other")
+      (str_literal_big "../../other/main.roc")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-app { }# Comment after keyword
-# Comment after packages open
-# Comment after provides open
-# Comment after exposed item
-# Comment after platform
-# Comment after last package
+app
+{
+	# Comment after keyword
+	# Comment after packages open
+	pf: "../main.roc" platform [ # Comment after provides open
+		main!
+	],
+	# Comment after exposed item
+	# Comment after platform
+	other: "../../other/main.roc",
+}# Comment after last package
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPECTED OPEN CURLY BRACE**
-A parsing error occurred: **expected_package_platform_open_curly**
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **main!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**app_header__nonempty_multiline__commented.md:1:1:1:5:**
+**app_header__nonempty_multiline__commented.md:4:4:4:9:**
 ```roc
-app # Comment after keyword
+			main!, # Comment after exposed item
 ```
-^^^^
+			^^^^^
 
 
 # CANONICALIZE
@@ -54,4 +74,5 @@ app # Comment after keyword
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

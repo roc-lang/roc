@@ -23,6 +23,7 @@ const infer_cir2 = types.infer_cir2;
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
+const Region = base.Region;
 const Check = check.Check;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
@@ -1478,6 +1479,20 @@ fn processSnapshotContent(
     // Create diagnostics buffer
     var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
 
+    // Tokenize once for both parser and formatter
+    var tokens = std.ArrayList(parse.tokenize_iter.Token).init(allocator);
+    defer tokens.deinit();
+
+    // Tokenize the source
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(&env, allocator, content.source, &messages, &byte_slices);
+    defer token_iter.deinit(allocator);
+
+    // Collect all tokens (including comments for formatter)
+    while (try token_iter.next(allocator)) |token| {
+        try tokens.append(token);
+        if (token.tag == .EndOfFile) break;
+    }
+
     // Create Parser2
     var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices);
     defer parser.deinit();
@@ -1519,7 +1534,7 @@ fn processSnapshotContent(
     try generateTokensSection2(&output, &parser, &content, &env);
     try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
     const root_node_idx: ?AST.Node.Idx = if (parse_result) |idx| @as(AST.Node.Idx, @enumFromInt(idx)) else null;
-    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx);
+    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx, tokens.items);
 
     // Create a TypeStore for type inference
     var types_store = try types.Store.initCapacity(allocator, 2048, 512);
@@ -3305,13 +3320,13 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 }
 
 /// Generate FORMATTED section for AST2
-fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx) !void {
+fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx, tokens: []const parse.tokenize_iter.Token) !void {
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    // Use the new AST2-aware formatter with ident_store
+    // Use the new AST2-aware formatter with pre-tokenized tokens
     const ident_store = env.getIdentStore();
-    const formatted_output = try fmt.formatAst2(output.gpa, ast, content.source, ident_store, root_node);
+    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, content.source, ident_store, tokens, root_node);
     defer output.gpa.free(formatted_output);
 
     // Check if formatting changed the source
@@ -3649,6 +3664,23 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
     try output.begin_section("SOLVED");
     try output.begin_code_block("clojure");
 
+    // First run type checking to generate constraints
+    var regions = Region.List{};
+    var checker = Check.initForCIR2(output.gpa, @constCast(types_store), &regions) catch |err| {
+        try output.md_writer.print("; Type checker init failed: {}\n", .{err});
+        try output.end_code_block();
+        try output.end_section();
+        return;
+    };
+    defer checker.deinit();
+
+    // Run type checking on the expression if we have one
+    if (maybe_expr_idx) |expr_idx| {
+        _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch |err| {
+            try output.md_writer.print("; Type checking failed: {}\n", .{err});
+        };
+    }
+
     // Create type inference context using the passed-in types store
     const InferContext = infer_cir2.InferContext(CIR);
     var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
@@ -3695,6 +3727,21 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
+
+    // First run type checking to generate constraints (may have already been done in SOLVED section)
+    var regions = Region.List{};
+    var checker = Check.initForCIR2(output.gpa, @constCast(types_store), &regions) catch {
+        try output.md_writer.writeAll("# Type checker initialization failed\n");
+        try output.end_code_block();
+        try output.end_section();
+        return;
+    };
+    defer checker.deinit();
+
+    // Run type checking on the expression if we have one
+    if (maybe_expr_idx) |expr_idx| {
+        _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch {};
+    }
 
     // Create type inference context using the passed-in types store
     const InferContext = infer_cir2.InferContext(CIR);

@@ -36,12 +36,9 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
       (binop_equals
         (binop_equals
           (binop_equals
-            (apply_anon
-              (malformed)
-              (tuple_literal
-                (lc "x")
-                (lc "y")
-              )
+            (tuple_literal
+              (lc "x")
+              (lc "y")
             )
             (apply_anon
               (tuple_literal
@@ -117,10 +114,10 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
 ~~~
 # FORMATTED
 ~~~roc
-((((
 
-	# Simple tuple destructuring
-((x, y)) = (1, 2)(
+
+# Simple tuple destructuring
+(((((x, y) = (1, 2)(
 
 # Nested tuple patterns
 ((a, b), (c, d)))
@@ -147,31 +144,12 @@ OpenCurly BlankLine LineComment OpenRound LowerIdent Comma LowerIdent CloseRound
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **
-
-    # Simple tuple destructuring
-    ** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**tuple_patterns.md:1:2:4:5:**
-```roc
-{
-
-    # Simple tuple destructuring
-    (x, y) = (1, 2)
-```
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**tuple_patterns.md:1:2:16:18:**
+**tuple_patterns.md:4:6:16:18:**
 ```roc
-{
-
-    # Simple tuple destructuring
     (x, y) = (1, 2)
 
     # Nested tuple patterns

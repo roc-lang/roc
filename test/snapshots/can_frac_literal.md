@@ -39,7 +39,7 @@ NIL
   )
   (Stmt.assign
     (pattern (Patt.ident "y"))
-    (Expr.frac_literal_big big:<idx:0>)
+    (Expr.frac_literal_big big:<idx:8>)
   )
   (Stmt.assign
     (pattern (Patt.ident "z"))

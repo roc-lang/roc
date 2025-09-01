@@ -18,50 +18,52 @@ if # Comment after if
 KwIf LineComment LowerIdent OpenCurly Int CloseCurly KwElse OpenCurly Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(malformed)
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (block
+      (num_literal_i32 1)
+    )
+)
+  (else     (block
+      (num_literal_i32 2)
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-# Comment after if
-{
-			
+if # Comment after if
+bool
+	{
+		1
+	}
+else {
+	2
+}
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **# Comment after if
-	** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNDEFINED VARIABLE**
+Nothing is named **bool** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**if_then_else_comments_block.md:1:4:2:2:**
+**if_then_else_comments_block.md:2:2:2:6:**
 ```roc
-if # Comment after if
 	bool
 ```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **{
-			** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**if_then_else_comments_block.md:3:3:4:4:**
-```roc
-		{
-			1
-```
+	^^^^
 
 
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.if_else)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag if_else :type "_a")
 ~~~
 # TYPES
 ~~~roc
-Error
+_a
 ~~~

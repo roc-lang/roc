@@ -543,6 +543,17 @@ pub fn getStmt(self: *const CIR, idx: Stmt.Idx) struct {
 
     // Read the tag as a u8 and interpret it directly as a StmtTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
+
+    // Check if this is a valid statement tag
+    if (tag_value < STMT_TAG_START or tag_value >= EXPR_TAG_START) {
+        // This node is not a statement - return a malformed statement view
+        return .{
+            .tag = .malformed,
+            .start = node.region.start,
+            .payload = node.payload,
+        };
+    }
+
     const stmt_tag = @as(StmtTag, @enumFromInt(tag_value));
 
     // Convert StmtTag to Stmt.Tag
@@ -672,6 +683,18 @@ pub fn getPatt(self: *const CIR, idx: Patt.Idx) struct {
 
     // Read the tag as a u8 and interpret it directly as a PattTag
     const tag_value = @as(u8, @intFromEnum(node.tag));
+
+    // Check if this is a valid pattern tag
+    if (tag_value < PATT_TAG_START) {
+        // This node is not a pattern - return a malformed pattern view
+        return .{
+            .tag = .malformed,
+            .start = node.region.start,
+            .payload = node.payload,
+            .is_mutable = idx.isMutable(),
+        };
+    }
+
     const patt_tag = @as(PattTag, @enumFromInt(tag_value));
 
     // Convert PattTag to Patt.Tag
@@ -813,7 +836,7 @@ pub const Patt = struct {
         }
 
         /// Create a pattern index with mutability encoded
-        pub fn withMutability(idx: AST2.Node.Idx, is_mutable: bool) Idx {
+        fn withMutability(idx: AST2.Node.Idx, is_mutable: bool) Idx {
             const base_value = @intFromEnum(idx);
             if (is_mutable) {
                 // Set the sign bit to indicate mutability
@@ -825,7 +848,7 @@ pub const Patt = struct {
         }
 
         /// Check if this pattern index represents a mutable pattern
-        pub fn isMutable(self: Idx) bool {
+        fn isMutable(self: Idx) bool {
             return @intFromEnum(self) < 0;
         }
 
@@ -841,7 +864,7 @@ pub const Patt = struct {
         }
 
         /// Set the mutability of this pattern index
-        pub fn setMutability(self: Idx, is_mutable: bool) Idx {
+        fn setMutability(self: Idx, is_mutable: bool) Idx {
             const node_idx = self.toNodeIdx();
             return withMutability(node_idx, is_mutable);
         }
@@ -1106,7 +1129,7 @@ pub const Type = struct {
 
 /// Ensure that a type variable exists at the given node index
 /// Creates variables as needed to fill gaps
-fn ensureTypeVarExists(self: *CIR, node_idx: AST2.Node.Idx) !void {
+pub fn ensureTypeVarExists(self: *CIR, node_idx: AST2.Node.Idx) !void {
     const target_idx = @intFromEnum(node_idx);
 
     // Create variables up to the target index if needed
@@ -2560,12 +2583,48 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                     }
 
                     // Check for exposing clause
-                    const exposed_items: ?[]const []const u8 = null;
+                    var exposed_items: ?[]const []const u8 = null;
                     if (iter.next()) |exposing_node_idx| {
                         const exposing_node = self.getNode(exposing_node_idx);
                         if (exposing_node.tag == .binop_exposing) {
-                            // TODO: Parse the exposed items list
-                            // For now, import everything
+                            // Parse the exposed items list
+                            const binop = self.ast.node_slices.binOp(exposing_node.payload.binop);
+                            const list_node = self.getNode(binop.rhs);
+
+                            if (list_node.tag == .list_literal and list_node.payload.nodes != collections.NodeSlices(AST2.Node.Idx).Idx.NIL) {
+                                // Count the exposed items
+                                var exposed_count: usize = 0;
+                                var item_iter = self.ast.node_slices.nodes(&list_node.payload.nodes);
+                                while (item_iter.next()) |_| {
+                                    exposed_count += 1;
+                                }
+
+                                // Allocate array for exposed item names
+                                const exposed_array = try allocator.alloc([]const u8, exposed_count);
+
+                                // Extract the exposed item names
+                                var index: usize = 0;
+                                item_iter = self.ast.node_slices.nodes(&list_node.payload.nodes);
+                                while (item_iter.next()) |item_idx| {
+                                    const item_node = self.getNode(item_idx);
+                                    const item_name = switch (item_node.tag) {
+                                        .lc => idents.getText(item_node.payload.ident),
+                                        .uc => idents.getText(item_node.payload.ident),
+                                        else => "", // Skip invalid items
+                                    };
+                                    if (item_name.len > 0) {
+                                        exposed_array[index] = item_name;
+                                        index += 1;
+                                    }
+                                }
+
+                                // Resize if we skipped any invalid items
+                                if (index < exposed_count) {
+                                    exposed_items = exposed_array[0..index];
+                                } else {
+                                    exposed_items = exposed_array;
+                                }
+                            }
                         }
                     }
 
@@ -2604,12 +2663,12 @@ pub fn canonicalizePatt(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 }
 
 /// Canonicalize an AST node that should be a pattern (mutable)
-pub fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
+fn canonicalizePattMutable(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !Patt.Idx {
     return self.canonicalizePattWithMutability(allocator, self.ast, node_idx, true);
 }
 
 /// Canonicalize an AST node that should be a pattern with specified mutability
-pub fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool) !Patt.Idx {
+fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *const AST2, node_idx: AST2.Node.Idx, is_mutable: bool) !Patt.Idx {
     // Calculate the proper region for this node BEFORE any mutations
     const node_region = ast_param.getRegion(node_idx);
     const node = ast_param.nodes.get(@enumFromInt(@intFromEnum(node_idx)));

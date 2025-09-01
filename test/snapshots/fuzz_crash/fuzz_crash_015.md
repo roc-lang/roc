@@ -17,7 +17,7 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 ~~~clojure
 (block
   (binop_pipe
-    (num_literal_big big:<idx:0>)
+    (num_literal_big big:<idx:4>)
     (num_literal_i32 0)
   )
   (num_literal_i32 0)

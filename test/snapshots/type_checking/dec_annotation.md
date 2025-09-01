@@ -37,7 +37,7 @@ NIL
   )
   (Stmt.assign
     (pattern (Patt.ident "x"))
-    (Expr.frac_literal_big big:<idx:0>)
+    (Expr.frac_literal_big big:<idx:8>)
   )
 )
 ~~~

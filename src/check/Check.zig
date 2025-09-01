@@ -9,6 +9,7 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
+const parse = @import("parse");
 
 const copy_import = @import("copy_import.zig");
 const unifier = @import("unify.zig");
@@ -16,6 +17,7 @@ const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 
 const CIR = can.CIR;
+const AST2 = parse.AST2;
 const CommonEnv = base.CommonEnv;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
@@ -2803,3 +2805,703 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //         }
 //     }
 // }
+
+// CIR2 Type Checking Integration //
+
+/// Initialize a Check instance for CIR2 type checking
+pub fn initForCIR2(
+    gpa: std.mem.Allocator,
+    types_store: *types_mod.Store,
+    regions: *Region.List,
+) std.mem.Allocator.Error!Self {
+    return .{
+        .gpa = gpa,
+        .types = types_store,
+        .cir = undefined, // Not used for CIR2 checking
+        .other_modules = &.{},
+        .regions = regions,
+        .snapshots = try SnapshotStore.initCapacity(gpa, 64),
+        .problems = try ProblemStore.initCapacity(gpa, 64),
+        .unify_scratch = try unifier.Scratch.init(gpa),
+        .occurs_scratch = try occurs.Scratch.init(gpa),
+        .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .import_cache = ImportCache{},
+        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+    };
+}
+
+/// Check types for a CIR2 expression
+pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_idx: CIR2.Expr.Idx) std.mem.Allocator.Error!Var {
+    const expr = cir2.getExpr(expr_idx);
+
+    // Check for malformed expressions
+    if (expr.tag == .malformed) {
+        // Return a fresh type variable for malformed expressions
+        return try self.types.fresh();
+    }
+
+    const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+    // Ensure the type variable exists in the store
+    // CIR2 should have already done this via ensureTypeVarExists, but we need to make sure
+    const var_idx = @intFromEnum(expr_var);
+    const current_len = self.types.len();
+    if (var_idx >= current_len) {
+        // We need to grow the types store to accommodate this variable
+        // Create fresh variables for any gaps
+        var i = current_len;
+        while (i <= var_idx) : (i += 1) {
+            _ = try self.types.fresh();
+        }
+    }
+
+    switch (expr.tag) {
+        // Literals - these already have their types set in canonicalization
+        .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big => {
+            // Type already set via ensureTypeVarExists in CIR2
+            return expr_var;
+        },
+
+        // Lookups - connect to their definitions
+        .lookup => {
+            // The type was already connected to the definition in canonicalization
+            return expr_var;
+        },
+
+        // Binary operations
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_lt, .binop_gt, .binop_lte, .binop_gte => {
+            // Get the binary operation
+            const binop = cir2.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+
+            // Recursively check both operands
+            const lhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.lhs);
+            const rhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.rhs);
+
+            // For numeric operations, unify both sides and result
+            _ = try self.unify(lhs_var, rhs_var);
+            _ = try self.unify(lhs_var, expr_var);
+
+            return expr_var;
+        },
+
+        // Equality operations
+        .binop_double_equals, .binop_not_equals => {
+            const binop = cir2.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+
+            // Check both operands
+            const lhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.lhs);
+            const rhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.rhs);
+
+            // Operands must have the same type
+            _ = try self.unify(lhs_var, rhs_var);
+
+            // Result is Bool (for now, just use a fresh type variable)
+            const bool_var = try self.types.fresh();
+            _ = try self.unify(expr_var, bool_var);
+
+            return expr_var;
+        },
+
+        // Boolean operations
+        .binop_and, .binop_or => {
+            const binop = cir2.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+
+            // Both operands must be Bool (for now, just use a fresh type variable)
+            const bool_var = try self.types.fresh();
+
+            const lhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.lhs);
+            const rhs_var = try self.checkCIR2Expr(CIR2, cir2, binop.rhs);
+
+            _ = try self.unify(lhs_var, bool_var);
+            _ = try self.unify(rhs_var, bool_var);
+            _ = try self.unify(expr_var, bool_var);
+
+            return expr_var;
+        },
+
+        // Unary operations
+        .unary_neg => {
+            // Negation preserves numeric type
+            // The operand is stored in .nodes as a single-element slice
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            const operand_idx = iter.next() orelse return expr_var;
+
+            const operand_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(operand_idx)));
+
+            _ = try self.unify(expr_var, operand_var);
+            return expr_var;
+        },
+
+        .unary_not => {
+            // Boolean NOT (for now, just use a fresh type variable)
+            const bool_var = try self.types.fresh();
+
+            // The operand is stored in .nodes as a single-element slice
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            const operand_idx = iter.next() orelse return expr_var;
+
+            const operand_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(operand_idx)));
+
+            _ = try self.unify(operand_var, bool_var);
+            _ = try self.unify(expr_var, bool_var);
+
+            return expr_var;
+        },
+
+        // If-else expressions
+        .if_else => {
+            // The if_branches field contains the node slice index as a u32
+            const nodes_idx = @as(collections.NodeSlices(AST2.Node.Idx).Idx, @enumFromInt(expr.payload.if_branches));
+            var iter = cir2.ast.node_slices.nodes(&nodes_idx);
+            const cond_idx = iter.next() orelse return expr_var;
+            const then_idx = iter.next() orelse return expr_var;
+            const else_idx = iter.next() orelse return expr_var;
+
+            // Condition must be Bool (represented as a tag union with True and False)
+            // For now, just create a fresh type variable
+            const bool_var = try self.types.fresh();
+
+            const cond_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(cond_idx)));
+            _ = try self.unify(cond_var, bool_var);
+
+            // Both branches must have the same type as the result
+            const then_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(then_idx)));
+            const else_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(else_idx)));
+
+            _ = try self.unify(then_var, else_var);
+            _ = try self.unify(expr_var, then_var);
+
+            return expr_var;
+        },
+
+        // Block expressions
+        .block => {
+            // Check all nodes in the block - they could be statements or expressions
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            var last_var: ?Var = null;
+
+            while (iter.next()) |node_idx| {
+                // Try to get it as an expression first
+                const expr_view = cir2.getExpr(@enumFromInt(@intFromEnum(node_idx)));
+                if (expr_view.tag != .malformed) {
+                    // It's a valid expression
+                    const node_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(node_idx)));
+                    last_var = node_var;
+                } else {
+                    // Try to get it as a statement
+                    const stmt_view = cir2.getStmt(@enumFromInt(@intFromEnum(node_idx)));
+                    if (stmt_view.tag != .malformed) {
+                        // It's a valid statement
+                        const stmt_var = try self.checkCIR2Stmt(CIR2, cir2, @enumFromInt(@intFromEnum(node_idx)));
+                        last_var = stmt_var;
+                    } else {
+                        // Neither expression nor statement - skip it
+                        continue;
+                    }
+                }
+            }
+
+            // Block type is the type of the last node
+            if (last_var) |var_id| {
+                _ = try self.unify(expr_var, var_id);
+            }
+
+            return expr_var;
+        },
+
+        // Lists
+        .list_literal => {
+            // All elements must have the same type
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            var elem_type: ?Var = null;
+
+            while (iter.next()) |elem_idx| {
+                const elem_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+
+                if (elem_type) |expected| {
+                    _ = try self.unify(elem_var, expected);
+                } else {
+                    elem_type = elem_var;
+                }
+            }
+
+            // Create List type
+            if (elem_type) |elem| {
+                const list_content = Content{ .structure = .{ .list = elem } };
+                const list_var = try self.types.freshFromContent(list_content);
+                _ = try self.unify(expr_var, list_var);
+            }
+
+            return expr_var;
+        },
+
+        .empty_list => {
+            // Empty list has type List a for fresh type variable a
+            const elem_var = try self.types.fresh();
+            const list_content = Content{ .structure = .{ .list = elem_var } };
+            const list_var = try self.types.freshFromContent(list_content);
+            _ = try self.unify(expr_var, list_var);
+            return expr_var;
+        },
+
+        // Tuples
+        .tuple_literal => {
+            // Check all elements and create tuple type
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            var elem_vars = std.ArrayList(Var).init(self.gpa);
+            defer elem_vars.deinit();
+
+            while (iter.next()) |elem_idx| {
+                const elem_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+                try elem_vars.append(elem_var);
+            }
+
+            if (elem_vars.items.len > 0) {
+                // Create tuple type
+                const tuple_content = Content{ .structure = .{ .tuple = .{
+                    .elems = try self.types.appendVars(elem_vars.items),
+                } } };
+                const tuple_var = try self.types.freshFromContent(tuple_content);
+                _ = try self.unify(expr_var, tuple_var);
+            }
+
+            return expr_var;
+        },
+
+        // Records
+        .record_literal => {
+            // For now, just return the type variable
+            // TODO: Implement proper record type checking
+            return expr_var;
+        },
+
+        .empty_record => {
+            // Empty record has a specific type
+            const record_content = Content{ .structure = .{ .empty_record = {} } };
+            const record_var = try self.types.freshFromContent(record_content);
+            _ = try self.unify(expr_var, record_var);
+            return expr_var;
+        },
+
+        // Lambda expressions
+        .lambda => {
+            // Lambda can come from two sources:
+            // 1. binop_pipe (|param| body) - keeps binop payload
+            // 2. lambda node - uses body_then_args payload
+            // This is a limitation of the current canonicalization approach
+
+            // Check the original AST node to determine which payload type
+            const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+
+            if (ast_node.tag == .lambda) {
+                // Original lambda node - uses body_then_args
+                var iter = cir2.ast.node_slices.nodes(&ast_node.payload.body_then_args);
+
+                // First is body
+                if (iter.next()) |body_idx| {
+                    _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(body_idx)));
+                }
+
+                // Rest are params - skip for now
+                while (iter.next()) |_| {}
+            } else if (ast_node.tag == .binop_pipe) {
+                // From binop_pipe - uses binop payload
+                const binop = cir2.getBinOp(CIR2.Expr.Idx, ast_node.payload.binop);
+
+                // RHS is the body
+                _ = try self.checkCIR2Expr(CIR2, cir2, binop.rhs);
+
+                // LHS contains parameters - skip for now
+            } else {
+                // Some other source - just skip
+            }
+
+            return expr_var;
+        },
+
+        // Tag application - creates a tag union type
+        .apply_tag => {
+            // Tag applications can be:
+            // 1. Simple tag (e.g., True) - has ident payload
+            // 2. Tag with arguments (e.g., Some(x)) - has nodes payload
+
+            // Check the original AST node
+            const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+
+            if (ast_node.tag == .uc) {
+                // Simple tag without payload - just has ident
+                // Nothing to check
+            } else if (ast_node.tag == .apply_uc) {
+                // Tag with payload - has nodes
+                var iter = cir2.ast.node_slices.nodes(&ast_node.payload.nodes);
+
+                // Skip tag constructor
+                _ = iter.next();
+
+                // Check payload if present
+                if (iter.next()) |payload_idx| {
+                    _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(payload_idx)));
+                }
+            }
+
+            // Tag creates a tag union type - for now use a fresh variable
+            return expr_var;
+        },
+
+        // Function application
+        .apply_ident => {
+            // Function applications use nodes payload
+            // Check the original AST node to be safe
+            const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+
+            if (ast_node.tag == .apply_lc or ast_node.tag == .apply_anon) {
+                var iter = cir2.ast.node_slices.nodes(&ast_node.payload.nodes);
+
+                // First is the function
+                var func_var: ?Var = null;
+                if (iter.next()) |func_idx| {
+                    func_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(func_idx)));
+                }
+
+                // Second is arguments (might be a tuple)
+                if (iter.next()) |args_idx| {
+                    const args_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(args_idx)));
+
+                    // Create function type constraint
+                    if (func_var) |fv| {
+                        // func_var should be: args_var -> expr_var
+                        // For now, just ensure variables exist
+                        _ = fv;
+                        _ = args_var;
+                    }
+                }
+            }
+
+            return expr_var;
+        },
+
+        // Match expressions
+        .match => {
+            // Get match data: first node is scrutinee, rest are pattern-body pairs
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+
+            // Check the scrutinee
+            const scrutinee_idx = iter.next() orelse return expr_var;
+            const scrutinee_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(scrutinee_idx)));
+
+            // Check all branches - they must all have the same type
+            var branch_type: ?Var = null;
+            while (iter.next()) |pattern_idx| {
+                const body_idx = iter.next() orelse break;
+
+                // Check the pattern against the scrutinee type
+                const pattern_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(pattern_idx)));
+                _ = try self.unify(pattern_var, scrutinee_var);
+
+                // Check the body
+                const body_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(body_idx)));
+
+                // All branches must have the same type
+                if (branch_type) |expected| {
+                    _ = try self.unify(body_var, expected);
+                } else {
+                    branch_type = body_var;
+                }
+            }
+
+            // Match expression has the type of its branches
+            if (branch_type) |branch| {
+                _ = try self.unify(expr_var, branch);
+            }
+
+            return expr_var;
+        },
+
+        // Record access
+        .record_access => {
+            // Record access: record.field
+            const binop = cir2.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
+
+            // Check the record expression
+            const record_var = try self.checkCIR2Expr(CIR2, cir2, binop.lhs);
+
+            // Field access (rhs is the field name)
+            // For now, just ensure types exist
+            _ = record_var;
+
+            return expr_var;
+        },
+
+        .record_accessor => {
+            // Record accessor function (.fieldName)
+            // This creates a function: record -> fieldType
+            return expr_var;
+        },
+
+        .dot_num => {
+            // Tuple accessor function (.0, .1, etc.)
+            // This creates a function: tuple -> elementType
+            return expr_var;
+        },
+
+        // Module access
+        .module_access => {
+            // Module.field access - for now just ensure type exists
+            return expr_var;
+        },
+
+        // String interpolation
+        .str_interpolation => {
+            // Result is always a string
+            const str_content = Content{ .structure = .{ .str = {} } };
+            const str_var = try self.types.freshFromContent(str_content);
+            _ = try self.unify(expr_var, str_var);
+
+            // Check interpolated expressions
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            while (iter.next()) |interp_idx| {
+                // Just check the expression, don't constrain its type
+                _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(interp_idx)));
+            }
+
+            return expr_var;
+        },
+
+        // TODO: Handle remaining expression types
+        else => {
+            // For now, just return the expression's type variable
+            return expr_var;
+        },
+    }
+}
+
+/// Check types for a CIR2 statement
+/// Check a pattern and return its type
+pub fn checkCIR2Pattern(
+    self: *Self,
+    comptime CIR2: type,
+    cir2: *const CIR2,
+    patt_idx: CIR2.Patt.Idx,
+) !Var {
+    const patt = cir2.getPatt(patt_idx);
+
+    // Get the type variable for this pattern (should already exist from canonicalization)
+    const node_idx = patt_idx.toNodeIdx();
+    const patt_var = @as(Var, @enumFromInt(@intFromEnum(node_idx)));
+
+    switch (patt.tag) {
+        // Identifier patterns - just bind a type variable
+        .ident, .var_ident => {
+            // Identifier binds to any type
+            return patt_var;
+        },
+
+        // Underscore matches anything
+        .underscore => {
+            return patt_var;
+        },
+
+        // Literal patterns
+        .num_literal_i32, .int_literal_i32 => {
+            // Integer literal pattern
+            const num_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
+            const num_var = try self.types.freshFromContent(num_content);
+            _ = try self.unify(patt_var, num_var);
+            return patt_var;
+        },
+
+        .frac_literal_small => {
+            // Float literal pattern
+            const frac_content = Content{ .structure = .{ .num = .{ .frac_precision = .f64 } } };
+            const frac_var = try self.types.freshFromContent(frac_content);
+            _ = try self.unify(patt_var, frac_var);
+            return patt_var;
+        },
+
+        .str_literal_small, .str_literal_big => {
+            // String literal pattern
+            const str_content = Content{ .structure = .{ .str = {} } };
+            const str_var = try self.types.freshFromContent(str_content);
+            _ = try self.unify(patt_var, str_var);
+            return patt_var;
+        },
+
+        // Tag patterns
+        .applied_tag => {
+            // Tag pattern with optional payload
+            var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
+
+            // Skip tag constructor
+            _ = iter.next();
+
+            // Check payload pattern if present
+            if (iter.next()) |payload_idx| {
+                // Payload should be a pattern
+                const payload_patt = cir2.getPatt(@enumFromInt(@intFromEnum(payload_idx)));
+                if (payload_patt.tag != .malformed) {
+                    _ = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(payload_idx)));
+                }
+            }
+
+            // Pattern has tag union type
+            return patt_var;
+        },
+
+        // Destructuring patterns
+        .tuple_destructure => {
+            // Tuple pattern - check all element patterns
+            var elem_vars = std.ArrayList(Var).init(self.gpa);
+            defer elem_vars.deinit();
+
+            var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
+            while (iter.next()) |elem_idx| {
+                // Elements should be patterns
+                const elem_patt = cir2.getPatt(@enumFromInt(@intFromEnum(elem_idx)));
+                if (elem_patt.tag != .malformed) {
+                    const elem_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+                    try elem_vars.append(elem_var);
+                }
+            }
+
+            // Create tuple type from element types
+            // For now, just use a fresh variable
+            return patt_var;
+        },
+
+        .list_destructure => {
+            // List pattern - all elements must have same type
+            var elem_type: ?Var = null;
+
+            var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
+            while (iter.next()) |elem_idx| {
+                // Elements should be patterns
+                const elem_patt = cir2.getPatt(@enumFromInt(@intFromEnum(elem_idx)));
+                if (elem_patt.tag != .malformed) {
+                    const elem_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(elem_idx)));
+
+                    if (elem_type) |expected| {
+                        _ = try self.unify(elem_var, expected);
+                    } else {
+                        elem_type = elem_var;
+                    }
+                }
+            }
+
+            // Create list type
+            if (elem_type) |et| {
+                const list_content = Content{ .structure = .{ .list = et } };
+                const list_var = try self.types.freshFromContent(list_content);
+                _ = try self.unify(patt_var, list_var);
+            }
+
+            return patt_var;
+        },
+
+        .record_destructure => {
+            // Record pattern - check field patterns
+            // Fields can be binop_colon (field: pattern) or direct patterns
+            var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
+            while (iter.next()) |field_idx| {
+                const field_node = cir2.getNode(field_idx);
+                const tag_value = @as(u8, @intFromEnum(field_node.tag));
+
+                // Check if it's an expression (binop_colon for field: pattern)
+                if (tag_value >= CIR2.EXPR_TAG_START and tag_value < CIR2.PATT_TAG_START) {
+                    // It's an expression node (binop_colon) - check the RHS pattern
+                    const expr_view = cir2.getExpr(@enumFromInt(@intFromEnum(field_idx)));
+                    if (expr_view.tag == .binop_colon) {
+                        const binop = cir2.getBinOp(CIR2.Patt.Idx, expr_view.payload.binop);
+                        // RHS is the pattern
+                        _ = try self.checkCIR2Pattern(CIR2, cir2, binop.rhs);
+                    }
+                } else if (tag_value >= CIR2.PATT_TAG_START) {
+                    // It's a pattern node - check it directly
+                    _ = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(field_idx)));
+                }
+            }
+
+            // Record type - for now use fresh variable
+            return patt_var;
+        },
+
+        // As patterns
+        .as => {
+            // Pattern as identifier - check the inner pattern
+            var iter = cir2.ast.node_slices.nodes(&patt.payload.nodes);
+            if (iter.next()) |inner_idx| {
+                const inner_patt = cir2.getPatt(@enumFromInt(@intFromEnum(inner_idx)));
+                if (inner_patt.tag != .malformed) {
+                    const inner_var = try self.checkCIR2Pattern(CIR2, cir2, @enumFromInt(@intFromEnum(inner_idx)));
+                    _ = try self.unify(patt_var, inner_var);
+                }
+            }
+            return patt_var;
+        },
+
+        // Rest patterns
+        .double_dot_ident => {
+            // Rest pattern in list/record - matches remaining elements
+            return patt_var;
+        },
+
+        else => {
+            // Unsupported pattern type - just return the variable
+            return patt_var;
+        },
+    }
+}
+
+pub fn checkCIR2Stmt(self: *Self, comptime CIR2: type, cir2: *const CIR2, stmt_idx: CIR2.Stmt.Idx) std.mem.Allocator.Error!Var {
+    const stmt_var = @as(Var, @enumFromInt(@intFromEnum(stmt_idx)));
+
+    // Ensure the type variable exists in the store
+    const var_idx = @intFromEnum(stmt_var);
+    const current_len = self.types.len();
+    if (var_idx >= current_len) {
+        // We need to grow the types store to accommodate this variable
+        // Create fresh variables for any gaps
+        var i = current_len;
+        while (i <= var_idx) : (i += 1) {
+            _ = try self.types.fresh();
+        }
+    }
+
+    const stmt = cir2.getStmt(stmt_idx);
+
+    switch (stmt.tag) {
+        .assign => {
+            // Get the pattern and value
+            const binop = cir2.getBinOp(CIR2.Stmt.Idx, stmt.payload.binop);
+
+            // Check the value expression
+            const value_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(binop.rhs)));
+
+            // Pattern gets the same type as the value
+            const pattern_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
+            _ = try self.unify(pattern_var, value_var);
+
+            // Statement type is the value type
+            _ = try self.unify(stmt_var, value_var);
+
+            return stmt_var;
+        },
+
+        .expr, .ret => {
+            // For now, just return the statement's type variable
+            // TODO: Implement proper statement type checking
+            return stmt_var;
+        },
+
+        .type_anno => {
+            // Type annotations don't have runtime values, just return the type variable
+            return stmt_var;
+        },
+
+        // TODO: Handle more statement types
+        else => {
+            return stmt_var;
+        },
+    }
+}

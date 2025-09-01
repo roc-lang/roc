@@ -14,24 +14,40 @@ KwApp LineComment OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 # PARSE
 ~~~clojure
 (app-header
-  (packages))
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../main.roc")
+        (block
+          (not_lc "main")
+        )
+      )
+    )
+
+    (binop_colon
+      (lc "somePkg")
+      (str_literal_big "../main.roc")
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-app { }# This comment is here
+app { # This comment is here
+pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPECTED OPEN CURLY BRACE**
-A parsing error occurred: **expected_package_platform_open_curly**
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **main!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**app_header__nonempty_multiline.md:1:1:1:5:**
+**app_header__nonempty_multiline.md:2:32:2:37:**
 ```roc
-app # This comment is here
+	{ pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
 ```
-^^^^
+	                              ^^^^^
 
 
 # CANONICALIZE
@@ -44,4 +60,5 @@ app # This comment is here
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

@@ -20,63 +20,37 @@ type=expr
 OpenSquare LineComment Int Comma LineComment BlankLine LineComment BlankLine Int Comma LineComment LineComment Int Comma LineComment CloseSquare ~~~
 # PARSE
 ~~~clojure
-(malformed)
+(list_literal
+  (num_literal_i32 1)
+  (num_literal_i32 2)
+  (num_literal_i32 3)
+)
 ~~~
 # FORMATTED
 ~~~roc
-# Open
-1# First
-# A comment in the middle
-# Second
-# This comment has no blanks around it
-# Third
+[ # Open
+	1, # First
+
+	# A comment in the middle
+
+	2, # Second
+	# This comment has no blanks around it
+	3, # Third
+]
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **# Open
-	** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**multiline_list_formatting_14.md:1:3:2:2:**
-```roc
-[ # Open
-	1, # First
-```
-
-
-**LIST NOT CLOSED**
-This list is not properly closed.
-Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
-
-**multiline_list_formatting_14.md:1:1:2:2:**
-```roc
-[ # Open
-	1, # First
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **1** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**multiline_list_formatting_14.md:2:2:2:3:**
-```roc
-	1, # First
-```
-	^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.list_literal)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag list_literal :type "List(_a)")
 ~~~
 # TYPES
 ~~~roc
-Error
+List(_a)
 ~~~

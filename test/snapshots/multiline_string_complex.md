@@ -42,7 +42,11 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
 ~~~roc
 module [value1, value2, value3, value4]
 
-value1 = ""
+value1 = """This is a "string" with just one line
+
+value2 = 
+	"""
+
 This
 is
 a
@@ -52,7 +56,10 @@ just
 one
 line
 
-value2 = ""
+value2 = """This is a "string" with just one line
+
+value3 = """
+
 This
 is
 a
@@ -62,32 +69,42 @@ just
 one
 line
 
-value3 = ""
+value3 = """This is a string
+	"""
+
 This
 is
 a
 string
-""
+"""With multiple lines
+	"""
 With
 multiple
 lines
-""
+"""${value1}
+
+value4 = 
+	"""
 $
 {
 	value1
 }
 
-value4 = ""
+value4 = """This is a string
+	# A comment in between
+	"""
+
 This
 is
 a
 string
 # A comment in between
-""
+"""With multiple lines
+	"""
 With
 multiple
 lines
-""
+"""${value
 $
 {
 	value2
@@ -563,7 +580,7 @@ This might be a limitation in the current implementation that will be addressed 
 (Expr.block
   (Stmt.assign
     (pattern (Patt.ident "value1"))
-    (Expr.str_literal_small)
+    (Expr.str_literal_big)
   )
   (Stmt.malformed)
   (Stmt.malformed)

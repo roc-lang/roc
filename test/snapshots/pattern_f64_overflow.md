@@ -22,15 +22,15 @@ KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Flo
   (scrutinee     (lc "x")
 )
   (branch1     (binop_thick_arrow
-      (frac_literal_big big:very large number)
+      (frac_literal_big big:<idx:95>)
       (block
         (str_literal_big "very large number")
         (binop_thick_arrow
-          (frac_literal_big big:<invalid:24>)
+          (frac_literal_big big:<idx:119>)
           (str_literal_big "very small number")
         )
         (binop_thick_arrow
-          (frac_literal_big big:<invalid:48>)
+          (frac_literal_big big:<idx:143>)
           (str_literal_big "near f64 max")
         )
         (binop_thick_arrow

@@ -19,40 +19,44 @@ type=expr
 Int LineComment OpPlus LineComment BlankLine LineComment BlankLine Int LineComment OpStar LineComment Int ~~~
 # PARSE
 ~~~clojure
-(malformed)
+(binop_plus
+  (num_literal_i32 1)
+  (binop_star
+    (num_literal_i32 2)
+    (num_literal_i32 3)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-# One
-	# Plus
+1 + # One
+# Plus
+
 # A comment in between
-# Two
+
+2 * # Two
 # Times
+3
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **# One
-	** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**multiline_binop_1.md:1:3:2:2:**
-```roc
-1 # One
-	+ # Plus
-```
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.malformed)
+(Expr.binop_plus
+  (Expr.num_literal_i32 1)
+  (Expr.binop_star
+    (Expr.num_literal_i32 2)
+    (Expr.num_literal_i32 3)
+  )
+)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag malformed :type "Error")
+(expr :tag binop_plus :type "Num(_a)")
 ~~~
 # TYPES
 ~~~roc
-Error
+Num(_a)
 ~~~

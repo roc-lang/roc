@@ -53,7 +53,7 @@ OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon String Comma LowerIden
         (record_literal
           (binop_colon
             (lc "lat")
-            (frac_literal_big big:alice@example.com)
+            (frac_literal_big big:<idx:112>)
           )
           (binop_colon
             (lc "lng")
@@ -280,7 +280,7 @@ Is there an **import** or **exposing** missing up-top?
         (Expr.record_literal
           (Expr.binop_colon
             (Expr.lookup "lat")
-            (Expr.frac_literal_big alice@example.com)
+            (Expr.frac_literal_big big:<idx:112>)
           )
           (Expr.binop_colon
             (Expr.lookup "lng")

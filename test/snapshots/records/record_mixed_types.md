@@ -38,7 +38,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
   )
   (binop_colon
     (lc "balance")
-    (frac_literal_big big:<idx:6>)
+    (frac_literal_big big:<idx:20>)
   )
 )
 ~~~
@@ -128,7 +128,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Expr.binop_colon
     (Expr.lookup "balance")
-    (Expr.frac_literal_big big:<idx:6>)
+    (Expr.frac_literal_big big:<idx:20>)
   )
 )
 ~~~

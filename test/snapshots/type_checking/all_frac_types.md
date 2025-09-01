@@ -57,7 +57,7 @@ NIL
   )
   (Stmt.assign
     (pattern (Patt.ident "b"))
-    (Expr.frac_literal_big big:<idx:0>)
+    (Expr.frac_literal_big big:<idx:16>)
   )
   (Stmt.type_anno
     (name "c")
@@ -65,7 +65,7 @@ NIL
   )
   (Stmt.assign
     (pattern (Patt.ident "c"))
-    (Expr.frac_literal_big big:<idx:8>)
+    (Expr.frac_literal_big big:<idx:24>)
   )
 )
 ~~~

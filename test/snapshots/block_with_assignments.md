@@ -33,7 +33,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign String LowerIdent OpAssign
   )
   (binop_equals
     (lc "pi")
-    (frac_literal_big big:hello)
+    (frac_literal_big big:<idx:30>)
   )
   (binop_equals
     (lc "isActive")
@@ -248,7 +248,7 @@ The unused variable is declared here:
   )
   (Stmt.assign
     (pattern (Patt.ident "pi"))
-    (Expr.frac_literal_big hello)
+    (Expr.frac_literal_big big:<idx:30>)
   )
   (Stmt.assign
     (pattern (Patt.ident "isActive"))

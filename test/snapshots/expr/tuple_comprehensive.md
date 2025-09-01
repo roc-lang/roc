@@ -31,7 +31,6 @@ OpenCurly LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenCurly Close
 # PARSE
 ~~~clojure
 (block
-  (malformed)
   (binop_equals
     (lc "add_one")
     (lambda
@@ -157,18 +156,6 @@ empty
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **# define these to avoid runtime errors
-    ** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**tuple_comprehensive.md:2:5:3:5:**
-```roc
-    # define these to avoid runtime errors
-    add_one = |_| {}
-```
-
-
 **UNUSED VARIABLE**
 Variable **pair** is not used anywhere in your code.
 
@@ -263,7 +250,6 @@ The unused variable is declared here:
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
   (Stmt.assign
     (pattern (Patt.ident "add_one"))
     (Expr.lambda (canonicalized))

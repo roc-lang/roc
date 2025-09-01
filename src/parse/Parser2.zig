@@ -237,8 +237,10 @@ fn parseAndCollectTokens(
     defer token_iter.deinit(allocator);
 
     // Collect all tokens including comments
+    // Pre-allocate based on source size heuristic (roughly 1 token per 10 bytes)
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
+    try tokens.ensureTotalCapacity(@max(256, source.len / 10));
 
     // Helper to get next non-comment token while saving all tokens
     const getNextNonComment = struct {
@@ -2133,23 +2135,24 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                 // Parse rigids if present
                 if (self.peek() == .OpenCurly) {
                     self.advance();
-                    // Parse rigid type variables
-                    var rigids = std.ArrayList(Node.Idx).init(self.gpa);
-                    defer rigids.deinit();
+                    // Parse rigid type variables using scratch buffer
+                    const scratch_marker = self.markScratchNodes();
+                    defer self.restoreScratchNodes(scratch_marker);
 
                     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                         if (self.peek() == .LowerIdent) {
                             const ident = self.currentLowerIdent();
                             const node = try self.ast.appendNode(self.gpa, self.currentRegion(), .lc, .{ .ident = ident });
-                            try rigids.append(node);
+                            try self.scratch_nodes.append(self.gpa, node);
                             self.advance();
                         }
                         _ = self.eat(.Comma);
                     }
                     _ = self.eat(.CloseCurly);
 
-                    if (rigids.items.len > 0) {
-                        rigids_idx = try self.ast.appendNodeSlice(self.gpa, rigids.items);
+                    const rigids = self.getScratchNodesSince(scratch_marker);
+                    if (rigids.len > 0) {
+                        rigids_idx = try self.ast.appendNodeSlice(self.gpa, rigids);
                     }
                 }
 
@@ -2408,16 +2411,17 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             const start_pos_val = if (self.value_stack.items.len > 0) self.value_stack.pop() else null;
             const start_pos = if (start_pos_val) |val| intToPosition(nodeIdxToInt(val)) else Position{ .offset = 0 };
 
-            // Build if expression node
-            var nodes = std.ArrayList(Node.Idx).init(self.gpa);
-            defer nodes.deinit();
+            // Build if expression node using scratch buffer
+            const scratch_marker = self.markScratchNodes();
+            defer self.restoreScratchNodes(scratch_marker);
 
-            if (condition) |c| try nodes.append(c);
-            if (then_branch) |t| try nodes.append(t);
-            if (else_branch) |e| try nodes.append(e);
+            if (condition) |c| try self.scratch_nodes.append(self.gpa, c);
+            if (then_branch) |t| try self.scratch_nodes.append(self.gpa, t);
+            if (else_branch) |e| try self.scratch_nodes.append(self.gpa, e);
 
-            const nodes_slice = try self.gpa.alloc(Node.Idx, nodes.items.len);
-            @memcpy(nodes_slice, nodes.items);
+            const nodes = self.getScratchNodesSince(scratch_marker);
+            const nodes_slice = try self.gpa.alloc(Node.Idx, nodes.len);
+            @memcpy(nodes_slice, nodes);
             const nodes_idx = try self.ast.node_slices.append(self.gpa, nodes_slice);
 
             // Determine end position
@@ -3173,13 +3177,15 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             // Get args from scratch_nodes
             const args = self.getScratchNodesSince(0);
 
-            // Build body_then_args array
-            var temp_nodes = std.ArrayList(Node.Idx).init(self.gpa);
-            defer temp_nodes.deinit();
-            try temp_nodes.append(body);
-            try temp_nodes.appendSlice(args);
+            // Build body_then_args array using scratch buffer
+            const scratch_marker = self.markScratchNodes();
+            defer self.restoreScratchNodes(scratch_marker);
 
-            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, temp_nodes.items);
+            try self.scratch_nodes.append(self.gpa, body);
+            try self.scratch_nodes.appendSlice(self.gpa, args);
+
+            const temp_nodes = self.getScratchNodesSince(scratch_marker);
+            const nodes_idx = try self.ast.appendNodeSlice(self.gpa, temp_nodes);
 
             // Calculate region from args (first |) to body end
             const start_pos = if (args.len > 0)
@@ -3498,12 +3504,34 @@ pub fn parseHeader(self: *Parser) Error!void {
     var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, &messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
-    // Get first two tokens to start
-    const first = try token_iter.next(self.gpa) orelse {
-        // No tokens at all - no header
-        return;
-    };
-    const second = try token_iter.next(self.gpa);
+    // Get first two non-comment tokens to start
+    var first: ?Token = null;
+    while (true) {
+        const token = try token_iter.next(self.gpa) orelse {
+            // No tokens at all - no header
+            return;
+        };
+        switch (token.tag) {
+            .LineComment, .DocComment, .BlankLine => continue,
+            else => {
+                first = token;
+                break;
+            },
+        }
+    }
+
+    var second: ?Token = null;
+    while (true) {
+        const token = try token_iter.next(self.gpa);
+        if (token == null) break;
+        switch (token.?.tag) {
+            .LineComment, .DocComment, .BlankLine => continue,
+            else => {
+                second = token;
+                break;
+            },
+        }
+    }
 
     self.current = first;
     self.lookahead = second;
@@ -4458,9 +4486,31 @@ pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) 
     var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
-    // Get first two tokens to start
-    const first = try token_iter.next(self.gpa) orelse return @enumFromInt(0);
-    const second = try token_iter.next(self.gpa);
+    // Get first two non-comment tokens to start
+    var first: ?Token = null;
+    while (true) {
+        const token = try token_iter.next(self.gpa) orelse return @enumFromInt(0);
+        switch (token.tag) {
+            .LineComment, .DocComment, .BlankLine => continue,
+            else => {
+                first = token;
+                break;
+            },
+        }
+    }
+
+    var second: ?Token = null;
+    while (true) {
+        const token = try token_iter.next(self.gpa);
+        if (token == null) break;
+        switch (token.?.tag) {
+            .LineComment, .DocComment, .BlankLine => continue,
+            else => {
+                second = token;
+                break;
+            },
+        }
+    }
 
     self.current = first;
     self.lookahead = second;
