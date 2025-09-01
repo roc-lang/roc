@@ -1,5 +1,10 @@
 //! Finds libc and dynamic linker paths on Linux systems
-//! Supports multiple architectures and distributions
+//!
+//! Only used when building natively (not cross-compiling for another target)
+//!
+//! TODO can we improve this or make it more reliable? this implementation probably
+//! needs some work but it will be hard to know until we have more users testing roc
+//! on different systems.
 
 const std = @import("std");
 const builtin = @import("builtin");

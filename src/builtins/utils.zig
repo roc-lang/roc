@@ -136,16 +136,14 @@ pub const TestEnv = struct {
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {
         _ = env;
-        _ = roc_dbg;
-        // const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
-        // std.debug.print("DBG: {s}\n", .{message});
+        const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+        std.debug.print("DBG: {s}\n", .{message});
     }
 
     fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
         _ = env;
-        _ = roc_expect;
-        // const message = @as([*]u8, @ptrCast(roc_expect.utf8_bytes))[0..roc_expect.len];
-        // std.debug.print("EXPECT FAILED: {s}\n", .{message});
+        const message = @as([*]u8, @ptrCast(roc_expect.utf8_bytes))[0..roc_expect.len];
+        std.debug.print("EXPECT FAILED: {s}\n", .{message});
     }
 
     fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.C) noreturn {
@@ -215,7 +213,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        // std.debug.print("| increment {*}: ", .{ptr_to_refcount});
+        std.debug.print("| increment {*}: ", .{ptr_to_refcount});
     }
 
     // Ensure that the refcount is not whole program lifetime.
@@ -225,12 +223,12 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             .normal => {
-                // if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                //     const old = @as(usize, @bitCast(refcount));
-                //     const new = old + @as(usize, @intCast(amount));
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const old = @as(usize, @bitCast(refcount));
+                    const new = old + @as(usize, @intCast(amount));
 
-                //     std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
-                // }
+                    std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
+                }
 
                 ptr_to_refcount.* = refcount +% amount;
             },
@@ -392,7 +390,7 @@ inline fn free_ptr_to_refcount(
     roc_ops.roc_dealloc(&roc_dealloc_args, roc_ops.env);
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        // std.debug.print("💀 freed {*}\n", .{allocation_ptr});
+        std.debug.print("💀 freed {*}\n", .{allocation_ptr});
     }
 }
 
@@ -405,7 +403,7 @@ inline fn decref_ptr_to_refcount(
     if (RC_TYPE == .none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        // std.debug.print("| decrement {*}: ", .{refcount_ptr});
+        std.debug.print("| decrement {*}: ", .{refcount_ptr});
     }
 
     // Due to RC alignment tmust take into account pointer size.
@@ -417,12 +415,12 @@ inline fn decref_ptr_to_refcount(
     if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
-                // if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                //     const old = @as(usize, @bitCast(refcount));
-                //     const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const old = @as(usize, @bitCast(refcount));
+                    const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
 
-                //     std.debug.print("{} - 1 = {}!\n", .{ old, new });
-                // }
+                    std.debug.print("{} - 1 = {}!\n", .{ old, new });
+                }
 
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
@@ -457,7 +455,7 @@ pub fn isUnique(
     const refcount = (isizes - 1)[0];
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        // std.debug.print("| is unique {*}\n", .{isizes - 1});
+        std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
     return rcUnique(refcount);
@@ -586,7 +584,7 @@ pub fn allocateWithRefcount(
     const new_bytes = @as([*]u8, @ptrCast(roc_alloc_args.answer));
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        // std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
+        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
     }
 
     const data_ptr = new_bytes + extra_bytes;

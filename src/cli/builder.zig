@@ -141,7 +141,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     std.log.debug("Target: {} ({s})", .{ config.target, config.target.toTriple() });
     std.log.debug("Optimization: {}", .{config.optimization});
 
-    // 1. Initialize LLVM targets (safe to call multiple times)
+    // 1. Initialize LLVM targets
     initializeLLVM();
 
     // 2. Load bitcode file

@@ -1532,6 +1532,10 @@ pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (
 }
 
 /// Extract platform specification from app file header using simple string parsing
+///
+/// TODO use this information from BuildEnv once we have the parser/can/typechcking setup
+/// for multiple modules, and we have this information available. This is just a temporary hack
+/// for testing now.
 fn extractPlatformSpecFromApp(gpa: std.mem.Allocator, app_file_path: []const u8) ![]const u8 {
     // Read the app file
     const source = std.fs.cwd().readFileAlloc(gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
