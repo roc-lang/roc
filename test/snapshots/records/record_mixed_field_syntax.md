@@ -45,17 +45,6 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_field_syntax.md:1:9:1:12:**
-```roc
-{ name, age: 30, email, status: "active", balance }
-```
-        ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **email** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -64,17 +53,6 @@ Is there an **import** or **exposing** missing up-top?
 { name, age: 30, email, status: "active", balance }
 ```
                  ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **status** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_field_syntax.md:1:25:1:31:**
-```roc
-{ name, age: 30, email, status: "active", balance }
-```
-                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -93,12 +71,12 @@ Is there an **import** or **exposing** missing up-top?
 (Expr.record_literal
   (Expr.lookup "name")
   (Expr.binop_colon
-    (Expr.lookup "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
   (Expr.lookup "email")
   (Expr.binop_colon
-    (Expr.lookup "status")
+    (Expr.malformed)
     (Expr.str_literal_big)
   )
   (Expr.lookup "balance")
@@ -106,9 +84,9 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag record_literal :type "{ name: _field, age: Num(_size), email: _field2, status: Str, balance: _field3 }")
 ~~~
 # TYPES
 ~~~roc
-{}
+{ name: _field, age: Num(_size), email: _field2, status: Str, balance: _field3 }
 ~~~

@@ -31,17 +31,6 @@ OpenCurly LowerIdent OpColon Int Comma LowerIdent OpAssign String CloseCurly ~~~
 NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**error_malformed_syntax_2.md:1:3:1:6:**
-```roc
-{ age: 42, name = "Alice" }
-```
-  ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **name** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -56,7 +45,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 42)
   )
   (Expr.binop_equals

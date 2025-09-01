@@ -158,225 +158,87 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon OpenSquare Int Comm
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**STATEMENT IN EXPRESSION CONTEXT**
+Found a statement where an expression was expected.
+Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
 
-**record_with_complex_types.md:2:5:2:9:**
-```roc
-    name: "Alice",
-```
-    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **scores** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:3:5:3:11:**
-```roc
-    scores: [95, 87, 92, 78],
-```
-    ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **status** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:4:5:4:11:**
+**record_with_complex_types.md:4:22:4:41:**
 ```roc
     status: Active({ since: "2023-01-15" }),
 ```
-    ^^^^^^
+                     ^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **since** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**STATEMENT IN EXPRESSION CONTEXT**
+Found a statement where an expression was expected.
+Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
 
-**record_with_complex_types.md:4:22:4:27:**
+**record_with_complex_types.md:10:19:14:6:**
 ```roc
-    status: Active({ since: "2023-01-15" }),
+    callback: |x| x + 1,
+    nested: {
+        items: [Some("first"), None, Some("third")],
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+    },
 ```
-                     ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **preferences** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
 
-**record_with_complex_types.md:5:5:5:16:**
-```roc
-    preferences: { theme: Dark, notifications: Email("alice@example.com") },
-```
-    ^^^^^^^^^^^
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 
-
-**UNDEFINED VARIABLE**
-Nothing is named **theme** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:5:20:5:25:**
-```roc
-    preferences: { theme: Dark, notifications: Email("alice@example.com") },
-```
-                   ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **notifications** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:5:33:5:46:**
-```roc
-    preferences: { theme: Dark, notifications: Email("alice@example.com") },
-```
-                                ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **metadata** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:6:5:6:13:**
-```roc
-    metadata: Ok({
-```
-    ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **tags** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:7:9:7:13:**
-```roc
-        tags: ["developer", "senior", "fullstack"],
-```
-        ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **permissions** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:8:9:8:20:**
-```roc
-        permissions: [Read, Write, Admin],
-```
-        ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **callback** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:10:5:10:13:**
+**record_with_complex_types.md:10:16:10:17:**
 ```roc
     callback: |x| x + 1,
 ```
-    ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **nested** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:11:5:11:11:**
-```roc
-    nested: {
-```
-    ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **items** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:12:9:12:14:**
-```roc
-        items: [Some("first"), None, Some("third")],
-```
-        ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **result** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:13:9:13:15:**
-```roc
-        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-```
-        ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **data** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:13:27:13:31:**
-```roc
-        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-```
-                          ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **timestamp** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_with_complex_types.md:13:44:13:53:**
-```roc
-        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-```
-                                           ^^^^^^^^^
+               ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "name")
+    (lc "name")
     (Expr.str_literal_big)
   )
   (Expr.binop_colon
-    (Expr.lookup "scores")
+    (lc "scores")
     (Expr.list_literal)
   )
   (Expr.binop_colon
-    (Expr.lookup "status")
+    (lc "status")
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "preferences")
+    (lc "preferences")
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "theme")
+        (lc "theme")
         (Expr.apply_tag)
       )
       (Expr.binop_colon
-        (Expr.lookup "notifications")
+        (lc "notifications")
         (Expr.apply_tag)
       )
     )
   )
   (Expr.binop_colon
-    (Expr.lookup "metadata")
+    (lc "metadata")
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "callback")
+    (lc "callback")
     (Expr.lambda (canonicalized))
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag record_literal :type "{ name: Str, scores: List(Num(_size)), status: _field, preferences: { theme: _field2, notifications: _field3 }, metadata: _field4, callback: _field5 }")
 ~~~
 # TYPES
 ~~~roc
-{}
+{ name: Str, scores: List(Num(_size)), status: _field, preferences: { theme: _field2, notifications: _field3 }, metadata: _field4, callback: _field5 }
 ~~~

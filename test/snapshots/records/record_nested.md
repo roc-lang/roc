@@ -94,196 +94,43 @@ OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon String Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **person** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:2:5:2:11:**
-```roc
-    person: { name: "Alice", age: 30 },
-```
-    ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:2:15:2:19:**
-```roc
-    person: { name: "Alice", age: 30 },
-```
-              ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:2:30:2:33:**
-```roc
-    person: { name: "Alice", age: 30 },
-```
-                             ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **address** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:3:5:3:12:**
-```roc
-    address: {
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **street** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:4:9:4:15:**
-```roc
-        street: "123 Main St",
-```
-        ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **city** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:5:9:5:13:**
-```roc
-        city: "Springfield",
-```
-        ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **coordinates** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:6:9:6:20:**
-```roc
-        coordinates: { lat: 42.1234, lng: -71.5678 },
-```
-        ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **lat** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:6:24:6:27:**
-```roc
-        coordinates: { lat: 42.1234, lng: -71.5678 },
-```
-                       ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **lng** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:6:38:6:41:**
-```roc
-        coordinates: { lat: 42.1234, lng: -71.5678 },
-```
-                                     ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **contact** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:8:5:8:12:**
-```roc
-    contact: {
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **email** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:9:9:9:14:**
-```roc
-        email: "alice@example.com",
-```
-        ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **phone** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:10:9:10:14:**
-```roc
-        phone: { home: "555-1234", work: "555-5678" },
-```
-        ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **home** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:10:18:10:22:**
-```roc
-        phone: { home: "555-1234", work: "555-5678" },
-```
-                 ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **work** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_nested.md:10:36:10:40:**
-```roc
-        phone: { home: "555-1234", work: "555-5678" },
-```
-                                   ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "person")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "name")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "age")
+        (Expr.malformed)
         (Expr.num_literal_i32 30)
       )
     )
   )
   (Expr.binop_colon
-    (Expr.lookup "address")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "street")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "city")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "coordinates")
+        (Expr.malformed)
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.lookup "lat")
+            (Expr.malformed)
             (Expr.frac_literal_big big:<idx:112>)
           )
           (Expr.binop_colon
-            (Expr.lookup "lng")
+            (Expr.malformed)
             (Expr.unary_neg)
           )
         )
@@ -291,21 +138,21 @@ Is there an **import** or **exposing** missing up-top?
     )
   )
   (Expr.binop_colon
-    (Expr.lookup "contact")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "email")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "phone")
+        (Expr.malformed)
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.lookup "home")
+            (Expr.malformed)
             (Expr.str_literal_big)
           )
           (Expr.binop_colon
-            (Expr.lookup "work")
+            (Expr.malformed)
             (Expr.str_literal_big)
           )
         )

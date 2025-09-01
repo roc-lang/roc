@@ -1004,39 +1004,6 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **foo** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_019.md:96:9:96:12:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	       ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **bar** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_019.md:96:19:96:22:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                 ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **baz** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_019.md:96:29:96:32:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                           ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **tag** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -1045,17 +1012,6 @@ Is there an **import** or **exposing** missing up-top?
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
 	                                ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **qux** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_019.md:96:39:96:42:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                                     ^^^
 
 
 **UNDEFINED VARIABLE**

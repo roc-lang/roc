@@ -1567,6 +1567,7 @@ fn processSnapshotContent(
             maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents);
         } else if (isExpressionNode(node.tag)) {
             maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
+            std.debug.print("DEBUG: canonicalizeExpr returned maybe_expr_idx={}\n", .{maybe_expr_idx != null});
         } else if (isStatementNode(node.tag)) {
             maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
         } else if (isPatternNode(node.tag)) {
@@ -3456,7 +3457,29 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             if (has_binop) {
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
                 try writer.writeAll("\n");
-                try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+
+                // Special handling for binop_colon in record literals
+                // The left side might still be an identifier node (.lc), not an expression
+                if (expr.tag == .binop_colon) {
+                    // Check if left side is still an identifier
+                    const lhs_node = cir.getNode(@enumFromInt(@intFromEnum(binop.lhs)));
+                    if (lhs_node.tag == .lc) {
+                        // It's a field name - output it as an identifier, not an expression
+                        for (0..indent + 1) |_| {
+                            try writer.writeAll("  ");
+                        }
+                        const ident_idx = lhs_node.payload.ident;
+                        const ident_name = env.idents.getText(ident_idx);
+                        try writer.print("(lc \"{s}\")\n", .{ident_name});
+                    } else {
+                        // It's been canonicalized - output as expression
+                        try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+                    }
+                } else {
+                    // Normal binop - both sides are expressions
+                    try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+                }
+
                 try outputCIR2ExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
                 for (0..indent) |_| {
                     try writer.writeAll("  ");
@@ -3676,9 +3699,13 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
+        std.debug.print("DEBUG: Calling checkCIR2Expr with expr_idx={}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch |err| {
+            std.debug.print("DEBUG: Type checking failed: {}\n", .{err});
             try output.md_writer.print("; Type checking failed: {}\n", .{err});
         };
+    } else {
+        std.debug.print("DEBUG: maybe_expr_idx is null!\n", .{});
     }
 
     // Create type inference context using the passed-in types store
@@ -3725,6 +3752,7 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
 /// Generate TYPES section with pretty-printed user-facing type annotations
 fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    std.debug.print("DEBUG: Entering generateTypesSection2, maybe_expr_idx={}\n", .{maybe_expr_idx != null});
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
 
@@ -3740,7 +3768,10 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
+        std.debug.print("DEBUG generateTypesSection2: Calling checkCIR2Expr with expr_idx={}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch {};
+    } else {
+        std.debug.print("DEBUG generateTypesSection2: maybe_expr_idx is null!\n", .{});
     }
 
     // Create type inference context using the passed-in types store

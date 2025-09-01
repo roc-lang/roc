@@ -1269,19 +1269,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
 
         // Type annotations should be handled as statements, not expressions
         .binop_colon => {
-            // binop_colon is used for both:
-            // 1. Record field assignments: { x: 42 }
-            // 2. Type annotations: x : Int
-            // In expression context, it's a record field assignment
-
-            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
-
-            // For record fields, both sides are expressions
-            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
-
-            self.mutateToExpr(node_idx, .binop_colon);
-            try self.ensureTypeVarExists(node_idx);
+            // binop_colon should not appear as a standalone expression
+            // It's either:
+            // 1. Part of a record field (handled by record_literal case)
+            // 2. A type annotation (which is a statement, not expression)
+            //
+            // If we reach here, it's likely a misplaced type annotation
+            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
+            self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
 
@@ -1393,8 +1388,48 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // Canonicalize all fields
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-            while (iter.next()) |n| {
-                _ = try self.canonicalizeExpr(allocator, n, raw_src, idents);
+            while (iter.next()) |field_node_idx| {
+                const field_node = self.ast.*.nodes.get(@enumFromInt(@intFromEnum(field_node_idx)));
+
+                if (field_node.tag == .binop_colon) {
+                    // Explicit field: { name: value }
+                    const ast_binop = self.ast.*.node_slices.binOp(field_node.payload.binop);
+
+                    // Left side is the field name - DO NOT canonicalize it as an expression
+                    // The field name should remain as an identifier (.lc node with ident payload)
+                    // We explicitly do NOT call canonicalizeExpr on the left side
+
+                    // Right side is the field value - canonicalize it as an expression
+                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                    // Now mutate the binop_colon node itself to mark it as canonicalized
+                    // But we keep the structure intact - left side stays as identifier
+                    self.mutateToExpr(field_node_idx, .binop_colon);
+                    try self.ensureTypeVarExists(field_node_idx);
+                } else if (field_node.tag == .lc) {
+                    // Shorthand syntax: { x } means { x: x }
+                    // The identifier is both the field name AND needs to be looked up as a value
+
+                    // We need to:
+                    // 1. Keep the identifier for the field name (don't mutate the node)
+                    // 2. Also canonicalize it as a variable lookup for the value
+
+                    // Create a synthetic binop_colon structure:
+                    // We'll repurpose the node to act as both field name and value
+                    // The shorthand node will be canonicalized as a lookup (for the value)
+                    // But we'll also preserve that it's shorthand so we know to use the
+                    // identifier as the field name too
+
+                    // Canonicalize as a variable lookup for the value part
+                    _ = try self.canonicalizeExpr(allocator, field_node_idx, raw_src, idents);
+
+                    // The node is now a .lookup with the variable reference
+                    // We'll handle extracting the field name from the original identifier
+                    // when we process records in type checking
+                } else {
+                    // Unknown field format - treat as expression for now
+                    _ = try self.canonicalizeExpr(allocator, field_node_idx, raw_src, idents);
+                }
             }
 
             self.mutateToExpr(node_idx, .record_literal);

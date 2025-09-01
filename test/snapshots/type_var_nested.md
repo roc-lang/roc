@@ -233,28 +233,6 @@ identity : a -> a
 ```
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **first** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_var_nested.md:18:22:18:27:**
-```roc
-make_pair = |x, y| { first: x, second: y }
-```
-                     ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **second** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_var_nested.md:18:32:18:38:**
-```roc
-make_pair = |x, y| { first: x, second: y }
-```
-                               ^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

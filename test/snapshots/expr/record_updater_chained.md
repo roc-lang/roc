@@ -172,15 +172,15 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
     (pattern (Patt.ident "person"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "name")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "age")
+        (Expr.malformed)
         (Expr.num_literal_i32 30)
       )
       (Expr.binop_colon
-        (Expr.lookup "city")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
     )

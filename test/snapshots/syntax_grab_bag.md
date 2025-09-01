@@ -1391,28 +1391,6 @@ Is there an **import** or **exposing** missing up-top?
 		                                  ^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **foo** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:130:5:130:8:**
-```roc
-		{ foo: 1, bar: 2 | 7 } => 12
-```
-		  ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **bar** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:130:13:130:16:**
-```roc
-		{ foo: 1, bar: 2 | 7 } => 12
-```
-		          ^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -1422,28 +1400,6 @@ This might be a limitation in the current implementation that will be addressed 
 		{ foo: 1, bar: 2 | 7 } => 12
 ```
 		                     ^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **foo** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:132:4:132:7:**
-```roc
-			foo: 1,
-```
-			^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **bar** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:133:4:133:7:**
-```roc
-			bar: 2 | 7, # After last record field
-```
-			^^^
 
 
 **UNUSED VARIABLE**
@@ -1710,39 +1666,6 @@ This might be a limitation in the current implementation that will be addressed 
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **foo** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:178:13:178:16:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	           ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **bar** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:178:23:178:26:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	                     ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **baz** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:178:37:178:40:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	                                   ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **tag** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -1751,17 +1674,6 @@ Is there an **import** or **exposing** missing up-top?
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
 	                                        ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **qux** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:178:47:178:50:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-	                                             ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2186,19 +2098,19 @@ expect {
     (pattern (Patt.ident "record"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "foo")
+        (Expr.malformed)
         (Expr.num_literal_i32 123)
       )
       (Expr.binop_colon
-        (Expr.lookup "bar")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "baz")
+        (Expr.malformed)
         (Expr.lookup "tag")
       )
       (Expr.binop_colon
-        (Expr.lookup "qux")
+        (Expr.malformed)
         (Expr.apply_tag)
       )
       (Expr.lookup "punned")

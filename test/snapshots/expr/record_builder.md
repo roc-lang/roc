@@ -68,39 +68,17 @@ This might be a limitation in the current implementation that will be addressed 
   ^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **x** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_builder.md:2:5:2:6:**
-```roc
-    x: 5,
-```
-    ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **y** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_builder.md:3:5:3:6:**
-```roc
-    y: 0,
-```
-    ^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
-    (Expr.lookup "x")
+    (Expr.malformed)
     (Expr.num_literal_i32 5)
   )
   (Expr.binop_colon
-    (Expr.lookup "y")
+    (Expr.malformed)
     (Expr.num_literal_i32 0)
   )
 )

@@ -2835,6 +2835,7 @@ pub fn initForCIR2(
 /// Check types for a CIR2 expression
 pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_idx: CIR2.Expr.Idx) std.mem.Allocator.Error!Var {
     const expr = cir2.getExpr(expr_idx);
+    std.debug.print("DEBUG checkCIR2Expr: expr_idx={}, tag={}\n", .{ @intFromEnum(expr_idx), expr.tag });
 
     // Check for malformed expressions
     if (expr.tag == .malformed) {
@@ -2855,6 +2856,14 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
         while (i <= var_idx) : (i += 1) {
             _ = try self.types.fresh();
         }
+    }
+
+    // Check if this expression has already been type-checked
+    // If the variable already has content beyond flex_var, we've already processed it
+    const resolved = self.types.resolveVar(expr_var);
+    if (resolved.desc.content != .flex_var) {
+        // Already has a concrete type, don't re-check
+        return expr_var;
     }
 
     switch (expr.tag) {
@@ -3072,8 +3081,69 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
 
         // Records
         .record_literal => {
-            // For now, just return the type variable
-            // TODO: Implement proper record type checking
+            // Build proper record type with field names and types
+            var fields = std.ArrayList(types_mod.RecordField).init(self.gpa);
+            defer fields.deinit();
+
+            // Iterate through all fields in the record
+            var iter = cir2.ast.node_slices.nodes(&expr.payload.nodes);
+            while (iter.next()) |field_node_idx| {
+                // Each field is itself a CIR2 expression
+                const field_expr = cir2.getExpr(@enumFromInt(@intFromEnum(field_node_idx)));
+
+                if (field_expr.tag == .binop_colon) {
+                    // Explicit field: { name: value }
+                    const binop = cir2.ast.node_slices.binOp(field_expr.payload.binop);
+
+                    // Get field name from left side (it's an .lc node in the AST)
+                    const name_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
+                    if (name_node.tag == .lc) {
+                        const field_name = name_node.payload.ident;
+
+                        // Type check the field value
+                        const field_type = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(binop.rhs)));
+
+                        try fields.append(.{
+                            .name = field_name,
+                            .var_ = field_type,
+                        });
+                    }
+                } else if (field_expr.tag == .lookup) {
+                    // Shorthand field: { x } means { x: x } - canonicalized to a lookup expression
+                    const field_name = field_expr.payload.ident;
+
+                    // Type check the lookup expression
+                    const field_type = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(field_node_idx)));
+
+                    try fields.append(.{
+                        .name = field_name,
+                        .var_ = field_type,
+                    });
+                }
+            }
+
+            // Create the actual record type
+            std.debug.print("DEBUG: Creating record type with {} fields\n", .{fields.items.len});
+            if (fields.items.len > 0) {
+                const record_fields = try self.types.appendRecordFields(fields.items);
+                std.debug.print("DEBUG: appendRecordFields returned start={}, count={}\n", .{ record_fields.start, record_fields.count });
+                const record_ext = try self.types.fresh(); // Extension variable for open records
+                const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
+                const record_var = try self.types.freshFromContent(record_content);
+                std.debug.print("DEBUG: Created record_var={} with record content\n", .{@intFromEnum(record_var)});
+                _ = try self.unify(expr_var, record_var);
+                std.debug.print("DEBUG: Unified expr_var={} with record_var={}\n", .{ @intFromEnum(expr_var), @intFromEnum(record_var) });
+
+                // Check what the type is after unification
+                const resolved_check = self.types.resolveVar(expr_var);
+                std.debug.print("DEBUG: After unify, expr_var={} resolves to content={}\n", .{ @intFromEnum(expr_var), resolved_check.desc.content });
+            } else {
+                // Empty record
+                const empty_content = Content{ .structure = .{ .empty_record = {} } };
+                const empty_var = try self.types.freshFromContent(empty_content);
+                _ = try self.unify(expr_var, empty_var);
+            }
+
             return expr_var;
         },
 
@@ -3150,17 +3220,26 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
                 func_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(func_idx)));
             }
 
-            // Second is arguments (might be a tuple)
-            if (iter.next()) |args_idx| {
-                const args_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(args_idx)));
+            // Collect all arguments
+            var arg_vars = std.ArrayList(Var).init(self.gpa);
+            defer arg_vars.deinit();
 
-                // Create function type constraint
-                if (func_var) |fv| {
-                    // func_var should be: args_var -> expr_var
-                    // For now, just ensure variables exist
-                    _ = fv;
-                    _ = args_var;
-                }
+            while (iter.next()) |arg_idx| {
+                const arg_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(arg_idx)));
+                try arg_vars.append(arg_var);
+            }
+
+            // Create function type constraint
+            if (func_var) |fv| {
+                // Build the function type: arg1 -> arg2 -> ... -> result
+                // For now, we'll create fresh type variables for the function type
+                // In a real implementation, we'd unify with the actual function type
+
+                // The function type should be: (arg_types) -> expr_var
+                // We need to ensure func_var unifies with this type
+                // For now, just ensure variables exist
+                _ = fv;
+                _ = arg_vars.items;
             }
 
             return expr_var;

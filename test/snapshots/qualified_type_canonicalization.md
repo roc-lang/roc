@@ -323,39 +323,6 @@ import Basics.Result
 ```
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **r** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:15:31:15:32:**
-```roc
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-```
-                              ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **g** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:15:39:15:40:**
-```roc
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-```
-                                      ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **b** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:15:45:15:46:**
-```roc
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-```
-                                            ^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -376,39 +343,6 @@ Is there an **import** or **exposing** missing up-top?
 multiLevelQualified = TypeC.new
 ```
                       ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **r** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:31:28:31:29:**
-```roc
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-```
-                           ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **g** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:31:34:31:35:**
-```roc
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-```
-                                 ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **b** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**qualified_type_canonicalization.md:31:42:31:43:**
-```roc
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-```
-                                         ^
 
 
 **UNUSED VARIABLE**

@@ -93,61 +93,7 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent OpColon OpenRound LowerIde
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **a** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**mixed_destructure_closure.md:1:55:1:56:**
-```roc
-(|{ a, x: (b, c), y: { d, e }}| a + b + c + d + e )({ a: 1, x: (2, 3), y: {d: 4, e: 5}})
-```
-                                                      ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **x** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**mixed_destructure_closure.md:1:61:1:62:**
-```roc
-(|{ a, x: (b, c), y: { d, e }}| a + b + c + d + e )({ a: 1, x: (2, 3), y: {d: 4, e: 5}})
-```
-                                                            ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **y** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**mixed_destructure_closure.md:1:72:1:73:**
-```roc
-(|{ a, x: (b, c), y: { d, e }}| a + b + c + d + e )({ a: 1, x: (2, 3), y: {d: 4, e: 5}})
-```
-                                                                       ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **d** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**mixed_destructure_closure.md:1:76:1:77:**
-```roc
-(|{ a, x: (b, c), y: { d, e }}| a + b + c + d + e )({ a: 1, x: (2, 3), y: {d: 4, e: 5}})
-```
-                                                                           ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **e** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**mixed_destructure_closure.md:1:82:1:83:**
-```roc
-(|{ a, x: (b, c), y: { d, e }}| a + b + c + d + e )({ a: 1, x: (2, 3), y: {d: 4, e: 5}})
-```
-                                                                                 ^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

@@ -49,94 +49,40 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_types.md:1:3:1:7:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_types.md:1:18:1:21:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                 ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **active** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_types.md:1:27:1:33:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                          ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **scores** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_types.md:1:46:1:52:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                             ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **balance** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_mixed_types.md:1:68:1:75:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                                                   ^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "name")
+    (lc "name")
     (Expr.str_literal_big)
   )
   (Expr.binop_colon
-    (Expr.lookup "age")
+    (lc "age")
     (Expr.num_literal_i32 30)
   )
   (Expr.binop_colon
-    (Expr.lookup "active")
+    (lc "active")
     (Expr.module_access
       (Expr.malformed)
       (Expr.malformed)
     )
   )
   (Expr.binop_colon
-    (Expr.lookup "scores")
+    (lc "scores")
     (Expr.list_literal)
   )
   (Expr.binop_colon
-    (Expr.lookup "balance")
+    (lc "balance")
     (Expr.frac_literal_big big:<idx:20>)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag record_literal :type "{ name: Str, age: Num(_size), active: _field, scores: List(Num(_size2)), balance: F64 }")
 ~~~
 # TYPES
 ~~~roc
-{}
+{ name: Str, age: Num(_size), active: _field, scores: List(Num(_size2)), balance: F64 }
 ~~~

@@ -104,28 +104,6 @@ BadRecord := { field: _, other: U32 }
           ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **field** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**underscore_error_type.md:16:9:16:14:**
-```roc
-baz = { field: "hi", other: 5 }
-```
-        ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **other** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**underscore_error_type.md:16:22:16:27:**
-```roc
-baz = { field: "hi", other: 5 }
-```
-                     ^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -178,11 +156,11 @@ BadTuple := (_, U32)
     (pattern (Patt.ident "baz"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "field")
+        (Expr.malformed)
         (Expr.str_literal_small)
       )
       (Expr.binop_colon
-        (Expr.lookup "other")
+        (Expr.malformed)
         (Expr.num_literal_i32 5)
       )
     )

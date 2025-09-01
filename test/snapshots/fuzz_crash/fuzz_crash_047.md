@@ -57,17 +57,6 @@ Expressions can be identifiers, literals, function calls, or operators.
          ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_047.md:3:12:3:16:**
-```roc
-person = { name: "Alice", age: 30 }
-```
-           ^^^^
-
-
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -97,11 +86,11 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "person"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "name")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "age")
+        (Expr.malformed)
         (Expr.num_literal_i32 30)
       )
     )

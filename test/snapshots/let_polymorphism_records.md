@@ -119,28 +119,6 @@ update_data = |container, new_value| { container & data: new_value }
                                                  ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **data** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**let_polymorphism_records.md:11:28:11:32:**
-```roc
-make_container = |value| { data: value, count: 1 }
-```
-                           ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **count** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**let_polymorphism_records.md:11:41:11:46:**
-```roc
-make_container = |value| { data: value, count: 1 }
-```
-                                        ^^^^^
-
-
 **UNUSED VARIABLE**
 Variable **data** is not used anywhere in your code.
 

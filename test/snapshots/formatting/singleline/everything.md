@@ -237,61 +237,6 @@ g : e -> e where module(e).A, module(e).B
                           ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **h11** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:19:9:19:12:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	       ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h12** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:19:17:19:20:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	               ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h13** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:19:25:19:28:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	                       ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h131** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:19:32:19:36:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	                              ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h132** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:19:41:19:45:**
-```roc
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-```
-	                                       ^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

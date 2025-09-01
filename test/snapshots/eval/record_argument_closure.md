@@ -52,28 +52,7 @@ OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIden
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **x** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_argument_closure.md:1:22:1:23:**
-```roc
-(|{ x, y }| x * y)({ x: 10, y: 20 })
-```
-                     ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **y** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_argument_closure.md:1:29:1:30:**
-```roc
-(|{ x, y }| x * y)({ x: 10, y: 20 })
-```
-                            ^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

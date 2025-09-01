@@ -115,61 +115,6 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **someTag** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**tag_vs_function_calls.md:2:5:2:12:**
-```roc
-    someTag: Some(42),
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **noneTag** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**tag_vs_function_calls.md:3:5:3:12:**
-```roc
-    noneTag: None,
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **okTag** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**tag_vs_function_calls.md:4:5:4:10:**
-```roc
-    okTag: Ok("hello"),
-```
-    ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **errTag** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**tag_vs_function_calls.md:5:5:5:11:**
-```roc
-    errTag: Err("oops"),
-```
-    ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **addOne** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**tag_vs_function_calls.md:6:5:6:11:**
-```roc
-    addOne: |x| x + 1,
-```
-    ^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **result** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -217,23 +162,23 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "someTag")
+    (Expr.malformed)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "noneTag")
+    (Expr.malformed)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "okTag")
+    (Expr.malformed)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "errTag")
+    (Expr.malformed)
     (Expr.apply_tag)
   )
   (Expr.binop_colon
-    (Expr.lookup "addOne")
+    (Expr.malformed)
     (Expr.lambda (canonicalized))
   )
 )

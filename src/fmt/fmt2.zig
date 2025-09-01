@@ -3635,73 +3635,8 @@ pub fn formatAst(
         if (token.tag == .EndOfFile) break;
     }
 
-    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, tokens.items);
-    defer formatter.deinit();
-
-    try formatter.format(root_node);
-
-    // Ensure the output ends with exactly one newline
-    // Remove any trailing blank lines, then ensure we have exactly one newline
-    while (formatter.output.items.len > 1 and
-        formatter.output.items[formatter.output.items.len - 1] == '\n' and
-        formatter.output.items[formatter.output.items.len - 2] == '\n')
-    {
-        _ = formatter.output.pop();
-    }
-
-    // Ensure we end with a newline if we don't already
-    if (formatter.output.items.len == 0 or formatter.output.items[formatter.output.items.len - 1] != '\n') {
-        try formatter.output.append('\n');
-    }
-
-    // Transfer ownership to caller by moving the items
-    const result = try formatter.output.toOwnedSlice();
-
-    // Debug: Check for lines with exactly 4 spaces
-    if (std.debug.runtime_safety) {
-        var i: usize = 0;
-        var line_start: usize = 0;
-        var line_num: usize = 1;
-
-        while (i < result.len) : (i += 1) {
-            if (result[i] == '\n') {
-                const line = result[line_start..i];
-                if (line.len == 4) {
-                    var all_spaces = true;
-                    for (line) |c| {
-                        if (c != ' ') {
-                            all_spaces = false;
-                            break;
-                        }
-                    }
-                    if (all_spaces) {
-                        std.debug.panic("ERROR: Formatter is returning line {} with exactly 4 spaces!\n", .{line_num});
-                    }
-                }
-                line_num += 1;
-                line_start = i + 1;
-            }
-        }
-    }
-
-    // Debug assertion: Ensure file ends with exactly one newline
-    if (std.debug.runtime_safety) {
-        if (result.len == 0) {
-            std.debug.panic("ERROR: Formatter returned empty output!\n", .{});
-        }
-
-        // Check that file ends with exactly one newline
-        if (result[result.len - 1] != '\n') {
-            std.debug.panic("ERROR: Formatted file does not end with a newline! Last char: '{c}'\n", .{result[result.len - 1]});
-        }
-
-        // Check that there's no blank line at the end (no double newline)
-        if (result.len > 1 and result[result.len - 2] == '\n') {
-            std.debug.panic("ERROR: Formatted file ends with a blank line (double newline)!\n", .{});
-        }
-    }
-
-    return result;
+    // Now format using the collected tokens
+    return formatAstWithTokens(allocator, ast, source, ident_store, tokens.items, root_node);
 }
 
 /// Formats AST2 with pre-tokenized source

@@ -35,65 +35,69 @@ pub fn InferContext(comptime CIR2: type) type {
 
         /// Infer the type of a CIR2 expression
         pub fn inferExpr(self: *Self, expr_idx: CIR2.Expr.Idx) !Var {
+            // The type variable for this expression should already exist at its index
+            // It was created and populated during type checking
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Check if this variable has content - if it does, return it
+            const resolved = self.store.resolveVar(expr_var);
+            if (resolved.desc.content != .flex_var) {
+                // Already has a type from type checking, return it
+                return expr_var;
+            }
+
+            // If no type was assigned during type checking, try to infer one
             const expr = self.cir.getExpr(expr_idx);
 
             // Handle the common cases first to avoid accessing union fields incorrectly
             switch (expr.tag) {
                 .num_literal_i32 => {
                     // Create a number type
-                    const var_id = try self.store.fresh();
                     const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-                    try self.store.setVarContent(var_id, num_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, num_content);
+                    return expr_var;
                 },
                 .int_literal_i32 => {
                     // Create an integer type
-                    const var_id = try self.store.fresh();
                     const int_content = Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
-                    try self.store.setVarContent(var_id, int_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, int_content);
+                    return expr_var;
                 },
                 .num_literal_big => {
                     // Big number literal - unbounded numeric type
-                    const var_id = try self.store.fresh();
                     const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 128 } } } };
-                    try self.store.setVarContent(var_id, num_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, num_content);
+                    return expr_var;
                 },
                 .int_literal_big => {
                     // Big integer literal - i128 precision
-                    const var_id = try self.store.fresh();
                     const int_content = Content{ .structure = .{ .num = .{ .int_precision = .i128 } } };
-                    try self.store.setVarContent(var_id, int_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, int_content);
+                    return expr_var;
                 },
                 .str_literal_small => {
                     // Create a string type
-                    const var_id = try self.store.fresh();
                     const str_content = Content{ .structure = .{ .str = {} } };
-                    try self.store.setVarContent(var_id, str_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, str_content);
+                    return expr_var;
                 },
                 .str_literal_big => {
                     // Create a string type
-                    const var_id = try self.store.fresh();
                     const str_content = Content{ .structure = .{ .str = {} } };
-                    try self.store.setVarContent(var_id, str_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, str_content);
+                    return expr_var;
                 },
                 .frac_literal_small => {
                     // Create a fractional type
-                    const var_id = try self.store.fresh();
                     const frac_content = Content{ .structure = .{ .num = .{ .frac_precision = .f64 } } };
-                    try self.store.setVarContent(var_id, frac_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, frac_content);
+                    return expr_var;
                 },
                 .frac_literal_big => {
                     // Create a fractional type
-                    const var_id = try self.store.fresh();
                     const frac_content = Content{ .structure = .{ .num = .{ .frac_precision = .f64 } } };
-                    try self.store.setVarContent(var_id, frac_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, frac_content);
+                    return expr_var;
                 },
                 .lookup => {
                     // For lookups, the type variable should already exist at the node index
@@ -118,9 +122,9 @@ pub fn InferContext(comptime CIR2: type) type {
                     return lookup_var;
                 },
                 .block => {
-                    // Type check all expressions in the block
-                    // TODO: Fix union field access
-                    return try self.store.fresh();
+                    // Block type should have been populated during type checking
+                    // If not populated, return the variable as-is
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Type check all expressions in the block
                     // // Return the type of the last expression
@@ -137,11 +141,9 @@ pub fn InferContext(comptime CIR2: type) type {
                     //                     // return last_type;
                 },
                 .record_literal => {
-                    // Create a record type
-                    const var_id = try self.store.fresh();
-                    const record_content = Content{ .structure = .empty_record };
-                    try self.store.setVarContent(var_id, record_content);
-                    return var_id;
+                    // Record type should have been populated during type checking
+                    // If not, return the variable as-is (it's a flex var)
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Create a record type - infer field types from the literal
                     // const var_id = try self.store.fresh();
@@ -183,12 +185,12 @@ pub fn InferContext(comptime CIR2: type) type {
                     // return var_id;
                 },
                 .list_literal => {
-                    // Create a list type
-                    const var_id = try self.store.fresh();
+                    // List type should have been populated during type checking
+                    // If not, create a list with fresh element type
                     const elem_var = try self.store.fresh();
                     const list_content = Content{ .structure = .{ .list = elem_var } };
-                    try self.store.setVarContent(var_id, list_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, list_content);
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Create a list type - infer element type from list elements
                     // const var_id = try self.store.fresh();
@@ -221,10 +223,9 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Type check arithmetic operations
                     // Due to CIR construction, binops might not have the expected payload
                     // For now, just return a numeric type
-                    const var_id = try self.store.fresh();
                     const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-                    try self.store.setVarContent(var_id, num_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, num_content);
+                    return expr_var;
 
                     // TODO: Fix this once CIR payload is corrected
                     // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
@@ -240,7 +241,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Comparison operators return Bool
                     // For now, just return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
-                    return try self.store.freshFromContent(bool_content);
+                    try self.store.setVarContent(expr_var, bool_content);
+                    return expr_var;
 
                     // TODO: Fix this once CIR payload is corrected
                     // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
@@ -248,9 +250,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     // _ = try self.inferExpr(binop.rhs);
                 },
                 .binop_colon => {
-                    // Type annotation - infer the value's type
-                    // For now, just return a fresh type
-                    return try self.store.fresh();
+                    // Type annotation - should have been populated during type checking
+                    return expr_var;
 
                     // TODO: Fix this once CIR payload is corrected
                     // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
@@ -260,7 +261,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Boolean operators
                     // For now, just return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
-                    return try self.store.freshFromContent(bool_content);
+                    try self.store.setVarContent(expr_var, bool_content);
+                    return expr_var;
 
                     // TODO: Fix this once CIR payload is corrected
                     // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
@@ -268,8 +270,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     // _ = try self.inferExpr(binop.rhs);
                 },
                 .if_else => {
-                    // If expression
-                    return try self.store.fresh();
+                    // If expression - should have been populated during type checking
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // If expression - infer types of condition and branches
                     // const if_branches_u32 = expr.payload.if_branches;
@@ -296,8 +298,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     //                     // return result_type;
                 },
                 .lambda => {
-                    // Lambda expression
-                    return try self.store.fresh();
+                    // Lambda expression - should have been populated during type checking
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Lambda expression - create function type
                     // // Lambda structure: binop_pipe with params on left, body on right
@@ -363,205 +365,20 @@ pub fn InferContext(comptime CIR2: type) type {
                     // return func_var;
                 },
                 .match => {
-                    // Match/when expression
-                    // Structure: scrutinee followed by pattern-body pairs
-                    // Get the original AST node to access the correct payload
-                    const node_idx = @as(@TypeOf(self.cir.ast.*).Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-                    const ast_node = self.cir.ast.*.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
-
-                    // Check if the original node has nodes payload
-                    if (ast_node.tag != .match) {
-                        // Node was mutated but payload doesn't match - return fresh type var
-                        return try self.store.fresh();
-                    }
-
-                    const nodes_idx = ast_node.payload.nodes;
-
-                    if (!nodes_idx.isNil()) {
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-
-                        // First element is the scrutinee (expression being matched)
-                        if (iter.next()) |scrutinee_idx| {
-                            const scrutinee_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(scrutinee_idx)));
-                            _ = try self.inferExpr(scrutinee_expr_idx);
-                        }
-
-                        // Remaining nodes are pattern-body pairs
-                        var branch_type: ?Var = null;
-
-                        while (iter.next()) |pattern_idx| {
-                            // Pattern node - skip it for type inference
-                            _ = pattern_idx;
-
-                            // Next node is the body expression for this branch
-                            if (iter.next()) |body_idx| {
-                                const body_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(body_idx)));
-                                const this_branch_type = try self.inferExpr(body_expr_idx);
-
-                                if (branch_type) |existing_type| {
-                                    // All branches should have the same type
-                                    _ = existing_type;
-                                } else {
-                                    branch_type = this_branch_type;
-                                }
-                            }
-                        }
-
-                        return branch_type orelse try self.store.fresh();
-                    }
-
-                    // Fallback if we can't parse the match structure
-                    return try self.store.fresh();
+                    // Match/when expression - should have been populated during type checking
+                    return expr_var;
                 },
                 .apply_ident => {
-                    // Function application
-                    // Structure: first node is function, second node is args (often a tuple)
-                    const nodes_idx = expr.payload.nodes;
-
-                    var arg_vars = std.ArrayList(Var).init(self.allocator);
-                    defer arg_vars.deinit();
-
-                    // Create a fresh type variable for the result
-                    const result_var = try self.store.fresh();
-
-                    if (!nodes_idx.isNil()) {
-                        var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-
-                        // First node is the function being called
-                        if (iter.next()) |func_node| {
-                            const func_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(func_node)));
-                            const func_var = try self.inferExpr(func_expr_idx);
-
-                            // Second node contains the arguments (could be a tuple or single expr)
-                            if (iter.next()) |args_node| {
-                                const args_tag = self.cir.ast.*.tag(args_node);
-                                if (args_tag == .tuple_literal) {
-                                    // Arguments are in a tuple - infer each element's type
-                                    const tuple_nodes_idx = self.cir.ast.*.payload(args_node).nodes;
-                                    if (!tuple_nodes_idx.isNil()) {
-                                        var tuple_iter = self.cir.ast.*.node_slices.nodes(&tuple_nodes_idx);
-                                        while (tuple_iter.next()) |arg| {
-                                            const arg_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(arg)));
-                                            const arg_var = try self.inferExpr(arg_expr_idx);
-                                            try arg_vars.append(arg_var);
-                                        }
-                                    }
-                                } else {
-                                    // Single argument - infer its type directly
-                                    const arg_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(args_node)));
-                                    const arg_var = try self.inferExpr(arg_expr_idx);
-                                    try arg_vars.append(arg_var);
-                                }
-                            }
-
-                            // Create a function type that expects the argument types and returns the result type
-                            const expected_func_content = try self.store.mkFuncUnbound(arg_vars.items, result_var);
-                            const expected_func_var = try self.store.freshFromContent(expected_func_content);
-
-                            // Type checking would unify the function with the expected type
-                            _ = func_var;
-                            _ = expected_func_var;
-                        }
-                    }
-
-                    return result_var;
+                    // Function application - should have been populated during type checking
+                    return expr_var;
                 },
                 .apply_tag => {
-                    // Tag constructor application
-                    // This could be from .uc (simple tag) or .apply_uc (tag with args)
-                    // We need to check the original AST node to determine which
-
-                    const result_var = try self.store.fresh();
-                    var arg_vars = std.ArrayList(Var).init(self.allocator);
-                    defer arg_vars.deinit();
-
-                    // Get the original AST node to check its type
-                    const ast_node_idx = @as(@TypeOf(self.cir.ast.*).Node.Idx, @enumFromInt(@intFromEnum(expr_idx)));
-                    const original_tag = self.cir.ast.*.tag(ast_node_idx);
-
-                    if (original_tag == .apply_uc) {
-                        // Tag application with arguments
-                        const nodes_idx = expr.payload.nodes;
-                        if (!nodes_idx.isNil()) {
-                            var iter = self.cir.ast.*.node_slices.nodes(&nodes_idx);
-
-                            // Skip the tag name (first node)
-                            _ = iter.next();
-
-                            // Process arguments if present
-                            if (iter.next()) |args_node| {
-                                const args_tag = self.cir.ast.*.tag(args_node);
-                                if (args_tag == .tuple_literal) {
-                                    // Arguments in a tuple
-                                    const tuple_nodes = self.cir.ast.*.payload(args_node).nodes;
-                                    if (!tuple_nodes.isNil()) {
-                                        var tuple_iter = self.cir.ast.*.node_slices.nodes(&tuple_nodes);
-                                        while (tuple_iter.next()) |arg| {
-                                            const arg_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(arg)));
-                                            const arg_var = try self.inferExpr(arg_expr_idx);
-                                            try arg_vars.append(arg_var);
-                                        }
-                                    }
-                                } else {
-                                    // Single argument
-                                    const arg_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(args_node)));
-                                    const arg_var = try self.inferExpr(arg_expr_idx);
-                                    try arg_vars.append(arg_var);
-                                }
-                            }
-                        }
-                    }
-                    // else: simple tag from .uc, no arguments
-
-                    if (arg_vars.items.len > 0) {
-                        // Tag with payload - create a tag union type
-                        // The tag union contains this specific tag variant with its payload types
-                        // Create a single tag with the payload types
-                        var tags = std.ArrayList(types_mod.Tag).init(self.allocator);
-                        defer tags.deinit();
-
-                        const args_range = try self.store.appendVars(arg_vars.items);
-                        try tags.append(.{
-                            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Placeholder tag name
-                            .args = args_range,
-                        });
-
-                        const tags_range = try self.store.appendTags(tags.items);
-                        const tag_content = Content{
-                            .structure = .{
-                                .tag_union = .{
-                                    .tags = tags_range,
-                                    .ext = try self.store.fresh(), // Extension variable for open tag unions
-                                },
-                            },
-                        };
-                        try self.store.setVarContent(result_var, tag_content);
-                    } else {
-                        // Tag without payload - simple tag union
-                        var tags = std.ArrayList(types_mod.Tag).init(self.allocator);
-                        defer tags.deinit();
-
-                        try tags.append(.{
-                            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Placeholder tag name
-                            .args = types_mod.Var.SafeList.Range.empty(),
-                        });
-
-                        const tags_range = try self.store.appendTags(tags.items);
-                        const tag_content = Content{ .structure = .{ .tag_union = .{
-                            .tags = tags_range,
-                            .ext = try self.store.fresh(),
-                        } } };
-                        try self.store.setVarContent(result_var, tag_content);
-                    }
-
-                    return result_var;
+                    // Tag constructor application - should have been populated during type checking
+                    return expr_var;
                 },
                 .unary_neg => {
-                    // Unary negation
-                    const var_id = try self.store.fresh();
-                    const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = true, .bits_needed = 0 } } } };
-                    try self.store.setVarContent(var_id, num_content);
-                    return var_id;
+                    // Unary negation - should have been populated during type checking
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Unary negation - operand must be numeric
                     // // Just return a numeric type for now
@@ -571,9 +388,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     // return var_id;
                 },
                 .unary_not => {
-                    // Unary not - result is Bool
-                    const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
-                    return try self.store.freshFromContent(bool_content);
+                    // Unary not - should have been populated during type checking
+                    return expr_var;
                     // DISABLED DUE TO UNION FIELD ACCESS ISSUES:
                     // // Unary not - operand must be Bool, result is Bool
                     // const nodes_idx = expr.payload.nodes;
@@ -595,14 +411,14 @@ pub fn InferContext(comptime CIR2: type) type {
                 },
                 .malformed => {
                     // Malformed expression - create error type
-                    const var_id = try self.store.fresh();
                     const err_content = Content{ .err = {} };
-                    try self.store.setVarContent(var_id, err_content);
-                    return var_id;
+                    try self.store.setVarContent(expr_var, err_content);
+                    return expr_var;
                 },
                 else => {
-                    // For unhandled cases, create an unbound type variable
-                    return try self.store.fresh();
+                    // For unhandled cases, return the expression's variable
+                    // It should have been populated during type checking
+                    return expr_var;
                 },
             }
         }

@@ -43,28 +43,6 @@ main = {
 NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**import_exposing_basic.md:6:14:6:18:**
-```roc
-    data = { name: "Alice", age: 30 }
-```
-             ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**import_exposing_basic.md:6:29:6:32:**
-```roc
-    data = { name: "Alice", age: 30 }
-```
-                            ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **encode** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -97,11 +75,11 @@ Is there an **import** or **exposing** missing up-top?
         (pattern (Patt.ident "data"))
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.lookup "name")
+            (Expr.malformed)
             (Expr.str_literal_big)
           )
           (Expr.binop_colon
-            (Expr.lookup "age")
+            (Expr.malformed)
             (Expr.num_literal_i32 30)
           )
         )

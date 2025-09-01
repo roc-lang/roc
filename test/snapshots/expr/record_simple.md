@@ -30,37 +30,16 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_simple.md:1:3:1:7:**
-```roc
-{ name: "Alice", age: 30 }
-```
-  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_simple.md:1:18:1:21:**
-```roc
-{ name: "Alice", age: 30 }
-```
-                 ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (Expr.lookup "name")
+    (Expr.malformed)
     (Expr.str_literal_big)
   )
   (Expr.binop_colon
-    (Expr.lookup "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
 )

@@ -105,28 +105,6 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_alias_decl.md:33:16:33:20:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-               ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_alias_decl.md:33:31:33:34:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-                              ^^^
-
-
 **UNUSED VARIABLE**
 Variable **color** is not used anywhere in your code.
 

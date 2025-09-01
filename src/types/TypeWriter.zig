@@ -87,6 +87,10 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.buf.clearRetainingCapacity();
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
+
+    const resolved = self.types.resolveVar(var_);
+    std.debug.print("DEBUG TypeWriter.write: var_={}, resolved content={}\n", .{ @intFromEnum(var_), resolved.desc.content });
+
     try self.writeVar(var_, var_);
 }
 
@@ -529,9 +533,11 @@ fn writeFuncWithArrow(self: *TypeWriter, func: Func, arrow: []const u8, root_var
 /// Write a record type
 fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocator.Error!void {
     const fields = self.types.getRecordFieldsSlice(record.fields);
+    std.debug.print("DEBUG writeRecord: fields.len={}, record.fields.start={}, count={}\n", .{ fields.len, record.fields.start, record.fields.count });
 
     _ = try self.buf.writer().write("{ ");
     for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
+        std.debug.print("DEBUG writeRecord field {}: name.idx={}, var={}\n", .{ i, field_name.idx, @intFromEnum(field_var) });
         if (i > 0) _ = try self.buf.writer().write(", ");
         _ = try self.buf.writer().write(self.getIdent(field_name));
         _ = try self.buf.writer().write(": ");

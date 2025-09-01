@@ -57,28 +57,6 @@ answer = composed([42])
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **value** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**test_nested_instantiation_crash.md:6:21:6:26:**
-```roc
-make_record = |x| { value: x, tag: "data" }
-```
-                    ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **tag** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**test_nested_instantiation_crash.md:6:31:6:34:**
-```roc
-make_record = |x| { value: x, tag: "data" }
-```
-                              ^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.

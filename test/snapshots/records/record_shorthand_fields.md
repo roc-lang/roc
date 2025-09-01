@@ -81,9 +81,9 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag record_literal :type "{}")
+(expr :tag record_literal :type "{ name: _field, age: _field2, email: _field3, active: _field4 }")
 ~~~
 # TYPES
 ~~~roc
-{}
+{ name: _field, age: _field2, email: _field3, active: _field4 }
 ~~~

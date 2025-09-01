@@ -56,17 +56,6 @@ updated = { ..person, age: 31 }
                               ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_updater_basic.md:3:12:3:16:**
-```roc
-person = { name: "Alice", age: 30 }
-```
-           ^^^^
-
-
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -96,11 +85,11 @@ updated = { ..person, age: 31 }
     (pattern (Patt.ident "person"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.lookup "name")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (Expr.lookup "age")
+        (Expr.malformed)
         (Expr.num_literal_i32 30)
       )
     )

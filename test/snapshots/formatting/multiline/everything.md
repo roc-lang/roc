@@ -475,61 +475,6 @@ g : e -> e where module(e).A, module(e).B
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **h11** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:62:3:62:6:**
-```roc
-		h11: x,
-```
-		^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h12** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:63:3:63:6:**
-```roc
-		h12: x,
-```
-		^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h13** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:64:3:64:6:**
-```roc
-		h13: {
-```
-		^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h131** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:65:4:65:8:**
-```roc
-			h131: x,
-```
-			^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **h132** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**everything.md:66:4:66:8:**
-```roc
-			h132: y,
-```
-			^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **a** in this scope.
 Is there an **import** or **exposing** missing up-top?
 

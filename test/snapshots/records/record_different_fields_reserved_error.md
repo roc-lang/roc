@@ -122,23 +122,12 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **when** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**record_different_fields_reserved_error.md:3:5:3:9:**
-```roc
-    when: "pattern match",
-```
-    ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
   (Expr.if_else)
   (Expr.binop_colon
-    (Expr.lookup "when")
+    (Expr.malformed)
     (Expr.str_literal_big)
   )
   (Expr.binop_colon

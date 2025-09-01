@@ -42,28 +42,7 @@ main! = |_| getName({ name : "luke", age : 21 })
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_record_basic.md:6:22:6:26:**
-```roc
-main! = |_| getName({name: "luke", age:21})
-```
-                     ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_record_basic.md:6:36:6:39:**
-```roc
-main! = |_| getName({name: "luke", age:21})
-```
-                                   ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
