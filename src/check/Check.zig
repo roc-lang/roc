@@ -3087,63 +3087,49 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
 
         // Lambda expressions
         .lambda => {
-            // Lambda can come from two sources:
-            // 1. binop_pipe (|param| body) - keeps binop payload
-            // 2. lambda node - uses body_then_args payload
-            // This is a limitation of the current canonicalization approach
-
-            // Check the original AST node to determine which payload type
+            // Lambdas in Roc come from |x| body syntax
+            // Parser creates them with body_then_args payload: [body, param1, param2, ...]
             const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+            var iter = cir2.ast.node_slices.nodes(&ast_node.payload.body_then_args);
 
-            if (ast_node.tag == .lambda) {
-                // Original lambda node - uses body_then_args
-                var iter = cir2.ast.node_slices.nodes(&ast_node.payload.body_then_args);
-
-                // First is body
-                if (iter.next()) |body_idx| {
-                    _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(body_idx)));
-                }
-
-                // Rest are params - skip for now
-                while (iter.next()) |_| {}
-            } else if (ast_node.tag == .binop_pipe) {
-                // From binop_pipe - uses binop payload
-                const binop = cir2.getBinOp(CIR2.Expr.Idx, ast_node.payload.binop);
-
-                // RHS is the body
-                _ = try self.checkCIR2Expr(CIR2, cir2, binop.rhs);
-
-                // LHS contains parameters - skip for now
-            } else {
-                // Some other source - just skip
+            // First is body
+            if (iter.next()) |body_idx| {
+                _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(body_idx)));
             }
+
+            // Rest are params - skip for now (will be handled when we implement function type inference)
+            while (iter.next()) |_| {}
 
             return expr_var;
         },
 
         // Tag application - creates a tag union type
         .apply_tag => {
-            // Tag applications can be:
-            // 1. Simple tag (e.g., True) - has ident payload
-            // 2. Tag with arguments (e.g., Some(x)) - has nodes payload
-
-            // Check the original AST node
+            // Tags can have either ident payload (simple tags) or nodes payload (tags with arguments)
+            // We need to check the original AST tag to know which payload type to use
+            // This is not ideal but necessary because apply_tag uses different payload types
             const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
 
-            if (ast_node.tag == .uc) {
-                // Simple tag without payload - just has ident
-                // Nothing to check
-            } else if (ast_node.tag == .apply_uc) {
-                // Tag with payload - has nodes
+            // Check tag type to determine payload
+            const tag_value = @intFromEnum(ast_node.tag);
+            const uc_tag = @intFromEnum(AST2.Node.Tag.uc);
+            const apply_uc_tag = @intFromEnum(AST2.Node.Tag.apply_uc);
+
+            if (tag_value == apply_uc_tag) {
+                // Has nodes payload - tag with arguments
                 var iter = cir2.ast.node_slices.nodes(&ast_node.payload.nodes);
 
-                // Skip tag constructor
+                // Skip tag constructor (first element)
                 _ = iter.next();
 
-                // Check payload if present
-                if (iter.next()) |payload_idx| {
-                    _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(payload_idx)));
+                // Check arguments
+                while (iter.next()) |arg_idx| {
+                    _ = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(arg_idx)));
                 }
+            } else if (tag_value == uc_tag) {
+                // Simple tag with ident payload - no arguments to check
+            } else {
+                // Some other tag form - skip for now
             }
 
             // Tag creates a tag union type - for now use a fresh variable
@@ -3152,30 +3138,28 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
 
         // Function application
         .apply_ident => {
-            // Function applications use nodes payload
-            // Check the original AST node to be safe
+            // Function applications always use nodes payload
             const ast_node = cir2.ast.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
 
-            if (ast_node.tag == .apply_lc or ast_node.tag == .apply_anon) {
-                var iter = cir2.ast.node_slices.nodes(&ast_node.payload.nodes);
+            // All apply_ident should have nodes payload
+            var iter = cir2.ast.node_slices.nodes(&ast_node.payload.nodes);
 
-                // First is the function
-                var func_var: ?Var = null;
-                if (iter.next()) |func_idx| {
-                    func_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(func_idx)));
-                }
+            // First is the function
+            var func_var: ?Var = null;
+            if (iter.next()) |func_idx| {
+                func_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(func_idx)));
+            }
 
-                // Second is arguments (might be a tuple)
-                if (iter.next()) |args_idx| {
-                    const args_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(args_idx)));
+            // Second is arguments (might be a tuple)
+            if (iter.next()) |args_idx| {
+                const args_var = try self.checkCIR2Expr(CIR2, cir2, @enumFromInt(@intFromEnum(args_idx)));
 
-                    // Create function type constraint
-                    if (func_var) |fv| {
-                        // func_var should be: args_var -> expr_var
-                        // For now, just ensure variables exist
-                        _ = fv;
-                        _ = args_var;
-                    }
+                // Create function type constraint
+                if (func_var) |fv| {
+                    // func_var should be: args_var -> expr_var
+                    // For now, just ensure variables exist
+                    _ = fv;
+                    _ = args_var;
                 }
             }
 

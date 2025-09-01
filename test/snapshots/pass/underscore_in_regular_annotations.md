@@ -93,17 +93,28 @@ process = |list| "processed"
            ^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**underscore_in_regular_annotations.md:15:21:15:33:**
+```roc
+get_data = |record| record.other
+```
+                    ^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **record** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
 The unused variable is declared here:
 
-**underscore_in_regular_annotations.md:15:21:15:27:**
+**underscore_in_regular_annotations.md:15:13:15:19:**
 ```roc
 get_data = |record| record.other
 ```
-                    ^^^^^^
+            ^^^^^^
 
 
 **UNSUPPORTED NODE**

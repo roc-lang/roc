@@ -34,7 +34,17 @@ red = (Color.RGB | Red)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_import_type.md:6:7:6:20:**
+```roc
+red = Color.RGB.Red
+```
+      ^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -45,7 +55,7 @@ NIL
   )
   (Stmt.assign
     (pattern (Patt.ident "red"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
 )
 ~~~

@@ -27,7 +27,17 @@ person.transform(42)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_access_function_call.md:1:2:1:18:**
+```roc
+(person.transform)(42)
+```
+ ^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.apply_ident)

@@ -42,17 +42,28 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_record_simple.md:4:21:4:32:**
+```roc
+get_name = |person| person.name
+```
+                    ^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **person** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
 The unused variable is declared here:
 
-**type_record_simple.md:4:21:4:27:**
+**type_record_simple.md:4:13:4:19:**
 ```roc
 get_name = |person| person.name
 ```
-                    ^^^^^^
+            ^^^^^^
 
 
 # CANONICALIZE

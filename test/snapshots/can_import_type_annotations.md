@@ -266,6 +266,17 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
+**can_import_type_annotations.md:15:26:15:38:**
+```roc
+    result = Json.decode(request.body)
+```
+                         ^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
 **can_import_type_annotations.md:17:9:17:23:**
 ```roc
         Ok(data) => Ok(Http.success(data))
@@ -312,19 +323,6 @@ Variable **request** is not used anywhere in your code.
 If you don't need this variable, prefix it with an underscore like `_request` to suppress this warning.
 The unused variable is declared here:
 
-**can_import_type_annotations.md:15:26:15:33:**
-```roc
-    result = Json.decode(request.body)
-```
-                         ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **request** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_request` to suppress this warning.
-The unused variable is declared here:
-
 **can_import_type_annotations.md:14:14:14:21:**
 ```roc
 handleApi = |request| {
@@ -353,6 +351,17 @@ Is there an **import** or **exposing** missing up-top?
 config = Json.defaultConfig
 ```
          ^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:27:40:27:61:**
+```roc
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+```
+                                       ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**

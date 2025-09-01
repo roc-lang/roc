@@ -27,11 +27,21 @@ person.age + 5
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_access_in_expression.md:1:1:1:11:**
+```roc
+person.age + 5
+```
+^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.binop_plus
-  (Expr.lambda (canonicalized))
+  (Expr.malformed)
   (Expr.num_literal_i32 5)
 )
 ~~~

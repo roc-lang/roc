@@ -204,30 +204,26 @@ identity_record = |x| { value: x }
                         ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **int_container** is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_int_container` to suppress this warning.
-The unused variable is declared here:
-
-**let_polymorphism_records.md:35:5:35:18:**
+**let_polymorphism_records.md:35:5:35:24:**
 ```roc
     int_container.count + str_container.count
 ```
-    ^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **str_container** is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_str_container` to suppress this warning.
-The unused variable is declared here:
-
-**let_polymorphism_records.md:35:27:35:40:**
+**let_polymorphism_records.md:35:27:35:46:**
 ```roc
     int_container.count + str_container.count
 ```
-                          ^^^^^^^^^^^^^
+                          ^^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE

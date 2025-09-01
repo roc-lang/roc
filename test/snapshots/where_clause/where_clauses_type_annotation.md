@@ -30,17 +30,28 @@ convert = |a| a.to_b()
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**where_clauses_type_annotation.md:4:15:4:21:**
+```roc
+convert = |a| a.to_b()
+```
+              ^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **a** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
 The unused variable is declared here:
 
-**where_clauses_type_annotation.md:4:15:4:16:**
+**where_clauses_type_annotation.md:4:12:4:13:**
 ```roc
 convert = |a| a.to_b()
 ```
-              ^
+           ^
 
 
 # CANONICALIZE

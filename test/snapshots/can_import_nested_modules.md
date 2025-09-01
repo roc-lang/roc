@@ -92,6 +92,17 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_nested_modules.md:18:5:18:37:**
+```roc
+    Config.Parser.Advanced.parseWith(advancedConfig, input)
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **padLeft** in this scope.
 Is there an **import** or **exposing** missing up-top?

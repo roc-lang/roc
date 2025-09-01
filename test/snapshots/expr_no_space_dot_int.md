@@ -25,13 +25,23 @@ foo = (asd | 0)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**expr_no_space_dot_int.md:3:7:3:12:**
+```roc
+foo = asd.0
+```
+      ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.assign
     (pattern (Patt.ident "foo"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
 )
 ~~~

@@ -57,6 +57,17 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_builder.md:1:3:1:14:**
+```roc
+{ Foo.Bar.baz <-
+```
+  ^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **x** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -82,7 +93,7 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.lambda (canonicalized))
+  (Expr.malformed)
   (Expr.malformed)
   (Expr.binop_colon
     (Expr.lookup "x")

@@ -62,17 +62,26 @@ Is there an **import** or **exposing** missing up-top?
     ^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **person** is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
-The unused variable is declared here:
+**type_record_effectful.md:7:18:7:29:**
+```roc
+    Stdout.line!(person.name)
+```
+                 ^^^^^^^^^^^
 
-**type_record_effectful.md:8:5:8:11:**
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_record_effectful.md:8:5:8:16:**
 ```roc
     person.name
 ```
-    ^^^^^^
+    ^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**

@@ -864,17 +864,15 @@ Is there an **import** or **exposing** missing up-top?
         ^^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **container1** is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_container1` to suppress this warning.
-The unused variable is declared here:
-
-**let_polymorphism_complex.md:107:5:107:15:**
+**let_polymorphism_complex.md:107:5:107:21:**
 ```roc
     container1.value + 10
 ```
-    ^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE

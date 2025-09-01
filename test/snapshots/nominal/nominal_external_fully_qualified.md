@@ -115,6 +115,17 @@ Is there an **import** or **exposing** missing up-top?
                                        ^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_external_fully_qualified.md:9:9:9:40:**
+```roc
+        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+```
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **code** in this scope.
 Is there an **import** or **exposing** missing up-top?

@@ -52,17 +52,28 @@ main! = add((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**pure_with_pure_annotation.md:5:14:5:30:**
+```roc
+add = |x, y| { x: x, y: y }.x
+```
+             ^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **x** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
 
-**pure_with_pure_annotation.md:5:19:5:20:**
+**pure_with_pure_annotation.md:5:8:5:9:**
 ```roc
 add = |x, y| { x: x, y: y }.x
 ```
-                  ^
+       ^
 
 
 **UNUSED VARIABLE**
@@ -71,11 +82,11 @@ Variable **y** is not used anywhere in your code.
 If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
 The unused variable is declared here:
 
-**pure_with_pure_annotation.md:5:25:5:26:**
+**pure_with_pure_annotation.md:5:11:5:12:**
 ```roc
 add = |x, y| { x: x, y: y }.x
 ```
-                        ^
+          ^
 
 
 # CANONICALIZE

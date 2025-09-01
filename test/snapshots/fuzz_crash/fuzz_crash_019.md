@@ -1183,33 +1183,33 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_019.md:105:65:105:66:**
+**fuzz_crash_019.md:105:65:105:69:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-	                                                               ^
+	                                                               ^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_019.md:105:71:105:72:**
+**fuzz_crash_019.md:105:71:105:76:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-	                                                                     ^
+	                                                                     ^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_019.md:105:78:105:79:**
+**fuzz_crash_019.md:105:78:105:84:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-	                                                                            ^
+	                                                                            ^^^^^^
 
 
 **UNDEFINED VARIABLE**

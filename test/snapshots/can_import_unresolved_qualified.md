@@ -73,6 +73,17 @@ parser = (Json.Parser | Advanced | NonExistent | .create)
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:7:8:7:31:**
+```roc
+main = Json.NonExistent.method
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **Json.stringify** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -82,6 +93,17 @@ Is there an **import** or **exposing** missing up-top?
 parseData = |data| Json.stringify(data)
 ```
                    ^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:15:24:15:51:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -108,6 +130,17 @@ result = Json.prase("test")
          ^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:21:10:21:31:**
+```roc
+config = Unknown.Module.config
+```
+         ^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **Http.invalidMethod** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -119,6 +152,17 @@ client = Http.invalidMethod
          ^^^^^^^^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_unresolved_qualified.md:27:10:27:49:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -126,7 +170,7 @@ client = Http.invalidMethod
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
   (Stmt.type_anno
     (name "parseData")
@@ -150,7 +194,7 @@ client = Http.invalidMethod
   )
   (Stmt.assign
     (pattern (Patt.ident "config"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
   (Stmt.assign
     (pattern (Patt.ident "client"))
@@ -161,7 +205,7 @@ client = Http.invalidMethod
   )
   (Stmt.assign
     (pattern (Patt.ident "parser"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
 )
 ~~~

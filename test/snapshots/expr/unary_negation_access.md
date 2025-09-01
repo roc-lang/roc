@@ -21,7 +21,17 @@ OpUnaryMinus LowerIdent Dot LowerIdent ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**unary_negation_access.md:1:2:1:12:**
+```roc
+-rec1.field
+```
+ ^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.unary_neg)

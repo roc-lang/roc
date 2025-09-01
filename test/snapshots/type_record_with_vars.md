@@ -42,17 +42,28 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_record_with_vars.md:4:21:4:33:**
+```roc
+getField = |record| record.field
+```
+                    ^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **record** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
 The unused variable is declared here:
 
-**type_record_with_vars.md:4:21:4:27:**
+**type_record_with_vars.md:4:13:4:19:**
 ```roc
 getField = |record| record.field
 ```
-                    ^^^^^^
+            ^^^^^^
 
 
 # CANONICALIZE

@@ -64,17 +64,28 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**type_multiple_aliases.md:12:24:12:33:**
+```roc
+get_user_name = |user| user.name
+```
+                       ^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **user** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_user` to suppress this warning.
 The unused variable is declared here:
 
-**type_multiple_aliases.md:12:24:12:28:**
+**type_multiple_aliases.md:12:18:12:22:**
 ```roc
 get_user_name = |user| user.name
 ```
-                       ^^^^
+                 ^^^^
 
 
 # CANONICALIZE

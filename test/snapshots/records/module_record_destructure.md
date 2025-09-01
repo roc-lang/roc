@@ -72,11 +72,11 @@ This might be a limitation in the current implementation that will be addressed 
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**module_record_destructure.md:7:2:7:10:**
+**module_record_destructure.md:7:2:7:12:**
 ```roc
 	{ a: 0 }.a + age - { a: 0 }.a
 ```
-	^^^^^^^^
+	^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -94,11 +94,11 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**module_record_destructure.md:7:21:7:29:**
+**module_record_destructure.md:7:21:7:31:**
 ```roc
 	{ a: 0 }.a + age - { a: 0 }.a
 ```
-	                   ^^^^^^^^
+	                   ^^^^^^^^^^
 
 
 # CANONICALIZE

@@ -396,6 +396,17 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
+**can_import_exposing_types.md:14:26:14:34:**
+```roc
+    result = Json.decode(req.body)
+```
+                         ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
 **can_import_exposing_types.md:16:9:16:26:**
 ```roc
         Ok(value) => Http.ok(value)
@@ -453,19 +464,6 @@ Variable **req** is not used anywhere in your code.
 If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
 The unused variable is declared here:
 
-**can_import_exposing_types.md:14:26:14:29:**
-```roc
-    result = Json.decode(req.body)
-```
-                         ^^^
-
-
-**UNUSED VARIABLE**
-Variable **req** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
-The unused variable is declared here:
-
 **can_import_exposing_types.md:13:18:13:21:**
 ```roc
 handleRequest = |req| {
@@ -512,6 +510,17 @@ createClient = |config| Http.clientWith(config)
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
+**can_import_exposing_types.md:43:11:43:26:**
+```roc
+    match response.status {
+```
+          ^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
 **can_import_exposing_types.md:44:9:44:27:**
 ```roc
         Ok(status) => Http.statusToString(status)
@@ -525,11 +534,11 @@ Variable **response** is not used anywhere in your code.
 If you don't need this variable, prefix it with an underscore like `_response` to suppress this warning.
 The unused variable is declared here:
 
-**can_import_exposing_types.md:43:11:43:19:**
+**can_import_exposing_types.md:42:19:42:27:**
 ```roc
-    match response.status {
+handleResponse = |response|
 ```
-          ^^^^^^^^
+                  ^^^^^^^^
 
 
 **UNSUPPORTED NODE**

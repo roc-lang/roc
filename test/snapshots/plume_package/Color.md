@@ -306,6 +306,17 @@ rgb = |r, g, b| Color.RGB(r, g, b)
                 ^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**Color.md:22:15:22:24:**
+```roc
+    rounded = a.to_frac() / 255.0
+```
+              ^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **Color.RGBA** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -323,24 +334,22 @@ Variable **a** is not used anywhere in your code.
 If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
 The unused variable is declared here:
 
-**Color.md:22:15:22:16:**
-```roc
-    rounded = a.to_frac() / 255.0
-```
-              ^
-
-
-**UNUSED VARIABLE**
-Variable **a** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-
 **Color.md:21:18:21:19:**
 ```roc
 rgba = |r, g, b, a| {
 ```
                  ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**Color.md:29:13:29:24:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -361,19 +370,6 @@ This might be a limitation in the current implementation that will be addressed 
             if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
         }
 ```
-
-
-**UNUSED VARIABLE**
-Variable **str** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-
-**Color.md:29:13:29:16:**
-```roc
-    bytes = str.to_utf8()
-```
-            ^^^
 
 
 **UNUSED VARIABLE**
@@ -560,33 +556,44 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Color.md:56:8:56:25:**
+**Color.md:56:8:56:32:**
 ```roc
 expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 ```
-       ^^^^^^^^^^^^^^^^^
+       ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Color.md:57:8:57:31:**
+**Color.md:57:8:57:38:**
 ```roc
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 ```
-       ^^^^^^^^^^^^^^^^^^^^^^^
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Color.md:58:8:58:22:**
+**Color.md:58:8:58:29:**
 ```roc
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 ```
-       ^^^^^^^^^^^^^^
+       ^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**Color.md:62:8:62:26:**
+```roc
+    if str.is_named_color()
+```
+       ^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -600,15 +607,26 @@ Is there an **import** or **exposing** missing up-top?
            ^^^^^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**Color.md:70:5:70:20:**
+```roc
+    colors.contains(str)
+```
+    ^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **colors** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_colors` to suppress this warning.
 The unused variable is declared here:
 
-**Color.md:70:5:70:11:**
+**Color.md:68:5:68:11:**
 ```roc
-    colors.contains(str)
+    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
 ```
     ^^^^^^
 

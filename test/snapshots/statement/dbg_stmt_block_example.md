@@ -63,17 +63,15 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^^^
 
 
-**UNUSED VARIABLE**
-Variable **num** is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
-The unused variable is declared here:
-
-**dbg_stmt_block_example.md:3:8:3:11:**
+**dbg_stmt_block_example.md:5:9:5:19:**
 ```roc
-foo = |num| {
+    dbg num.to_str()
 ```
-       ^^^
+        ^^^^^^^^^^
 
 
 # CANONICALIZE

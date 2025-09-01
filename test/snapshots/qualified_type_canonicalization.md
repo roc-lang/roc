@@ -356,6 +356,17 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
                                             ^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**qualified_type_canonicalization.md:19:20:19:43:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **TypeC.new** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -519,7 +530,7 @@ This might be a limitation in the current implementation that will be addressed 
   )
   (Stmt.assign
     (pattern (Patt.ident "aliasedQualified"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
   (Stmt.type_anno
     (name "multiLevelQualified")

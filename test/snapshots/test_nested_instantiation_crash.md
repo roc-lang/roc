@@ -79,17 +79,28 @@ make_record = |x| { value: x, tag: "data" }
                               ^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**test_nested_instantiation_crash.md:9:17:9:24:**
+```roc
+get_value = |r| r.value
+```
+                ^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **r** is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_r` to suppress this warning.
 The unused variable is declared here:
 
-**test_nested_instantiation_crash.md:9:17:9:18:**
+**test_nested_instantiation_crash.md:9:14:9:15:**
 ```roc
 get_value = |r| r.value
 ```
-                ^
+             ^
 
 
 # CANONICALIZE

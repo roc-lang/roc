@@ -1138,52 +1138,6 @@ pub fn ensureTypeVarExists(self: *CIR, node_idx: AST2.Node.Idx) !void {
     }
 }
 
-/// Canonicalize an AST node that should be an expression
-/// Mutates the node's tag in place to the appropriate CIR expression tag
-/// Reports errors if the node is not valid in expression context
-fn canonicalizeLambdaParams(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!void {
-    const node = self.getNode(node_idx);
-
-    switch (node.tag) {
-        .underscore => {
-            // Underscore parameter - canonicalize as pattern
-            _ = try self.canonicalizePatt(allocator, node_idx);
-        },
-        .lc, .var_lc => {
-            // Identifier parameter - canonicalize as pattern
-            const patt_idx = try self.canonicalizePatt(allocator, node_idx);
-            // Register the parameter in scope
-            try self.scope_state.addIdent(allocator, node.payload.ident, patt_idx);
-            try self.scope_state.recordVarPattern(allocator, patt_idx);
-        },
-        .tuple_literal => {
-            // Multiple parameters passed as a tuple: |a, b| -> parsed as tuple_literal(a, b)
-            // Iterate through each element and canonicalize as a parameter
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |param_node| {
-                    try self.canonicalizeLambdaParams(allocator, param_node, raw_src, idents);
-                }
-            }
-            // Don't mutate the tuple_literal node itself - it's just a container for params
-        },
-        .binop_pipe => {
-            // Multiple parameters: |a| b | rest
-            // This is nested binop_pipe for multiple parameters
-            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
-            // Recursively handle left parameter
-            try self.canonicalizeLambdaParams(allocator, ast_binop.lhs, raw_src, idents);
-            // Recursively handle right parameter(s)
-            try self.canonicalizeLambdaParams(allocator, ast_binop.rhs, raw_src, idents);
-        },
-        else => {
-            // Other patterns might be supported in the future
-            _ = try self.canonicalizePatt(allocator, node_idx);
-        },
-    }
-}
-
 pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Expr.Idx {
     const node = self.getNode(node_idx);
 
@@ -1769,13 +1723,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
-        // Lambda expressions
+        // Lambda expressions from |x| body syntax
         .lambda => {
-            // Lambda expression with parameters and body
             // Push a new scope for the lambda (this is a function boundary)
             try self.scope_state.pushScope(allocator, true); // true = function boundary
             defer self.popScopeAndCheckUnused(allocator) catch {};
 
+            // Parser creates lambda nodes with body_then_args payload
+            // Format: [body, param1, param2, ...]
             const nodes_idx = node.payload.body_then_args;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
@@ -1800,7 +1755,8 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             return asExprIdx(node_idx);
         },
 
-        // Lambda expressions OR module access (binop_pipe is overloaded)
+        // Module access - binop_pipe should NEVER be lambda!
+        // Lambdas are parsed as .lambda nodes
         .binop_pipe => {
             // binop_pipe can be:
             // 1. Lambda syntax: |params| body
@@ -1851,17 +1807,10 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
                 try self.ensureTypeVarExists(node_idx);
                 return asExprIdx(node_idx);
             } else {
-                // This is lambda syntax: |params| body
-                // Canonicalize the parameters (left side)
-                // Parameters might be underscore, identifiers, or nested binop_pipe for multiple params
-                _ = try self.canonicalizeLambdaParams(allocator, ast_binop.lhs, raw_src, idents);
-
-                // Canonicalize the body (right side)
-                _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
-
-                // Mutate to lambda expression
-                self.mutateToExpr(node_idx, .lambda);
-                try self.ensureTypeVarExists(node_idx);
+                // This shouldn't happen - binop_pipe should only be module access
+                // If we see this, it's a parser bug
+                try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+                self.mutateToExpr(node_idx, .malformed);
                 return asExprIdx(node_idx);
             }
         },
@@ -1908,22 +1857,6 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Id
             // These have nodes payload with multiple identifiers
             // Keep as apply_tag since they're tag applications
             self.mutateToExpr(node_idx, .apply_tag);
-            try self.ensureTypeVarExists(node_idx);
-            return asExprIdx(node_idx);
-        },
-
-        // Special lambda without args (e.g., || expr)
-        .lambda_no_args => {
-            // Lambda with no arguments, just has body stored in nodes field
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                if (iter.next()) |body_node| {
-                    _ = try self.canonicalizeExpr(allocator, body_node, raw_src, idents);
-                }
-            }
-
-            self.mutateToExpr(node_idx, .lambda);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },
@@ -2966,7 +2899,7 @@ fn processTypeNode(self: *CIR, allocator: Allocator, node_idx: AST2.Node.Idx) !v
         },
 
         // Invalid nodes in type position
-        .num_literal_i32, .int_literal_i32, .str_literal_small, .str_literal_big, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_equals, .binop_not_equals, .binop_lt, .binop_gt, .if_else, .if_without_else, .lambda, .lambda_no_args, .block => {
+        .num_literal_i32, .int_literal_i32, .str_literal_small, .str_literal_big, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_equals, .binop_not_equals, .binop_lt, .binop_gt, .if_else, .if_without_else, .block => {
             // These are expressions, not valid in type position
             try self.pushDiagnostic(allocator, .expr_in_type_context, node_region);
         },

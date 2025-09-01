@@ -38,7 +38,17 @@ blue = CC.Color | RGB((0, 0, 255))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nominal_tag_package_import.md:8:8:8:20:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+       ^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

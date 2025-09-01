@@ -89,11 +89,11 @@ Expressions can be identifiers, literals, function calls, or operators.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**type_var_namespace.md:11:34:11:40:**
+**type_var_namespace.md:11:34:11:52:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
-                                 ^^^^^^
+                                 ^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE

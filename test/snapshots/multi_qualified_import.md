@@ -50,6 +50,17 @@ data = json.Core | Utf8 | .encode("hello")
 # EXPECTED
 NIL
 # PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:6:16:6:45:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable **encoder** is not used anywhere in your code.
 
@@ -63,6 +74,17 @@ process = |encoder| "processing"
            ^^^^^^^
 
 
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_qualified_import.md:14:8:14:29:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+       ^^^^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -73,7 +95,7 @@ process = |encoder| "processing"
   )
   (Stmt.assign
     (pattern (Patt.ident "json_encoder"))
-    (Expr.lambda (canonicalized))
+    (Expr.malformed)
   )
   (Stmt.type_anno
     (name "process")

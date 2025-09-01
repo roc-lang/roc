@@ -46,11 +46,11 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**type_app_multiple_args.md:6:25:6:37:**
+**type_app_multiple_args.md:6:25:6:44:**
 ```roc
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
-                        ^^^^^^^^^^^^
+                        ^^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
