@@ -12,7 +12,7 @@ permissions: {}
 
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.br
+  ARCHIVE_FORMAT: .tar.gz
   RELEASE_TAG: 0.13.0
 
 jobs:
@@ -199,7 +199,9 @@ jobs:
       - name: Set OS-specific variables
         id: vars
         run: |
-          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+          if [[ "${{ matrix.os }}" =~ ^ubuntu-.*-arm$ ]]; then
+            echo "os_pattern=linux_arm64" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" = "macos-13" ]; then
             echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
@@ -231,20 +233,19 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
-          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
-          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+          sudo apt install -y expect ncat ripgrep
 
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
-          brew install expect
-          brew install nmap  # includes ncat
-          brew install ripgrep
+          brew install expect # for tests
+          brew install nmap  # includes ncat server for tcp tests
+          brew install ripgrep # for ci/check_all_exposed_funs_tested.roc
 
       - name: prepare testing
         run: |
           mv roc_nightly basic-webserver-platform/.
-          cd basic-webserver-platform
+          cd basic-webserver-platform 
           mkdir platform
           # move all files to platform dir
           find . -maxdepth 1 -type f -exec mv {} platform/ \;
@@ -261,6 +262,13 @@ jobs:
           cp -r ci ../..
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
+
+      - name: Remove things that dont work on musl
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          rm basic-webserver-platform/examples/file-accessed-modified-created-time.roc
+          sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' basic-webserver-platform/platform/File.roc
+          rm basic-webserver-platform/platform/File.roc.bak
 
       - name: run tests
         run: |

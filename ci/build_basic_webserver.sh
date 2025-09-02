@@ -20,6 +20,12 @@ if [ "$OS" == "Linux" ]; then
     fi
     
     cd basic-webserver/platform # we cd to install the target for the right rust version
+
+    # Remove these functions that don't work with musl.
+    sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' File.roc
+    # Remove sed backup file
+    rm File.roc.bak
+    
     if [ "$ARCH" == "x86_64" ]; then
         rustup target add x86_64-unknown-linux-musl
     elif [ "$ARCH" == "aarch64" ]; then
