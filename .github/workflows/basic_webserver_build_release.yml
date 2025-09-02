@@ -64,6 +64,8 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
 
+      - run: sudo apt install -y gcc-aarch64-linux-gnu
+
       - name: build basic-webserver
         env:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
