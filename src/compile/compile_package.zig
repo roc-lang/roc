@@ -502,7 +502,6 @@ pub const PackageEnv = struct {
         const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var parse_ast = try parse.parse(&env.common, self.gpa);
         defer parse_ast.deinit(self.gpa);
-        parse_ast.store.emptyScratch();
         const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
@@ -510,8 +509,9 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(&env, &parse_ast, null);
-        try czer.canonicalizeFile();
+        var czer = Can.init(&parse_ast, &env.types);
+        const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+        _ = try czer.canonicalizeFileBlock(self.gpa, root_node_idx, env.common.source, &env.common.idents);
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {

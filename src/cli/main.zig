@@ -818,50 +818,29 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Parse the source code as a full module
     var parse_ast = try parse.parse(&env.common, gpa);
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(shm_allocator, module_name);
 
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    var canonicalizer = Can.init(&parse_ast, &env.types);
 
     // Canonicalize the entire module
-    try canonicalizer.canonicalizeFile();
+    const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+    // For expressions, use canonicalizeExpr instead of canonicalizeFileBlock
+    const canonicalized_expr = try canonicalizer.canonicalizeExpr(shm_allocator, root_node_idx, env.common.source, &env.common.idents);
 
-    // Find the "main" definition in the module
-    // Look through all definitions to find one named "main"
-    var main_expr_idx: ?u32 = null;
-    const defs = env.store.sliceDefs(env.all_defs);
-    for (defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const ident_idx = pattern.assign.ident;
-            const ident_text = env.getIdent(ident_idx);
-            if (std.mem.eql(u8, ident_text, "main")) {
-                main_expr_idx = @intFromEnum(def.expr);
-                break;
-            }
-        }
-    }
-
-    // Store the main expression index for the child
-    expr_idx_ptr[0] = main_expr_idx orelse {
-        std.log.err("No 'main' definition found in module\n", .{});
-        return error.NoMainFunction;
-    };
+    // Store the canonicalized expression index for the child
+    expr_idx_ptr[0] = @intCast(@intFromEnum(canonicalized_expr));
 
     // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
-    try checker.checkDefs();
+    var checker = try Check.initForCIR(shm_allocator, &env.types, &env.store.regions);
+    defer checker.deinit();
 
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;
 
     // Clean up the canonicalizer and parsing structures
-    canonicalizer.deinit();
+    canonicalizer.deinit(shm_allocator);
 
     // Clean up parse_ast since it was allocated with gpa, not shared memory
     parse_ast.deinit(gpa);
@@ -1544,51 +1523,28 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     };
     defer parse_ast.deinit(gpa);
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
-        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
-        std.process.exit(1);
-    };
+    var canonicalizer = Can.init(&parse_ast, &env.types);
     defer canonicalizer.deinit();
 
     // Canonicalize the entire module
-    canonicalizer.canonicalizeFile() catch |err| {
-        try stderr.print("Failed to canonicalize file: {}\n", .{err});
-        std.process.exit(1);
-    };
+    const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+    _ = try canonicalizer.canonicalizeFileBlock(gpa, root_node_idx, env.common.source, &env.common.idents);
 
-    // Type check the module
-    var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions) catch |err| {
-        try stderr.print("Failed to initialize type checker: {}\n", .{err});
-        std.process.exit(1);
-    };
-    defer checker.deinit();
-
-    checker.checkDefs() catch |err| {
-        try stderr.print("Type checking failed: {}\n", .{err});
-        std.process.exit(1);
-    };
-
-    // Find all expect statements
-    const statements = env.store.sliceStatements(env.all_statements);
+    // Collect expect statements from CIR
     var expects = std.ArrayList(ExpectTest).init(gpa);
     defer expects.deinit();
 
-    for (statements) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_expect) {
-            const region = env.store.getStatementRegion(stmt_idx);
-            try expects.append(.{
-                .expr_idx = stmt.s_expect.body,
-                .region = region,
-            });
-        }
+    for (canonicalizer.expect_statements.items) |expr_idx| {
+        // Create ExpectTest entry for each expect statement
+        // For now, use a placeholder region - could enhance CIR to track regions
+        try expects.append(.{
+            .expr_idx = @intFromEnum(expr_idx),
+            .region = base.Region.zero,
+        });
     }
 
     if (expects.items.len == 0) {

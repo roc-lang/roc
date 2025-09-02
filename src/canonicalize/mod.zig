@@ -2,27 +2,22 @@
 
 const std = @import("std");
 
-/// The canonicalizer (the thing that canonicalizes the AST).
-pub const Can = @import("Can.zig");
 /// The Canonical Intermediate Representation (CIR)
 pub const CIR = @import("CIR.zig");
-/// The new (WIP) Canonical Intermediate Representation (CIR)
-pub const CIR2 = @import("CIR2.zig");
+/// Can is now an alias to CIR for backward compatibility
+pub const Can = CIR;
 /// The Module Environment after canonicalization (used also for type checking and serialization)
 pub const ModuleEnv = @import("ModuleEnv.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
 
-    std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
-    std.testing.refAllDecls(@import("CIR2.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
     std.testing.refAllDecls(@import("ModuleEnv.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
-    std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Pattern.zig"));
     std.testing.refAllDecls(@import("Scope.zig"));
     std.testing.refAllDecls(@import("Statement.zig"));
@@ -33,7 +28,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/frac_test.zig"));
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
     std.testing.refAllDecls(@import("test/int_test.zig"));
-    std.testing.refAllDecls(@import("test/node_store_test.zig"));
     std.testing.refAllDecls(@import("test/import_store_test.zig"));
     std.testing.refAllDecls(@import("test/scope_test.zig"));
     std.testing.refAllDecls(@import("test/record_test.zig"));

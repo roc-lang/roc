@@ -71,7 +71,14 @@ client = Http.invalidMethod
 parser = (Json.Parser | Advanced | NonExistent | .create)
 ~~~
 # EXPECTED
-NIL
+UNSUPPORTED NODE - can_import_unresolved_qualified.md:7:8:7:31
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:11:20:11:34
+UNSUPPORTED NODE - can_import_unresolved_qualified.md:15:24:15:51
+UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:18:10:18:20
+UNSUPPORTED NODE - can_import_unresolved_qualified.md:21:10:21:31
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:24:10:24:28
+UNSUPPORTED NODE - can_import_unresolved_qualified.md:27:10:27:49
 # PROBLEMS
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
@@ -211,7 +218,6 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

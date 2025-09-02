@@ -1,11 +1,11 @@
 // Tests for sign bit encoding of pattern mutability
-// These tests are designed to be added to CIR2.zig
+// These tests are designed to be added to CIR.zig
 
 test "sign bit encoding: basic mutability encoding" {
     const testing = std.testing;
 
     // Test that we can encode and decode mutability correctly
-    const node_idx = @as(AST2.Node.Idx, @enumFromInt(42));
+    const node_idx = @as(AST.Node.Idx, @enumFromInt(42));
 
     // Create immutable pattern index
     const immutable_idx = Patt.Idx.withMutability(node_idx, false);
@@ -27,13 +27,13 @@ test "sign bit encoding: edge cases" {
     const testing = std.testing;
 
     // Test with index 0
-    const node_idx_0 = @as(AST2.Node.Idx, @enumFromInt(0));
+    const node_idx_0 = @as(AST.Node.Idx, @enumFromInt(0));
     const mutable_0 = Patt.Idx.withMutability(node_idx_0, true);
     try testing.expect(mutable_0.isMutable());
     try testing.expectEqual(node_idx_0, mutable_0.toNodeIdx());
 
     // Test with large index
-    const node_idx_large = @as(AST2.Node.Idx, @enumFromInt(1000000));
+    const node_idx_large = @as(AST.Node.Idx, @enumFromInt(1000000));
     const mutable_large = Patt.Idx.withMutability(node_idx_large, true);
     try testing.expect(mutable_large.isMutable());
     try testing.expectEqual(node_idx_large, mutable_large.toNodeIdx());
@@ -49,7 +49,7 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     // Create CIR with shared AST storage
@@ -95,7 +95,7 @@ test "sign bit encoding: nested scopes with mixed mutability" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 30);
+    var ast = try AST.initCapacity(allocator, 30);
     defer ast.deinit(allocator);
 
     var cir = CIR.init(&ast);
@@ -194,7 +194,7 @@ test "sign bit encoding: var_lc always creates mutable pattern" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var cir = CIR.init(&ast);
@@ -221,7 +221,7 @@ test "sign bit encoding: function boundaries and var reassignment" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 20);
+    var ast = try AST.initCapacity(allocator, 20);
     defer ast.deinit(allocator);
 
     var cir = CIR.init(&ast);

@@ -76,7 +76,6 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

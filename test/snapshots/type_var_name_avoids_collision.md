@@ -160,7 +160,9 @@ main! = |_| {
 # Just use some of our variables
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
+UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
+UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **result5** is not used anywhere in your code.
@@ -344,7 +346,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_ac")
 ~~~
 # TYPES
 ~~~roc

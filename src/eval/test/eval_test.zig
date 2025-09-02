@@ -730,27 +730,22 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var parse_ast = try parse.parseExpr(&original_env.common, original_env.gpa);
     defer parse_ast.deinit(gpa);
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
 
     // Create canonicalizer
-    var czer = try Can.init(&original_env, &parse_ast, null);
-    defer czer.deinit();
+    var czer = Can.init(&parse_ast, &original_env.types);
+    defer czer.deinit(gpa);
 
     // Canonicalize the expression
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonicalized_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeFailure;
-    };
+    const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canonicalized_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, original_env.common.source, &original_env.common.idents);
 
     // Type check the expression
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions);
+    var checker = try Check.initForCIR(gpa, &original_env.types, &original_env.store.regions);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonicalized_expr_idx.get_idx());
+    _ = try checker.checkCIRExpr(Can, &czer, canonicalized_expr_idx);
 
     // Test 1: Evaluate with the original ModuleEnv
     {
@@ -769,7 +764,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         );
         defer interpreter.deinit(test_env_instance.get_ops());
 
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
+        const result = try interpreter.eval(canonicalized_expr_idx, test_env_instance.get_ops());
 
         try testing.expectEqual(@as(i128, 13), result.asI128());
     }
@@ -842,7 +837,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             );
             defer interpreter.deinit(test_env_instance.get_ops());
 
-            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
+            const result = try interpreter.eval(canonicalized_expr_idx, test_env_instance.get_ops());
 
             // Verify we get the same result from the deserialized ModuleEnv
             try testing.expectEqual(@as(i128, 13), result.asI128());

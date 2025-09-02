@@ -38,9 +38,8 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag lambda :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
+# No header found
 ~~~

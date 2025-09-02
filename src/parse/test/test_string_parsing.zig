@@ -2,18 +2,16 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const collections = @import("collections");
-const AST2 = @import("../AST2.zig");
-const Parser2 = @import("../Parser2.zig");
-const tokenize_iter = @import("../tokenize_iter.zig");
+const AST = @import("../AST.zig");
+const Parser = @import("../Parser.zig");
+const tokenize_iter = @import("../tokenize.zig");
 
 test "parse simple string literal" {
     const allocator = testing.allocator;
 
-    const source =
-        \\x = "hello world"
-    ;
+    const source = "\"hello world\"";
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var env = try base.CommonEnv.init(allocator, source);
@@ -45,21 +43,20 @@ test "parse simple string literal" {
     try testing.expect(found_string);
 
     // Now test parsing
-    var parser = try Parser2.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
     defer parser.deinit();
 
-    const stmt = try parser.parseStmt();
-    try testing.expect(stmt != null);
+    const expr = try parser.parseExprFromSource(messages[0..]);
+    // Should parse as a string literal
+    try testing.expect(ast.tag(expr) == .str_literal_small or ast.tag(expr) == .str_literal_big);
 }
 
 test "parse string with escapes" {
     const allocator = testing.allocator;
 
-    const source =
-        \\x = "hello\nworld"
-    ;
+    const source = "\"hello\\nworld\"";
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var env = try base.CommonEnv.init(allocator, source);
@@ -69,9 +66,10 @@ test "parse string with escapes" {
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var parser = try Parser2.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
     defer parser.deinit();
 
-    const stmt = try parser.parseStmt();
-    try testing.expect(stmt != null);
+    const expr = try parser.parseExprFromSource(messages[0..]);
+    // Should parse as a string literal
+    try testing.expect(ast.tag(expr) == .str_literal_small or ast.tag(expr) == .str_literal_big);
 }

@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const CIR2 = @import("canonicalize/CIR2.zig");
-const AST2 = @import("parse/AST2.zig");
+const CIR2 = @import("canonicalize/CIR.zig");
+const AST = @import("parse/AST.zig");
 const ByteSlices = @import("collections").ByteSlices;
 const NodeSlices = @import("collections").NodeSlices;
 
@@ -15,7 +15,7 @@ test "sign bit encoding: basic mutability encoding" {
     _ = testing.allocator; // Available if needed
 
     // Test that we can encode and decode mutability correctly
-    const node_idx = AST2.Node.Idx{ .idx = 42 };
+    const node_idx = AST.Node.Idx{ .idx = 42 };
 
     // Create immutable pattern index
     const immutable_idx = CIR2.Patt.Idx.withMutability(node_idx, false);
@@ -37,13 +37,13 @@ test "sign bit encoding: edge cases" {
     _ = testing.allocator; // Available if needed
 
     // Test with index 0
-    const node_idx_0 = AST2.Node.Idx{ .idx = 0 };
+    const node_idx_0 = AST.Node.Idx{ .idx = 0 };
     const mutable_0 = CIR2.Patt.Idx.withMutability(node_idx_0, true);
     try testing.expect(mutable_0.isMutable());
     try testing.expectEqual(node_idx_0, mutable_0.toNodeIdx());
 
     // Test with large index
-    const node_idx_large = AST2.Node.Idx{ .idx = 1000000 };
+    const node_idx_large = AST.Node.Idx{ .idx = 1000000 };
     const mutable_large = CIR2.Patt.Idx.withMutability(node_idx_large, true);
     try testing.expect(mutable_large.isMutable());
     try testing.expectEqual(node_idx_large, mutable_large.toNodeIdx());
@@ -58,7 +58,7 @@ test "sign bit encoding: edge cases" {
 test "sign bit encoding: mutable vs immutable pattern canonicalization" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -106,7 +106,7 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
 test "sign bit encoding: nested scopes with mixed mutability" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 30);
+    var ast = try AST.initCapacity(allocator, 30);
     defer ast.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -207,7 +207,7 @@ test "sign bit encoding: nested scopes with mixed mutability" {
 test "sign bit encoding: function boundaries and var reassignment" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 20);
+    var ast = try AST.initCapacity(allocator, 20);
     defer ast.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -259,7 +259,7 @@ test "sign bit encoding: function boundaries and var reassignment" {
 test "sign bit encoding: var_lc pattern always mutable" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -288,7 +288,7 @@ test "sign bit encoding: var_lc pattern always mutable" {
 test "sign bit encoding: literals and underscore never mutable" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 10);
+    var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -332,10 +332,10 @@ test "sign bit encoding: literals and underscore never mutable" {
 test "sign bit encoding: comprehensive statement canonicalization" {
     const allocator = testing.allocator;
 
-    var ast = try AST2.initCapacity(allocator, 50);
+    var ast = try AST.initCapacity(allocator, 50);
     defer ast.deinit(allocator);
 
-    var node_slices = try NodeSlices(AST2.Node.Idx).initCapacity(allocator, 20);
+    var node_slices = try NodeSlices(AST.Node.Idx).initCapacity(allocator, 20);
     defer node_slices.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };

@@ -2,9 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const collections = @import("collections");
-const AST2 = @import("../AST2.zig");
-const Parser2 = @import("../Parser2.zig");
-const tokenize_iter = @import("../tokenize_iter.zig");
+const AST = @import("../AST.zig");
+const Parser = @import("../Parser.zig");
+const tokenize_iter = @import("../tokenize.zig");
 
 /// Metadata from snapshot files
 const SnapshotMeta = struct {
@@ -102,9 +102,9 @@ fn extractSection(allocator: std.mem.Allocator, content: []const u8, section_nam
     return try allocator.dupe(u8, section_content);
 }
 
-/// Parse source using our new Parser2/TokenIterator pipeline
+/// Parse source using our new Parser/TokenIterator pipeline
 fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapshot_type: []const u8) ![]const u8 {
-    var ast = try AST2.initCapacity(allocator, 100);
+    var ast = try AST.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
 
     // Create a CommonEnv for tokenization
@@ -117,8 +117,8 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    // Parse using new Parser2 with TokenIterator
-    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    // Parse using new Parser with TokenIterator
+    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {
@@ -294,7 +294,7 @@ fn compareProblemsSections(allocator: std.mem.Allocator, existing: []const u8, n
     };
 }
 
-test "snapshot comparison - new Parser2 vs existing snapshots" {
+test "snapshot comparison - new Parser vs existing snapshots" {
     const allocator = testing.allocator;
 
     // Find all snapshot files

@@ -68,7 +68,12 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
+UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
+UNSUPPORTED NODE - can_import_nested_modules.md:18:5:18:37
+UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
+UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
+UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **Config.toString** in this scope.
@@ -186,7 +191,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

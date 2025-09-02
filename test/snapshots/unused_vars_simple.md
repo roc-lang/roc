@@ -70,7 +70,7 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **x** is not used anywhere in your code.
@@ -112,7 +112,6 @@ unused_regular = |x| 42
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_e")
 ~~~
 # TYPES
 ~~~roc

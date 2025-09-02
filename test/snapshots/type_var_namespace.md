@@ -61,7 +61,9 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:32:11:34
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:34:11:40
+UNSUPPORTED NODE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **> ** is not expected in an expression.
@@ -115,7 +117,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

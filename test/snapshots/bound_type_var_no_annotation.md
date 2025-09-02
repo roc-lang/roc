@@ -78,7 +78,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - bound_type_var_no_annotation.md:24:5:24:11
+UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **result** is not used anywhere in your code.
@@ -137,7 +138,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

@@ -156,78 +156,70 @@ nested_empty = [empty_list, empty_list, empty_list]
 mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
 
 # Polymorphic record with empty list
-poly_record = { items : empty_list, count : 0 }
-use_poly_record1 = { items : [1, 2, 3], count : 0 }
-use_poly_record2 = { items : ["x", "y", "z"], count : 0 }
+poly_record = { items: empty_list, count: 0 }
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
 
 # Complex nested structure with multiple polymorphic uses
 base_config = {
-	data : empty_list,
-	metadata :
-		{
-			version : num,
-			ratio : frac,
-			description : str,
-		},
+	data: empty_list,
+	metadata: {
+		version: num,
+		ratio: frac,
+		description: str,
+	},
 }
 
 # Different instantiations of base_config
-config1 = { data : [1, 2, 3, 4, 5], metadata :
-	{
-		version : num,
-		ratio : frac,
-		description : str,
-	}, name : "integers" }
+config1 = { data: [1, 2, 3, 4, 5], metadata: {
+	version: num,
+	ratio: frac,
+	description: str,
+}, name: "integers" }
 
 config2 = { # Test comment 1
-	data : ["apple", "banana", "cherry"], # Test comment 2
-	metadata :
-		{
-			 # Test comment 3
-version : num,
-			 # Test comment 4
-ratio : frac,
-			 # Test comment 5
-description : str,
-		}, # Test comment 6
-	# Test comment 7
-	name : "fruits", # Test comment 8
+	data: ["apple", "banana", "cherry"], # Test comment 2
+	metadata: { # Test comment 3
+		version: num, # Test comment 4
+		ratio: frac, # Test comment 5
+		description: str, # Test comment 6
+	}, # Test comment 7
+	name: "fruits", # Test comment 8
 }
 
 # Test comment 9
 
 # Polymorphic function-like structures
-make_container = |val| { value : val, wrapper : [val] }
+make_container = |val| { value: val, wrapper: [val] }
 container1 = make_container(num)
 container2 = make_container(str)
 container3 = make_container(frac)
 
 # Deeply nested polymorphism
 deep = {
-	level1 :
-		{
-			level2 : {
-				level3 : {
-					data : empty_list,
-					value : num,
-				},
-				items : [num, num * 2, num * 3],
+	level1: {
+		level2: {
+			level3: {
+				data: empty_list,
+				value: num,
 			},
-			collection : empty_list,
+			items: [num, num * 2, num * 3],
 		},
-	results : [{ data : [1], tag : "single" }, { data : [1, 2], tag : "ints" }, { data : [1, 2, 3], tag : "more" }],
+		collection: empty_list,
+	},
+	results: [{ data: [1], tag: "single" }, { data: [1, 2], tag: "ints" }, { data: [1, 2, 3], tag: "more" }],
 }
 
 # Polymorphic values used in computations
 compute1 = num + 10
 compute2 = num * 2
 compute3 = [num, num]
-compute4 = { base : num, derived : [num, num + 1, num + 2] }
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
 
 # Mixed polymorphic structures
-mixed = { numbers : {value : num, list : [num, num], float : frac}, strings : {value : str, list : [str, str]}, empty_lists : {raw : empty_list, in_list : [empty_list], in_record : {
+mixed = { numbers: { value: num, list: [num, num], float: frac }, strings: { value: str, list: [str, str] }, empty_lists: { raw: empty_list, in_list: [empty_list], in_record: {
 	data : empty_list
-}}, computations : {from_num : num * 100, from_frac : frac * 10.0, list_from_num : [num, num, num]} }
+} }, computations: { from_num: num * 100, from_frac: frac * 10.0, list_from_num: [num, num, num] } }
 
 main = |_| {
 	# Just type-check everything
@@ -235,17 +227,18 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+STATEMENT IN EXPRESSION CONTEXT - let_polymorphism_complex.md:96:22:96:38
+UNSUPPORTED NODE - let_polymorphism_complex.md:107:5:107:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **data** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**STATEMENT IN EXPRESSION CONTEXT**
+Found a statement where an expression was expected.
+Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
 
-**let_polymorphism_complex.md:96:22:96:26:**
+**let_polymorphism_complex.md:96:22:96:38:**
 ```roc
         in_record: { data: empty_list },
 ```
-                     ^^^^
+                     ^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -311,11 +304,11 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "poly_record"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "items")
         (Expr.lookup "empty_list")
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "count")
         (Expr.num_literal_i32 0)
       )
     )
@@ -324,11 +317,11 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "use_poly_record1"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "items")
         (Expr.list_literal)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "count")
         (Expr.num_literal_i32 0)
       )
     )
@@ -337,11 +330,11 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "use_poly_record2"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "items")
         (Expr.list_literal)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "count")
         (Expr.num_literal_i32 0)
       )
     )
@@ -350,22 +343,22 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "base_config"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "data")
         (Expr.lookup "empty_list")
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "metadata")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "version")
             (Expr.lookup "num")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "ratio")
             (Expr.lookup "frac")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "description")
             (Expr.lookup "str")
           )
         )
@@ -376,28 +369,28 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "config1"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "data")
         (Expr.list_literal)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "metadata")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "version")
             (Expr.lookup "num")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "ratio")
             (Expr.lookup "frac")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "description")
             (Expr.lookup "str")
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "name")
         (Expr.str_literal_big)
       )
     )
@@ -406,28 +399,28 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "config2"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "data")
         (Expr.list_literal)
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "metadata")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "version")
             (Expr.lookup "num")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "ratio")
             (Expr.lookup "frac")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "description")
             (Expr.lookup "str")
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "name")
         (Expr.str_literal_big)
       )
     )
@@ -452,38 +445,38 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "deep"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "level1")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "level2")
             (Expr.record_literal
               (Expr.binop_colon
-                (Expr.malformed)
+                (lc "level3")
                 (Expr.record_literal
                   (Expr.binop_colon
-                    (Expr.malformed)
+                    (lc "data")
                     (Expr.lookup "empty_list")
                   )
                   (Expr.binop_colon
-                    (Expr.malformed)
+                    (lc "value")
                     (Expr.lookup "num")
                   )
                 )
               )
               (Expr.binop_colon
-                (Expr.malformed)
+                (lc "items")
                 (Expr.list_literal)
               )
             )
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "collection")
             (Expr.lookup "empty_list")
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "results")
         (Expr.list_literal)
       )
     )
@@ -510,11 +503,11 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "compute4"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "base")
         (Expr.lookup "num")
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "derived")
         (Expr.list_literal)
       )
     )
@@ -523,76 +516,73 @@ This might be a limitation in the current implementation that will be addressed 
     (pattern (Patt.ident "mixed"))
     (Expr.record_literal
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "numbers")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "value")
             (Expr.lookup "num")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "list")
             (Expr.list_literal)
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "float")
             (Expr.lookup "frac")
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "strings")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "value")
             (Expr.lookup "str")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "list")
             (Expr.list_literal)
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "empty_lists")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "raw")
             (Expr.lookup "empty_list")
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "in_list")
             (Expr.list_literal)
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "in_record")
             (Expr.record_literal
-              (Expr.binop_colon
-                (Expr.lookup "data")
-                (Expr.lookup "empty_list")
-              )
+              (Expr.malformed)
             )
           )
         )
       )
       (Expr.binop_colon
-        (Expr.malformed)
+        (lc "computations")
         (Expr.record_literal
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "from_num")
             (Expr.binop_star
               (Expr.lookup "num")
               (Expr.num_literal_i32 100)
             )
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "from_frac")
             (Expr.binop_star
               (Expr.lookup "frac")
               (Expr.frac_literal_small 10)
             )
           )
           (Expr.binop_colon
-            (Expr.malformed)
+            (lc "list_from_num")
             (Expr.list_literal)
           )
         )
@@ -607,7 +597,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

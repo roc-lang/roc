@@ -2,12 +2,12 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
 const collections = @import("collections");
-const AST2 = @import("../AST2.zig");
-const Parser2 = @import("../Parser2.zig");
-const tokenize_iter = @import("../tokenize_iter.zig");
+const AST = @import("../AST.zig");
+const Parser = @import("../Parser.zig");
+const tokenize_iter = @import("../tokenize.zig");
 
-fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
-    var ast = try AST2.initCapacity(allocator, 100);
+fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST {
+    var ast = try AST.initCapacity(allocator, 100);
     errdefer ast.deinit(allocator);
 
     // Create a CommonEnv for tokenization
@@ -20,8 +20,8 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    // Parse using new Parser2 with TokenIterator
-    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    // Parse using new Parser with TokenIterator
+    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
     _ = try parser.parseFile();
@@ -29,8 +29,8 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     return ast;
 }
 
-fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
-    var ast = try AST2.initCapacity(allocator, 100);
+fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST {
+    var ast = try AST.initCapacity(allocator, 100);
     errdefer ast.deinit(allocator);
 
     // Create a CommonEnv for tokenization
@@ -43,11 +43,12 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST2 {
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    // Parse expression using new Parser2 with TokenIterator
-    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    // Parse expression using new Parser with TokenIterator
+    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
-    _ = try parser.parseExpr();
+    const expr_idx = try parser.parseExprFromSource(msg_slice);
+    ast.root_node_idx = @intCast(@intFromEnum(expr_idx));
 
     return ast;
 }
@@ -430,7 +431,7 @@ test "parse tag with payload" {
     try testing.expect(ast.nodes.len() > 0);
 }
 
-test "Parser2: simple assignment binop uses correct nodes" {
+test "Parser: simple assignment binop uses correct nodes" {
     const allocator = testing.allocator;
     const source = "module [x]\nx = 42";
 
@@ -447,8 +448,8 @@ test "Parser2: simple assignment binop uses correct nodes" {
     // Node 2: x from assignment LHS
     // Node 3: 42
     // Node 4: binop_equals
-    const binop_idx = @as(AST2.Node.Idx, @enumFromInt(4));
-    try testing.expectEqual(AST2.Node.Tag.binop_equals, ast.tag(binop_idx));
+    const binop_idx = @as(AST.Node.Idx, @enumFromInt(4));
+    try testing.expectEqual(AST.Node.Tag.binop_equals, ast.tag(binop_idx));
 
     // Get the binop operands
     const binop_payload = ast.payload(binop_idx).binop;
@@ -460,12 +461,12 @@ test "Parser2: simple assignment binop uses correct nodes" {
     try testing.expectEqual(@as(i32, 3), @intFromEnum(binop.rhs));
 
     // Verify the nodes are correct
-    try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(binop.lhs));
-    try testing.expectEqual(AST2.Node.Tag.num_literal_i32, ast.tag(binop.rhs));
+    try testing.expectEqual(AST.Node.Tag.lc, ast.tag(binop.lhs));
+    try testing.expectEqual(AST.Node.Tag.num_literal_i32, ast.tag(binop.rhs));
     try testing.expectEqual(@as(i32, 42), ast.payload(binop.rhs).num_literal_i32);
 }
 
-test "Parser2: lambda expression parsing" {
+test "Parser: lambda expression parsing" {
     const allocator = testing.allocator;
     const source = "|x| x + 1";
 
@@ -473,8 +474,8 @@ test "Parser2: lambda expression parsing" {
     defer ast.deinit(allocator);
 
     // Check it's a lambda
-    const lambda_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-    try testing.expectEqual(AST2.Node.Tag.lambda, ast.tag(lambda_idx));
+    const lambda_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+    try testing.expectEqual(AST.Node.Tag.lambda, ast.tag(lambda_idx));
 
     // Get lambda parts
     const lambda = ast.lambda(lambda_idx);
@@ -482,16 +483,16 @@ test "Parser2: lambda expression parsing" {
     // Should have one argument
     var args_iter = ast.lambdaArgs(lambda);
     const arg = args_iter.next() orelse unreachable; // Should have one arg
-    try testing.expectEqual(@as(?AST2.Node.Idx, null), args_iter.next()); // Should be no more args
+    try testing.expectEqual(@as(?AST.Node.Idx, null), args_iter.next()); // Should be no more args
 
     // The argument should be 'x'
-    try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(arg));
+    try testing.expectEqual(AST.Node.Tag.lc, ast.tag(arg));
 
     // The body should be a binop_plus
-    try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(lambda.body));
+    try testing.expectEqual(AST.Node.Tag.binop_plus, ast.tag(lambda.body));
 }
 
-test "Parser2: unary operator parsing" {
+test "Parser: unary operator parsing" {
     const allocator = testing.allocator;
 
     // Test unary not - verify it stores operand in block_nodes
@@ -501,20 +502,20 @@ test "Parser2: unary operator parsing" {
         defer ast.deinit(allocator);
 
         // !foo is parsed as unary_not with foo as operand
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.unary_not, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.unary_not, ast.tag(root_idx));
 
         // Verify the operand is stored in block_nodes and we can iterate over it
         const payload_ptr = ast.payloadPtr(root_idx);
         const nodes_iter = ast.node_slices.nodes(&payload_ptr.nodes);
         var iter = nodes_iter;
         const operand = iter.next() orelse unreachable; // Should have an operand
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(operand)); // Should be 'foo'
-        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one operand
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(operand)); // Should be 'foo'
+        try testing.expectEqual(@as(?AST.Node.Idx, null), iter.next()); // Should be only one operand
     }
 }
 
-test "Parser2: while loop parsing" {
+test "Parser: while loop parsing" {
     const allocator = testing.allocator;
 
     // Test simple while loop
@@ -524,17 +525,17 @@ test "Parser2: while loop parsing" {
         defer ast.deinit(allocator);
 
         // Should be parsed as .while_loop with condition and body
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.while_loop, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.while_loop, ast.tag(root_idx));
 
         // Verify the while loop structure
         const while_val = ast.whileLoop(root_idx);
 
         // The condition should be a binop_lt
-        try testing.expectEqual(AST2.Node.Tag.binop_lt, ast.tag(while_val.condition));
+        try testing.expectEqual(AST.Node.Tag.binop_lt, ast.tag(while_val.condition));
 
         // The body should be a block
-        try testing.expectEqual(AST2.Node.Tag.block, ast.tag(while_val.body));
+        try testing.expectEqual(AST.Node.Tag.block, ast.tag(while_val.body));
     }
 
     // Test while loop with expression body
@@ -543,20 +544,20 @@ test "Parser2: while loop parsing" {
         var ast = try parseTestExpr(allocator, source);
         defer ast.deinit(allocator);
 
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.while_loop, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.while_loop, ast.tag(root_idx));
 
         const while_val = ast.whileLoop(root_idx);
 
         // The condition should be a tag (True)
-        try testing.expectEqual(AST2.Node.Tag.uc, ast.tag(while_val.condition));
+        try testing.expectEqual(AST.Node.Tag.uc, ast.tag(while_val.condition));
 
         // The body should be a lowercase identifier
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(while_val.body));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(while_val.body));
     }
 }
 
-test "Parser2: for loop parsing" {
+test "Parser: for loop parsing" {
     const allocator = testing.allocator;
 
     // Test simple for loop
@@ -566,20 +567,20 @@ test "Parser2: for loop parsing" {
         defer ast.deinit(allocator);
 
         // Should be parsed as .for_loop with pattern, iterable, and body
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.for_loop, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.for_loop, ast.tag(root_idx));
 
         // Verify the for loop structure
         const for_val = ast.forLoop(root_idx);
 
         // The pattern should be a lowercase identifier (x)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.pattern));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.pattern));
 
         // The iterable should be a lowercase identifier (list)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.iterable));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.iterable));
 
         // The body should be a block
-        try testing.expectEqual(AST2.Node.Tag.block, ast.tag(for_val.body));
+        try testing.expectEqual(AST.Node.Tag.block, ast.tag(for_val.body));
     }
 
     // Test for loop with expression body (new syntax)
@@ -588,19 +589,19 @@ test "Parser2: for loop parsing" {
         var ast = try parseTestExpr(allocator, source);
         defer ast.deinit(allocator);
 
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.for_loop, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.for_loop, ast.tag(root_idx));
 
         const for_val = ast.forLoop(root_idx);
 
         // The pattern should be a lowercase identifier (item)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.pattern));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.pattern));
 
         // The iterable should be a lowercase identifier (items)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.iterable));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.iterable));
 
         // The body should be a lowercase identifier (item)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.body));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.body));
     }
 
     // Test for loop with pattern destructuring
@@ -609,23 +610,23 @@ test "Parser2: for loop parsing" {
         var ast = try parseTestExpr(allocator, source);
         defer ast.deinit(allocator);
 
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.for_loop, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.for_loop, ast.tag(root_idx));
 
         const for_val = ast.forLoop(root_idx);
 
         // The pattern should be a tuple literal (used for tuple patterns too)
-        try testing.expectEqual(AST2.Node.Tag.tuple_literal, ast.tag(for_val.pattern));
+        try testing.expectEqual(AST.Node.Tag.tuple_literal, ast.tag(for_val.pattern));
 
         // The iterable should be a lowercase identifier (pairs)
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(for_val.iterable));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(for_val.iterable));
 
         // The body should be a binop_plus
-        try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(for_val.body));
+        try testing.expectEqual(AST.Node.Tag.binop_plus, ast.tag(for_val.body));
     }
 }
 
-test "Parser2: return and crash statements" {
+test "Parser: return and crash statements" {
     const allocator = testing.allocator;
 
     // Test return statement
@@ -635,16 +636,16 @@ test "Parser2: return and crash statements" {
         defer ast.deinit(allocator);
 
         // Should be parsed as .ret with expression
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.ret, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.ret, ast.tag(root_idx));
 
         // Verify the expression is stored in block_nodes
         const payload_ptr2 = ast.payloadPtr(root_idx);
         const nodes_iter = ast.node_slices.nodes(&payload_ptr2.nodes);
         var iter = nodes_iter;
         const expr = iter.next() orelse unreachable; // Should have the expression
-        try testing.expectEqual(AST2.Node.Tag.num_literal_i32, ast.tag(expr)); // Should be '42'
-        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one expression
+        try testing.expectEqual(AST.Node.Tag.num_literal_i32, ast.tag(expr)); // Should be '42'
+        try testing.expectEqual(@as(?AST.Node.Idx, null), iter.next()); // Should be only one expression
     }
 
     // Test crash statement
@@ -654,8 +655,8 @@ test "Parser2: return and crash statements" {
         defer ast.deinit(allocator);
 
         // Should be parsed as .crash with expression
-        const root_idx = @as(AST2.Node.Idx, @enumFromInt(ast.nodes.len() - 1));
-        try testing.expectEqual(AST2.Node.Tag.crash, ast.tag(root_idx));
+        const root_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+        try testing.expectEqual(AST.Node.Tag.crash, ast.tag(root_idx));
 
         // Verify the expression is stored in block_nodes
         const payload_ptr2 = ast.payloadPtr(root_idx);
@@ -664,13 +665,13 @@ test "Parser2: return and crash statements" {
         const expr = iter.next() orelse unreachable; // Should have the expression
         // The string literal could be small or big depending on the content
         try testing.expect(ast.tag(expr) == .str_literal_small or ast.tag(expr) == .str_literal_big);
-        try testing.expectEqual(@as(?AST2.Node.Idx, null), iter.next()); // Should be only one expression
+        try testing.expectEqual(@as(?AST.Node.Idx, null), iter.next()); // Should be only one expression
     }
 }
 
 // ============ Comma/Arrow Parsing Tests ============
 
-test "Parser2: basic function arrow cases" {
+test "Parser: basic function arrow cases" {
     const allocator = testing.allocator;
 
     // Test -> arrow
@@ -704,7 +705,7 @@ test "Parser2: basic function arrow cases" {
     }
 }
 
-test "Parser2: comma sequence parsing differences" {
+test "Parser: comma sequence parsing differences" {
     const allocator = testing.allocator;
 
     // Test case with arrow (should parse as function type)
@@ -725,7 +726,7 @@ test "Parser2: comma sequence parsing differences" {
     // The exact structure depends on how the parser handles comma sequences
 }
 
-test "Parser2: explicit tuples vs functions" {
+test "Parser: explicit tuples vs functions" {
     const allocator = testing.allocator;
 
     // Explicit tuple - should be valid
@@ -756,7 +757,7 @@ test "Parser2: explicit tuples vs functions" {
     }
 }
 
-test "Parser2: record field parsing with arrows" {
+test "Parser: record field parsing with arrows" {
     const allocator = testing.allocator;
 
     // Field puns
@@ -796,7 +797,7 @@ test "Parser2: record field parsing with arrows" {
     }
 }
 
-test "Parser2: record field arrow cases" {
+test "Parser: record field arrow cases" {
     const allocator = testing.allocator;
 
     // Arrow without field name
@@ -818,7 +819,7 @@ test "Parser2: record field arrow cases" {
     }
 }
 
-test "Parser2: list element parsing with arrows" {
+test "Parser: list element parsing with arrows" {
     const allocator = testing.allocator;
 
     // List of single type
@@ -858,7 +859,7 @@ test "Parser2: list element parsing with arrows" {
     }
 }
 
-test "Parser2: list comma sequences" {
+test "Parser: list comma sequences" {
     const allocator = testing.allocator;
 
     // Comma sequence in list without arrow
@@ -871,7 +872,7 @@ test "Parser2: list comma sequences" {
     }
 }
 
-test "Parser2: mixed container cases" {
+test "Parser: mixed container cases" {
     const allocator = testing.allocator;
 
     // Tuple containing list of functions
@@ -911,7 +912,7 @@ test "Parser2: mixed container cases" {
     }
 }
 
-test "Parser2: function composition and precedence" {
+test "Parser: function composition and precedence" {
     const allocator = testing.allocator;
 
     // Function returning tuple (explicit parens)
@@ -951,7 +952,7 @@ test "Parser2: function composition and precedence" {
     }
 }
 
-test "Parser2: complex nested cases" {
+test "Parser: complex nested cases" {
     const allocator = testing.allocator;
 
     // Function taking record with function field
@@ -982,7 +983,7 @@ test "Parser2: complex nested cases" {
     }
 }
 
-test "Parser2: current comma parsing behavior" {
+test "Parser: current comma parsing behavior" {
     const allocator = testing.allocator;
 
     // Test what the current parser actually does with comma sequences
@@ -1041,7 +1042,7 @@ test "manual snapshot comparison - one file" {
     // std.debug.print("Expected problems: NIL (no errors)\n", .{});
     // std.debug.print("Source:\n{s}\n\n", .{source});
 
-    var ast = try AST2.initCapacity(allocator, 100);
+    var ast = try AST.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
 
     var env = try base.CommonEnv.init(allocator, source);
@@ -1052,7 +1053,7 @@ test "manual snapshot comparison - one file" {
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
     defer parser.deinit();
 
     // std.debug.print("Parsing...\n", .{});
@@ -1073,13 +1074,13 @@ test "manual snapshot comparison - one file" {
     // std.debug.print("=== End Manual Test ===\n", .{});
 }
 
-test "Parser2: iterative parser simple expression" {
+test "Parser: iterative parser simple expression" {
     const allocator = testing.allocator;
 
     // Test simple identifier
     {
         const source = "foo";
-        var ast = try AST2.initCapacity(allocator, 100);
+        var ast = try AST.initCapacity(allocator, 100);
         defer ast.deinit(allocator);
 
         var env = try base.CommonEnv.init(allocator, source);
@@ -1091,19 +1092,19 @@ test "Parser2: iterative parser simple expression" {
         defer byte_slices.entries.deinit(allocator);
 
         // Create parser
-        var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
         defer parser.deinit();
 
-        const result = try parser.parseExpr();
+        const result = try parser.parseExprFromSource(msg_slice);
 
         // Should produce a lowercase identifier
-        try testing.expectEqual(AST2.Node.Tag.lc, ast.tag(result));
+        try testing.expectEqual(AST.Node.Tag.lc, ast.tag(result));
     }
 
     // Test binary operation
     {
         const source = "1 + 2";
-        var ast = try AST2.initCapacity(allocator, 100);
+        var ast = try AST.initCapacity(allocator, 100);
         defer ast.deinit(allocator);
 
         var env = try base.CommonEnv.init(allocator, source);
@@ -1115,12 +1116,12 @@ test "Parser2: iterative parser simple expression" {
         defer byte_slices.entries.deinit(allocator);
 
         // Create parser
-        var parser = try Parser2.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+        var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
         defer parser.deinit();
 
-        const result = try parser.parseExpr();
+        const result = try parser.parseExprFromSource(msg_slice);
 
         // Should produce a binary operation
-        try testing.expectEqual(AST2.Node.Tag.binop_plus, ast.tag(result));
+        try testing.expectEqual(AST.Node.Tag.binop_plus, ast.tag(result));
     }
 }

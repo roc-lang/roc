@@ -27,7 +27,7 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - can_import_json.md:5:8:5:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **Json.utf8** in this scope.
@@ -55,7 +55,6 @@ main = Json.utf8
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

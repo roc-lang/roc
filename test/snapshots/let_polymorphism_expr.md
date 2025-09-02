@@ -50,7 +50,7 @@ match []
 	empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
 ~~~
 # EXPECTED
-NIL
+UNSUPPORTED NODE - let_polymorphism_expr.md:2:5:2:70
 # PROBLEMS
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
@@ -69,9 +69,8 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag match :type "_a")
 ~~~
 # TYPES
 ~~~roc
-_a
+# No header found
 ~~~

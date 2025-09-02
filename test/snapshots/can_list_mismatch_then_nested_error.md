@@ -35,9 +35,8 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag list_literal :type "List(Error)")
 ~~~
 # TYPES
 ~~~roc
-List(Error)
+# No header found
 ~~~

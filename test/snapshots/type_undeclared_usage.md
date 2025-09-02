@@ -42,7 +42,7 @@ processValue = |value| {
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **value** is not used anywhere in your code.
@@ -80,7 +80,6 @@ processValue = |value| {
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -50,7 +50,7 @@ identity = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_var_annotation_body_connection.md:7:5:7:10
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **thing** is not used anywhere in your code.
@@ -84,7 +84,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_b")
 ~~~
 # TYPES
 ~~~roc

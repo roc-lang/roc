@@ -19,7 +19,6 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const collections = @import("collections");
-const infer_cir2 = types.infer_cir2;
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
@@ -36,9 +35,9 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const CacheModule = compile.CacheModule;
-const AST = parse.AST2; // Use AST2 as the main AST
-const Parser = parse.Parser2; // Use Parser2 as the main parser
-const CIR = can.CIR2; // Use CIR2 as the main CIR
+const AST = parse.AST; // Using the new AST (formerly AST)
+const Parser = parse.Parser; // Using the new Parser (formerly Parser)
+const CIR = can.CIR; // Using the new CIR (formerly CIR)
 const Report = reporting.Report;
 const types_problem_mod = check.problem;
 const tokenize = parse.tokenize;
@@ -451,7 +450,7 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
         a.end_col == b.end_col;
 }
 
-/// Helper to determine if an AST2 node tag represents an expression
+/// Helper to determine if an AST node tag represents an expression
 fn isExpressionNode(tag: AST.Node.Tag) bool {
     return switch (tag) {
         .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big, .lc, .uc, .var_lc, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .block, .record_literal, .lambda, .lambda_no_args, .apply_lc, .apply_uc, .apply_anon, .tuple_literal, .list_literal, .if_else, .match, .unary_neg, .unary_not => true,
@@ -459,7 +458,7 @@ fn isExpressionNode(tag: AST.Node.Tag) bool {
     };
 }
 
-/// Helper to determine if an AST2 node tag represents a statement
+/// Helper to determine if an AST node tag represents a statement
 fn isStatementNode(tag: AST.Node.Tag) bool {
     return switch (tag) {
         .binop_equals, .binop_colon, .binop_colon_equals, .import => true,
@@ -467,7 +466,7 @@ fn isStatementNode(tag: AST.Node.Tag) bool {
     };
 }
 
-/// Helper to determine if an AST2 node tag represents a pattern
+/// Helper to determine if an AST node tag represents a pattern
 fn isPatternNode(tag: AST.Node.Tag) bool {
     return switch (tag) {
         .underscore => true,
@@ -475,7 +474,7 @@ fn isPatternNode(tag: AST.Node.Tag) bool {
     };
 }
 
-/// Generate reports from Parser2 and CIR2 diagnostics
+/// Generate reports from Parser and CIR diagnostics
 fn generateReportsFromNewSystem(
     allocator: std.mem.Allocator,
     parser: *const Parser,
@@ -486,23 +485,23 @@ fn generateReportsFromNewSystem(
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
 
-    // Convert Parser2 diagnostics to reports
+    // Convert Parser diagnostics to reports
     for (parser.diagnostics.items) |diag| {
-        const report = try convertParser2DiagnosticToReport(allocator, diag, parser, env, snapshot_path);
+        const report = try convertParserDiagnosticToReport(allocator, diag, parser, env, snapshot_path);
         try reports.append(report);
     }
 
-    // Convert CIR2 diagnostics to reports
+    // Convert CIR diagnostics to reports
     for (cir.diagnostics.items) |diag| {
-        const report = try convertCIR2DiagnosticToReport(allocator, diag, env, snapshot_path);
+        const report = try convertCIRDiagnosticToReport(allocator, diag, env, snapshot_path);
         try reports.append(report);
     }
 
     return reports;
 }
 
-/// Convert Parser2 diagnostic to a report
-fn convertParser2DiagnosticToReport(
+/// Convert Parser diagnostic to a report
+fn convertParserDiagnosticToReport(
     allocator: std.mem.Allocator,
     diag: AST.Diagnostic,
     parser: *const Parser,
@@ -738,8 +737,8 @@ fn convertParser2DiagnosticToReport(
     return report;
 }
 
-/// Convert CIR2 diagnostic to a report
-fn convertCIR2DiagnosticToReport(
+/// Convert CIR diagnostic to a report
+fn convertCIRDiagnosticToReport(
     allocator: std.mem.Allocator,
     diag: CIR.CanDiagnostic,
     env: *const base.CommonEnv,
@@ -759,6 +758,9 @@ fn convertCIR2DiagnosticToReport(
         .invalid_type_var_in_constraint => "INVALID TYPE VARIABLE IN CONSTRAINT",
         .invalid_ability_in_constraint => "INVALID ABILITY IN CONSTRAINT",
         .invalid_where_constraint => "INVALID WHERE CONSTRAINT",
+        .exposed_but_not_implemented => "EXPOSED BUT NOT IMPLEMENTED",
+        .redundant_exposed => "REDUNDANT EXPOSED",
+        .shadowing_warning => "SHADOWING",
         .unsupported_node => "UNSUPPORTED NODE",
         .malformed_ast => "MALFORMED AST",
     };
@@ -844,7 +846,9 @@ fn convertCIR2DiagnosticToReport(
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
-            try report.document.addInlineCode(try std.fmt.allocPrint(allocator, "_{s}", .{var_text}));
+            const underscore_text = try std.fmt.allocPrint(allocator, "_{s}", .{var_text});
+            defer allocator.free(underscore_text);
+            try report.document.addInlineCode(underscore_text);
             try report.document.addText(" to suppress this warning.");
             try report.document.addLineBreak();
             try report.document.addText("The unused variable is declared here:");
@@ -884,6 +888,15 @@ fn convertCIR2DiagnosticToReport(
             try report.document.addReflowingText("This syntax is not yet supported by the compiler.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("This might be a limitation in the current implementation that will be addressed in a future update.");
+        },
+        .exposed_but_not_implemented => {
+            try report.document.addReflowingText("This value is exposed in the module header but not defined in the module.");
+        },
+        .redundant_exposed => {
+            try report.document.addReflowingText("This value is exposed multiple times in the module header.");
+        },
+        .shadowing_warning => {
+            try report.document.addReflowingText("This definition shadows an existing one.");
         },
         .malformed_ast => {
             try report.document.addReflowingText("The Abstract Syntax Tree is malformed at this location.");
@@ -1463,16 +1476,16 @@ fn processSnapshotContent(
         return processReplSnapshot(allocator, content, output_path, config);
     }
 
-    // Create ByteSlices for Parser2
+    // Create ByteSlices for Parser
     var byte_slices = ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    // Create AST for Parser2
+    // Create AST for Parser
     // Increase initial capacity to handle large files like let_polymorphism_complex.md
     var ast = try AST.initCapacity(allocator, 16384);
     defer ast.deinit(allocator);
 
-    // Create common environment for Parser2
+    // Create common environment for Parser
     var env = try base.CommonEnv.init(allocator, content.source);
     defer env.deinit(allocator);
     try env.calcLineStarts(allocator);
@@ -1494,7 +1507,7 @@ fn processSnapshotContent(
         if (token.tag == .EndOfFile) break;
     }
 
-    // Create Parser2
+    // Create Parser
     var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices);
     defer parser.deinit();
 
@@ -1543,7 +1556,7 @@ fn processSnapshotContent(
     var types_store = try types.Store.initCapacity(allocator, 8192, 2048);
     defer types_store.deinit();
 
-    // NOW we can create CIR2 and canonicalize (which will mutate AST into CIR)
+    // NOW we can create CIR and canonicalize (which will mutate AST into CIR)
     var cir = CIR.init(ast_ptr, &types_store);
     defer cir.deinit(allocator);
 
@@ -1582,7 +1595,7 @@ fn processSnapshotContent(
 
     // Canonicalization has now mutated AST into CIR
 
-    // Generate reports from Parser2 and CIR2 diagnostics
+    // Generate reports from Parser and CIR diagnostics
     var generated_reports = try generateReportsFromNewSystem(allocator, &parser, &cir, &env, output_path);
     defer {
         for (generated_reports.items) |*report| {
@@ -1596,7 +1609,7 @@ fn processSnapshotContent(
     try generateProblemsSection(&output, &generated_reports);
     try generateCanonicalizeSection2(&output, &cir, &env, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
     try generateSolvedSection(&output, &cir, &env, &types_store, maybe_expr_idx);
-    try generateTypesSection2(&output, &cir, content.meta.node_type, &env, &types_store, maybe_expr_idx);
+    try generateTypesSection2(&output, &cir, &env, &types_store, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -2620,10 +2633,10 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
 }
 
 // ============================================================================
-// New generation functions for Parser2/AST2/CIR2
+// New generation functions for Parser/AST/CIR
 // ============================================================================
 
-/// Generate TOKENS section for Parser2
+/// Generate TOKENS section for Parser
 fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *const Content, env: *base.CommonEnv) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("text");
@@ -2652,12 +2665,12 @@ fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *
     try output.end_section();
 }
 
-/// Generate PARSE section for AST2
+/// Generate PARSE section for AST
 fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST, env: *const base.CommonEnv, parse_result: ?i32) !void {
     try output.begin_section("PARSE");
     try output.begin_code_block("clojure");
 
-    // Output AST2 structure as S-expressions
+    // Output AST structure as S-expressions
     // Always check for header first - headers are the primary content for header types
     if (ast.header) |header| {
         try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
@@ -2854,7 +2867,7 @@ fn outputHeaderAsSExpr(writer: anytype, ast: *const AST, env: *const base.Common
     }
 }
 
-/// Helper to output AST2 node as S-expression
+/// Helper to output AST node as S-expression
 fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, node_idx: AST.Node.Idx, indent: usize) !void {
     const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
 
@@ -2914,7 +2927,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         },
         .str_literal_big => {
             // Big strings are stored in ByteSlices
-            // Check if ByteSlices is empty (happens after CIR2 mutation)
+            // Check if ByteSlices is empty (happens after CIR mutation)
             if (ast.byte_slices.entries.items.items.len == 0) {
                 try writer.print(" \"<idx:{}>\"", .{@intFromEnum(node.payload.str_literal_big)});
             } else {
@@ -3101,7 +3114,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         // Big number literals
         .num_literal_big, .int_literal_big, .frac_literal_big => {
             // These store digits in ByteSlices
-            // However, after CIR2 mutation, the ByteSlices might be empty
+            // However, after CIR mutation, the ByteSlices might be empty
             // so we need to handle that case
             const idx = switch (node.tag) {
                 .num_literal_big => node.payload.num_literal_big,
@@ -3153,7 +3166,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         .if_else, .if_without_else => {
             // if expressions store nodes in the if_branches field (bit-cast as u32)
             const nodes_idx_val = @as(u32, @bitCast(node.payload.if_branches));
-            const nodes_idx = @as(collections.NodeSlices(parse.AST2.Node.Idx).Idx, @enumFromInt(nodes_idx_val));
+            const nodes_idx = @as(collections.NodeSlices(parse.AST.Node.Idx).Idx, @enumFromInt(nodes_idx_val));
 
             if (!nodes_idx.isNil()) {
                 var iter = ast.node_slices.nodes(&nodes_idx);
@@ -3316,12 +3329,12 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
     try writer.writeAll(")\n");
 }
 
-/// Generate FORMATTED section for AST2
+/// Generate FORMATTED section for AST
 fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx, tokens: []const parse.tokenize_iter.Token) !void {
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    // Use the new AST2-aware formatter with pre-tokenized tokens
+    // Use the new AST-aware formatter with pre-tokenized tokens
     const ident_store = env.getIdentStore();
     const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, content.source, ident_store, tokens, root_node);
     defer output.gpa.free(formatted_output);
@@ -3341,10 +3354,10 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     try output.end_section();
 }
 
-// The old Formatter2 struct has been moved to fmt2.zig as the production formatter
+// The old Formatter struct has been moved to fmt.zig as the production formatter
 // and is now accessed through fmt.formatSource()
 
-/// Generate CANONICALIZE section for CIR2
+/// Generate CANONICALIZE section for CIR
 fn generateCanonicalizeSection2(
     output: *DualOutput,
     cir: *const CIR,
@@ -3356,13 +3369,13 @@ fn generateCanonicalizeSection2(
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    // Output CIR2 structure
+    // Output CIR structure
     if (maybe_expr_idx) |expr_idx| {
-        try outputCIR2ExprAsSExpr(output.md_writer, cir, env, expr_idx, 0);
+        try outputCIRExprAsSExpr(output.md_writer, cir, env, expr_idx, 0);
     } else if (maybe_stmt_idx) |stmt_idx| {
-        try outputCIR2StmtAsSExpr(output.md_writer, cir, env, stmt_idx, 0);
+        try outputCIRStmtAsSExpr(output.md_writer, cir, env, stmt_idx, 0);
     } else if (maybe_patt_idx) |patt_idx| {
-        try outputCIR2PattAsSExpr(output.md_writer, cir, env, patt_idx, 0);
+        try outputCIRPattAsSExpr(output.md_writer, cir, env, patt_idx, 0);
     } else {
         try output.md_writer.writeAll("(empty)\n");
     }
@@ -3371,8 +3384,8 @@ fn generateCanonicalizeSection2(
     try output.end_section();
 }
 
-/// Helper to output CIR2 expression as S-expression
-fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) anyerror!void {
+/// Helper to output CIR expression as S-expression
+fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) anyerror!void {
     const expr = cir.getExpr(expr_idx);
 
     // Indent
@@ -3425,8 +3438,8 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             // Module access has binop payload
             const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
             try writer.writeAll("\n");
-            try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
-            try outputCIR2ExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
+            try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+            try outputCIRExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
             for (0..indent) |_| {
                 try writer.writeAll("  ");
             }
@@ -3439,7 +3452,7 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             if (iter.next()) |msg_node| {
                 // Cast the AST node to CIR expr
                 const msg_expr = CIR.asExprIdx(msg_node);
-                try outputCIR2ExprAsSExpr(writer, cir, env, msg_expr, indent + 1);
+                try outputCIRExprAsSExpr(writer, cir, env, msg_expr, indent + 1);
             }
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -3469,14 +3482,14 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
                         try writer.print("(lc \"{s}\")\n", .{ident_name});
                     } else {
                         // It's been canonicalized - output as expression
-                        try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+                        try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
                     }
                 } else {
                     // Normal binop - both sides are expressions
-                    try outputCIR2ExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+                    try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
                 }
 
-                try outputCIR2ExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
+                try outputCIRExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
                 for (0..indent) |_| {
                     try writer.writeAll("  ");
                 }
@@ -3493,7 +3506,7 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             while (iter.next()) |block_node_idx| {
                 // The nodes are expression indices
                 const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_node_idx)));
-                try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+                try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
             }
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -3513,11 +3526,11 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
                 if (tag_value >= CIR.STMT_TAG_START and tag_value < CIR.EXPR_TAG_START) {
                     // It's a statement
                     const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
-                    try outputCIR2StmtAsSExpr(writer, cir, env, stmt_idx, indent + 1);
+                    try outputCIRStmtAsSExpr(writer, cir, env, stmt_idx, indent + 1);
                 } else if (tag_value >= CIR.EXPR_TAG_START and tag_value < CIR.PATT_TAG_START) {
                     // It's an expression
                     const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
-                    try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+                    try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
                 } else {
                     // Unknown or malformed
                     for (0..indent + 1) |_| {
@@ -3538,7 +3551,7 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             while (iter.next()) |field_idx| {
                 // Record fields are expressions
                 const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_idx)));
-                try outputCIR2ExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+                try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
             }
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -3556,8 +3569,8 @@ fn outputCIR2ExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
     try writer.writeAll(")\n");
 }
 
-/// Helper to output CIR2 statement as S-expression
-fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, stmt_idx: CIR.Stmt.Idx, indent: usize) anyerror!void {
+/// Helper to output CIR statement as S-expression
+fn outputCIRStmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, stmt_idx: CIR.Stmt.Idx, indent: usize) anyerror!void {
     const stmt = cir.getStmt(stmt_idx);
 
     // Indent
@@ -3581,12 +3594,12 @@ fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             }
             try writer.writeAll("(pattern ");
             const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
-            try outputCIR2PattAsSExpr(writer, cir, env, patt_idx, 0);
+            try outputCIRPattAsSExpr(writer, cir, env, patt_idx, 0);
             try writer.writeAll(")\n");
 
             // Output the expression (right side)
             const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-            try outputCIR2ExprAsSExpr(writer, cir, env, expr_idx, indent + 1);
+            try outputCIRExprAsSExpr(writer, cir, env, expr_idx, indent + 1);
 
             for (0..indent) |_| {
                 try writer.writeAll("  ");
@@ -3631,8 +3644,8 @@ fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
             const type_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(binop.rhs)));
             const type_tag_value = @as(u8, @intFromEnum(type_node.tag));
 
-            // Check if the tag is a valid AST2.Node.Tag
-            const max_ast_tag = @typeInfo(parse.AST2.Node.Tag).@"enum".fields.len;
+            // Check if the tag is a valid AST.Node.Tag
+            const max_ast_tag = @typeInfo(parse.AST.Node.Tag).@"enum".fields.len;
             if (type_tag_value < max_ast_tag) {
                 // It's a valid AST tag
                 try writer.print("{s}", .{@tagName(type_node.tag)});
@@ -3652,8 +3665,8 @@ fn outputCIR2StmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
     try writer.writeAll(")\n");
 }
 
-/// Helper to output CIR2 pattern as S-expression
-fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, patt_idx: CIR.Patt.Idx, indent: usize) anyerror!void {
+/// Helper to output CIR pattern as S-expression
+fn outputCIRPattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, patt_idx: CIR.Patt.Idx, indent: usize) anyerror!void {
     const patt = cir.getPatt(patt_idx);
 
     // Indent
@@ -3680,6 +3693,7 @@ fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
 
 /// Generate SOLVED section showing internal type solving details
 fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    _ = env; // May be used in future for identifier resolution
     std.debug.print("generateSolvedSection called with expr_idx: {?}\n", .{maybe_expr_idx});
     try output.begin_section("SOLVED");
     std.debug.print("begin_section completed\n", .{});
@@ -3688,9 +3702,9 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // First run type checking to generate constraints
     var regions = Region.List{};
-    std.debug.print("About to call Check.initForCIR2\n", .{});
-    var checker = Check.initForCIR2(output.gpa, @constCast(types_store), &regions) catch |err| {
-        std.debug.print("Check.initForCIR2 failed with error: {}\n", .{err});
+    std.debug.print("About to call Check.initForCIR\n", .{});
+    var checker = Check.initForCIR(output.gpa, @constCast(types_store), &regions) catch |err| {
+        std.debug.print("Check.initForCIR failed with error: {}\n", .{err});
         try output.md_writer.print("; Type checker init failed: {}\n", .{err});
         try output.end_code_block();
         try output.end_section();
@@ -3700,67 +3714,26 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
-        std.debug.print("About to call checkCIR2Expr with expr_idx: {}\n", .{@intFromEnum(expr_idx)});
-        _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch |err| {
-            std.debug.print("checkCIR2Expr failed with error: {}\n", .{err});
+        std.debug.print("About to call checkCIRExpr with expr_idx: {}\n", .{@intFromEnum(expr_idx)});
+        _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch |err| {
+            std.debug.print("checkCIRExpr failed with error: {}\n", .{err});
             try output.md_writer.print("; Type checking failed: {}\n", .{err});
         };
-        std.debug.print("checkCIR2Expr completed successfully\n", .{});
+        std.debug.print("checkCIRExpr completed successfully\n", .{});
     } else {}
-
-    std.debug.print("About to create InferContext type\n", .{});
-    // Create type inference context using the passed-in types store
-    const InferContext = infer_cir2.InferContext(CIR);
-    std.debug.print("About to call InferContext.init\n", .{});
-    var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
-    std.debug.print("InferContext.init completed\n", .{});
-
-    if (maybe_expr_idx) |expr_idx| {
-        // Get the expression
-        const expr = cir.getExpr(expr_idx);
-
-        // Infer the type of this specific expression
-        const type_var = infer_ctx.inferExpr(expr_idx) catch |err| {
-            try output.md_writer.print("; Type inference failed: {}\n", .{err});
-            try output.end_code_block();
-            try output.end_section();
-            return;
-        };
-
-        // Format the type
-        var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-            try output.md_writer.writeAll("; Failed to create type writer\n");
-            try output.end_code_block();
-            try output.end_section();
-            return;
-        };
-        defer type_writer.deinit();
-
-        type_writer.write(type_var) catch {
-            try output.md_writer.writeAll("; Failed to write type\n");
-            try output.end_code_block();
-            try output.end_section();
-            return;
-        };
-
-        const type_str = type_writer.get();
-        try output.md_writer.print("(expr :tag {s} :type \"{s}\")\n", .{ @tagName(expr.tag), type_str });
-    } else {
-        try output.md_writer.writeAll("; No expression to type check\n");
-    }
 
     try output.end_code_block();
     try output.end_section();
 }
 
 /// Generate TYPES section with pretty-printed user-facing type annotations
-fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeType, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
 
     // First run type checking to generate constraints (may have already been done in SOLVED section)
     var regions = Region.List{};
-    var checker = Check.initForCIR2(output.gpa, @constCast(types_store), &regions) catch {
+    var checker = Check.initForCIR(output.gpa, @constCast(types_store), &regions) catch {
         try output.md_writer.writeAll("# Type checker initialization failed\n");
         try output.end_code_block();
         try output.end_section();
@@ -3770,277 +3743,113 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, node_type: NodeTy
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
-        _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch {};
+        _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch {};
     } else {}
 
-    // Create type inference context using the passed-in types store
-    const InferContext = infer_cir2.InferContext(CIR);
-    var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
+    // Extract and display the exported symbols
 
-    // For type=expr snapshots, handle specially
-    if (node_type == .expr) {
-        if (maybe_expr_idx) |expr_idx| {
-            const expr = cir.getExpr(expr_idx);
+    // Headers are stored in the AST, not in CIR expressions
+    // We need to access the AST header information
+    if (cir.ast.header) |header| {
+        switch (header) {
+            .app => |app| {
+                // App headers expose functions - now stored in the platform binop
+                // Find the platform field in packages
+                var packages_iter = cir.ast.node_slices.nodes(&app.packages);
+                while (packages_iter.next()) |field_idx| {
+                    const field_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_idx))));
+                    if (field_node.tag == .binop_colon) {
+                        const field_binop = cir.ast.node_slices.binOp(field_node.payload.binop);
+                        const rhs_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_binop.rhs))));
+                        if (rhs_node.tag == .binop_platform) {
+                            // This is the platform field with provides list
+                            const platform_binop = cir.ast.node_slices.binOp(rhs_node.payload.binop);
+                            const provides_block = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(platform_binop.rhs))));
+                            if (provides_block.tag == .block) {
+                                var provides_iter = cir.ast.node_slices.nodes(&provides_block.payload.nodes);
+                                while (provides_iter.next()) |node_idx| {
+                                    const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+                                    // After canonicalization, nodes might have been converted to expressions
+                                    // Check the tag to see what we have
+                                    const tag_int = @intFromEnum(node.tag);
 
-            // Check if it's a block with assignments
-            if (expr.tag == .block) {
-                // Extract named bindings from the block
-                const nodes_idx = expr.payload.nodes;
-                var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+                                    // Check if this node has been canonicalized to an expression
+                                    if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+                                        // It's an expression - we can infer its type
+                                        const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
 
-                while (iter.next()) |node_idx| {
-                    const node = cir.getNode(node_idx);
-                    const tag_int = @intFromEnum(node.tag);
+                                        // Get the identifier name from the node
+                                        const ident_idx = node.payload.ident;
+                                        const name = env.idents.getText(ident_idx);
 
-                    // Check if this is an assignment statement
-                    if (tag_int < @intFromEnum(CIR.ExprTag.lookup)) {
-                        // It's a statement
-                        const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(node_idx)));
-                        const stmt = cir.getStmt(stmt_idx);
+                                        // Get the type variable for this expression
+                                        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-                        if (stmt.tag == .assign or stmt.tag == .init_var) {
-                            // Get the pattern (variable name) and expression
-                            const binop = cir.ast.*.node_slices.binOp(node.payload.binop);
-                            const lhs_node = cir.getNode(binop.lhs);
+                                        // Format the type
+                                        var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                                            try output.md_writer.print("{s} : ?\n", .{name});
+                                            continue;
+                                        };
+                                        defer type_writer.deinit();
 
-                            // Get the identifier name if it's a simple binding
-                            // Check if LHS is an identifier (lc or var_lc tag)
-                            const lhs_tag_int = @intFromEnum(lhs_node.tag);
-                            if (lhs_tag_int == @intFromEnum(CIR.PattTag.ident) or
-                                lhs_tag_int == @intFromEnum(CIR.PattTag.var_ident))
-                            {
-                                const ident_idx = lhs_node.payload.ident;
-                                const ident_str = env.getIdent(ident_idx);
+                                        type_writer.write(expr_var) catch {
+                                            try output.md_writer.print("{s} : ?\n", .{name});
+                                            continue;
+                                        };
 
-                                // Get the RHS expression and infer its type
-                                const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-                                const inferred_type = infer_ctx.inferExpr(rhs_expr_idx) catch {
-                                    try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                    continue;
-                                };
-
-                                // Format the type
-                                var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                                    try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                    continue;
-                                };
-                                defer type_writer.deinit();
-
-                                type_writer.write(inferred_type) catch {
-                                    try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                    continue;
-                                };
-                                const type_str = type_writer.get();
-
-                                // Output the named binding with its type
-                                try output.md_writer.print("{s} : {s}\n", .{ ident_str, type_str });
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Single expression - just show its type
-                const inferred_type = try infer_ctx.inferExpr(expr_idx);
-
-                // Format the type
-                var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                    try output.md_writer.writeAll("?\n");
-                    try output.end_code_block();
-                    try output.end_section();
-                    return;
-                };
-                defer type_writer.deinit();
-
-                type_writer.write(inferred_type) catch {
-                    try output.md_writer.writeAll("?\n");
-                    try output.end_code_block();
-                    try output.end_section();
-                    return;
-                };
-                const type_str = type_writer.get();
-
-                // Output just the type without "expr_0 :"
-                try output.md_writer.print("{s}\n", .{type_str});
-            }
-        } else {
-            try output.md_writer.writeAll("# No expression found\n");
-        }
-    } else if (node_type == .file) {
-        // For type=file, show types of top-level definitions
-        if (maybe_expr_idx) |expr_idx| {
-            const expr = cir.getExpr(expr_idx);
-            // Check if it's a block with assignments (typical for files)
-            if (expr.tag == .block) {
-                // Extract named bindings from the file's top-level block
-                const nodes_idx = expr.payload.nodes;
-                var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
-
-                while (iter.next()) |node_idx| {
-                    const node = cir.getNode(node_idx);
-                    const tag_int = @intFromEnum(node.tag);
-
-                    // Check if this is an assignment (now stored as binop_equals expression)
-                    if (tag_int == @intFromEnum(CIR.ExprTag.binop_equals)) {
-                        // It's a binop_equals expression (assignment)
-                        // Get the pattern (variable name) and expression
-                        const binop = cir.ast.*.node_slices.binOp(node.payload.binop);
-                        const lhs_node = cir.getNode(binop.lhs);
-
-                        // Get the identifier name if it's a simple binding
-                        const lhs_tag_int = @intFromEnum(lhs_node.tag);
-                        // After canonicalization, LHS identifiers become lookup expressions
-                        if (lhs_tag_int == @intFromEnum(CIR.ExprTag.lookup)) {
-                            const ident_idx = lhs_node.payload.ident;
-                            const ident_str = env.idents.getText(ident_idx);
-
-                            // Get the RHS expression and infer its type
-                            const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
-
-                            // Infer the type using the existing context
-                            const inferred_type = infer_ctx.inferExpr(rhs_expr_idx) catch {
-                                try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                continue;
-                            };
-
-                            // Format the type using TypeWriter
-                            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                                try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                continue;
-                            };
-                            defer type_writer.deinit();
-
-                            type_writer.write(inferred_type) catch {
-                                try output.md_writer.print("{s} : ?\n", .{ident_str});
-                                continue;
-                            };
-
-                            const type_str = type_writer.get();
-                            try output.md_writer.print("{s} : {s}\n", .{ ident_str, type_str });
-                        }
-                    }
-                }
-            } else {
-                try output.md_writer.writeAll("# File does not contain a block of statements\n");
-            }
-        } else {
-            try output.md_writer.writeAll("# No top-level expression found in file\n");
-        }
-    } else if (node_type == .header) {
-        // Headers define what a module/app/package exposes
-        // Extract and display the exported symbols
-
-        // Headers are stored in the AST2, not in CIR expressions
-        // We need to access the AST2 header information
-        if (cir.ast.header) |header| {
-            switch (header) {
-                .app => |app| {
-                    // App headers expose functions - now stored in the platform binop
-                    // Find the platform field in packages
-                    var packages_iter = cir.ast.node_slices.nodes(&app.packages);
-                    while (packages_iter.next()) |field_idx| {
-                        const field_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_idx))));
-                        if (field_node.tag == .binop_colon) {
-                            const field_binop = cir.ast.node_slices.binOp(field_node.payload.binop);
-                            const rhs_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_binop.rhs))));
-                            if (rhs_node.tag == .binop_platform) {
-                                // This is the platform field with provides list
-                                const platform_binop = cir.ast.node_slices.binOp(rhs_node.payload.binop);
-                                const provides_block = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(platform_binop.rhs))));
-                                if (provides_block.tag == .block) {
-                                    var provides_iter = cir.ast.node_slices.nodes(&provides_block.payload.nodes);
-                                    while (provides_iter.next()) |node_idx| {
-                                        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
-                                        // After canonicalization, nodes might have been converted to expressions
-                                        // Check the tag to see what we have
-                                        const tag_int = @intFromEnum(node.tag);
-
-                                        // Check if this node has been canonicalized to an expression
-                                        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
-                                            // It's an expression - we can infer its type
-                                            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
-
-                                            // Get the identifier name from the node
-                                            const ident_idx = node.payload.ident;
-                                            const name = env.idents.getText(ident_idx);
-
-                                            // Infer the type
-                                            const inferred_type = infer_ctx.inferExpr(expr_idx) catch {
-                                                try output.md_writer.print("{s} : ?\n", .{name});
-                                                continue;
-                                            };
-
-                                            // Format the type using TypeWriter
-                                            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                                                try output.md_writer.print("{s} : ?\n", .{name});
-                                                continue;
-                                            };
-                                            defer type_writer.deinit();
-
-                                            type_writer.write(inferred_type) catch {
-                                                try output.md_writer.print("{s} : ?\n", .{name});
-                                                continue;
-                                            };
-
-                                            const type_str = type_writer.get();
-                                            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
-                                        }
+                                        const type_str = type_writer.get();
+                                        try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
                                     }
                                 }
                             }
                         }
                     }
-                },
-                .module => |mod| {
-                    // Module headers expose values and types
-                    var exposes_iter = cir.ast.node_slices.nodes(&mod.exposes);
+                }
+            },
+            .module => |mod| {
+                // Module headers expose values and types
+                var exposes_iter = cir.ast.node_slices.nodes(&mod.exposes);
 
-                    while (exposes_iter.next()) |node_idx| {
-                        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
-                        const tag_int = @intFromEnum(node.tag);
+                while (exposes_iter.next()) |node_idx| {
+                    const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+                    const tag_int = @intFromEnum(node.tag);
 
-                        // Check if this node has been canonicalized to an expression
-                        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
-                            // It's an expression - we can infer its type
-                            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                    // Check if this node has been canonicalized to an expression
+                    if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+                        // It's an expression - we can infer its type
+                        const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
 
-                            // Get the identifier name from the node
-                            const ident_idx = node.payload.ident;
-                            const name = env.idents.getText(ident_idx);
+                        // Get the identifier name from the node
+                        const ident_idx = node.payload.ident;
+                        const name = env.idents.getText(ident_idx);
 
-                            // Infer the type
-                            const inferred_type = infer_ctx.inferExpr(expr_idx) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
+                        // Get the type variable for this expression
+                        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
-                            // Format the type using TypeWriter
-                            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
-                            defer type_writer.deinit();
+                        // Format the type
+                        var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                            try output.md_writer.print("{s} : ?\n", .{name});
+                            continue;
+                        };
+                        defer type_writer.deinit();
 
-                            type_writer.write(inferred_type) catch {
-                                try output.md_writer.print("{s} : ?\n", .{name});
-                                continue;
-                            };
+                        type_writer.write(expr_var) catch {
+                            try output.md_writer.print("{s} : ?\n", .{name});
+                            continue;
+                        };
 
-                            const type_str = type_writer.get();
-                            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
-                        }
+                        const type_str = type_writer.get();
+                        try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
                     }
-                },
-                else => {
-                    // Other header types
-                    try output.md_writer.writeAll("# Header type not yet fully supported\n");
-                },
-            }
-        } else {
-            try output.md_writer.writeAll("# No header found\n");
+                }
+            },
+            else => {
+                // Other header types
+                try output.md_writer.writeAll("# Header type not yet fully supported\n");
+            },
         }
     } else {
-        // For other non-expr types (patterns, statements, etc.), we don't show types yet
-        try output.md_writer.writeAll("# Type checking for this node type not yet implemented\n");
+        try output.md_writer.writeAll("# No header found\n");
     }
 
     try output.end_code_block();

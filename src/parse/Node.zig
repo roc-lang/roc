@@ -6,6 +6,7 @@
 //! be interpreted.
 
 const collections = @import("collections");
+const base = @import("base");
 
 const AST = @import("AST.zig");
 const TokenIdx = @import("tokenize.zig").Token.Idx;
@@ -15,7 +16,7 @@ const Node = @This();
 tag: Tag,
 data: Data,
 main_token: TokenIdx,
-region: AST.TokenizedRegion,
+region: base.Region,
 
 /// A SafeMultiList of Nodes
 pub const List = collections.SafeMultiList(Node);

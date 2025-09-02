@@ -373,81 +373,38 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         return error.SyntaxError;
     }
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
     // Create czer
     //
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, null);
+    czer.* = Can.init(parse_ast, &module_env.types);
 
     // Canonicalize the expression
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-        // If canonicalization fails, create a runtime error
-        const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
-            .feature = try module_env.insertString("canonicalization failed"),
-            .region = base.Region.zero(),
-        } });
-        const checker = try allocator.create(Check);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
-        return .{
-            .module_env = module_env,
-            .parse_ast = parse_ast,
-            .can = czer,
-            .checker = checker,
-            .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
-                .diagnostic = diagnostic_idx,
-            } }, base.Region.zero()),
-        };
-    };
+    const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canonical_expr_idx = try czer.canonicalizeExpr(allocator, expr_idx, module_env.common.source, &module_env.common.idents);
 
     // Create type checker
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+    checker.* = try Check.initForCIR(allocator, &module_env.types, &module_env.store.regions);
 
     // Type check the expression
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
-
-    // WORKAROUND: The type checker doesn't set types for binop expressions yet.
-    // For numeric binops, manually set the type to match the operands.
-    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
-    if (expr == .e_binop) {
-        const binop = expr.e_binop;
-        // For arithmetic ops, use the type of the left operand
-        switch (binop.op) {
-            .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-                const left_var = @as(types.Var, @enumFromInt(@intFromEnum(binop.lhs)));
-                const left_resolved = module_env.types.resolveVar(left_var);
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-                try module_env.types.setVarContent(result_var, left_resolved.desc.content);
-            },
-            .lt, .gt, .le, .ge, .eq, .ne => {
-                // Comparison ops return Bool
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-                const bool_content = try module_env.types.mkBool(allocator, &module_env.common.idents, @enumFromInt(0));
-                try module_env.types.setVarContent(result_var, bool_content);
-            },
-            else => {},
-        }
-    }
+    _ = try checker.checkCIRExpr(Can, czer, canonical_expr_idx);
 
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
-        .expr_idx = canonical_expr_idx.get_idx(),
+        .expr_idx = canonical_expr_idx,
     };
 }
 
 /// Cleanup resources allocated by parseAndCanonicalizeExpr.
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
     resources.checker.deinit();
-    resources.can.deinit();
+    resources.can.deinit(allocator);
     resources.parse_ast.deinit(allocator);
     // module_env.source is freed by module_env.deinit()
     resources.module_env.deinit();

@@ -1,4 +1,5 @@
-//! Formatting logic for Roc modules.
+//! Production-ready formatter for AST
+//! Matches the behavior of the original fmt.zig but works with AST/Parser
 
 const std = @import("std");
 const base = @import("base");
@@ -6,2198 +7,3181 @@ const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
 
-const fs_mod = @import("fs");
-const Filesystem = fs_mod.Filesystem;
-const tracy = @import("tracy");
-
-const ModuleEnv = can.ModuleEnv;
-const Token = tokenize.Token;
-const Parser = parse.Parser;
 const AST = parse.AST;
-const Node = parse.Node;
-const NodeStore = parse.NodeStore;
-const SafeList = collections.SafeList;
+const Node = AST.Node;
+const Parser = parse.Parser;
+const tokenize_iter = parse.tokenize_iter;
+const Token = tokenize_iter.Token;
 const CommonEnv = base.CommonEnv;
+const ByteSlices = collections.ByteSlices;
+const Position = base.Region.Position;
+const Ident = base.Ident;
 
-const tokenize = parse.tokenize;
-const fatal = collections.utils.fatal;
-
-const FormatFlags = enum {
-    debug_binop,
-    no_debug,
-};
-
-/// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
-pub const FormattingResult = struct {
-    success: usize,
-    failure: usize,
-    /// Only relevant when using `roc format --check`
-    unformatted_files: ?std.ArrayList([]const u8),
-
-    pub fn deinit(self: *@This()) void {
-        if (self.unformatted_files) |files| {
-            files.deinit();
-        }
-    }
-};
-
-/// Formats all roc files in the specified path.
-/// Handles both single files and directories
-/// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
-    // TODO: update this to use the filesystem abstraction
-    // When doing so, add a mock filesystem and some tests.
-    const stderr = std.io.getStdErr().writer();
-
-    var success_count: usize = 0;
-    var failed_count: usize = 0;
-    // Only used for `roc format --check`. If we aren't doing check, don't bother allocating
-    var unformatted_files = if (check) std.ArrayList([]const u8).init(gpa) else null;
-
-    // First try as a directory.
-    if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
-        var dir = const_dir;
-        defer dir.close();
-        // Walk is recursive.
-        var walker = try dir.walk(arena);
-        defer walker.deinit();
-        while (try walker.next()) |entry| {
-            if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
-                    success_count += 1;
-                } else |err| {
-                    if (err != error.NotRocFile) {
-                        try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
-                        failed_count += 1;
-                    }
-                }
-            }
-        }
-    } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
-            success_count += 1;
-        } else |err| {
-            if (err != error.NotRocFile) {
-                try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
-                failed_count += 1;
-            }
-        }
-    }
-
-    return .{ .success = success_count, .failure = failed_count, .unformatted_files = unformatted_files };
-}
-
-fn binarySearch(
-    items: []const u32,
-    needle: u32,
-) ?usize {
-    if (items.len == 0) return null;
-
-    var low: usize = 0;
-    var high: usize = items.len;
-
-    // Find the insertion point (largest element <= needle)
-    while (low < high) {
-        // Avoid overflowing in the midpoint calculation
-        const mid = low + (high - low) / 2;
-        // Compare needle with items[mid]
-        if (needle == items[mid]) {
-            return mid; // Exact match
-        } else if (needle > items[mid]) {
-            low = mid + 1; // Look in upper half
-        } else {
-            high = mid; // Look in lower half
-        }
-    }
-
-    // At this point, low is the insertion point
-    // If low > 0, the largest element <= needle is at low-1
-    if (low > 0) {
-        // Check if the previous element is <= needle
-        if (needle >= items[low - 1]) {
-            return low - 1;
-        }
-    }
-
-    return null; // No element is <= needle
-}
-
-/// Formats a single roc file at the specified path.
-/// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, unformatted_files: ?*std.ArrayList([]const u8)) !void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Skip non ".roc" files.
-    if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
-        return error.NotRocFile;
-    }
-
-    const format_file_frame = tracy.namedFrame("format_file");
-    defer format_file_frame.end();
-
-    const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
-    defer input_file.close();
-
-    const contents = blk: {
-        const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
-        defer blk_trace.end();
-
-        if (input_file.stat()) |stat| {
-            // Attempt to allocate exactly the right size first.
-            // The avoids needless reallocs and saves some perf.
-            const size = stat.size;
-            const buf = try gpa.alloc(u8, @intCast(size));
-            errdefer gpa.free(buf);
-            if (try input_file.readAll(buf) != size) {
-                // This is unexpected, the file is smaller than the size from stat.
-                // It must have been modified inplace.
-                // TODO: handle this more gracefully.
-                return error.FileSizeChangedDuringRead;
-            }
-            break :blk buf;
-        } else |_| {
-            // Fallback on readToEndAlloc.
-            const buf = try input_file.readToEndAlloc(gpa, Filesystem.max_file_size);
-            break :blk buf;
-        }
-    };
-
-    var module_env = try ModuleEnv.init(gpa, contents);
-    defer module_env.deinit();
-
-    var parse_ast: AST = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
-
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
-        return error.ParsingFailed;
-    }
-
-    // Check if the file is formatted without actually formatting it
-    if (unformatted_files != null) {
-        var formatted = std.ArrayList(u8).init(gpa);
-        defer formatted.deinit();
-        try formatAst(parse_ast, formatted.writer().any());
-        if (!std.mem.eql(u8, formatted.items, module_env.common.source)) {
-            try unformatted_files.?.append(path);
-        }
-    } else { // Otherwise actually format it
-        const output_file = try base_dir.createFile(path, .{});
-        defer output_file.close();
-
-        try formatAst(parse_ast, output_file.writer().any());
-    }
-}
-
-/// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
-
-    // ModuleEnv takes ownership of contents
-    var module_env = try ModuleEnv.init(gpa, contents);
-    defer module_env.deinit();
-
-    var parse_ast: AST = try parse.parse(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
-
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast);
-        return error.ParsingFailed;
-    }
-
-    try formatAst(parse_ast, std.io.getStdOut().writer().any());
-}
-
-fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
-    // compute offsets of each line, looping over bytes of the input
-    var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
-    defer line_offsets.deinit(gpa);
-    _ = try line_offsets.append(gpa, 0);
-    for (source, 0..) |c, i| {
-        if (c == '\n') {
-            _ = try line_offsets.append(gpa, @intCast(i));
-        }
-    }
-
-    const stderr = std.io.getStdErr().writer();
-    try stderr.print("Errors:\n", .{});
-    for (parse_ast.parse_diagnostics.items) |err| {
-        const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
-        const column = region.start.offset - line_offsets.items.items[line];
-        const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
-        // TODO: pretty print the parse failures.
-        try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
-    }
-}
-
-fn formatIRNode(ast: AST, writer: std.io.AnyWriter, formatter: *const fn (*Formatter) anyerror!void) !void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var fmt = Formatter.init(ast, writer);
-
-    try formatter(&fmt);
-    try fmt.flush();
-}
-
-/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
-/// Only returns an error if the underlying writer returns an error.
-pub fn formatAst(ast: AST, writer: std.io.AnyWriter) !void {
-    return formatIRNode(ast, writer, Formatter.formatFile);
-}
-
-/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
-/// Only returns an error if the underlying writer returns an error.
-pub fn formatHeader(ast: AST, writer: std.io.AnyWriter) !void {
-    return formatIRNode(ast, writer, formatHeaderInner);
-}
-
-fn formatHeaderInner(fmt: *Formatter) !void {
-    return fmt.formatHeader(@enumFromInt(fmt.ast.root_node_idx));
-}
-
-/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
-/// Only returns an error if the underlying writer returns an error.
-pub fn formatStatement(ast: AST, writer: std.io.AnyWriter) !void {
-    return formatIRNode(ast, writer, formatStatementInner);
-}
-
-fn formatStatementInner(fmt: *Formatter) !void {
-    return fmt.formatStatement(@enumFromInt(fmt.ast.root_node_idx));
-}
-
-/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
-/// Only returns an error if the underlying writer returns an error.
-pub fn formatExpr(ast: AST, writer: std.io.AnyWriter) !void {
-    return formatIRNode(ast, writer, formatExprNode);
-}
-
-fn formatExprNode(fmt: *Formatter) !void {
-    _ = try fmt.formatExpr(@enumFromInt(fmt.ast.root_node_idx));
-}
-
-/// Formatter for the roc parse ast.
+/// Main formatter struct for AST
 const Formatter = struct {
-    ast: AST,
-    buffer: std.io.BufferedWriter(16 * 1024, std.io.AnyWriter),
-    curr_indent: u32 = 0,
-    flags: FormatFlags = .no_debug,
-    // This starts true since beginning of file is considered a newline.
-    has_newline: bool = true,
+    allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator, // For temporary allocations
+    ast: *const AST,
+    source: []const u8,
+    ident_store: *const Ident.Store,
+    tokens: []const Token, // Now includes comment tokens!
+    output: std.ArrayList(u8),
+    scratch_nodes: std.ArrayList(Node.Idx), // Scratch buffer for temporary node collections
 
-    /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: std.io.AnyWriter) Formatter {
-        return .{
+    // Formatting state
+    curr_indent_level: u32 = 0,
+    has_newline: bool = true, // Starts true since beginning of file is considered a newline
+    token_cursor: usize = 0, // Current position in tokens array for efficient traversal
+    consecutive_newlines: u32 = 0, // Track consecutive newlines to prevent multiple blank lines
+
+    fn init(
+        allocator: std.mem.Allocator,
+        scratch_allocator: std.mem.Allocator,
+        ast: *const AST,
+        source: []const u8,
+        ident_store: *const Ident.Store,
+        tokens: []const Token,
+    ) !Formatter {
+        return Formatter{
+            .allocator = allocator,
+            .scratch_allocator = scratch_allocator,
             .ast = ast,
-            .buffer = .{ .unbuffered_writer = writer },
+            .source = source,
+            .ident_store = ident_store,
+            .tokens = tokens, // Use pre-collected tokens including comments
+            .output = std.ArrayList(u8).init(allocator),
+            .scratch_nodes = std.ArrayList(Node.Idx).init(scratch_allocator),
+            .token_cursor = 0,
         };
     }
 
-    /// Deinits all data owned by the formatter object.
-    fn flush(fmt: *Formatter) !void {
-        try fmt.buffer.flush();
+    fn deinit(self: *Formatter) void {
+        // tokens are now owned externally, don't deinit them
+        self.output.deinit();
+        self.scratch_nodes.deinit();
     }
 
-    /// Emits a string containing the well-formed source of a Roc parse IR (AST).
-    /// The resulting string is owned by the caller.
-    pub fn formatFile(fmt: *Formatter) !void {
-        fmt.ast.store.emptyScratch();
-        const file = fmt.ast.store.getFile();
-        const header_region = fmt.ast.store.nodes.items.items(.region)[@intFromEnum(file.header)];
-        _ = try fmt.flushCommentsBefore(header_region.start);
-        _ = try fmt.formatHeader(file.header);
-        const statement_slice = fmt.ast.store.statementSlice(file.statements);
-        for (statement_slice, 0..) |s, i| {
-            const region = fmt.nodeRegion(@intFromEnum(s));
-            _ = try fmt.flushCommentsBefore(region.start);
-            try fmt.ensureNewline();
-            try fmt.formatStatement(s);
+    fn format(self: *Formatter, root_node: ?Node.Idx) !void {
 
-            if (i == statement_slice.len - 1) {
-                // Flush comments before EOF
-                _ = try fmt.flushCommentsBefore(region.end);
+        // Format the header if present
+        if (self.ast.header) |header| {
+            try self.formatHeader(header);
+            // Don't add blank line here - let the source tokens handle spacing
+        }
+
+        // Format the root node (which is usually a block containing all top-level statements)
+        if (root_node) |root| {
+            const node = self.getNode(root);
+            if (node.tag == .block) {
+                // Format the block contents without the braces
+                try self.formatBlockContents(root);
+            } else {
+                // Single expression or statement
+                try self.formatNode(root);
             }
         }
-    }
 
-    fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) !void {
-        const statement = fmt.ast.store.getStatement(si);
-        const multiline = fmt.nodeWillBeMultiline(AST.Statement.Idx, si);
-        const orig_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = orig_indent;
-        }
-        switch (statement) {
-            .decl => |d| {
-                const pattern_region = fmt.nodeRegion(@intFromEnum(d.pattern));
-                _ = try fmt.formatPattern(d.pattern);
-                if (multiline and try fmt.flushCommentsBefore(pattern_region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                    try fmt.push('=');
-                } else {
-                    try fmt.pushAll(" = ");
-                }
-                const body_region = fmt.nodeRegion(@intFromEnum(d.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                _ = try fmt.formatExpr(d.body);
-            },
-            .@"var" => |v| {
-                try fmt.pushAll("var");
-                if (multiline and try fmt.flushCommentsBefore(v.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.pushTokenText(v.name);
-                if (multiline and try fmt.flushCommentsAfter(v.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.push('=');
-                const body_region = fmt.nodeRegion(@intFromEnum(v.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(v.body);
-            },
-            .expr => |e| {
-                _ = try fmt.formatExpr(e.expr);
-            },
-            .import => |i| {
-                var flushed = false;
-                try fmt.pushAll("import");
-                if (multiline) {
-                    flushed = try fmt.flushCommentsBefore(if (i.qualifier_tok) |q| q else i.module_name_tok);
-                }
-                if (!flushed) {
-                    try fmt.push(' ');
-                } else {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
-                if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
-                    flushed = try fmt.flushCommentsAfter(i.module_name_tok);
-                }
-
-                if (i.alias_tok) |a| {
-                    if (multiline) {
-                        if (flushed) {
-                            fmt.curr_indent += 1;
-                            try fmt.pushIndent();
-                            try fmt.pushAll("as");
-                        } else {
-                            try fmt.pushAll(" as");
-                        }
-                        flushed = try fmt.flushCommentsBefore(a);
-                        if (!flushed) {
-                            try fmt.push(' ');
-                        } else {
-                            try fmt.pushIndent();
-                        }
-                    } else {
-                        try fmt.pushAll(" as ");
-                    }
-                    try fmt.pushTokenText(a);
-                    if (i.exposes.span.len > 0) {
-                        flushed = try fmt.flushCommentsAfter(a);
-                    }
-                }
-                if (i.exposes.span.len > 0) {
-                    if (flushed) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                        try fmt.pushAll("exposing ");
-                    } else {
-                        try fmt.pushAll(" exposing ");
-                    }
-                    const items = fmt.ast.store.exposedItemSlice(i.exposes);
-                    const items_region = fmt.regionInSlice(AST.ExposedItem.Idx, items);
-                    // This is a near copy of formatCollection because to make that function
-                    // work correctly, the exposed items have to be in a new Node type that
-                    // will have its own region.
-                    // Include the open and close squares.
-                    const items_multiline = fmt.ast.regionIsMultiline(.{ .start = items_region.start - 1, .end = items_region.end + 1 }) or
-                        fmt.nodesWillBeMultiline(AST.ExposedItem.Idx, items);
-                    const braces = Braces.square;
-                    try fmt.push(braces.start());
-                    if (items.len == 0) {
-                        try fmt.push(braces.end());
-                    } else {
-                        if (items_multiline) {
-                            fmt.curr_indent += 1;
-                        }
-                        for (items, 0..) |item, x| {
-                            const arg_region = fmt.nodeRegion(@intFromEnum(item));
-                            if (items_multiline) {
-                                _ = try fmt.flushCommentsBefore(arg_region.start);
-                                try fmt.ensureNewline();
-                                try fmt.pushIndent();
-                            }
-                            _ = try fmt.formatExposedItem(item);
-                            if (items_multiline) {
-                                try fmt.push(',');
-                            } else if (x < (items.len - 1)) {
-                                try fmt.pushAll(", ");
-                            }
-                        }
-                        if (items_multiline) {
-                            _ = try fmt.flushCommentsBefore(i.region.end - 1);
-                            try fmt.ensureNewline();
-                            fmt.curr_indent -= 1;
-                            try fmt.pushIndent();
-                        }
-                        try fmt.push(braces.end());
-                    }
-                }
-            },
-            .type_decl => |d| {
-                const header_region = fmt.nodeRegion(@intFromEnum(d.header));
-                try fmt.formatTypeHeader(d.header);
-                if (multiline and try fmt.flushCommentsBefore(header_region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                if (d.kind == .nominal) {
-                    try fmt.pushAll(":=");
-                } else {
-                    try fmt.push(':');
-                }
-                const anno_region = fmt.nodeRegion(@intFromEnum(d.anno));
-                if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatTypeAnno(d.anno);
-                if (d.where) |w| {
-                    if (multiline) {
-                        _ = try fmt.flushCommentsBefore(anno_region.end);
-                        try fmt.ensureNewline();
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    }
-                    try fmt.formatWhereConstraint(w, multiline);
-                }
-            },
-            .type_anno => |t| {
-                try fmt.pushTokenText(t.name);
-                if (multiline and try fmt.flushCommentsAfter(t.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.push(':');
-                const anno_region = fmt.nodeRegion(@intFromEnum(t.anno));
-                if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatTypeAnno(t.anno);
-                if (t.where) |w| {
-                    if (multiline) {
-                        _ = try fmt.flushCommentsBefore(anno_region.end);
-                        try fmt.ensureNewline();
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    }
-                    try fmt.formatWhereConstraint(w, multiline);
-                }
-            },
-            .expect => |e| {
-                try fmt.pushAll("expect");
-                const body_region = fmt.nodeRegion(@intFromEnum(e.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(e.body);
-            },
-            .@"for" => |f| {
-                try fmt.pushAll("for");
-                const patt_region = fmt.nodeRegion(@intFromEnum(f.patt));
-                if (multiline and try fmt.flushCommentsBefore(patt_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatPattern(f.patt);
-                if (multiline and try fmt.flushCommentsBefore(patt_region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.pushAll("in");
-                const expr_region = fmt.nodeRegion(@intFromEnum(f.expr));
-                if (multiline and try fmt.flushCommentsBefore(expr_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(f.expr);
-                if (multiline and try fmt.flushCommentsBefore(expr_region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(f.body);
-            },
-            .crash => |c| {
-                try fmt.pushAll("crash");
-                const body_region = fmt.nodeRegion(@intFromEnum(c.expr));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(c.expr);
-            },
-            .dbg => |d| {
-                try fmt.pushAll("dbg");
-                const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(d.expr);
-            },
-            .@"return" => |r| {
-                try fmt.pushAll("return");
-                const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(r.expr);
-            },
-            .malformed => {
-                // Output nothing for malformed node
-            },
+        // Flush any trailing comments using token-based approach
+        if (self.tokens.len > 0) {
+            _ = try self.flushTrailingComments();
         }
     }
 
-    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, multiline: bool) !void {
-        const start_indent = fmt.curr_indent;
-        defer fmt.curr_indent = start_indent;
-        const clause_coll = fmt.ast.store.getCollection(w);
-        const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
-        const clauses_are_multiline = fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
-
-        if (!multiline) {
-            try fmt.push(' ');
-        }
-
-        try fmt.pushAll("where");
-
-        for (clause_slice, 0..) |clause, i| {
-            if (clauses_are_multiline) {
-                const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-                _ = try fmt.flushCommentsBefore(clause_region.start);
-            }
-            if (i == 0) {
-                if (clauses_are_multiline) {
-                    fmt.curr_indent += 1;
-                } else {
-                    try fmt.push(' ');
-                }
-            }
-            if (clauses_are_multiline) {
-                try fmt.ensureNewline();
-                try fmt.pushIndent();
-            }
-            try fmt.formatWhereClause(clause);
-            if (i < clause_slice.len - 1) {
-                if (clauses_are_multiline) {
-                    try fmt.push(',');
-                } else {
-                    try fmt.pushAll(", ");
-                }
-            }
-        }
+    /// Helper to get a node from an index - eliminates massive boilerplate
+    inline fn getNode(self: *const Formatter, idx: Node.Idx) Node {
+        return self.ast.nodes.get(nodeIdxToMultiListIdx(idx));
     }
 
-    fn formatIdent(fmt: *Formatter, ident: Token.Idx, qualifier: ?Token.Idx) !void {
-        const curr_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = curr_indent;
-        }
-        if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
-            try fmt.pushTokenText(q);
-            if (multiline and try fmt.flushCommentsAfter(q)) {
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            }
-            const ident_tag = fmt.ast.tokens.tokens.items(.tag)[ident];
-            if (ident_tag == .NoSpaceDotUpperIdent or ident_tag == .NoSpaceDotLowerIdent or ident_tag == .DotUpperIdent or ident_tag == .DotLowerIdent) {
-                try fmt.push('.');
-            }
-        }
-        try fmt.pushTokenText(ident);
+    /// Convert Node.Idx (i32) to SafeMultiList.Idx (u32 enum)
+    inline fn nodeIdxToMultiListIdx(idx: Node.Idx) collections.SafeMultiList(Node).Idx {
+        const idx_val = @intFromEnum(idx);
+        const u32_idx = @as(u32, @intCast(idx_val));
+        return @as(collections.SafeMultiList(Node).Idx, @enumFromInt(u32_idx));
     }
 
-    const Braces = enum {
-        round,
-        square,
-        curly,
-        bar,
+    /// Convert u32 payload to NodeSlices.Idx
+    inline fn payloadToNodeSlicesIdx(payload_u32: u32) collections.NodeSlices(Node.Idx).Idx {
+        // The payload is already the index value (possibly bit-cast in parser)
+        return @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(payload_u32));
+    }
 
-        fn start(b: Braces) u8 {
-            return switch (b) {
-                .round => '(',
-                .square => '[',
-                .curly => '{',
-                .bar => '|',
-            };
-        }
+    /// Flush all comments between two offsets (used for preserving comments between statements)
+    fn flushCommentsInRegion(self: *Formatter, start_offset: usize, end_offset: usize) !bool {
+        var found_any = false;
 
-        fn end(b: Braces) u8 {
-            return switch (b) {
-                .round => ')',
-                .square => ']',
-                .curly => '}',
-                .bar => '|',
-            };
-        }
-    };
+        // Process tokens in the specified region
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
 
-    fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
-        const multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(T, items);
-        const curr_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = curr_indent;
-        }
-        try fmt.push(braces.start());
-        if (items.len == 0) {
-            try fmt.push(braces.end());
-            return;
-        }
-        if (multiline) {
-            fmt.curr_indent += 1;
-        } else if (braces == .curly) {
-            try fmt.push(' ');
-        }
-        for (items, 0..) |item_idx, i| {
-            const item_region = fmt.nodeRegion(@intFromEnum(item_idx));
-            if (multiline) {
-                _ = try fmt.flushCommentsBefore(item_region.start);
-                try fmt.ensureNewline();
-                try fmt.pushIndent();
+            // Stop if we've passed the end of the region
+            if (token.region.start.offset >= end_offset) {
+                break;
             }
-            _ = try formatter(fmt, item_idx);
-            if (multiline) {
-                try fmt.push(',');
-            } else if (i < (items.len - 1)) {
-                try fmt.pushAll(", ");
+
+            // Skip tokens before our region
+            if (token.region.end.offset <= start_offset) {
+                self.token_cursor += 1;
+                continue;
             }
-        }
-        if (multiline) {
-            _ = try fmt.flushCommentsBefore(region.end - 1);
-            fmt.curr_indent -= 1;
-            try fmt.ensureNewline();
-            try fmt.pushIndent();
-        } else if (braces == .curly) {
-            try fmt.push(' ');
-        }
-        try fmt.push(braces.end());
-    }
 
-    fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
-        const field = fmt.ast.store.getRecordField(idx);
-        try fmt.pushTokenText(field.name);
-        if (field.value) |v| {
-            try fmt.pushAll(": ");
-            _ = try fmt.formatExpr(v);
-        }
-
-        return field.region;
-    }
-
-    const ExprFormatBehavior = enum {
-        normal,
-        no_indent_on_access,
-    };
-
-    fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) !void {
-        try fmt.pushAll("${");
-        const part_region = fmt.nodeRegion(@intFromEnum(idx));
-        // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
-        // That means they won't include any of the newlines between them and the actual expr.
-        // So we'll widen the region by one token for calculating multliline.
-        // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
-        // we'll leave it as is for now
-        const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 }) or
-            fmt.nodeWillBeMultiline(AST.Expr.Idx, idx);
-
-        if (part_is_multiline) {
-            _ = try fmt.flushCommentsBefore(part_region.start);
-            try fmt.ensureNewline();
-            fmt.curr_indent += 1;
-            try fmt.pushIndent();
-        }
-        _ = try fmt.formatExpr(idx);
-        if (part_is_multiline) {
-            _ = try fmt.flushCommentsBefore(part_region.end);
-            try fmt.ensureNewline();
-            fmt.curr_indent -= 1;
-            try fmt.pushIndent();
-        }
-        try fmt.push('}');
-    }
-
-    fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
-        return formatExprInner(fmt, ei, .normal);
-    }
-
-    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!AST.TokenizedRegion {
-        const expr = fmt.ast.store.getExpr(ei);
-        const region = fmt.nodeRegion(@intFromEnum(ei));
-        const multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, ei);
-        const indent_modifier: u32 = @intFromBool(format_behavior == .no_indent_on_access and fmt.curr_indent > 0);
-        const curr_indent: u32 = fmt.curr_indent - indent_modifier;
-        defer {
-            fmt.curr_indent = curr_indent;
-        }
-        switch (expr) {
-            .apply => |a| {
-                _ = try fmt.formatExpr(a.@"fn");
-                const fn_region = fmt.nodeRegion(@intFromEnum(a.@"fn"));
-                const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = region.end };
-                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
-            },
-            .string_part => |s| {
-                try fmt.pushTokenText(s.token);
-            },
-            .string => |s| {
-                try fmt.push('"');
-                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
-                    const e = fmt.ast.store.getExpr(idx);
-                    switch (e) {
-                        .string_part => |str| {
-                            try fmt.pushTokenText(str.token);
-                        },
-                        else => try fmt.formatStringInterpolation(idx),
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    // Add newline before comment if we haven't found any yet
+                    if (!found_any) {
+                        try self.ensureNewline();
                     }
-                }
-                try fmt.push('"');
-            },
-            .multiline_string => |s| {
-                // check if this region starts on a new line
-                var has_newline_before = true;
-                if (s.region.start != 0) {
-                    const start_offset = fmt.ast.tokens.resolve(s.region.start - 1).end.offset;
-                    const end_offset = fmt.ast.tokens.resolve(s.region.start).start.offset;
-                    has_newline_before = std.mem.indexOfScalar(u8, fmt.ast.env.source[start_offset..end_offset], '\n') != null;
-                }
-                if (!has_newline_before) {
-                    fmt.curr_indent += 1;
-                }
-                var add_newline = false;
-                try fmt.pushAll("\"\"\"");
-                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
-                    const e = fmt.ast.store.getExpr(idx);
-                    switch (e) {
-                        .string_part => |str| {
-                            if (add_newline) {
-                                // Comments could be located before the MultilineStringStart token, not the StringPart token
-                                _ = try fmt.flushCommentsBefore(str.region.start - 1);
-                                try ensureNewline(fmt);
-                                try fmt.pushIndent();
-                                try fmt.pushAll("\"\"\"");
-                            }
 
-                            add_newline = true;
-                            try fmt.pushTokenText(str.token);
-                        },
-                        else => {
-                            add_newline = false;
-                            try fmt.formatStringInterpolation(idx);
-                        },
-                    }
-                }
-            },
-            .single_quote => |s| {
-                try fmt.pushTokenText(s.token);
-            },
-            .ident => |i| {
-                const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
+                    try self.pushIndent();
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
+                    try self.newline();
 
-                for (qualifier_tokens) |tok_idx| {
-                    const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushTokenText(tok);
-                    try fmt.push('.');
-                }
-
-                try fmt.pushTokenText(i.token);
-            },
-            .field_access => |fa| {
-                _ = try fmt.formatExpr(fa.left);
-                const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
-                if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.push('.');
-                _ = try fmt.formatExprInner(fa.right, .no_indent_on_access);
-            },
-            .local_dispatch => |ld| {
-                _ = try fmt.formatExpr(ld.left);
-                if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
-                    if (format_behavior == .normal) {
-                        fmt.curr_indent += 1;
-                    }
-                    try fmt.pushIndent();
-                }
-                try fmt.pushAll("->");
-                if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
-                    try fmt.pushIndent();
-                }
-                _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-            },
-            .int => |i| {
-                try fmt.pushTokenText(i.token);
-            },
-            .frac => |f| {
-                try fmt.pushTokenText(f.token);
-            },
-            .list => |l| {
-                try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
-            },
-            .tuple => |t| {
-                try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
-            },
-            .record => |r| {
-                try fmt.push('{');
-
-                const fields = fmt.ast.store.recordFieldSlice(r.fields);
-                var has_extension = false;
-
-                // Handle extension if present
-                if (r.ext) |ext| {
-                    if (multiline) {
-                        _ = try fmt.flushCommentsAfter(r.region.start);
-                        fmt.curr_indent += 1;
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushAll("..");
-                    _ = try fmt.formatExpr(ext);
-                    has_extension = true;
-
-                    try fmt.push(',');
-                    if (multiline and fields.len > 0) {
-                        try fmt.newline();
-                        try fmt.pushIndent();
-                    }
-                }
-
-                // Format fields
-                if (multiline and !has_extension and fields.len > 0) {
-                    _ = try fmt.flushCommentsAfter(r.region.start);
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-
-                for (fields, 0..) |field_idx, i| {
-                    if (!multiline) {
-                        try fmt.push(' ');
-                    }
-                    const field_region = try fmt.formatRecordField(field_idx);
-                    if (multiline) {
-                        try fmt.push(',');
-                        _ = try fmt.flushCommentsAfter(field_region.end);
-                        try fmt.ensureNewline();
-                        if (i < fields.len - 1) {
-                            try fmt.pushIndent();
-                        }
-                    } else if (i < fields.len - 1) {
-                        try fmt.pushAll(",");
-                    }
-                }
-
-                if (has_extension or fields.len > 0) {
-                    if (multiline) {
-                        fmt.curr_indent -= 1;
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                }
-                try fmt.push('}');
-            },
-            .lambda => |l| {
-                const args = fmt.ast.store.patternSlice(l.args);
-                const body_region = fmt.nodeRegion(@intFromEnum(l.body));
-                const args_region = fmt.regionInSlice(AST.Pattern.Idx, args);
-                const args_are_multiline = args.len > 0 and
-                    (fmt.ast.regionIsMultiline(.{ .start = args_region.start - 1, .end = args_region.end + 1 }) or
-                        fmt.nodesWillBeMultiline(AST.Pattern.Idx, args));
-                try fmt.push('|');
-                if (args_are_multiline) {
-                    fmt.curr_indent += 1;
-                    _ = try fmt.flushCommentsAfter(l.region.start);
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                for (args, 0..) |arg, i| {
-                    const arg_region = try fmt.formatPattern(arg);
-                    if (args_are_multiline) {
-                        try fmt.push(',');
-                        _ = try fmt.flushCommentsAfter(arg_region.end);
-                        try fmt.ensureNewline();
-                        if (i < args.len - 1) {
-                            try fmt.pushIndent();
-                        }
-                    } else if (i < args.len - 1) {
-                        try fmt.pushAll(", ");
-                    }
-                }
-                if (args_are_multiline) {
-                    fmt.curr_indent -= 1;
-                }
-                try fmt.push('|');
-                if (try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(l.body);
-            },
-            .unary_op => |op| {
-                try fmt.pushTokenText(op.operator);
-                _ = try fmt.formatExpr(op.expr);
-            },
-            .bin_op => |op| {
-                if (fmt.flags == .debug_binop) {
-                    try fmt.push('(');
-                    if (multiline) {
-                        try fmt.newline();
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    }
-                }
-                _ = try fmt.formatExpr(op.left);
-                var pushed = false;
-                if (multiline and try fmt.flushCommentsBefore(op.operator)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                    pushed = true;
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.pushTokenText(op.operator);
-                const right_region = fmt.nodeRegion(@intFromEnum(op.right));
-                if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
-                    fmt.curr_indent += if (pushed) 0 else 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(op.right);
-                if (fmt.flags == .debug_binop) {
-                    if (multiline) {
-                        fmt.curr_indent -= 1;
-                        try fmt.pushIndent();
-                    }
-                    try fmt.push(')');
-                }
-            },
-            .suffix_single_question => |s| {
-                _ = try fmt.formatExpr(s.expr);
-                try fmt.push('?');
-            },
-            .tag => |t| {
-                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
-
-                for (qualifier_tokens) |tok_idx| {
-                    const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushTokenText(tok);
-                    try fmt.push('.');
-                }
-
-                try fmt.pushTokenText(t.token);
-            },
-            .if_then_else => |i| {
-                try fmt.pushAll("if");
-                const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
-                var flushed = try fmt.flushCommentsBefore(cond_region.start);
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(i.condition);
-                const then_region = fmt.nodeRegion(@intFromEnum(i.then));
-                flushed = try fmt.flushCommentsBefore(then_region.start);
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(i.then);
-                flushed = try fmt.flushCommentsBefore(then_region.end);
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.pushAll("else");
-                const else_region = fmt.nodeRegion(@intFromEnum(i.@"else"));
-                flushed = try fmt.flushCommentsBefore(else_region.start);
-                if (flushed) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(i.@"else");
-            },
-            .match => |m| {
-                try fmt.pushAll("match ");
-                _ = try fmt.formatExpr(m.expr);
-                try fmt.pushAll(" {");
-                fmt.curr_indent += 1;
-                const branch_indent = fmt.curr_indent;
-                const branches = fmt.ast.store.matchBranchSlice(m.branches);
-                if (branches.len == 0) {
-                    try fmt.push('}');
-                    return region;
-                }
-                var branch_region = fmt.nodeRegion(@intFromEnum(branches[0]));
-                for (branches) |b| {
-                    fmt.curr_indent = branch_indent;
-                    branch_region = fmt.nodeRegion(@intFromEnum(b));
-                    const branch = fmt.ast.store.getBranch(b);
-                    _ = try fmt.flushCommentsBefore(branch_region.start);
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                    const pattern_region = try fmt.formatPattern(branch.pattern);
-                    var flushed = try fmt.flushCommentsBefore(pattern_region.end);
-                    if (flushed) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                        try fmt.pushAll("=>");
-                    } else {
-                        try fmt.pushAll(" =>");
-                    }
-                    const body_region = fmt.nodeRegion(@intFromEnum(branch.body));
-                    flushed = try fmt.flushCommentsBefore(body_region.start);
-                    if (flushed) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    _ = try fmt.formatExpr(branch.body);
-                }
-                fmt.curr_indent -= 1;
-                try fmt.newline();
-                try fmt.pushIndent();
-                try fmt.push('}');
-            },
-            .dbg => |d| {
-                try fmt.pushAll("dbg");
-                const expr_node = fmt.nodeRegion(@intFromEnum(d.expr));
-                if (multiline and try fmt.flushCommentsBefore(expr_node.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(d.expr);
-            },
-            .block => |b| {
-                try fmt.formatBlock(b);
-            },
-            .ellipsis => |_| {
-                try fmt.pushAll("...");
-            },
-            .malformed => {
-                // Output nothing for malformed node
-            },
-            else => {
-                std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
-            },
-        }
-        return region;
-    }
-
-    fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) !AST.TokenizedRegion {
-        const field = fmt.ast.store.getPatternRecordField(idx);
-        const multiline = fmt.nodeWillBeMultiline(AST.PatternRecordField.Idx, idx);
-        const curr_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = curr_indent;
-        }
-        if (field.rest) {
-            try fmt.pushAll("..");
-            if (multiline and try fmt.flushCommentsBefore(field.name)) {
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            }
-            if (field.name != 0) {
-                try fmt.pushTokenText(field.name);
-            }
-        } else {
-            try fmt.pushTokenText(field.name);
-            if (field.value) |v| {
-                if (multiline and try fmt.flushCommentsAfter(field.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.push(':');
-                const v_region = fmt.nodeRegion(@intFromEnum(v));
-                if (multiline and try fmt.flushCommentsBefore(v_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatPattern(v);
-            }
-        }
-        return field.region;
-    }
-
-    fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) !AST.TokenizedRegion {
-        const pattern = fmt.ast.store.getPattern(pi);
-        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
-        const multiline = fmt.nodeWillBeMultiline(AST.Pattern.Idx, pi);
-        switch (pattern) {
-            .ident => |i| {
-                region = i.region;
-                try fmt.formatIdent(i.ident_tok, null);
-            },
-            .tag => |t| {
-                region = t.region;
-
-                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
-                for (qualifier_tokens) |tok_idx| {
-                    const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushTokenText(tok);
-                    try fmt.push('.');
-                }
-
-                try fmt.pushTokenText(t.tag_tok);
-                if (t.args.span.len > 0) {
-                    try fmt.formatCollection(region, .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
-                }
-            },
-            .string => |s| {
-                region = s.region;
-                _ = try fmt.formatExpr(s.expr);
-            },
-            .single_quote => |sq| {
-                region = sq.region;
-                try fmt.formatIdent(sq.token, null);
-            },
-            .int => |n| {
-                region = n.region;
-                try fmt.formatIdent(n.number_tok, null);
-            },
-            .frac => |n| {
-                region = n.region;
-                try fmt.formatIdent(n.number_tok, null);
-            },
-            .record => |r| {
-                region = r.region;
-                try fmt.formatCollection(region, .curly, AST.PatternRecordField.Idx, fmt.ast.store.patternRecordFieldSlice(r.fields), Formatter.formatPatternRecordField);
-            },
-            .list => |l| {
-                region = l.region;
-                try fmt.formatCollection(region, .square, AST.Pattern.Idx, fmt.ast.store.patternSlice(l.patterns), Formatter.formatPattern);
-            },
-            .tuple => |t| {
-                region = t.region;
-                try fmt.formatCollection(region, .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.patterns), Formatter.formatPattern);
-            },
-            .list_rest => |r| {
-                region = r.region;
-                const curr_indent = fmt.curr_indent;
-                defer {
-                    fmt.curr_indent = curr_indent;
-                }
-                try fmt.pushAll("..");
-                if (r.name) |n| {
-                    if (multiline and try fmt.flushCommentsAfter(region.start)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushAll("as");
-                    if (multiline and try fmt.flushCommentsBefore(n)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushTokenText(n);
-                }
-            },
-            .underscore => |u| {
-                region = u.region;
-                try fmt.push('_');
-            },
-            .alternatives => |a| {
-                const curr_indent = fmt.curr_indent;
-                defer {
-                    fmt.curr_indent = curr_indent;
-                }
-                region = a.region;
-                const patterns = fmt.ast.store.patternSlice(a.patterns);
-                for (patterns, 0..) |p, i| {
-                    const pattern_region = fmt.nodeRegion(@intFromEnum(p));
-                    _ = try fmt.formatPattern(p);
-                    fmt.curr_indent = curr_indent;
-                    if (i < a.patterns.span.len - 1) {
-                        if (multiline) {
-                            _ = try fmt.flushCommentsBefore(pattern_region.end);
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        } else {
-                            try fmt.push(' ');
-                        }
-                        try fmt.push('|');
-                        const next_region = fmt.nodeRegion(@intFromEnum(patterns[i + 1]));
-                        if (multiline and try fmt.flushCommentsBefore(next_region.start)) {
-                            fmt.curr_indent += 1;
-                            try fmt.pushIndent();
-                        } else {
-                            try fmt.push(' ');
+                    found_any = true;
+                    self.token_cursor += 1;
+                },
+                .BlankLine => {
+                    // Only add a blank line if we don't already have one
+                    // A blank line needs 2 consecutive newlines total
+                    if (self.consecutive_newlines < 2) {
+                        // Add newlines to make a blank line
+                        while (self.consecutive_newlines < 2) {
+                            try self.newline();
                         }
                     }
-                }
-            },
-            .as => |a| {
-                _ = try fmt.formatPattern(a.pattern);
-                try fmt.pushAll(" as ");
-                try fmt.pushTokenText(a.name);
-            },
-            .malformed => {
-                // Output nothing for malformed node
-            },
+                    // If we already have 2+ newlines, skip this blank line token
+                    self.token_cursor += 1;
+                    found_any = true;
+                },
+                else => {
+                    // Skip non-comment tokens
+                    self.token_cursor += 1;
+                },
+            }
         }
-        return region;
+
+        return found_any;
     }
 
-    fn formatExposedItem(fmt: *Formatter, idx: AST.ExposedItem.Idx) !AST.TokenizedRegion {
-        const item = fmt.ast.store.getExposedItem(idx);
-        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
-        switch (item) {
-            .lower_ident => |i| {
-                region = i.region;
-                try fmt.pushTokenText(i.ident);
-                if (i.as) |a| {
-                    try fmt.pushAll(" as ");
-                    try fmt.pushTokenText(a);
-                }
-            },
-            .upper_ident => |i| {
-                region = i.region;
-                try fmt.pushTokenText(i.ident);
-                if (i.as) |a| {
-                    try fmt.pushAll(" as ");
-                    try fmt.pushTokenText(a);
-                }
-            },
-            .upper_ident_star => |i| {
-                region = i.region;
-                try fmt.pushTokenText(i.ident);
-                try fmt.pushAll(".*");
-            },
-            .malformed => |m| {
-                region = m.region;
-                // Don't format malformed exposed items - they'll be reported as errors
-            },
+    /// Flush any comment and blank line tokens before the given position
+    fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
+        var found_any = false;
+
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+
+            // Stop if we've reached or passed the position
+            if (token.region.start.offset >= pos.offset) {
+                break;
+            }
+
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    // Ensure we're on a new line before outputting the comment
+                    if (!self.has_newline) {
+                        // Check if we need a space before the comment
+                        if (self.output.items.len > 0 and self.output.items[self.output.items.len - 1] != ' ') {
+                            try self.pushAll(" ");
+                        }
+                    } else {
+                        try self.pushIndent();
+                    }
+
+                    // Output the comment text (doesn't include newline)
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
+
+                    // Add newline after comment
+                    try self.newline();
+
+                    found_any = true;
+                    self.token_cursor += 1;
+                },
+                .BlankLine => {
+                    // Only add a blank line if we don't already have one
+                    // A blank line needs 2 consecutive newlines total
+                    if (self.consecutive_newlines < 2) {
+                        // Add newlines to make a blank line
+                        while (self.consecutive_newlines < 2) {
+                            try self.newline();
+                        }
+                    }
+                    // If we already have 2+ newlines, skip this blank line token
+                    self.token_cursor += 1;
+                    found_any = true;
+                },
+                else => {
+                    // Skip non-comment/blank tokens but keep looking for comments
+                    // This ensures we find all comments before the target position
+                    self.token_cursor += 1;
+                },
+            }
         }
 
-        return region;
+        return found_any;
     }
 
-    fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) !void {
-        const header = fmt.ast.store.getHeader(hi);
-        const start_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = start_indent;
+    /// Binary search to find the first token at or after the given offset
+    fn findFirstTokenAtOrAfter(self: *const Formatter, offset: usize) usize {
+        var left: usize = 0;
+        var right = self.tokens.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < offset) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
         }
+        return left;
+    }
 
-        const multiline = fmt.nodeWillBeMultiline(AST.Header.Idx, hi);
+    /// Helper function to check if there's a trailing comma after a given offset
+    /// Uses binary search to efficiently find the position in the tokens array
+    fn hasTrailingCommaAfterOffset(self: *const Formatter, offset: usize) bool {
+        // Find first token at or after the offset
+        var cursor = self.findFirstTokenAtOrAfter(offset);
+
+        // Look for a comma token after the offset
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+            switch (token.tag) {
+                .Comma => return true,
+                .CloseCurly => return false, // Found the closing brace
+                .LineComment, .DocComment => continue, // Skip comments
+                else => return false, // Any other token means no trailing comma
+            }
+        }
+        return false;
+    }
+
+    fn formatHeader(self: *Formatter, header: AST.Header) !void {
         switch (header) {
-            .app => |a| {
-                const provides = fmt.ast.store.getCollection(a.provides);
-                try fmt.pushAll("app");
-                if (multiline and try fmt.flushCommentsAfter(a.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-
-                try fmt.formatCollection(
-                    provides.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
-                    Formatter.formatExposedItem,
-                );
-
-                if (multiline and try fmt.flushCommentsBefore(provides.region.end)) {
-                    if (fmt.curr_indent == start_indent) {
-                        fmt.curr_indent += 1;
-                    }
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                const packages = fmt.ast.store.getCollection(a.packages);
-                const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, a.packages);
-                try fmt.push('{');
-                if (packages_multiline) {
-                    fmt.curr_indent += 1;
-                } else {
-                    try fmt.push(' ');
-                }
-
-                var platform_field: ?AST.RecordField.Idx = null;
-                var package_fields_list = try std.ArrayListUnmanaged(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
-                const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
-                for (packages_slice) |package_idx| {
-                    if (package_idx == a.platform_idx) {
-                        platform_field = package_idx;
-                        continue;
-                    }
-                    try package_fields_list.append(fmt.ast.store.gpa, package_idx);
-                }
-                const package_fields = try package_fields_list.toOwnedSlice(fmt.ast.store.gpa);
-                defer fmt.ast.store.gpa.free(package_fields);
-
-                if (platform_field) |field_idx| {
-                    const field = fmt.ast.store.getRecordField(field_idx);
-                    if (packages_multiline) {
-                        _ = try fmt.flushCommentsBefore(field.region.start);
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    }
-                    try fmt.pushTokenText(field.name);
-                    if (field.value) |v| {
-                        try fmt.push(':');
-                        try fmt.push(' ');
-                        try fmt.pushAll("platform");
-                        try fmt.push(' ');
-                        _ = try fmt.formatExpr(v);
-                    }
-                    if (packages_multiline) {
-                        try fmt.push(',');
-                    } else if (package_fields.len > 0) {
-                        try fmt.pushAll(", ");
-                    }
-                }
-                for (package_fields, 0..) |field_idx, i| {
-                    const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
-                    if (packages_multiline) {
-                        _ = try fmt.flushCommentsBefore(item_region.start);
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    }
-                    _ = try fmt.formatRecordField(field_idx);
-                    if (packages_multiline) {
-                        try fmt.push(',');
-                    } else if (i < package_fields.len - 1) {
-                        try fmt.pushAll(", ");
-                    }
-                }
-                if (packages_multiline) {
-                    _ = try fmt.flushCommentsBefore(packages.region.end - 1);
-                    fmt.curr_indent -= 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-
-                try fmt.push('}');
-            },
             .module => |m| {
-                try fmt.pushAll("module");
-                const exposes = fmt.ast.store.getCollection(m.exposes);
-                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatCollection(
-                    exposes.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
-                    Formatter.formatExposedItem,
-                );
+                _ = try self.flushCommentsBeforePosition(m.region);
+                try self.pushAll("module");
+
+                // Format the exposed list
+                try self.formatExposedList(m.exposes);
             },
-            .hosted => |h| {
-                try fmt.pushAll("hosted");
-                const exposes = fmt.ast.store.getCollection(h.exposes);
-                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+            .app => |a| {
+                _ = try self.flushCommentsBeforePosition(a.region);
+                try self.pushAll("app");
+
+                // Format exports list BEFORE packages
+                if (a.exposes != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    try self.pushAll(" ");
+                    try self.formatExposedList(a.exposes);
                 }
-                try fmt.formatCollection(
-                    exposes.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
-                    Formatter.formatExposedItem,
-                );
+
+                // Check if we need multiline formatting
+                const packages_idx = a.packages;
+                var needs_multiline = false;
+
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    // Use multiline only if we have multiple packages
+                    // Single package with platform clause should stay on one line
+                    var package_count: usize = 0;
+
+                    var check_it = self.ast.node_slices.nodes(&packages_idx);
+                    while (check_it.next()) |_| {
+                        package_count += 1;
+                    }
+
+                    // Check if there are comments between packages or a trailing comma
+                    var pkg_iter = self.ast.node_slices.nodes(&packages_idx);
+                    var prev_end: usize = 0;
+                    while (pkg_iter.next()) |pkg_idx| {
+                        const pkg_node = self.getNode(pkg_idx);
+                        if (prev_end > 0 and self.hasCommentBetween(prev_end, pkg_node.region.start.offset)) {
+                            needs_multiline = true;
+                            break;
+                        }
+                        prev_end = pkg_node.region.end.offset;
+                    }
+
+                    // Also check for trailing comma after last package using tokens
+                    if (!needs_multiline and prev_end > 0) {
+                        needs_multiline = self.hasTrailingCommaAfterOffset(prev_end);
+                    }
+                }
+
+                if (needs_multiline) {
+                    // Multiline format with proper comment preservation
+
+                    // Comments after "app" keyword will be handled when we flush before the next token
+
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                    try self.push('{');
+                    try self.ensureNewline();
+                    self.curr_indent_level += 1;
+
+                    if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                        var it = self.ast.node_slices.nodes(&packages_idx);
+                        while (it.next()) |pkg| {
+                            const pkg_node = self.getNode(pkg);
+
+                            // Flush any comments before this package
+                            _ = try self.flushCommentsBeforePosition(pkg_node.region.start);
+
+                            try self.pushIndent();
+
+                            if (pkg_node.tag == .binop_colon) {
+                                const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
+                                try self.formatNode(binop.lhs);
+                                try self.push(':');
+                                try self.ensureSpace();
+
+                                const value_node = self.getNode(binop.rhs);
+                                if (value_node.tag == .binop_platform) {
+                                    const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
+                                    // Format: "path" platform [exports]
+                                    try self.formatNode(platform_binop.lhs); // The path string
+                                    try self.pushAll(" platform ");
+
+                                    // Platform exports should always format as list
+                                    try self.formatPlatformExports(platform_binop.rhs);
+                                } else {
+                                    try self.formatNode(binop.rhs);
+                                }
+                            } else {
+                                try self.formatNode(pkg);
+                            }
+
+                            try self.push(',');
+                            try self.ensureNewline();
+                        }
+                    }
+
+                    self.curr_indent_level -= 1;
+                    try self.pushIndent();
+                    try self.push('}');
+                } else {
+                    // Single line format (simpler case)
+                    try self.ensureSpace();
+                    try self.pushAll("{ ");
+                    if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                        var it = self.ast.node_slices.nodes(&packages_idx);
+                        var first = true;
+                        while (it.next()) |pkg| {
+                            if (!first) try self.pushAll(", ");
+                            first = false;
+                            const pkg_node = self.getNode(pkg);
+                            if (pkg_node.tag == .binop_colon) {
+                                const binop = self.ast.node_slices.binOp(pkg_node.payload.binop);
+
+                                try self.formatNode(binop.lhs);
+                                try self.push(':');
+                                try self.ensureSpace();
+                                const value_node = self.getNode(binop.rhs);
+                                if (value_node.tag == .binop_platform) {
+                                    const platform_binop = self.ast.node_slices.binOp(value_node.payload.binop);
+                                    // Format: "path" platform [exports]
+                                    try self.formatNode(platform_binop.lhs); // The path string
+                                    try self.pushAll(" platform ");
+
+                                    // Platform exports should always format as list
+                                    try self.formatPlatformExports(platform_binop.rhs);
+                                } else {
+                                    try self.formatNode(binop.rhs);
+                                }
+                            } else {
+                                try self.formatNode(pkg);
+                            }
+                        }
+                    }
+                    try self.ensureSpace();
+                    try self.push('}');
+                }
             },
             .package => |p| {
-                try fmt.pushAll("package");
-                if (multiline) {
-                    _ = try fmt.flushCommentsAfter(p.region.start);
-                    try fmt.ensureNewline();
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                _ = try self.flushCommentsBeforePosition(p.region);
+                try self.pushAll("package");
+
+                // Comments after package keyword will be handled when we flush before the next token
+
+                // Format exposes
+                try self.formatExposedList(p.exposes);
+
+                // Format packages
+                const packages_idx = p.packages;
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    try self.pushAll(" packages ");
+                    try self.push('{');
+                    var it = self.ast.node_slices.nodes(&packages_idx);
+                    var first = true;
+                    while (it.next()) |pkg| {
+                        if (!first) try self.pushAll(", ");
+                        first = false;
+                        try self.formatNode(pkg);
+                    }
+                    try self.push('}');
                 }
-                // TODO: This needs to be extended to the next CloseSquare
-                const exposes = fmt.ast.store.getCollection(p.exposes);
-                const exposesItems = fmt.ast.store.exposedItemSlice(.{ .span = exposes.span });
-                try fmt.formatCollection(
-                    exposes.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    exposesItems,
-                    Formatter.formatExposedItem,
-                );
-                if (multiline) {
-                    try fmt.newline();
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                const packages = fmt.ast.store.getCollection(p.packages);
-                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
-                try fmt.formatCollection(
-                    packages.region,
-                    .curly,
-                    AST.RecordField.Idx,
-                    packagesItems,
-                    Formatter.formatRecordField,
-                );
             },
             .platform => |p| {
-                try fmt.pushAll("platform");
-                if (try fmt.flushCommentsAfter(p.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                _ = try self.flushCommentsBeforePosition(p.region);
+                try self.pushAll("platform");
+
+                // Comments after platform keyword will be handled when we flush before the next token
+
+                // Format name
+                try self.pushAll(" ");
+                try self.formatNode(p.name);
+
+                // Format requires if present
+                if (p.requires_rigids != collections.NodeSlices(Node.Idx).Idx.NIL or @intFromEnum(p.requires_signatures) != std.math.minInt(i32)) {
+                    try self.pushAll(" requires ");
+
+                    // Format rigids
+                    const rigids_idx = p.requires_rigids;
+                    if (rigids_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                        try self.push('{');
+                        var it = self.ast.node_slices.nodes(&rigids_idx);
+                        var first = true;
+                        while (it.next()) |rigid| {
+                            if (!first) try self.pushAll(", ");
+                            first = false;
+                            try self.formatNode(rigid);
+                        }
+                        try self.pushAll("} ");
+                    }
+
+                    // Format signatures
+                    try self.formatNode(p.requires_signatures);
                 }
-                try fmt.push('"');
-                try fmt.pushTokenText(p.name);
-                try fmt.push('"');
 
-                _ = try fmt.flushCommentsAfter(p.name + 1);
-                try fmt.ensureNewline();
-                fmt.curr_indent = start_indent + 1;
-                try fmt.pushIndent();
+                // Format exposes
+                try self.pushAll(" exposes");
+                try self.formatExposedList(p.exposes);
 
-                try fmt.pushAll("requires");
-                const rigids = fmt.ast.store.getCollection(p.requires_rigids);
-                if (try fmt.flushCommentsBefore(rigids.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                // Format packages
+                const packages_idx = p.packages;
+                if (packages_idx != collections.NodeSlices(Node.Idx).Idx.NIL) {
+                    try self.pushAll(" packages ");
+                    try self.push('{');
+                    var it = self.ast.node_slices.nodes(&packages_idx);
+                    var first = true;
+                    while (it.next()) |pkg| {
+                        if (!first) try self.pushAll(", ");
+                        first = false;
+                        try self.formatNode(pkg);
+                    }
+                    try self.push('}');
                 }
-                try fmt.formatCollection(
-                    rigids.region,
-                    .curly,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = rigids.span }),
-                    Formatter.formatExposedItem,
-                );
-                if (try fmt.flushCommentsBefore(rigids.region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatTypeAnno(p.requires_signatures);
-
-                const signatures_region = fmt.nodeRegion(@intFromEnum(p.requires_signatures));
-                _ = try fmt.flushCommentsBefore(signatures_region.end);
-                try fmt.ensureNewline();
-                fmt.curr_indent = start_indent + 1;
-                try fmt.pushIndent();
-
-                try fmt.pushAll("exposes");
-                const exposes = fmt.ast.store.getCollection(p.exposes);
-                if (try fmt.flushCommentsBefore(exposes.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatCollection(
-                    exposes.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
-                    Formatter.formatExposedItem,
-                );
-
-                _ = try fmt.flushCommentsBefore(exposes.region.end);
-                try fmt.ensureNewline();
-                fmt.curr_indent = start_indent + 1;
-                try fmt.pushIndent();
-
-                try fmt.pushAll("packages");
-                const packages = fmt.ast.store.getCollection(p.packages);
-                if (try fmt.flushCommentsBefore(packages.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatCollection(
-                    packages.region,
-                    .curly,
-                    AST.RecordField.Idx,
-                    fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
-                    Formatter.formatRecordField,
-                );
-
-                _ = try fmt.flushCommentsBefore(packages.region.end);
-                try fmt.ensureNewline();
-                fmt.curr_indent = start_indent + 1;
-                try fmt.pushIndent();
-
-                try fmt.pushAll("provides");
-                const provides = fmt.ast.store.getCollection(p.provides);
-                if (try fmt.flushCommentsBefore(provides.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatCollection(
-                    provides.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
-                    Formatter.formatExposedItem,
-                );
             },
-            .malformed => {},
+            .hosted => |h| {
+                _ = try self.flushCommentsBeforePosition(h.region);
+                try self.pushAll("hosted");
+
+                // Format exposes
+                try self.formatExposedList(h.exposes);
+            },
+            .interface => |i| {
+                _ = try self.flushCommentsBeforePosition(i.region);
+                try self.pushAll("interface");
+
+                // Format exposes
+                try self.formatExposedList(i.exposes);
+            },
+            .malformed => |m| {
+                _ = try self.flushCommentsBeforePosition(m.region);
+                // Malformed headers just get flushed as-is
+            },
         }
     }
 
-    fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
-        return fmt.ast.store.nodes.items.items(.region)[idx];
-    }
+    fn formatExposedList(self: *Formatter, exposes_idx: collections.NodeSlices(Node.Idx).Idx) !void {
+        try self.ensureSpace();
+        try self.pushAll("[");
 
-    fn formatBlock(fmt: *Formatter, block: AST.Block) !void {
-        if (block.statements.span.len > 0) {
-            fmt.curr_indent += 1;
-            try fmt.push('{');
-            for (fmt.ast.store.statementSlice(block.statements), 0..) |s, i| {
-                const region = fmt.nodeRegion(@intFromEnum(s));
-                _ = try fmt.flushCommentsBefore(region.start);
-                try fmt.ensureNewline();
-                try fmt.pushIndent();
-                try fmt.formatStatement(s);
+        // Check if we have exposed items
+        // NodeSlices uses NIL (minInt(i32)) for empty, all other values are valid indices
+        if (exposes_idx == collections.NodeSlices(Node.Idx).Idx.NIL) {
+            // Truly empty list
+            try self.push(']');
+            return;
+        }
 
-                if (i == block.statements.span.len - 1) {
-                    _ = try fmt.flushCommentsBefore(region.end);
+        // Count items and check for comments to decide on formatting
+        var item_count: usize = 0;
+        var has_comments = false;
+        var iter = self.ast.node_slices.nodes(&exposes_idx);
+
+        // Get the first node to check for comments before it
+        var first_node_idx: ?Node.Idx = null;
+
+        // First pass: count and check for complexity
+        while (iter.next()) |node_idx| {
+            item_count += 1;
+            if (first_node_idx == null) {
+                first_node_idx = node_idx;
+            }
+            const node = self.getNode(node_idx);
+
+            // Check if there are comments before this node
+            // Save current cursor position and check ahead
+            const saved_cursor = self.token_cursor;
+            var check_cursor = self.token_cursor;
+            while (check_cursor < self.tokens.len) : (check_cursor += 1) {
+                const token = self.tokens[check_cursor];
+                if (token.region.start.offset >= node.region.start.offset) break;
+                switch (token.tag) {
+                    .LineComment, .DocComment => {
+                        has_comments = true;
+                        break;
+                    },
+                    else => {},
                 }
             }
-            try fmt.ensureNewline();
-            fmt.curr_indent -= 1;
-            try fmt.pushIndent();
-            try fmt.push('}');
-        } else {
-            try fmt.pushAll("{}");
+            self.token_cursor = saved_cursor;
         }
-    }
 
-    fn formatTypeHeader(fmt: *Formatter, header: AST.TypeHeader.Idx) !void {
-        // Check if the type header node is malformed before calling getTypeHeader
-        const h = fmt.ast.store.getTypeHeader(header) catch {
-            // Handle malformed type header by outputting placeholder text
-            try fmt.pushAll("<malformed>");
-            return;
-        };
+        // Use multiline if there are comments or trailing comma
+        // Check for trailing comma using tokens
+        var has_trailing_comma = false;
+        if (item_count > 0) {
+            // Reset iterator to find last item
+            iter = self.ast.node_slices.nodes(&exposes_idx);
+            var last_node_idx: Node.Idx = undefined;
+            while (iter.next()) |n| {
+                last_node_idx = n;
+            }
+            const last_node = self.getNode(last_node_idx);
 
-        try fmt.pushTokenText(h.name);
-        if (h.args.span.len > 0) {
-            try fmt.formatCollection(h.region, .round, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
-        }
-    }
-
-    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.AnnoRecordField.Idx) !AST.TokenizedRegion {
-        const curr_indent = fmt.curr_indent;
-        defer {
-            fmt.curr_indent = curr_indent;
-        }
-        const field = fmt.ast.store.getAnnoRecordField(idx) catch |err| switch (err) {
-            error.MalformedNode => {
-                // Return empty region for malformed fields - they were already handled during parsing
-                return AST.TokenizedRegion{ .start = 0, .end = 0 };
-            },
-        };
-        const multiline = fmt.nodeWillBeMultiline(AST.AnnoRecordField.Idx, idx);
-        try fmt.pushTokenText(field.name);
-        if (multiline and try fmt.flushCommentsAfter(field.name)) {
-            fmt.curr_indent += 1;
-            try fmt.pushIndent();
-        } else {
-            try fmt.push(' ');
-        }
-        try fmt.push(':');
-        const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
-        if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
-            fmt.curr_indent += 1;
-            try fmt.pushIndent();
-        } else {
-            try fmt.push(' ');
-        }
-        _ = try fmt.formatTypeAnno(field.ty);
-        return field.region;
-    }
-
-    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx) !void {
-        const clause = fmt.ast.store.getWhereClause(idx);
-        const start_indent = fmt.curr_indent;
-        defer fmt.curr_indent = start_indent;
-
-        const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
-        switch (clause) {
-            .mod_method => |c| {
-                try fmt.pushAll("module(");
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.pushTokenText(c.var_tok);
-                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
-                    fmt.curr_indent = start_indent;
-                    try fmt.pushIndent();
-                }
-                try fmt.push(')');
-                try fmt.push('.');
-                try fmt.pushTokenText(c.name_tok);
-                try fmt.pushAll(" :");
-                const args_coll = fmt.ast.store.getCollection(c.args);
-                const ret_region = fmt.nodeRegion(@intFromEnum(c.ret_anno));
-
-                fmt.curr_indent = start_indent;
-                if (args_coll.span.len > 0) {
-                    if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    } else {
-                        try fmt.push(' ');
-                    }
-                    const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
-                    // Format function arguments without parentheses (like regular function types)
-                    for (args, 0..) |arg_idx, i| {
-                        const arg_region = fmt.nodeRegion(@intFromEnum(arg_idx));
-                        if (multiline and i > 0) {
-                            _ = try fmt.flushCommentsBefore(arg_region.start);
-                            try fmt.ensureNewline();
-                            try fmt.pushIndent();
-                        }
-                        _ = try fmt.formatTypeAnno(arg_idx);
-                        if (i < args.len - 1) {
-                            if (multiline) {
-                                try fmt.push(',');
-                            } else {
-                                try fmt.pushAll(", ");
-                            }
-                        } else {
-                            if (multiline and try fmt.flushCommentsAfter(arg_region.end - 1)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                                try fmt.pushAll("->");
-                            } else {
-                                try fmt.pushAll(" ->");
-                            }
-                        }
-                    }
-                }
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
+            // Use binary search to find tokens after the last node
+            var cursor: usize = 0;
+            var search_end = self.tokens.len;
+            while (cursor < search_end) {
+                const mid = cursor + (search_end - cursor) / 2;
+                if (self.tokens[mid].region.start.offset < last_node.region.end.offset) {
+                    cursor = mid + 1;
                 } else {
-                    try fmt.push(' ');
+                    search_end = mid;
                 }
-                _ = try fmt.formatTypeAnno(c.ret_anno);
-            },
-            .mod_alias => |c| {
-                try fmt.pushAll("module(");
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
-                try fmt.pushTokenText(c.var_tok);
-                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
-                    fmt.curr_indent = start_indent;
-                    try fmt.pushIndent();
-                }
-                try fmt.push(')');
-                try fmt.push('.');
-                try fmt.pushTokenText(c.name_tok);
-            },
-            .malformed => {
-                // Output nothing for malformed node
-            },
-        }
-    }
+            }
 
-    fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) !AST.TokenizedRegion {
-        const a = fmt.ast.store.getTypeAnno(anno);
-        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
-        const multiline = fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, anno);
-        switch (a) {
-            .apply => |app| {
-                const slice = fmt.ast.store.typeAnnoSlice(app.args);
-                const first = slice[0];
-                _ = try fmt.formatTypeAnno(first);
-                const rest = slice[1..];
-                try fmt.formatCollection(app.region, .round, AST.TypeAnno.Idx, rest, Formatter.formatTypeAnno);
-            },
-            .ty_var => |v| {
-                region = v.region;
-                try fmt.pushTokenText(v.tok);
-            },
-            .underscore_type_var => |utv| {
-                region = utv.region;
-                try fmt.pushTokenText(utv.tok);
-            },
-            .ty => |t| {
-                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
-
-                for (qualifier_tokens) |tok_idx| {
-                    const tok = @as(Token.Idx, @intCast(tok_idx));
-                    try fmt.pushTokenText(tok);
-                    try fmt.push('.');
+            // Look for a comma token immediately after the last node
+            while (cursor < self.tokens.len) : (cursor += 1) {
+                const token = self.tokens[cursor];
+                switch (token.tag) {
+                    .Comma => {
+                        has_trailing_comma = true;
+                        break;
+                    },
+                    .CloseSquare => break, // Found the closing bracket, no trailing comma
+                    .LineComment, .DocComment => continue, // Skip comments
+                    else => break, // Any other token means no trailing comma
                 }
-
-                try fmt.pushTokenText(t.token);
-            },
-            .tuple => |t| {
-                region = t.region;
-                try fmt.formatCollection(t.region, .round, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);
-            },
-            .record => |r| {
-                region = r.region;
-                try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
-            },
-            .tag_union => |t| {
-                region = t.region;
-                try fmt.formatCollection(t.region, .square, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(t.tags), Formatter.formatTypeAnno);
-            },
-            .@"fn" => |f| {
-                region = f.region;
-
-                const args = fmt.ast.store.typeAnnoSlice(f.args);
-                for (args, 0..) |idx, i| {
-                    const arg_region = fmt.nodeRegion(@intFromEnum(idx));
-                    if (multiline and i > 0) {
-                        _ = try fmt.flushCommentsBefore(arg_region.start);
-                        try fmt.ensureNewline();
-                        try fmt.pushIndent();
-                    }
-                    _ = try fmt.formatTypeAnno(idx);
-                    if (i < args.len - 1) {
-                        if (multiline) {
-                            try fmt.push(',');
-                        } else {
-                            try fmt.pushAll(", ");
-                        }
-                    }
-                }
-                try fmt.pushAll(if (f.effectful) " =>" else " ->");
-                const ret_region = fmt.nodeRegion(@intFromEnum(f.ret));
-                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-
-                _ = try fmt.formatTypeAnno(f.ret);
-            },
-            .parens => |p| {
-                region = p.region;
-                try fmt.push('(');
-                if (multiline) {
-                    _ = try fmt.flushCommentsAfter(region.start);
-                    fmt.curr_indent += 1;
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                const anno_region = try fmt.formatTypeAnno(p.anno);
-                _ = try fmt.flushCommentsBefore(anno_region.end);
-                try fmt.push(')');
-            },
-            .underscore => |u| {
-                region = u.region;
-                try fmt.push('_');
-            },
-            .malformed => {
-                // Output nothing for malformed node
-            },
+            }
         }
 
-        return region;
-    }
+        const multiline = has_comments or has_trailing_comma;
 
-    fn ensureNewline(fmt: *Formatter) !void {
-        if (fmt.has_newline) {
-            return;
+        if (multiline) {
+            self.curr_indent_level += 1;
+            // Check for comments after the opening bracket before newline
+            if (first_node_idx) |first_idx| {
+                const first_node = self.getNode(first_idx);
+                _ = try self.flushCommentsBeforePosition(first_node.region.start);
+            }
+            try self.ensureNewline();
         }
-        try fmt.newline();
-    }
 
-    fn newline(fmt: *Formatter) !void {
-        try fmt.push('\n');
-    }
+        // Reset iterator for second pass
+        iter = self.ast.node_slices.nodes(&exposes_idx);
+        var first = true;
 
-    fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
-        const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
-        const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
-    }
-
-    fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
-        const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
-        const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
-        return fmt.flushComments(fmt.ast.env.source[start..end]);
-    }
-
-    fn flushComments(fmt: *Formatter, between_text: []const u8) !bool {
-        var found_comment = false;
-        var newline_count: usize = 0;
-        var i: usize = 0;
-        while (i < between_text.len) {
-            if (between_text[i] == '#') {
-                // Found a comment, extract it
-                const comment_start = i + 1; // Skip the #
-                var comment_end = comment_start;
-                while (comment_end < between_text.len and between_text[comment_end] != '\n' and between_text[comment_end] != '\r') {
-                    comment_end += 1;
+        while (iter.next()) |node_idx| {
+            if (multiline) {
+                // For items after the first, check for comments
+                if (!first) {
+                    const node = self.getNode(node_idx);
+                    _ = try self.flushCommentsBeforePosition(node.region.start);
                 }
-
-                if (comment_end > comment_start) {
-                    if (found_comment or newline_count > 0) {
-                        try fmt.pushIndent();
-                    } else if (!fmt.has_newline) {
-                        try fmt.pushAll(" ");
-                    }
-                    try fmt.push('#');
-                    const comment_text = between_text[comment_start..comment_end];
-                    if (comment_text.len > 0 and comment_text[0] != ' ') {
-                        try fmt.push(' ');
-                    }
-                    try fmt.pushAll(comment_text);
-                    found_comment = true;
-                }
-                try fmt.newline();
-                newline_count += 1;
-                i = comment_end;
-                if (i < between_text.len and (between_text[i] == '\n' or between_text[i] == '\r')) {
-                    i += 1; // Skip any additional newlines
-                }
-            } else if (between_text[i] == '\n') {
-                try fmt.newline();
-                newline_count += 1;
-                i += 1;
+                try self.pushIndent();
             } else {
-                i += 1;
+                if (!first) try self.pushAll(", ");
+            }
+
+            try self.formatNode(node_idx);
+
+            if (multiline) {
+                try self.push(',');
+                try self.ensureNewline();
+            }
+
+            first = false;
+        }
+
+        if (multiline) {
+            self.curr_indent_level -= 1;
+            try self.pushIndent();
+        }
+
+        try self.push(']');
+    }
+
+    fn formatNode(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        // Flush any comments before this node
+        _ = try self.flushCommentsBeforePosition(node.region.start);
+
+        try self.formatNodeWithoutCommentFlush(node_idx);
+
+        // Check for blank lines after this node (for separating statement groups)
+        try self.flushBlankLinesAfterPosition(node.region.end);
+    }
+
+    fn formatNodeInBlock(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        // Flush any comments before this node
+        _ = try self.flushCommentsBeforePosition(node.region.start);
+
+        // After flushing comments (which end with a newline) or if no comments,
+        // we're at the start of a line and just need indentation
+        try self.pushIndent();
+
+        try self.formatNodeWithoutCommentFlush(node_idx);
+
+        // Check for blank lines after this node (for separating statement groups)
+        try self.flushBlankLinesAfterPosition(node.region.end);
+    }
+
+    fn flushBlankLinesAfterPosition(self: *Formatter, pos: Position) !void {
+        // Look ahead for blank line tokens immediately after this position
+        if (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+            if (token.tag == .BlankLine and token.region.start.offset >= pos.offset) {
+                // Found a blank line token after this statement
+                // Add an extra newline to create the blank line
+
+                // Debug: Make sure we just add a clean newline, nothing else
+                if (std.debug.runtime_safety) {
+                    const output_before = self.output.items.len;
+                    try self.newline();
+                    const output_after = self.output.items.len;
+
+                    // Check what was added
+                    if (output_after > output_before) {
+                        const added = self.output.items[output_before..output_after];
+                        if (added.len != 1 or added[0] != '\n') {
+                            std.debug.panic("ERROR: flushBlankLinesAfterPosition added more than just newline: {s}\n", .{added});
+                        }
+                    }
+                } else {
+                    try self.newline();
+                }
+                self.token_cursor += 1;
+            }
+        }
+    }
+
+    fn formatNodeWithoutCommentFlush(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            // Binary operations
+            .binop_equals => try self.formatBinOp(node_idx, "="),
+            .binop_double_equals => try self.formatBinOp(node_idx, "=="),
+            .binop_not_equals => try self.formatBinOp(node_idx, "!="),
+            .binop_colon => try self.formatTypeAnnotation(node_idx),
+            .binop_colon_equals => try self.formatNominalTypeDefinition(node_idx),
+            .binop_dot => try self.formatDotAccess(node_idx),
+            .binop_plus => try self.formatBinOp(node_idx, "+"),
+            .binop_minus => try self.formatBinOp(node_idx, "-"),
+            .binop_star => try self.formatBinOp(node_idx, "*"),
+            .binop_slash => try self.formatBinOp(node_idx, "/"),
+            .binop_double_slash => try self.formatBinOp(node_idx, "//"),
+            .binop_double_question => try self.formatBinOp(node_idx, "??"),
+            .binop_gt => try self.formatBinOp(node_idx, ">"),
+            .binop_gte => try self.formatBinOp(node_idx, ">="),
+            .binop_lt => try self.formatBinOp(node_idx, "<"),
+            .binop_lte => try self.formatBinOp(node_idx, "<="),
+            .binop_thick_arrow => try self.formatBinOp(node_idx, "=>"),
+            .binop_thin_arrow => try self.formatBinOp(node_idx, "->"),
+            .binop_and => try self.formatBinOp(node_idx, "&&"),
+            .binop_or => try self.formatBinOp(node_idx, "||"),
+            .binop_as => try self.formatBinOp(node_idx, "as"),
+            .binop_exposing => try self.formatBinOp(node_idx, "exposing"),
+            .binop_where => try self.formatWhereClause(node_idx),
+            .binop_platform => try self.formatBinOp(node_idx, "platform"),
+            .binop_pipe => {
+                // Check if this is a module field access pattern
+                const pipe_node = self.getNode(node_idx);
+                const binop = self.ast.node_slices.binOp(pipe_node.payload.binop);
+                const lhs_node = self.getNode(binop.lhs);
+                const rhs_node = self.getNode(binop.rhs);
+
+                // If LHS is apply_module and RHS is dot_lc, format as module field access
+                if (lhs_node.tag == .apply_module and rhs_node.tag == .dot_lc) {
+                    try self.formatNode(binop.lhs);
+                    try self.formatNode(binop.rhs);
+                } else {
+                    // Regular pipe for pattern alternatives
+                    try self.formatBinOp(node_idx, "|");
+                }
+            },
+
+            // Identifiers
+            .uc => try self.formatIdent(node_idx),
+            .lc => try self.formatIdent(node_idx),
+            .dot_lc => try self.formatDotIdent(node_idx),
+            .uc_dot_ucs => try self.formatQualifiedIdent(node_idx),
+            .lc_dot_ucs => try self.formatQualifiedIdent(node_idx),
+            .dot_num => try self.formatDotNum(node_idx),
+            .underscore => try self.pushAll("_"),
+            .var_lc => {
+                try self.pushAll("var ");
+                try self.formatIdent(node_idx);
+            },
+            .neg_lc => {
+                try self.pushAll("-");
+                try self.formatIdent(node_idx);
+            },
+            .not_lc => {
+                try self.formatIdent(node_idx);
+                try self.pushAll("!");
+            },
+            .double_dot_lc => {
+                try self.pushAll("..");
+                try self.formatIdent(node_idx);
+            },
+            .ellipsis => try self.pushAll("..."),
+            .import => try self.formatImport(node_idx),
+            .expect => try self.formatExpectStatement(node_idx),
+
+            // Literals - format from source to preserve underscores
+            .num_literal_i32, .num_literal_big => {
+                try self.formatNumberFromSource(node_idx);
+            },
+            .int_literal_i32, .int_literal_big => {
+                try self.formatNumberFromSource(node_idx);
+            },
+            .frac_literal_small, .frac_literal_big => {
+                try self.formatNumberFromSource(node_idx);
+            },
+            .str_literal_small, .str_literal_big => {
+                try self.formatStringFromSource(node_idx);
+            },
+            .str_interpolation => try self.formatStringInterpolation(node_idx),
+
+            // Blocks and collections
+            .block => try self.formatBlock(node_idx),
+            .list_literal => try self.formatList(node_idx),
+            .record_literal => try self.formatRecord(node_idx),
+            .tuple_literal => try self.formatTuple(node_idx),
+
+            // Control flow
+            .if_else => try self.formatIfElse(node_idx),
+            .if_without_else => try self.formatIfWithoutElse(node_idx),
+            .match => try self.formatMatch(node_idx),
+            .lambda => try self.formatLambda(node_idx),
+            .lambda_no_args => {
+                // Lambda with no args should just be a lambda with empty args
+                // Format as ||
+                try self.pushAll("||");
+                // The body is in the nodes payload
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |body_idx| {
+                    try self.pushAll(" ");
+                    try self.formatNode(body_idx);
+                }
+            },
+
+            // Application
+            .apply_lc, .apply_uc, .apply_anon => try self.formatApply(node_idx),
+            .apply_module => {
+                // Module application in where clauses
+                try self.pushAll("module(");
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                var first = true;
+                while (iter.next()) |arg_idx| {
+                    if (!first) {
+                        try self.pushAll(", ");
+                    }
+                    try self.formatNode(arg_idx);
+                    first = false;
+                }
+                try self.push(')');
+            },
+
+            // Unary operators
+            .unary_not => try self.formatUnaryNot(node_idx),
+            .unary_neg => try self.formatUnaryNeg(node_idx),
+
+            // Import/Export
+
+            // Loops
+            .for_loop => try self.formatForLoop(node_idx),
+            .while_loop => try self.formatWhileLoop(node_idx),
+
+            // Statements
+            .crash => try self.formatCrash(node_idx),
+
+            // Unary double dot operator
+            .unary_double_dot => {
+                try self.pushAll("..");
+                // The expression follows in the nodes payload
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |expr_idx| {
+                    try self.formatNode(expr_idx);
+                }
+            },
+
+            // Return statements
+            .ret => {
+                try self.pushAll("return");
+                // Return has nodes payload with the expression
+                var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+                if (iter.next()) |expr_idx| {
+                    // Check if expression needs space before it
+                    const expr_node = self.getNode(expr_idx);
+                    const needs_space = switch (expr_node.tag) {
+                        // No space for parenthesized expressions or certain literals
+                        .tuple_literal => false,
+                        .list_literal => false,
+                        .record_literal => false,
+                        .block => false,
+                        else => true,
+                    };
+
+                    if (needs_space) {
+                        try self.ensureSpace();
+                    }
+
+                    try self.formatNode(expr_idx);
+                }
+            },
+
+            // Malformed nodes - preserve source bytes but skip pure whitespace
+            .malformed => |_| {
+                // For malformed nodes, we need to be careful not to output raw whitespace
+                // from the source, as that violates our formatting rules
+                const start = node.region.start.offset;
+                const end = node.region.end.offset;
+
+                if (end <= self.source.len) {
+                    const source_text = self.source[start..end];
+
+                    // Check if this is just whitespace - if so, skip it
+                    var is_all_whitespace = true;
+                    for (source_text) |c| {
+                        if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
+                            is_all_whitespace = false;
+                            break;
+                        }
+                    }
+
+                    // Only output non-whitespace malformed content
+                    if (!is_all_whitespace) {
+                        // For malformed content, we need to replace source indentation with tabs
+                        // Split the content by lines and re-indent with tabs
+
+                        var line_start = start;
+                        var i = start;
+                        while (i < end) : (i += 1) {
+                            if (self.source[i] == '\n') {
+                                // Output this line with tab indentation
+                                const line_end = i;
+
+                                // Count leading spaces
+                                var space_count: usize = 0;
+                                var content_start = line_start;
+                                while (content_start < line_end and self.source[content_start] == ' ') {
+                                    content_start += 1;
+                                    space_count += 1;
+                                }
+
+                                // If the line had indentation, add a single tab
+                                if (space_count > 0 and content_start < line_end) {
+                                    try self.push('\t');
+                                }
+
+                                // Output the content without leading spaces
+                                if (content_start < line_end) {
+                                    try self.pushLiteralFromRegion(content_start, line_end);
+                                }
+
+                                // Add the newline
+                                try self.newline();
+
+                                // Move to next line
+                                line_start = i + 1;
+                            }
+                        }
+
+                        // Handle last line if it doesn't end with newline
+                        if (line_start < end) {
+                            // Count leading spaces
+                            var space_count: usize = 0;
+                            var content_start = line_start;
+                            while (content_start < end and self.source[content_start] == ' ') {
+                                content_start += 1;
+                                space_count += 1;
+                            }
+
+                            // If the line had indentation, add a single tab
+                            if (space_count > 0 and content_start < end) {
+                                try self.push('\t');
+                            }
+
+                            // Output the content without leading spaces
+                            if (content_start < end) {
+                                try self.pushLiteralFromRegion(content_start, end);
+                            }
+                        }
+                    }
+
+                    // Update token cursor to skip past this malformed region
+                    while (self.token_cursor < self.tokens.len and
+                        self.tokens[self.token_cursor].region.start.offset < end)
+                    {
+                        self.token_cursor += 1;
+                    }
+                }
+            },
+        }
+
+        // Comments after nodes will be handled when we flush before the next token
+    }
+
+    fn formatDotAccess(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        // Format dot access without spaces
+        try self.formatNode(binop.lhs);
+        try self.push('.');
+        try self.formatNode(binop.rhs);
+    }
+
+    fn formatBinOp(self: *Formatter, node_idx: Node.Idx, op_str: []const u8) !void {
+        // Debug check: operators should never have leading or trailing whitespace
+        if (std.debug.runtime_safety) {
+            if (op_str.len > 0) {
+                if (op_str[0] == ' ' or op_str[0] == '\t') {
+                    std.debug.panic("ERROR: Operator has leading whitespace: '{s}'\n", .{op_str});
+                }
+                if (op_str[op_str.len - 1] == ' ' or op_str[op_str.len - 1] == '\t') {
+                    std.debug.panic("ERROR: Operator has trailing whitespace: '{s}'\n", .{op_str});
+                }
             }
         }
 
-        // Return true if there was a newline, whether or not there was a comment
-        return newline_count > 0;
-    }
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
 
-    fn push(fmt: *Formatter, c: u8) !void {
-        fmt.has_newline = c == '\n';
-        try fmt.buffer.writer().writeByte(c);
-    }
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
 
-    fn pushAll(fmt: *Formatter, str: []const u8) !void {
-        if (str.len == 0) {
+        // Special case for binop_platform: format as "string" platform [provides]
+        if (node.tag == .binop_platform) {
+            try self.formatNode(lhs); // The platform string
+            try self.ensureSpace();
+            try self.pushAll(op_str); // "platform"
+            try self.ensureSpace();
+
+            // The RHS is a block containing the provides list - format it as a list
+            const rhs_node = self.getNode(rhs);
+            if (rhs_node.tag == .block) {
+                // Format as a list with square brackets
+                const multiline = self.collectionIsMultiline(rhs);
+
+                try self.pushAll("[");
+
+                if (multiline) {
+                    self.curr_indent_level += 1;
+                }
+
+                var it = self.ast.node_slices.nodes(&rhs_node.payload.nodes);
+                var first_elem = true;
+                while (it.next()) |elem| {
+                    if (multiline) {
+                        if (!first_elem) {
+                            try self.push(',');
+                        }
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    } else {
+                        if (!first_elem) {
+                            try self.pushAll(", ");
+                        }
+                    }
+                    first_elem = false;
+                    try self.formatNode(elem);
+                }
+
+                if (multiline) {
+                    // Always add trailing comma in multiline mode
+                    try self.push(',');
+                    self.curr_indent_level -= 1;
+                    try self.ensureNewline();
+                    try self.pushIndent();
+                }
+
+                try self.pushAll("]");
+            } else {
+                // Shouldn't happen but fall back to regular formatting
+                try self.formatNode(rhs);
+            }
             return;
         }
-        fmt.has_newline = str[str.len - 1] == '\n';
-        try fmt.buffer.writer().writeAll(str);
-    }
 
-    fn pushIndent(fmt: *Formatter) !void {
-        if (fmt.curr_indent == 0) {
+        // Special case: binop_pipe with identifiers is actually field access or qualified name
+        // like Bool.True being parsed as (binop_pipe (uc "Bool") (uc "True"))
+        // or Stdout.line! being parsed as (binop_pipe (uc "Stdout") (not_lc "line"))
+        if (node.tag == .binop_pipe) {
+            const lhs_node = self.getNode(lhs);
+            const rhs_node = self.getNode(rhs);
+            // Check if this looks like field access or qualified name
+            if ((lhs_node.tag == .uc or lhs_node.tag == .lc) and
+                (rhs_node.tag == .uc or rhs_node.tag == .lc or rhs_node.tag == .dot_lc or rhs_node.tag == .not_lc))
+            {
+                // This is field access or a qualified name (Roc doesn't have a pipe operator)
+                try self.formatNode(lhs);
+                try self.push('.');
+
+                // For dot_lc, we already have the dot, so just format the identifier part
+                // For not_lc, format it as identifier followed by !
+                if (rhs_node.tag == .dot_lc) {
+                    // Skip the dot since we already added it
+                    try self.formatIdent(rhs);
+                } else if (rhs_node.tag == .not_lc) {
+                    // Format as identifier!
+                    try self.formatIdent(rhs);
+                    try self.push('!');
+                } else {
+                    // Regular identifier
+                    try self.formatNode(rhs);
+                }
+                return;
+            }
+        }
+
+        // Check if we need parentheses for operands based on precedence
+        const needs_lhs_parens = self.needsParens(lhs, node.tag, true);
+        const needs_rhs_parens = self.needsParens(rhs, node.tag, false);
+
+        var multiline = self.nodeWillBeMultiline(node_idx);
+
+        // Special handling for dot-access with multiline
+        if (node.tag == .binop_dot and multiline) {
+            // Format as multiline dot-access
+            if (needs_lhs_parens) try self.push('(');
+            try self.formatNode(lhs);
+            if (needs_lhs_parens) try self.push(')');
+
+            try self.ensureNewline();
+            self.curr_indent_level += 1;
+            try self.pushIndent();
+            try self.push('.');
+
+            if (needs_rhs_parens) try self.push('(');
+            try self.formatNode(rhs);
+            if (needs_rhs_parens) try self.push(')');
+
+            self.curr_indent_level -= 1;
             return;
         }
-        for (0..fmt.curr_indent) |_| {
-            try fmt.push('\t');
+
+        // Special handling for equals in statements
+        if (node.tag == .binop_equals) {
+            // Format pattern
+            if (needs_lhs_parens) try self.push('(');
+            try self.formatNode(lhs);
+            if (needs_lhs_parens) try self.push(')');
+
+            try self.ensureSpace();
+            try self.pushAll("=");
+
+            // Remember where we are before formatting RHS to detect if it's multiline
+            const output_len_before_rhs = self.output.items.len;
+
+            // Check for comments before RHS
+            const rhs_node = self.getNode(rhs);
+            const has_comments = try self.flushCommentsBeforePosition(rhs_node.region.start);
+
+            if (has_comments) {
+                // Force multiline if we found any comments
+                multiline = true;
+            }
+
+            if (multiline) {
+                self.curr_indent_level += 1;
+                if (!has_comments) {
+                    // Only add blank line if there wasn't a comment (which already added newline)
+                    try self.ensureBlankLine();
+                    try self.pushIndent();
+                } else {
+                    // Comment already added newline and indentation
+                    // Don't add duplicate indentation
+                }
+                if (needs_rhs_parens) try self.push('(');
+                try self.formatNode(rhs);
+                if (needs_rhs_parens) try self.push(')');
+                self.curr_indent_level -= 1;
+
+                // Add a blank line after multiline assignment expressions
+                try self.ensureBlankLine();
+            } else {
+                try self.ensureSpace();
+                if (needs_rhs_parens) try self.push('(');
+                try self.formatNode(rhs);
+                if (needs_rhs_parens) try self.push(')');
+
+                // Check if the RHS actually formatted as multiline
+                // by checking if any newlines were added
+                const formatted_multiline = std.mem.indexOf(u8, self.output.items[output_len_before_rhs..], "\n") != null;
+
+                // If the RHS formatted as multiline, add a blank line after it
+                if (formatted_multiline) {
+                    try self.ensureBlankLine();
+                }
+            }
+        } else {
+            // Normal binary operator
+            if (needs_lhs_parens) try self.push('(');
+            try self.formatNode(lhs);
+            if (needs_lhs_parens) try self.push(')');
+
+            // Comments around operators will be handled when we flush before the RHS
+
+            // Add space before operator if needed
+            // Debug check first
+            if (std.debug.runtime_safety) {
+                // Check that operator doesn't start or end with spaces
+                if (op_str.len > 0) {
+                    if (op_str[0] == ' ' or op_str[op_str.len - 1] == ' ') {
+                        std.debug.panic("ERROR: Operator '{s}' starts or ends with whitespace!\n", .{op_str});
+                    }
+                }
+            }
+
+            try self.ensureSpace();
+            try self.pushAll(op_str);
+            try self.ensureSpace();
+
+            // Check for comments after operator using token-based approach
+            const rhs_node = self.getNode(rhs);
+            _ = try self.flushCommentsBeforePosition(rhs_node.region.start);
+
+            if (needs_rhs_parens) try self.push('(');
+            try self.formatNode(rhs);
+            if (needs_rhs_parens) try self.push(')');
         }
     }
 
-    fn pushTokenText(fmt: *Formatter, ti: Token.Idx) !void {
-        const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
-        const region = fmt.ast.tokens.resolve(ti);
-        var start = region.start.offset;
-        switch (tag) {
-            .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .DotLowerIdent, .DotUpperIdent => {
-                start += 1;
+    fn formatTypeAnnotation(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the left side (identifier or pattern)
+        try self.formatNode(lhs);
+
+        // Check if this is a complex type that should be multiline
+        const rhs_node = self.getNode(rhs);
+        const is_complex_type = switch (rhs_node.tag) {
+            // Only make function types multiline if they have nested arrows (curried functions)
+            .binop_thin_arrow => blk: {
+                const arrow_binop = self.ast.node_slices.binOp(rhs_node.payload.binop);
+                const arrow_lhs_node = self.getNode(arrow_binop.lhs);
+                // Only multiline for nested arrows, not simple tuples
+                break :blk arrow_lhs_node.tag == .binop_thin_arrow;
+            },
+            // Record types with many fields
+            .record_literal => self.collectionIsMultiline(rhs),
+            // Type applications - check if they have multiline markers
+            .apply_uc => self.collectionIsMultiline(rhs),
+            else => false,
+        };
+
+        if (is_complex_type) {
+            try self.ensureSpace();
+            try self.push(':');
+            try self.ensureNewline();
+            self.curr_indent_level += 1;
+            try self.pushIndent();
+            try self.formatTypeExpression(rhs);
+            self.curr_indent_level -= 1;
+        } else {
+            try self.ensureSpace();
+            try self.push(':');
+            try self.ensureSpace();
+            try self.formatTypeExpression(rhs);
+        }
+    }
+
+    fn formatNominalTypeDefinition(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the left side (type name with parameters)
+        try self.formatNode(lhs);
+
+        try self.ensureSpace();
+        try self.pushAll(":=");
+        try self.ensureSpace();
+
+        // Format the implementation type
+        try self.formatTypeExpression(rhs);
+    }
+
+    fn formatTypeExpression(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            .binop_thin_arrow => {
+                // Function type: format with proper precedence and spacing
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+                // Check if LHS needs parentheses (another function type)
+                const lhs_node = self.getNode(binop.lhs);
+                const needs_parens = lhs_node.tag == .binop_thin_arrow;
+
+                if (needs_parens) try self.push('(');
+                try self.formatTypeExpression(binop.lhs);
+                if (needs_parens) try self.push(')');
+
+                try self.pushAll(" -> ");
+                try self.formatTypeExpression(binop.rhs);
+            },
+            .record_literal => {
+                // Record type: { field1 : Type1, field2 : Type2 }
+                try self.formatRecordType(node_idx);
+            },
+            .apply_uc => {
+                // Type application: List a, Dict k v
+                try self.formatTypeApplication(node_idx);
+            },
+            else => {
+                // Default: format as normal node
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
+    fn formatRecordType(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.push('{');
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first_field = true;
+
+        while (it.next()) |field| {
+            if (multiline) {
+                if (!first_field) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_field) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_field = false;
+
+            // Fields are binop_colon nodes
+            const field_node = self.getNode(field);
+            if (field_node.tag == .binop_colon) {
+                const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(field_binop.lhs);
+                try self.push(':'); // No space before colon in record fields
+                try self.ensureSpace();
+                try self.formatNode(field_binop.rhs); // Use formatNode, not formatTypeExpression
+            } else {
+                try self.formatNode(field);
+            }
+        }
+
+        if (multiline) {
+            // Check for trailing comma
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+            }
+            self.curr_indent_level -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.push('}');
+    }
+
+    fn formatTypeApplication(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Type applications store the constructor and arguments
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        // First is the type constructor
+        if (it.next()) |constructor| {
+            try self.formatNode(constructor);
+        }
+
+        // Check if there's exactly one argument and it's a tuple_literal
+        // If so, format the tuple's contents directly with parens
+        var args_slice = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = args_slice.next(); // Skip constructor
+        const first_arg_opt = args_slice.next();
+        const has_more = args_slice.next() != null;
+
+        if (first_arg_opt) |first_arg| {
+            if (!has_more) {
+                // Only one argument - check if it's a tuple
+                const arg_node = self.getNode(first_arg);
+                if (arg_node.tag == .tuple_literal) {
+                    // Format tuple contents directly with single parens
+                    try self.push('(');
+                    var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                    var first_tuple_elem = true;
+                    while (tuple_it.next()) |elem| {
+                        if (!first_tuple_elem) {
+                            try self.pushAll(", ");
+                        }
+                        first_tuple_elem = false;
+                        try self.formatTypeExpression(elem);
+                    }
+                    try self.push(')');
+                    return;
+                }
+            }
+        }
+
+        // Normal case: space-separated type arguments
+        it = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = it.next(); // Skip constructor again
+
+        while (it.next()) |elem| {
+            try self.ensureSpace();
+
+            // Check if argument needs parentheses (e.g., function types as arguments)
+            const elem_node = self.getNode(elem);
+            const needs_parens = elem_node.tag == .binop_thin_arrow;
+
+            if (needs_parens) try self.push('(');
+            try self.formatTypeExpression(elem);
+            if (needs_parens) try self.push(')');
+        }
+    }
+
+    fn formatWhereClause(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const binop_idx = node.payload.binop;
+        const binop = self.ast.node_slices.binOp(binop_idx);
+
+        const lhs = binop.lhs;
+        const rhs = binop.rhs;
+
+        // Format the main type expression
+        try self.formatTypeExpression(lhs);
+
+        // Check if constraints should be multiline
+        const rhs_node = self.getNode(rhs);
+        const multiline = switch (rhs_node.tag) {
+            // Multiple constraints (comma-separated)
+            .record_literal, .block => self.collectionIsMultiline(rhs),
+            // Chained where clauses
+            .binop_where => true,
+            else => false,
+        };
+
+        if (multiline) {
+            try self.pushAll(" where");
+            try self.ensureNewline();
+            self.curr_indent_level += 1;
+            try self.pushIndent();
+            try self.formatWhereConstraints(rhs);
+            self.curr_indent_level -= 1;
+        } else {
+            try self.pushAll(" where ");
+            try self.formatWhereConstraints(rhs);
+        }
+    }
+
+    fn formatWhereConstraints(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            .record_literal, .block => {
+                // Multiple constraints
+                var it = self.ast.node_slices.nodes(&node.payload.nodes);
+                var first = true;
+
+                while (it.next()) |constraint| {
+                    if (!first) {
+                        try self.push(',');
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    }
+                    first = false;
+                    try self.formatNode(constraint);
+                }
+            },
+            .binop_where => {
+                // Nested where clause - format recursively
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                try self.formatWhereConstraints(binop.lhs);
+                try self.push(',');
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.formatWhereConstraints(binop.rhs);
+            },
+            else => {
+                // Single constraint
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
+    fn formatQualifiedIdent(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Qualified identifiers store their segments in nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        var first = true;
+        while (it.next()) |segment| {
+            if (!first) {
+                try self.pushAll(".");
+            }
+            first = false;
+            try self.formatNode(segment);
+        }
+    }
+
+    fn formatDotNum(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // .dot_num is for tuple accessors like .0, .1, etc.
+        // Extract from source
+        try self.push('.');
+
+        const start = node.region.start.offset + 1; // Skip the dot
+        var end = start;
+
+        // Find the number after the dot
+        while (end < self.source.len and std.ascii.isDigit(self.source[end])) {
+            end += 1;
+        }
+
+        if (end > start) {
+            try self.pushLiteralFromRegion(start, end);
+        }
+    }
+
+    fn formatDotIdent(self: *Formatter, node_idx: Node.Idx) !void {
+        // For .foo identifiers, just format as .foo
+        const node = self.getNode(node_idx);
+
+        // The node region includes the dot and the identifier
+        try self.pushLiteralFromRegion(node.region.start.offset, node.region.end.offset);
+    }
+
+    fn formatUnaryNot(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // For unary not, format as !operand (not operator)
+        try self.push('!');
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        if (it.next()) |operand| {
+            try self.formatNode(operand);
+        }
+    }
+
+    fn formatUnaryNeg(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("-");
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        if (it.next()) |operand| {
+            try self.formatNode(operand);
+        }
+    }
+
+    fn formatImport(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // New import structure: the import node contains a single child
+        // which is either:
+        // - A simple path node (e.g., pf.Task)
+        // - A binop_as node (e.g., pf.Task as Task)
+        // - A binop_exposing node (e.g., pf.Task exposing [Task, await])
+
+        try self.pushAll("import ");
+
+        // Get the single child node - imports use import_nodes field
+        var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
+        if (it.next()) |child_idx| {
+            const child = self.getNode(child_idx);
+
+            switch (child.tag) {
+                .binop_as => try self.formatImportWithAs(child_idx),
+                .binop_exposing => try self.formatImportWithExposing(child_idx),
+                else => {
+                    // Simple path import
+                    try self.formatNode(child_idx);
+                },
+            }
+        }
+    }
+
+    fn formatImportWithAs(self: *Formatter, node_idx: Node.Idx) !void {
+        // binop_as node: lhs is the path (or binop_exposing), rhs is the alias
+        const binop = self.ast.binOp(node_idx);
+
+        // Check if lhs is binop_exposing (import path exposing [...] as alias)
+        const lhs_node = self.getNode(binop.lhs);
+        if (lhs_node.tag == .binop_exposing) {
+            // Format: path exposing [...] as alias
+            try self.formatImportWithExposing(binop.lhs);
+        } else {
+            // Format: path as alias
+            try self.formatNode(binop.lhs);
+        }
+
+        try self.pushAll(" as ");
+        try self.formatNode(binop.rhs);
+    }
+
+    fn formatImportWithExposing(self: *Formatter, node_idx: Node.Idx) !void {
+        // binop_exposing node: lhs is the path, rhs is the exposing list
+        const binop = self.ast.binOp(node_idx);
+
+        // Format the module path
+        try self.formatNode(binop.lhs);
+
+        try self.pushAll(" exposing ");
+
+        // The rhs should be a list of exposed items
+        const rhs_node = self.getNode(binop.rhs);
+        if (rhs_node.tag == .list_literal) {
+            // Format as list
+            try self.formatNode(binop.rhs);
+        } else {
+            // Single exposed item or other structure
+            try self.pushAll("[");
+            try self.formatNode(binop.rhs);
+            try self.pushAll("]");
+        }
+    }
+
+    fn formatExpectStatement(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("expect ");
+
+        // Expect statements store the condition expression in nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        if (it.next()) |condition| {
+            try self.formatNode(condition);
+        }
+    }
+
+    fn formatCrash(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("crash ");
+
+        // Crash statements store the expression to crash with
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        if (it.next()) |expr| {
+            try self.formatNode(expr);
+        }
+    }
+
+    fn formatPlatformExports(self: *Formatter, node_idx: Node.Idx) !void {
+        // Platform exports are parsed as record_literal but should format as list
+        const node = self.getNode(node_idx);
+
+        // Check if this list should be multiline
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.pushAll("[");
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        // Get elements from record node
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        var first_elem = true;
+        while (it.next()) |elem| {
+            const elem_node = self.getNode(elem);
+
+            if (multiline) {
+                if (!first_elem) {
+                    try self.push(',');
+                    // Comments after comma will be handled when we flush before the next element
+                }
+                _ = try self.flushCommentsBeforePosition(elem_node.region.start);
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_elem) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_elem = false;
+            try self.formatNode(elem);
+
+            if (multiline) {
+                // Comments will be handled when we flush before the next token
+            }
+        }
+
+        if (multiline) {
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+                // Comments will be handled when we flush before the next token
+            }
+            self.curr_indent_level -= 1;
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.pushAll("]");
+    }
+
+    fn formatList(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Check if this list should be multiline
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.pushAll("[");
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        // List literals store elements in nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        var first_elem = true;
+        while (it.next()) |elem| {
+            const elem_node = self.getNode(elem);
+
+            if (multiline) {
+                if (!first_elem) {
+                    try self.push(',');
+                    // Check for inline comments after the comma
+                    // Comments after comma will be handled when we flush before the next element
+                }
+                // Flush any comments before this element
+                _ = try self.flushCommentsBeforePosition(elem_node.region.start);
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_elem) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_elem = false;
+            try self.formatNode(elem);
+
+            // After formatting the element, check for inline comments
+            if (multiline) {
+                // Comments will be handled when we flush before the next token
+            }
+        }
+
+        if (multiline) {
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            // Check for comment after trailing comma
+            // Comments will be handled when we flush before the closing bracket
+            self.curr_indent_level -= 1;
+            // Flush any remaining comments before the closing bracket
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.pushAll("]");
+    }
+
+    fn formatRecord(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Count fields and check for special cases
+        var field_count: usize = 0;
+        var is_single_ident_with_comma = false;
+        var field_iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        while (field_iter.next()) |field| {
+            field_count += 1;
+            if (field_count == 1) {
+                const field_node = self.getNode(field);
+                // Check if it's just an identifier (not field:value)
+                is_single_ident_with_comma = (field_node.tag == .lc or field_node.tag == .var_lc) and self.hasTrailingComma(node_idx);
+            }
+        }
+
+        // Special case: empty record - format as {} with no space
+        if (field_count == 0) {
+            // Check if there are any comments inside the empty record
+            const has_internal_comments = blk: {
+                var scan = self.token_cursor;
+                while (scan < self.tokens.len) {
+                    const token = self.tokens[scan];
+                    if (token.region.start.offset >= node.region.end.offset) break;
+                    if (token.region.start.offset > node.region.start.offset and
+                        (token.tag == .LineComment or token.tag == .DocComment))
+                    {
+                        break :blk true;
+                    }
+                    scan += 1;
+                }
+                break :blk false;
+            };
+
+            if (has_internal_comments) {
+                // Format with comments preserved
+                try self.push('{');
+                self.curr_indent_level += 1;
+                _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(node.region.end.offset) });
+                self.curr_indent_level -= 1;
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.push('}');
+            } else {
+                // Simple empty record - no space
+                try self.pushAll("{}");
+            }
+            return;
+        }
+
+        // Check if this record should be multiline
+        const multiline = if (is_single_ident_with_comma and field_count == 1) false else self.collectionIsMultiline(node_idx);
+
+        if (multiline) {
+            try self.push('{');
+            self.curr_indent_level += 1;
+        } else {
+            try self.pushAll("{ ");
+        }
+
+        // Record literals store fields in nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        var first_field = true;
+        while (it.next()) |field| {
+            const field_node = self.getNode(field);
+
+            // Skip malformed nodes
+            if (field_node.tag == .malformed) {
+                continue;
+            }
+
+            if (multiline) {
+                if (!first_field) {
+                    try self.push(',');
+                    // Check for inline comments after the comma
+                    // Comments after comma will be handled when we flush before the next element
+                }
+                // Flush any comments before this field
+                _ = try self.flushCommentsBeforePosition(field_node.region.start);
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_field) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_field = false;
+
+            // Handle record fields specially
+            if (field_node.tag == .binop_colon) {
+                // Field with explicit value: { name: value }
+                const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(field_binop.lhs);
+                try self.push(':'); // No space before colon in record fields
+                try self.ensureSpace();
+                try self.formatNode(field_binop.rhs);
+            } else {
+                // Shorthand field: { name }
+                try self.formatNode(field);
+            }
+
+            // After formatting the field, check for inline comments
+            if (multiline) {
+                // Comments will be handled when we flush before the next token
+            }
+        }
+
+        if (multiline) {
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            // Check for comment after trailing comma
+            // Comments will be handled when we flush before the closing bracket
+            self.curr_indent_level -= 1;
+            // Flush any remaining comments before the closing brace
+            _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(self.getNode(node_idx).region.end.offset) });
+            try self.ensureNewline();
+            try self.pushIndent();
+            try self.pushAll("}");
+        } else {
+            try self.ensureSpace();
+            try self.push('}');
+        }
+    }
+
+    fn formatTuple(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Check if this tuple should be multiline
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        // Check if this tuple contains a where clause type - if so, don't add parens
+        const nodes_idx = node.payload.nodes;
+        var has_where_type = false;
+        if (!nodes_idx.isNil()) {
+            var check_it = self.ast.node_slices.nodes(&nodes_idx);
+            while (check_it.next()) |child| {
+                const child_node = self.getNode(child);
+                // Check for type with where clause
+                if (child_node.tag == .binop_thin_arrow) {
+                    const arrow_binop = self.ast.node_slices.binOp(child_node.payload.binop);
+                    const lhs_node = self.getNode(arrow_binop.lhs);
+                    if (lhs_node.tag == .binop_where) {
+                        has_where_type = true;
+                        break;
+                    }
+                }
+                // Also check for binop_pipe which indicates module constraints
+                if (child_node.tag == .binop_pipe) {
+                    const pipe_binop = self.ast.node_slices.binOp(child_node.payload.binop);
+                    const pipe_lhs = self.getNode(pipe_binop.lhs);
+                    if (pipe_lhs.tag == .apply_module) {
+                        has_where_type = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!has_where_type) {
+            try self.push('(');
+        }
+
+        if (multiline) {
+            try self.ensureNewline();
+            self.curr_indent_level += 1;
+        }
+
+        var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+        while (iter.next()) |child_idx| {
+            const child_node = self.getNode(child_idx);
+
+            // Skip malformed nodes
+            if (child_node.tag == .malformed) {
+                continue;
+            }
+
+            // Skip malformed nodes - they shouldn't be part of the formatted output
+            // The parser adds malformed nodes when it encounters syntax errors
+            if (child_node.tag == .malformed) {
+                continue;
+            }
+
+            if (multiline) {
+                if (!first) {
+                    try self.push(',');
+                    // Check for inline comments after the comma
+                    // Comments after comma will be handled when we flush before the next element
+                }
+                // Flush any comments before this element
+                _ = try self.flushCommentsBeforePosition(child_node.region.start);
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first) {
+                    try self.pushAll(", ");
+                }
+            }
+            try self.formatNode(child_idx);
+
+            // After formatting the element, check for inline comments
+            if (multiline) {
+                // Comments will be handled when we flush before the next token
+            }
+            first = false;
+        }
+
+        if (multiline) {
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            self.curr_indent_level -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        if (!has_where_type) {
+            try self.push(')');
+        }
+    }
+
+    fn formatBlockContents(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const nodes_idx = node.payload.nodes;
+        var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+        var first = true;
+        var prev_end_offset: ?usize = null;
+        while (iter.next()) |stmt_idx| {
+            const stmt_node = self.getNode(stmt_idx);
+
+            // For the first statement, flush comments before it
+            if (first) {
+                _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+                first = false;
+            } else if (prev_end_offset) |end_offset| {
+                // For subsequent statements, flush all comments between the previous statement and this one
+                // This ensures comments in the middle of the file are preserved
+                _ = try self.flushCommentsInRegion(end_offset, stmt_node.region.start.offset);
+
+                // Ensure we have a newline before the next statement
+                try self.ensureNewline();
+                try self.pushIndent();
+            }
+
+            // Now format the statement itself
+            // Use formatNodeWithoutCommentFlush since we already flushed comments above
+            try self.formatNodeWithoutCommentFlush(stmt_idx);
+
+            // Remember where this statement ended for next iteration
+            prev_end_offset = stmt_node.region.end.offset;
+        }
+    }
+
+    fn formatBlock(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const nodes_idx = node.payload.nodes;
+
+        // Count statements
+        var stmt_count: usize = 0;
+        var count_iter = self.ast.node_slices.nodes(&nodes_idx);
+        while (count_iter.next()) |_| {
+            stmt_count += 1;
+        }
+
+        // Special case: empty block - format as {} with no space
+        if (stmt_count == 0) {
+            // Check if there are any comments inside the empty block
+            const has_internal_comments = blk: {
+                var scan = self.token_cursor;
+                while (scan < self.tokens.len) {
+                    const token = self.tokens[scan];
+                    if (token.region.start.offset >= node.region.end.offset) break;
+                    if (token.region.start.offset > node.region.start.offset and
+                        (token.tag == .LineComment or token.tag == .DocComment))
+                    {
+                        break :blk true;
+                    }
+                    scan += 1;
+                }
+                break :blk false;
+            };
+
+            if (has_internal_comments) {
+                // Format with comments preserved
+                try self.push('{');
+                self.curr_indent_level += 1;
+                _ = try self.flushCommentsBeforePosition(Position{ .offset = @intCast(node.region.end.offset) });
+                self.curr_indent_level -= 1;
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.push('}');
+            } else {
+                // Simple empty block - no space
+                try self.pushAll("{}");
+            }
+            return;
+        }
+
+        try self.push('{');
+        self.curr_indent_level += 1;
+
+        var iter = self.ast.node_slices.nodes(&nodes_idx);
+        var first = true;
+        var prev_end_offset: ?usize = null;
+
+        while (iter.next()) |stmt_idx| {
+            const stmt_node = self.getNode(stmt_idx);
+
+            if (first) {
+                // For the first statement, we need a newline after the opening brace
+                try self.newline();
+
+                // Flush any comments before the first statement
+                _ = try self.flushCommentsBeforePosition(stmt_node.region.start);
+
+                first = false;
+            } else if (prev_end_offset) |end_offset| {
+                // For subsequent statements, flush all comments between the previous statement and this one
+                _ = try self.flushCommentsInRegion(end_offset, stmt_node.region.start.offset);
+
+                // Ensure we have a newline before the next statement
+                try self.ensureNewline();
+            }
+
+            // Add indentation for the statement
+            try self.pushIndent();
+
+            // Format the statement itself
+            try self.formatNodeWithoutCommentFlush(stmt_idx);
+
+            // Remember where this statement ended for next iteration
+            prev_end_offset = stmt_node.region.end.offset;
+
+            // Check for blank lines after this node
+            try self.flushBlankLinesAfterPosition(stmt_node.region.end);
+
+            first = false;
+        }
+
+        self.curr_indent_level -= 1;
+        try self.ensureNewline();
+        try self.pushIndent();
+        try self.push('}');
+    }
+
+    fn formatIfWithoutElse(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("if ");
+
+        // if_without_else uses if_branches payload
+        const nodes_idx = payloadToNodeSlicesIdx(node.payload.if_branches);
+        var it = self.ast.node_slices.nodes(&nodes_idx);
+
+        // Condition
+        if (it.next()) |condition| {
+            try self.formatNode(condition);
+        }
+
+        // Space between condition and body
+        try self.ensureSpace();
+
+        // Body (single statement/expression)
+        if (it.next()) |body| {
+            try self.formatNode(body);
+        }
+    }
+
+    fn formatIfElse(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // The if_branches field contains the node slice index
+        const nodes_idx = payloadToNodeSlicesIdx(node.payload.if_branches);
+
+        // Get the nodes for this if-else
+        var it = self.ast.node_slices.nodes(&nodes_idx);
+
+        // Collect all nodes for analysis
+        var condition: ?Node.Idx = null;
+        var then_branch: ?Node.Idx = null;
+        var else_branch: ?Node.Idx = null;
+
+        if (it.next()) |c| condition = c;
+        if (it.next()) |t| then_branch = t;
+        if (it.next()) |e| else_branch = e;
+
+        if (condition == null or then_branch == null) return; // Malformed
+
+        // Check if any part is a block (blocks force multiline)
+        var has_block = false;
+        if (then_branch) |tb| {
+            const tb_node = self.getNode(tb);
+            if (tb_node.tag == .block) has_block = true;
+        }
+        if (else_branch) |eb| {
+            const eb_node = self.getNode(eb);
+            if (eb_node.tag == .block) has_block = true;
+        }
+
+        const multiline = has_block;
+
+        try self.pushAll("if ");
+        try self.formatNode(condition.?);
+
+        if (multiline) {
+            // Roc doesn't use 'then', just space before the block
+            try self.ensureNewline();
+            self.curr_indent_level += 1;
+            try self.pushIndent();
+            try self.formatNode(then_branch.?);
+            self.curr_indent_level -= 1;
+
+            if (else_branch) |eb| {
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.pushAll("else");
+
+                // Check for else-if chain
+                const eb_node = self.getNode(eb);
+                if (eb_node.tag == .if_else) {
+                    try self.pushAll(" ");
+                    // Format the if-else directly inline (it will handle its own formatting)
+                    try self.formatIfElse(eb);
+                } else if (eb_node.tag == .block) {
+                    // Blocks handle their own formatting
+                    try self.pushAll(" ");
+                    try self.formatNode(eb);
+                } else {
+                    // Non-block else branch stays on same line as "else"
+                    try self.pushAll(" ");
+                    try self.formatNode(eb);
+                }
+            }
+        } else {
+            // Single-line formatting
+            try self.pushAll(" ");
+            try self.formatNode(then_branch.?);
+
+            if (else_branch) |eb| {
+                try self.pushAll(" else ");
+                try self.formatNode(eb);
+            }
+        }
+    }
+
+    // Removed shouldIfElseBeMultiline - if-else is always multiline now
+
+    fn formatMatch(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("match ");
+
+        // Match nodes store scrutinee followed by pattern-body pairs in the nodes field
+        const nodes_idx = node.payload.nodes;
+        var it = self.ast.node_slices.nodes(&nodes_idx);
+
+        // First node is the scrutinee
+        if (it.next()) |scrutinee| {
+            try self.formatNode(scrutinee);
+        }
+
+        // Match expressions in Roc use indentation, not curly braces
+        // Format is:
+        // match expr
+        //     pattern1 => body1
+        //     pattern2 => body2
+
+        try self.ensureNewline();
+        self.curr_indent_level += 1;
+
+        // Format branches - each branch is stored as a binop_thick_arrow node
+        // where the lhs is the pattern and rhs is the body
+        while (it.next()) |branch_idx| {
+            const branch_node = self.getNode(branch_idx);
+
+            // Flush any comments before this branch
+            _ = try self.flushCommentsBeforePosition(branch_node.region.start);
+
+            try self.pushIndent();
+
+            // Each branch should be a thick arrow (=>) binop
+            if (branch_node.tag == .binop_thick_arrow) {
+                const binop = self.ast.binOp(branch_idx);
+
+                // Format pattern - handle pattern alternatives (|) specially
+                const pattern_node = self.getNode(binop.lhs);
+                if (pattern_node.tag == .binop_pipe) {
+                    // This is a pattern alternative like Ok(x) | Err(x)
+                    try self.formatPatternWithAlternatives(binop.lhs);
+                } else {
+                    try self.formatPattern(binop.lhs);
+                }
+
+                try self.ensureSpace();
+                try self.pushAll("=>");
+                try self.ensureSpace();
+
+                // Format body
+                const body_node = self.getNode(binop.rhs);
+
+                // Complex bodies might need their own line and extra indentation
+                const needs_block_indent = switch (body_node.tag) {
+                    .block, .if_else, .match, .lambda => true,
+                    else => false,
+                };
+
+                if (needs_block_indent) {
+                    try self.ensureNewline();
+                    self.curr_indent_level += 1;
+
+                    // For blocks in match branches, format contents without braces
+                    if (body_node.tag == .block) {
+                        // Format block contents with proper indentation
+                        const block_node = body_node;
+                        const block_nodes_idx = block_node.payload.nodes;
+                        var block_it = self.ast.node_slices.nodes(&block_nodes_idx);
+
+                        var first_stmt = true;
+                        while (block_it.next()) |stmt_idx| {
+                            if (!first_stmt) {
+                                try self.ensureNewline();
+                            }
+                            try self.pushIndent();
+                            try self.formatNode(stmt_idx);
+                            first_stmt = false;
+                        }
+                    } else {
+                        try self.pushIndent();
+                        try self.formatNode(binop.rhs);
+                    }
+                    self.curr_indent_level -= 1;
+                } else {
+                    try self.formatNode(binop.rhs);
+                }
+
+                // Check for inline comments after the body
+                // Comments will be handled when we flush before the next token
+            } else {
+                // Shouldn't happen - branches should always be thick arrows
+                // But handle gracefully by formatting the node as-is
+                try self.formatNode(branch_idx);
+            }
+
+            // Add newline after each branch (except potentially the last)
+            try self.ensureNewline();
+        }
+
+        self.curr_indent_level -= 1;
+    }
+
+    fn formatPatternWithAlternatives(self: *Formatter, node_idx: Node.Idx) !void {
+        // Format pattern alternatives like Ok(x) | Err(x)
+        const node = self.getNode(node_idx);
+
+        if (node.tag != .binop_pipe) {
+            // Not a pattern alternative, format as pattern
+            try self.formatPattern(node_idx);
+            return;
+        }
+
+        // Recursively format pattern alternatives
+        const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+        // Check if left side is also a pipe (chained alternatives)
+        const lhs_node = self.getNode(binop.lhs);
+        if (lhs_node.tag == .binop_pipe) {
+            try self.formatPatternWithAlternatives(binop.lhs);
+        } else {
+            try self.formatPattern(binop.lhs);
+        }
+
+        try self.pushAll(" | ");
+        try self.formatPattern(binop.rhs);
+    }
+
+    fn formatPattern(self: *Formatter, node_idx: Node.Idx) anyerror!void {
+        const node = self.getNode(node_idx);
+
+        switch (node.tag) {
+            // Literal patterns
+            .num_literal_i32, .num_literal_big, .int_literal_i32, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big => {
+                try self.formatNode(node_idx);
+            },
+
+            // Identifier patterns
+            .lc => {
+                try self.formatIdent(node_idx);
+            },
+            .underscore => {
+                try self.pushAll("_");
+            },
+
+            // Constructor patterns
+            .apply_uc => {
+                try self.formatConstructorPattern(node_idx);
+            },
+            .uc => {
+                // Bare constructor
+                try self.formatIdent(node_idx);
+            },
+
+            // Collection patterns
+            .list_literal => {
+                try self.formatListPattern(node_idx);
+            },
+            .record_literal => {
+                try self.formatRecordPattern(node_idx);
+            },
+            .tuple_literal => {
+                try self.formatTuplePattern(node_idx);
+            },
+
+            // As-patterns (e.g., pattern as name)
+            .binop_as => {
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                try self.formatPattern(binop.lhs);
+                try self.pushAll(" as ");
+                try self.formatIdent(binop.rhs);
+            },
+
+            // Guard patterns (pattern if condition)
+            .if_without_else => {
+                const nodes_idx_val = @as(u32, @bitCast(node.payload.if_branches));
+                const nodes_idx = @as(collections.NodeSlices(Node.Idx).Idx, @enumFromInt(nodes_idx_val));
+                var it = self.ast.node_slices.nodes(&nodes_idx);
+
+                // First node is the pattern
+                if (it.next()) |pattern| {
+                    try self.formatPattern(pattern);
+                }
+
+                try self.pushAll(" if ");
+
+                // Second node is the guard condition
+                if (it.next()) |guard| {
+                    try self.formatNode(guard);
+                }
+            },
+
+            else => {
+                // Default: format as normal node
+                try self.formatNode(node_idx);
+            },
+        }
+    }
+
+    fn formatConstructorPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        // First node is the constructor
+        if (it.next()) |constructor| {
+            try self.formatNode(constructor);
+        }
+
+        // Check if there's exactly one argument and it's a tuple_literal
+        // If so, format the tuple's contents directly without double parens
+        var args_slice = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = args_slice.next(); // Skip constructor
+        const first_arg_opt = args_slice.next();
+        const has_more = args_slice.next() != null;
+
+        if (first_arg_opt) |first_arg| {
+            if (!has_more) {
+                // Only one argument - check if it's a tuple
+                const arg_node = self.getNode(first_arg);
+                if (arg_node.tag == .tuple_literal) {
+                    // Format tuple contents directly with single parens
+                    try self.push('(');
+                    var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                    var first_tuple_elem = true;
+                    while (tuple_it.next()) |elem| {
+                        if (!first_tuple_elem) {
+                            try self.pushAll(", ");
+                        }
+                        first_tuple_elem = false;
+                        try self.formatPattern(elem);
+                    }
+                    try self.push(')');
+                    return;
+                }
+            }
+        }
+
+        // Normal case: format arguments with parentheses
+        it = self.ast.node_slices.nodes(&node.payload.nodes);
+        _ = it.next(); // Skip constructor again
+
+        var has_args = false;
+        var first_arg = true;
+        while (it.next()) |arg| {
+            if (first_arg) {
+                try self.push('(');
+                has_args = true;
+            } else {
+                try self.pushAll(", ");
+            }
+            first_arg = false;
+            try self.formatPattern(arg);
+        }
+
+        if (has_args) {
+            try self.push(')');
+        }
+    }
+
+    fn formatListPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.push('[');
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+        var has_rest = false;
+
+        while (it.next()) |elem| {
+            if (!first) {
+                try self.pushAll(", ");
+            }
+            first = false;
+
+            const elem_node = self.getNode(elem);
+            if (elem_node.tag == .double_dot_lc or elem_node.tag == .unary_double_dot) {
+                // Rest pattern: ..rest or ..
+                has_rest = true;
+                if (elem_node.tag == .double_dot_lc) {
+                    try self.pushAll("..");
+                    try self.formatIdent(elem);
+                } else {
+                    try self.pushAll("..");
+                }
+            } else {
+                try self.formatPattern(elem);
+            }
+        }
+
+        try self.push(']');
+    }
+
+    fn formatRecordPattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+        const multiline = self.collectionIsMultiline(node_idx);
+
+        try self.push('{');
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+
+        while (it.next()) |field| {
+            if (multiline) {
+                if (!first) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first) {
+                    try self.pushAll(", ");
+                }
+            }
+            first = false;
+
+            const field_node = self.getNode(field);
+            if (field_node.tag == .binop_colon) {
+                // Field with explicit pattern: field: pattern
+                const binop = self.ast.node_slices.binOp(field_node.payload.binop);
+                try self.formatNode(binop.lhs);
+                try self.pushAll(": ");
+                try self.formatPattern(binop.rhs);
+            } else if (field_node.tag == .double_dot_lc) {
+                // Rest fields: ..rest
+                try self.pushAll("..");
+                try self.formatIdent(field);
+            } else {
+                // Punned field: just the field name
+                try self.formatNode(field);
+            }
+        }
+
+        if (multiline) {
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+            }
+            self.curr_indent_level -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.push('}');
+    }
+
+    fn formatTuplePattern(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.push('(');
+
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        var first = true;
+
+        while (it.next()) |elem| {
+            if (!first) {
+                try self.pushAll(", ");
+            }
+            first = false;
+            try self.formatPattern(elem);
+        }
+
+        try self.push(')');
+    }
+
+    fn formatLambdaNoArgs(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("|| ");
+
+        // Lambda with no args stores only the body node
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+        if (it.next()) |body| {
+            try self.formatNode(body);
+        }
+    }
+
+    fn formatLambda(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Check if lambda args should be multiline based on trailing comma
+        const multiline = self.hasTrailingComma(node_idx);
+
+        try self.pushAll("|");
+
+        // Lambda nodes use body_then_args which stores body first, then args
+        var it = self.ast.node_slices.nodes(&node.payload.body_then_args);
+
+        // First node is the body - save it for later
+        const body = it.next();
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        // Format arguments
+        var first_arg = true;
+        while (it.next()) |arg| {
+            const arg_node = self.getNode(arg);
+
+            // Special case: if the argument is a tuple_literal in a lambda,
+            // format its elements as individual parameters without parentheses
+            if (arg_node.tag == .tuple_literal and first_arg) {
+                // This is the first (and likely only) argument and it's a tuple
+                // Format its elements as individual lambda parameters
+                var tuple_it = self.ast.node_slices.nodes(&arg_node.payload.nodes);
+                var first_param = true;
+                while (tuple_it.next()) |param| {
+                    if (multiline) {
+                        if (!first_param) {
+                            try self.push(',');
+                        }
+                        try self.ensureNewline();
+                        try self.pushIndent();
+                    } else {
+                        if (!first_param) {
+                            try self.pushAll(", ");
+                        }
+                    }
+                    first_param = false;
+                    try self.formatNode(param);
+                }
+                first_arg = false;
+                continue;
+            }
+
+            // Normal case: single parameter
+            if (multiline) {
+                if (!first_arg) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_arg) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_arg = false;
+            try self.formatNode(arg);
+        }
+
+        if (multiline) {
+            // Always add trailing comma in multiline mode
+            try self.push(',');
+            self.curr_indent_level -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.pushAll("| ");
+
+        // Format body
+        if (body) |body_node| {
+            try self.formatNode(body_node);
+        }
+    }
+
+    fn formatApply(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Check if function args should be multiline based on trailing comma
+        const multiline = self.hasTrailingComma(node_idx);
+
+        // Format arguments
+        const args_idx = node.payload.nodes;
+        var iter = self.ast.node_slices.nodes(&args_idx);
+
+        // First node is the function
+        if (iter.next()) |func| {
+            const func_node = self.getNode(func);
+            // Lambdas need parentheses when applied
+            const needs_parens = func_node.tag == .lambda;
+            if (needs_parens) {
+                try self.push('(');
+            }
+            try self.formatNode(func);
+            if (needs_parens) {
+                try self.push(')');
+            }
+        }
+
+        // Format arguments in parentheses
+        try self.push('(');
+
+        if (multiline) {
+            self.curr_indent_level += 1;
+        }
+
+        var first_arg = true;
+        while (iter.next()) |arg| {
+            if (multiline) {
+                if (!first_arg) {
+                    try self.push(',');
+                }
+                try self.ensureNewline();
+                try self.pushIndent();
+            } else {
+                if (!first_arg) {
+                    try self.pushAll(", ");
+                }
+            }
+            first_arg = false;
+            try self.formatNode(arg);
+        }
+
+        if (multiline) {
+            // Preserve trailing comma
+            if (self.hasTrailingComma(node_idx)) {
+                try self.push(',');
+            }
+            self.curr_indent_level -= 1;
+            try self.ensureNewline();
+            try self.pushIndent();
+        }
+
+        try self.push(')');
+    }
+
+    fn formatForLoop(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("for ");
+
+        // For loops store: pattern, iterator, body nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        // Pattern
+        if (it.next()) |pattern| {
+            try self.formatNode(pattern);
+        }
+
+        try self.pushAll(" in ");
+
+        // Iterator
+        if (it.next()) |iterator| {
+            try self.formatNode(iterator);
+        }
+
+        try self.ensureSpace();
+        try self.push('{');
+
+        // Format the loop body
+        try self.formatLoopBody(&it);
+    }
+
+    fn formatWhileLoop(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        try self.pushAll("while ");
+
+        // While loops store: condition, body nodes
+        var it = self.ast.node_slices.nodes(&node.payload.nodes);
+
+        // Condition
+        if (it.next()) |condition| {
+            try self.formatNode(condition);
+        }
+
+        try self.ensureSpace();
+        try self.push('{');
+
+        // Format the loop body
+        try self.formatLoopBody(&it);
+    }
+
+    fn formatLoopBody(self: *Formatter, it: *collections.NodeSlices(Node.Idx).Iterator) !void {
+        // Use scratch buffer to collect body nodes
+        const scratch_start = self.scratch_nodes.items.len;
+        defer self.scratch_nodes.items.len = scratch_start;
+
+        while (it.next()) |stmt| {
+            try self.scratch_nodes.append(stmt);
+        }
+
+        const body_nodes = self.scratch_nodes.items[scratch_start..];
+
+        // Check if body should be single-line
+        const single_line = body_nodes.len == 1 and
+            !self.nodeWillBeMultiline(body_nodes[0]);
+
+        if (single_line) {
+            // Single line: { expr }
+            try self.ensureSpace();
+            try self.formatNode(body_nodes[0]);
+            try self.ensureSpace();
+            try self.push('}');
+        } else {
+            // Multi-line body
+            self.curr_indent_level += 1;
+            for (body_nodes, 0..) |stmt, idx| {
+                try self.ensureNewline();
+                try self.pushIndent();
+                try self.formatNode(stmt);
+
+                // Add blank line between complex statements
+                if (idx < body_nodes.len - 1) {
+                    const stmt_node = self.getNode(stmt);
+                    const is_complex = switch (stmt_node.tag) {
+                        .binop_equals, .if_else, .match, .for_loop, .while_loop => true,
+                        else => false,
+                    };
+                    if (is_complex) {
+                        try self.ensureNewline();
+                    }
+                }
+            }
+            self.curr_indent_level -= 1;
+
+            try self.ensureNewline();
+            try self.pushIndent();
+            try self.push('}');
+        }
+    }
+
+    fn formatIdent(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Get the identifier text from the ident store
+        const ident_idx = node.payload.ident;
+        const ident_text = self.ident_store.getText(ident_idx);
+        try self.pushAll(ident_text);
+    }
+
+    fn findMaxChildEnd(self: *const Formatter, node_idx: Node.Idx) usize {
+        const node = self.getNode(node_idx);
+        var max_end: usize = node.region.start.offset;
+
+        // Get appropriate iterator based on node type
+        switch (node.tag) {
+            .import => {
+                var it = self.ast.node_slices.nodes(&node.payload.import_nodes);
+                while (it.next()) |child| {
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+            .match => {
+                // Match nodes have complete regions now
+                return node.region.end.offset;
+            },
+            .if_else, .if_without_else => {
+                // If expressions have complete regions now
+                return node.region.end.offset;
+            },
+            .lambda => {
+                // Lambda uses body_then_args
+                var it = self.ast.node_slices.nodes(&node.payload.body_then_args);
+                while (it.next()) |child| {
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+            .binop_colon, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_lt, .binop_gt, .binop_lte, .binop_gte, .binop_double_equals, .binop_not_equals, .binop_and, .binop_or, .binop_pipe, .binop_dot, .binop_colon_equals, .binop_as, .binop_where, .binop_thick_arrow, .binop_thin_arrow, .binop_platform => {
+                // Binary operators use binop payload
+                const binop = self.ast.node_slices.binOp(node.payload.binop);
+                const lhs_node = self.getNode(binop.lhs);
+                const rhs_node = self.getNode(binop.rhs);
+                const lhs_end = lhs_node.region.end.offset;
+                const rhs_end = rhs_node.region.end.offset;
+                return @max(lhs_end, rhs_end);
+            },
+            else => {
+                var it = self.ast.node_slices.nodes(&node.payload.nodes);
+                while (it.next()) |child| {
+                    const child_node = self.getNode(child);
+                    const child_end = child_node.region.end.offset;
+                    if (child_end > max_end) {
+                        max_end = child_end;
+                    }
+                }
+            },
+        }
+
+        // Check for closing paren if this is an application
+        switch (node.tag) {
+            .apply_lc, .apply_uc, .apply_anon, .apply_module => {
+                if (max_end < self.source.len and self.source[max_end] == ')') {
+                    return max_end + 1;
+                }
             },
             else => {},
         }
 
-        const text = fmt.ast.env.source[start..region.end.offset];
-        try fmt.pushAll(text);
+        return max_end;
     }
 
-    fn regionInSlice(fmt: *Formatter, comptime T: anytype, slice: []T) AST.TokenizedRegion {
-        if (slice.len == 0) {
-            return AST.TokenizedRegion.empty();
+    fn findIdentifierEnd(self: *const Formatter, start: usize) usize {
+        var end = start;
+
+        // Scan forward to find the end of the identifier
+        while (end < self.source.len) {
+            const c = self.source[end];
+            // Identifiers can contain letters, numbers, and underscores
+            if (std.ascii.isAlphanumeric(c) or c == '_') {
+                end += 1;
+            } else {
+                break;
+            }
         }
-        const first: usize = @intFromEnum(slice[0]);
-        const last: usize = @intFromEnum(slice[slice.len - 1]);
-        const first_region = fmt.ast.store.nodes.items.items(.region)[first];
-        const last_region = fmt.ast.store.nodes.items.items(.region)[last];
-        return first_region.spanAcross(last_region);
+
+        return end;
     }
 
-    fn displayRegion(fmt: *Formatter, region: AST.TokenizedRegion) void {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
-    }
+    fn formatNumberFromSource(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
 
-    fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
-        switch (T) {
-            AST.Expr.Idx => {
-                const expr = fmt.ast.store.getExpr(item);
-                if (fmt.ast.regionIsMultiline(expr.to_tokenized_region())) {
-                    return true;
+        // Find the number text from the source
+        const start = node.region.start.offset;
+        var end = start;
+
+        // Scan forward to find the end of the number
+        // Numbers can contain digits, underscores, dots (for fractions), hex/binary/octal letters
+        while (end < self.source.len) {
+            const c = self.source[end];
+            // Include hex digits, binary/octal/hex prefixes, underscores, decimal points, and scientific notation
+            if (std.ascii.isHex(c) or c == '_' or c == '.' or
+                c == 'x' or c == 'X' or // Hex prefix
+                c == 'b' or c == 'B' or // Binary prefix
+                c == 'o' or c == 'O' or // Octal prefix
+                c == 'e' or c == 'E' or // Scientific notation
+                c == '+' or c == '-')
+            { // Exponent sign
+                end += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Now format it, collapsing multiple underscores and fixing uppercase base prefixes
+        var i = start;
+        var last_was_underscore = false;
+        var is_at_base_prefix = false;
+
+        // Check if this is a number with a base prefix (0x, 0X, 0b, 0B, 0o, 0O)
+        if (end - start > 2 and self.source[start] == '0') {
+            const second_char = self.source[start + 1];
+            is_at_base_prefix = (second_char == 'X' or second_char == 'B' or second_char == 'O' or
+                second_char == 'x' or second_char == 'b' or second_char == 'o');
+        }
+
+        while (i < end) : (i += 1) {
+            const c = self.source[i];
+            if (c == '_') {
+                if (!last_was_underscore) {
+                    try self.push('_');
+                    last_was_underscore = true;
                 }
+            } else {
+                // Convert uppercase base prefixes to lowercase
+                if (is_at_base_prefix and i == start + 1) {
+                    // This is the base prefix character
+                    if (c == 'X') {
+                        try self.push('x');
+                    } else if (c == 'B') {
+                        try self.push('b');
+                    } else if (c == 'O') {
+                        try self.push('o');
+                    } else {
+                        try self.push(c);
+                    }
+                    is_at_base_prefix = false; // Only convert the prefix, not hex digits
+                } else {
+                    try self.push(c);
+                }
+                last_was_underscore = false;
+            }
+        }
+    }
 
-                switch (expr) {
-                    .block => return true,
-                    .tuple => |t| {
-                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(t.items));
-                    },
-                    .apply => |a| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, a.@"fn")) {
-                            return true;
-                        }
+    fn formatStringInterpolation(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
 
-                        return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(a.args));
-                    },
-                    .bin_op => |b| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, b.left)) {
-                            return true;
-                        }
+        // Start the interpolated string
+        try self.push('"');
 
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, b.right);
-                    },
-                    .record => |r| {
-                        if (r.ext) |ext| {
-                            if (fmt.nodeWillBeMultiline(AST.Expr.Idx, ext)) {
-                                return true;
+        // Process the interpolation nodes
+        // String interpolation alternates between string literal parts and expression parts
+        var iter = self.ast.node_slices.nodes(&node.payload.nodes);
+        var is_expression = false; // First element is always a string part (could be empty)
+
+        while (iter.next()) |part_idx| {
+            const part_node = self.getNode(part_idx);
+
+            if (is_expression) {
+                // Expression part - format with ${} syntax
+                try self.pushAll("${");
+
+                // Save current state
+                const saved_has_newline = self.has_newline;
+                const saved_consecutive_newlines = self.consecutive_newlines;
+
+                // Format the expression inline (no newlines)
+                self.has_newline = false;
+                self.consecutive_newlines = 0;
+                try self.formatNode(part_idx);
+
+                // Restore state
+                self.has_newline = saved_has_newline;
+                self.consecutive_newlines = saved_consecutive_newlines;
+
+                try self.push('}');
+            } else {
+                // String literal part - extract the literal content
+                switch (part_node.tag) {
+                    .str_literal_small => {
+                        // Small string stored inline
+                        const bytes = part_node.payload.str_literal_small;
+                        for (bytes) |byte| {
+                            if (byte == 0) break; // Null-terminated
+
+                            // Escape special characters
+                            switch (byte) {
+                                '"' => try self.pushAll("\\\""),
+                                '\\' => try self.pushAll("\\\\"),
+                                '\n' => try self.pushAll("\\n"),
+                                '\r' => try self.pushAll("\\r"),
+                                '\t' => try self.pushAll("\\t"),
+                                else => try self.push(byte),
                             }
                         }
-
-                        return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
                     },
-                    .suffix_single_question => |s| {
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);
-                    },
-                    .unary_op => |u| {
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, u.expr);
-                    },
-                    .field_access => |f| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, f.left)) {
-                            return true;
+                    .str_literal_big => {
+                        // Large string stored in ByteSlices
+                        const slice = self.ast.byte_slices.slice(part_node.payload.str_literal_big);
+                        for (slice) |byte| {
+                            // Escape special characters
+                            switch (byte) {
+                                '"' => try self.pushAll("\\\""),
+                                '\\' => try self.pushAll("\\\\"),
+                                '\n' => try self.pushAll("\\n"),
+                                '\r' => try self.pushAll("\\r"),
+                                '\t' => try self.pushAll("\\t"),
+                                else => try self.push(byte),
+                            }
                         }
-
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
                     },
-                    .lambda => |l| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {
-                            return true;
-                        }
+                    else => {
+                        // Fallback: if it's not a recognized string literal, extract from source
+                        const start = part_node.region.start.offset;
+                        const end = part_node.region.end.offset;
+                        if (start < end and end <= self.source.len) {
+                            var content = self.source[start..end];
 
-                        if (fmt.nodesWillBeMultiline(AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args))) {
-                            return true;
-                        }
+                            // Skip surrounding quotes if present
+                            if (content.len >= 2 and content[0] == '"' and content[content.len - 1] == '"') {
+                                content = content[1 .. content.len - 1];
+                            }
 
-                        return false;
+                            // Output the content with proper escaping
+                            for (content) |byte| {
+                                switch (byte) {
+                                    '"' => try self.pushAll("\\\""),
+                                    '\\' => try self.pushAll("\\\\"),
+                                    '\n' => try self.pushAll("\\n"),
+                                    '\r' => try self.pushAll("\\r"),
+                                    '\t' => try self.pushAll("\\t"),
+                                    else => try self.push(byte),
+                                }
+                            }
+                        }
                     },
-                    .if_then_else => |i| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, i.condition)) {
-                            return true;
-                        }
-
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, i.then)) {
-                            return true;
-                        }
-
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, i.@"else");
-                    },
-                    .local_dispatch => |l| {
-                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.left)) {
-                            return true;
-                        }
-
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, l.right);
-                    },
-                    else => return false,
                 }
-            },
-            AST.Pattern.Idx => {
-                const pattern = fmt.ast.store.getPattern(item);
-                return fmt.ast.regionIsMultiline(pattern.to_tokenized_region());
-            },
-            AST.PatternRecordField.Idx => {
-                const patternRecordField = fmt.ast.store.getPatternRecordField(item);
-                if (fmt.ast.regionIsMultiline(patternRecordField.region)) {
-                    return true;
-                }
+            }
 
-                if (patternRecordField.value) |value| {
-                    if (fmt.nodeWillBeMultiline(AST.Pattern.Idx, value)) {
-                        return true;
-                    }
-                }
-
-                return false;
-            },
-            AST.ExposedItem.Idx => {
-                const exposedItem = fmt.ast.store.getExposedItem(item);
-                return fmt.ast.regionIsMultiline(exposedItem.to_tokenized_region());
-            },
-            AST.RecordField.Idx => {
-                const recordField = fmt.ast.store.getRecordField(item);
-                if (fmt.ast.regionIsMultiline(recordField.region)) {
-                    return true;
-                }
-
-                if (recordField.value) |value| {
-                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, value)) {
-                        return true;
-                    }
-                }
-
-                return false;
-            },
-            AST.TypeAnno.Idx => {
-                const typeAnno = fmt.ast.store.getTypeAnno(item);
-                return fmt.ast.regionIsMultiline(typeAnno.to_tokenized_region());
-            },
-            AST.AnnoRecordField.Idx => {
-                const annoRecordField = fmt.ast.store.getAnnoRecordField(item) catch return false;
-                if (fmt.ast.regionIsMultiline(annoRecordField.region)) {
-                    return true;
-                }
-
-                return fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, annoRecordField.ty);
-            },
-            AST.WhereClause.Idx => {
-                const whereClause = fmt.ast.store.getWhereClause(item);
-                return fmt.ast.regionIsMultiline(whereClause.to_tokenized_region());
-            },
-            AST.Statement.Idx => {
-                const statement = fmt.ast.store.getStatement(item);
-                if (fmt.ast.regionIsMultiline(statement.to_tokenized_region())) {
-                    return true;
-                }
-
-                switch (statement) {
-                    .expr => |e| {
-                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, e.expr);
-                    },
-                    else => return false,
-                }
-            },
-            AST.TypeHeader.Idx => {
-                const typeHeader = fmt.ast.store.getTypeHeader(item) catch return false;
-                if (fmt.ast.regionIsMultiline(typeHeader.region)) {
-                    return true;
-                }
-
-                return fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(typeHeader.args));
-            },
-            AST.Header.Idx => {
-                const header = fmt.ast.store.getHeader(item);
-                if (fmt.ast.regionIsMultiline(header.to_tokenized_region())) {
-                    return true;
-                }
-
-                switch (header) {
-                    .package => |p| {
-                        if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.exposes)) {
-                            return true;
-                        }
-
-                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages);
-                    },
-                    else => return false,
-                }
-            },
-            else => return false,
+            is_expression = !is_expression;
         }
+
+        try self.push('"');
     }
 
-    fn nodesWillBeMultiline(fmt: *Formatter, comptime T: type, items: []T) bool {
-        for (items) |item| {
-            if (fmt.nodeWillBeMultiline(T, item)) {
+    fn formatStringFromSource(self: *Formatter, node_idx: Node.Idx) !void {
+        const node = self.getNode(node_idx);
+
+        // Find the string in the source
+        const start = node.region.start.offset;
+
+        // Handle single-quoted strings (single characters)
+        if (start < self.source.len and self.source[start] == '\'') {
+            // Single-quoted string - output until closing quote
+            var end = start + 1;
+            while (end < self.source.len and self.source[end] != '\'') {
+                end += 1;
+            }
+            if (end < self.source.len) {
+                end += 1; // Include closing quote
+            }
+            const string_text = self.source[start..end];
+            try self.pushAll(string_text);
+            return;
+        }
+
+        // Check for multiline string (triple quotes)
+        if (start + 2 < self.source.len and
+            self.source[start] == '"' and
+            self.source[start + 1] == '"' and
+            self.source[start + 2] == '"')
+        {
+            // Multiline string - find the closing triple quotes
+            var end = start + 3; // Skip opening triple quotes
+
+            while (end + 2 < self.source.len) {
+                if (self.source[end] == '"' and
+                    self.source[end + 1] == '"' and
+                    self.source[end + 2] == '"')
+                {
+                    end += 3; // Include closing triple quotes
+                    break;
+                }
+                end += 1;
+            }
+
+            // Output the multiline string as-is from source
+            // Can't use pushLiteralFromRegion since it doesn't allow newlines
+            const multiline_str = self.source[start..end];
+            for (multiline_str) |c| {
+                try self.push(c);
+            }
+            return;
+        }
+
+        // Regular double-quoted string
+        var end = start + 1; // Skip opening quote
+
+        // Find the closing quote, handling escapes
+        while (end < self.source.len) {
+            const c = self.source[end];
+            if (c == '\\' and end + 1 < self.source.len) {
+                end += 2; // Skip escape sequence
+            } else if (c == '"') {
+                end += 1; // Include closing quote
+                break;
+            } else {
+                end += 1;
+            }
+        }
+
+        // Output the string as-is from source
+        try self.pushLiteralFromRegion(start, end);
+    }
+
+    fn nodeRegion(self: *const Formatter, node_idx: Node.Idx) base.Region {
+        const node = self.getNode(node_idx);
+        const end_offset = node.region.end.offset;
+
+        // Calculate the end position based on the offset
+        // We need to count lines and columns from the start
+        var line = node.region.start.line;
+        var column = node.region.start.column;
+        var pos = node.region.start.offset;
+
+        while (pos < end_offset and pos < self.source.len) {
+            if (self.source[pos] == '\n') {
+                line += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+            pos += 1;
+        }
+
+        return .{
+            .start = node.region.start,
+            .end = .{
+                .offset = end_offset,
+                .line = line,
+                .column = column,
+            },
+        };
+    }
+
+    fn nodeWillBeMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
+        const node = self.getNode(node_idx);
+
+        return switch (node.tag) {
+            // Block expressions are always multiline
+            .block => true,
+            // Collections use the collectionIsMultiline check (trailing comma or too long)
+            .list_literal, .record_literal, .tuple_literal => self.collectionIsMultiline(node_idx),
+            // Everything else is single-line
+            else => false,
+        };
+    }
+
+    fn collectionIsMultiline(self: *const Formatter, node_idx: Node.Idx) bool {
+        // Collections are multiline if:
+        // 1. They have a trailing comma, OR
+        // 2. They contain inline comments
+        // We DO NOT enforce line lengths in this formatter by design
+
+        // First check for trailing comma
+        if (self.hasTrailingComma(node_idx)) {
+            return true;
+        }
+
+        // Check if the collection contains any comments using our token list
+        const node = self.getNode(node_idx);
+        const start_offset = node.region.start.offset;
+        const end_offset = node.region.end.offset;
+
+        // Find first token that could be inside this collection
+        const start_token_idx = self.findFirstTokenAtOrAfter(start_offset);
+
+        // Check tokens within the collection's range for comments
+        var i = start_token_idx;
+        while (i < self.tokens.len and self.tokens[i].region.start.offset < end_offset) : (i += 1) {
+            if (self.tokens[i].tag == .LineComment or self.tokens[i].tag == .DocComment) {
+                // Found a comment inside the collection
                 return true;
             }
         }
@@ -2205,74 +3189,546 @@ const Formatter = struct {
         return false;
     }
 
-    fn collectionWillBeMultiline(fmt: *Formatter, comptime T: type, idx: AST.Collection.Idx) bool {
-        const collection = fmt.ast.store.getCollection(idx);
-        if (fmt.ast.regionIsMultiline(collection.region)) {
+    fn hasTrailingComma(self: *const Formatter, node_idx: Node.Idx) bool {
+        const node = self.getNode(node_idx);
+        const start = node.region.start.offset;
+        const end = node.region.end.offset;
+
+        if (end <= start or end > self.source.len) {
+            return false;
+        }
+
+        // Use binary search to find tokens within the node's region
+        var left: usize = 0;
+        var right: usize = self.tokens.len;
+
+        // Binary search for first token with offset >= start
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < start) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        // Find the last token before the closing delimiter
+        var last_content_token: ?Token = null;
+        var found_closing_delimiter = false;
+
+        // Scan tokens within the node's region
+        var cursor = left;
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+
+            // Stop if we're past the node's region
+            if (token.region.start.offset >= end) break;
+
+            switch (token.tag) {
+                // Skip comments and whitespace
+                .LineComment, .DocComment => continue,
+
+                // Check for closing delimiters
+                .CloseSquare, .CloseCurly, .CloseRound => {
+                    // If this delimiter is within our node's region, it's our closing delimiter
+                    if (token.region.start.offset < end) {
+                        found_closing_delimiter = true;
+                        // Check if the previous non-comment token was a comma
+                        if (last_content_token) |last| {
+                            return last.tag == .Comma;
+                        }
+                        return false;
+                    }
+                },
+
+                // Track the last non-comment, non-delimiter token
+                .Comma, .LowerIdent, .UpperIdent, .String, .Int, .Float, .IntBase, .SingleQuote, .MultilineString, .OpenCurly, .OpenSquare, .OpenRound, .Dot, .OpUnaryMinus, .OpBinaryMinus, .OpBang => {
+                    last_content_token = token;
+                },
+
+                else => {
+                    // Track any other token as potential content
+                    last_content_token = token;
+                },
+            }
+        }
+
+        // If we found a closing delimiter and the last token was a comma, we have a trailing comma
+        if (found_closing_delimiter and last_content_token != null) {
+            return last_content_token.?.tag == .Comma;
+        }
+
+        return false;
+    }
+
+    fn needsParens(self: *const Formatter, child_idx: Node.Idx, parent_tag: Node.Tag, is_left: bool) bool {
+        const child = self.getNode(child_idx);
+
+        // Only binary operators need parentheses based on precedence
+        if (!std.mem.startsWith(u8, @tagName(child.tag), "binop_")) {
+            return false;
+        }
+
+        // Special case: binop_pipe that's actually module/field access never needs parens
+        if (child.tag == .binop_pipe) {
+            const binop = self.ast.node_slices.binOp(child.payload.binop);
+            const lhs_node = self.getNode(binop.lhs);
+            const rhs_node = self.getNode(binop.rhs);
+
+            // Check if this is module/field access (Bool.True, Stdout.line, etc.)
+            if ((lhs_node.tag == .uc or lhs_node.tag == .lc) and
+                (rhs_node.tag == .uc or rhs_node.tag == .lc or rhs_node.tag == .dot_lc or rhs_node.tag == .not_lc))
+            {
+                return false; // Module/field access never needs parentheses
+            }
+        }
+
+        const parent_prec = self.getOperatorPrecedence(parent_tag);
+        const child_prec = self.getOperatorPrecedence(child.tag);
+
+        // Need parens if child has lower precedence than parent
+        // Or if same precedence and associativity matters
+        if (child_prec.left < parent_prec.left) {
             return true;
         }
 
-        switch (T) {
-            AST.RecordField.Idx => {
-                const record_field_slice = fmt.ast.store.recordFieldSlice(.{ .span = collection.span });
-                return fmt.nodesWillBeMultiline(AST.RecordField.Idx, record_field_slice);
-            },
-            else => return false,
+        // For same precedence, check associativity
+        if (child_prec.left == parent_prec.left) {
+            // Right associative operators need parens on the left
+            // Left associative operators need parens on the right
+            if (is_left and parent_prec.right > parent_prec.left) {
+                return true; // Right associative, left operand needs parens
+            }
+            if (!is_left and parent_prec.right == parent_prec.left + 1) {
+                return true; // Left associative, right operand needs parens if same precedence
+            }
         }
+
+        return false;
+    }
+
+    fn getOperatorPrecedence(_: *const Formatter, tag: Node.Tag) Parser.BindingPower {
+        // Convert Node.Tag to Token.Tag, then use parser's getBindingPower
+        const token_tag = nodeTagToTokenTag(tag);
+        return Parser.getBindingPower(token_tag);
+    }
+
+    fn nodeTagToTokenTag(tag: Node.Tag) Token.Tag {
+        // Map AST node tags to their corresponding token tags
+        return switch (tag) {
+            .binop_pipe => .OpBar,
+            .binop_or => .OpOr,
+            .binop_and => .OpAnd,
+            .binop_double_equals => .OpEquals,
+            .binop_not_equals => .OpNotEquals,
+            .binop_lt => .OpLessThan,
+            .binop_lte => .OpLessThanOrEq,
+            .binop_gt => .OpGreaterThan,
+            .binop_gte => .OpGreaterThanOrEq,
+            .binop_plus => .OpPlus,
+            .binop_minus => .OpBinaryMinus,
+            .binop_star => .OpStar,
+            .binop_slash => .OpSlash,
+            .binop_double_slash => .OpDoubleSlash,
+            .binop_double_question => .OpDoubleQuestion,
+            .binop_equals => .OpAssign,
+            .binop_colon => .OpColon,
+            .binop_thin_arrow => .OpArrow,
+            .binop_thick_arrow => .OpFatArrow,
+            .binop_as => .KwAs,
+            .binop_where => .KwWhere,
+            .binop_exposing => .KwExposing,
+            .binop_platform => .KwPlatform,
+            else => .EndOfFile, // Fallback for non-operator nodes
+        };
+    }
+
+    fn hasBlankLine(_: *const Formatter, text: []const u8) bool {
+        var newline_count: u32 = 0;
+        for (text) |c| {
+            if (c == '\n') {
+                newline_count += 1;
+                if (newline_count >= 2) return true;
+            } else if (c != ' ' and c != '\t' and c != '\r') {
+                newline_count = 0;
+            }
+        }
+        return false;
+    }
+
+    fn push(self: *Formatter, c: u8) !void {
+        // Debug check for consecutive spaces and blank lines
+        if (std.debug.runtime_safety) {
+            if (c == '\n') {
+                // Track consecutive newlines
+                self.consecutive_newlines += 1;
+
+                // Check for more than 2 consecutive newlines (which would be more than 1 blank line)
+                if (self.consecutive_newlines > 2) {
+                    std.debug.panic("ERROR: Formatter is emitting more than 1 consecutive blank line! Already have {} newlines, trying to add another.\nOutput so far:\n{s}\n", .{ self.consecutive_newlines - 1, self.output.items });
+                }
+            } else if (c != ' ' and c != '\t') {
+                // Reset counter on non-whitespace (but spaces and tabs don't reset it!)
+                self.consecutive_newlines = 0;
+            }
+
+            if (c == ' ' and self.output.items.len > 0) {
+                const prev = self.output.items[self.output.items.len - 1];
+                if (prev == '\n') {
+                    // Track consecutive spaces after newline
+                    var consecutive_spaces: usize = 1;
+
+                    // Look ahead in the current output to see if we're building up spaces
+                    if (self.output.items.len >= 2) {
+                        var i = self.output.items.len - 2;
+                        while (i > 0) : (i -= 1) {
+                            if (self.output.items[i] == ' ') {
+                                consecutive_spaces += 1;
+                            } else if (self.output.items[i] == '\n') {
+                                // Found the newline, stop counting
+                                break;
+                            } else {
+                                // Hit non-space, non-newline
+                                break;
+                            }
+                        }
+                    }
+
+                    if (consecutive_spaces >= 4) {
+                        std.debug.panic("ERROR: push() is adding space #{} after a newline! Output so far:\n{s}\n", .{ consecutive_spaces, self.output.items });
+                    }
+                } else if (prev == ' ') {
+                    // Check if we're adding consecutive spaces
+                    var space_count: usize = 1;
+                    var i = self.output.items.len - 1;
+                    while (i > 0 and self.output.items[i] == ' ') : (i -= 1) {
+                        space_count += 1;
+                    }
+                    if (space_count >= 2) {
+                        std.debug.panic("ERROR: push() is adding consecutive space #{} at output position {}! Preceding context: {s}\n", .{ space_count + 1, self.output.items.len, self.output.items[std.math.sub(usize, self.output.items.len, 50) catch 0 ..] });
+                    }
+                }
+            }
+        } else {
+            // In non-debug mode, still track consecutive newlines
+            if (c == '\n') {
+                self.consecutive_newlines += 1;
+            } else if (c != ' ' and c != '\t') {
+                self.consecutive_newlines = 0;
+            }
+        }
+
+        self.has_newline = c == '\n';
+        try self.output.append(c);
+    }
+
+    fn pushAll(self: *Formatter, str: []const u8) !void {
+        if (str.len == 0) return;
+
+        // Debug checks in debug builds only
+        if (std.debug.runtime_safety) {
+            // Check for consecutive spaces
+            var prev_was_space = false;
+            for (str, 0..) |c, i| {
+                if (c == ' ') {
+                    if (prev_was_space) {
+                        std.debug.panic("ERROR: Multiple consecutive spaces in pushAll at position {}: {s}\n", .{ i, str });
+                    }
+                    prev_was_space = true;
+                } else {
+                    prev_was_space = false;
+                }
+
+                // Check tab placement - tabs should only come after newline or another tab
+                if (c == '\t') {
+                    if (i > 0) {
+                        const prev = str[i - 1];
+                        if (prev != '\n' and prev != '\t') {
+                            std.debug.panic("ERROR: Tab not after newline or tab at position {} in: {s}\n", .{ i, str });
+                        }
+                    } else if (self.output.items.len > 0) {
+                        // Check what's at the end of output
+                        const last = self.output.items[self.output.items.len - 1];
+                        if (last != '\n' and last != '\t') {
+                            std.debug.panic("ERROR: Tab not after newline or tab (from output) in: {s}\n", .{str});
+                        }
+                    }
+                }
+            }
+
+            // Check if output ends in space and str starts with space
+            if (self.output.items.len > 0 and str.len > 0) {
+                if (self.output.items[self.output.items.len - 1] == ' ' and str[0] == ' ') {
+                    std.debug.panic("ERROR: Output ends in space and pushAll starts with space: {s}\n", .{str});
+                }
+            }
+        }
+        self.has_newline = str[str.len - 1] == '\n';
+
+        // Update consecutive newlines counter based on what we're appending
+        for (str) |c| {
+            if (c == '\n') {
+                self.consecutive_newlines += 1;
+            } else if (c != ' ' and c != '\t') {
+                self.consecutive_newlines = 0;
+            }
+        }
+
+        try self.output.appendSlice(str);
+    }
+
+    /// Push literal content from source (e.g., string literals, number literals, malformed content)
+    /// This doesn't check for formatting violations since we're preserving source content
+    fn pushLiteralFromRegion(self: *Formatter, start: usize, end: usize) !void {
+        if (std.debug.runtime_safety) {
+            std.debug.assert(end > start); // Should not be empty
+            std.debug.assert(end <= self.source.len); // Should be within bounds
+        }
+
+        const str = self.source[start..end];
+
+        // Debug assertion: literals should never contain newlines
+        if (std.debug.runtime_safety) {
+            for (str) |c| {
+                if (c == '\n') {
+                    std.debug.panic("ERROR: pushLiteralFromRegion encountered a newline in what should be a literal! Region [{}-{}]: {s}\n", .{ start, end, str });
+                }
+            }
+        }
+
+        self.has_newline = false; // Literals never end with newlines
+        // Since we're outputting non-whitespace content, reset consecutive newlines
+        self.consecutive_newlines = 0;
+        try self.output.appendSlice(str);
+    }
+
+    fn ensureNewline(self: *Formatter) !void {
+        if (!self.has_newline) {
+            try self.newline();
+        }
+    }
+
+    fn ensureSpace(self: *Formatter) !void {
+        // Don't add a space if we're at the beginning of a line (after newline)
+        if (self.output.items.len > 0 and self.output.items[self.output.items.len - 1] == '\n') {
+            // We're at the start of a line, don't add a space
+            return;
+        }
+
+        // Only add a space if the output doesn't already end with one
+        if (self.output.items.len == 0 or self.output.items[self.output.items.len - 1] != ' ') {
+            try self.push(' ');
+        }
+    }
+
+    fn ensureBlankLine(self: *Formatter) !void {
+        // We want exactly 2 consecutive newlines for a blank line (one ends the previous line, one creates the blank)
+        if (self.consecutive_newlines == 0) {
+            // No newlines yet, add two
+            try self.newline();
+            try self.newline();
+        } else if (self.consecutive_newlines == 1) {
+            // One newline already, add one more for the blank line
+            try self.newline();
+        }
+        // If we already have 2+ newlines, don't add more
+    }
+
+    fn newline(self: *Formatter) !void {
+        try self.push('\n');
+    }
+
+    fn pushIndent(self: *Formatter) !void {
+        if (self.curr_indent_level == 0) {
+            return;
+        }
+
+        // Use TABS for indentation, not spaces!
+        // OPTIMIZATION: Pre-allocated string of 32 tabs for common cases.
+        // This avoids dynamic allocation for indentation levels 1-32 (covers 99.9% of real code).
+        // For levels 1-32: Single pushAll() with a slice = one memcpy operation
+        // For levels >32: Still handled correctly with the fallback loop below
+        // This is NOT a limitation - just an optimization for the common case!
+        const tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
+        const indent_level = @min(self.curr_indent_level, tabs.len);
+        try self.pushAll(tabs[0..indent_level]);
+
+        // Handle very deep indentation (unlikely but possible)
+        // This ensures there's no maximum indentation limit
+        if (self.curr_indent_level > tabs.len) {
+            for (tabs.len..self.curr_indent_level) |_| {
+                try self.push('\t');
+            }
+        }
+    }
+
+    /// Check if there are comment tokens between two positions
+    fn hasCommentBetween(self: *const Formatter, start: usize, end: usize) bool {
+        // Use binary search to find the first token that could be in range
+        var left: usize = 0;
+        var right: usize = self.tokens.len;
+
+        // Binary search for first token with offset >= start
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            if (self.tokens[mid].region.start.offset < start) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        // Now scan from this position until we reach end
+        var cursor = left;
+        while (cursor < self.tokens.len) : (cursor += 1) {
+            const token = self.tokens[cursor];
+            if (token.region.start.offset >= end) break;
+            switch (token.tag) {
+                .LineComment, .DocComment => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn flushTrailingComments(self: *Formatter) !bool {
+        // Flush all remaining comment tokens
+        var found_any = false;
+        while (self.token_cursor < self.tokens.len) {
+            const token = self.tokens[self.token_cursor];
+            switch (token.tag) {
+                .LineComment, .DocComment => {
+                    try self.pushIndent();
+                    try self.pushLiteralFromRegion(token.region.start.offset, token.region.end.offset);
+                    try self.newline();
+                    found_any = true;
+                },
+                else => {},
+            }
+            self.token_cursor += 1;
+        }
+        return found_any;
     }
 };
 
-/// Asserts a module when formatted twice in a row results in the same final output.
-/// Returns that final output.
-pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    if (debug) {
-        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+/// Formats AST with source code
+pub fn formatAst(
+    allocator: std.mem.Allocator,
+    ast: *const AST,
+    source: []const u8,
+    ident_store: *const Ident.Store,
+    root_node: ?Node.Idx,
+) ![]u8 {
+    // Create a scratch arena for temporary allocations
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const scratch = scratch_arena.allocator();
+
+    // Just tokenize - we don't need to parse since we already have an AST
+    var env = try CommonEnv.init(scratch, source);
+    defer env.deinit(scratch);
+
+    var byte_slices = collections.ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(scratch);
+
+    var messages: [256]tokenize_iter.Diagnostic = undefined;
+
+    // Tokenize without parsing
+    var tokens = std.ArrayList(tokenize_iter.Token).init(scratch);
+    defer tokens.deinit();
+
+    var token_iter = try tokenize_iter.TokenIterator.init(&env, scratch, source, &messages, &byte_slices);
+    defer token_iter.deinit(scratch);
+
+    // Collect all tokens
+    while (try token_iter.next(scratch)) |token| {
+        try tokens.append(token);
+        if (token.tag == .EndOfFile) break;
     }
 
-    const formatted = parseAndFmt(gpa, input, debug) catch |err| {
-        switch (err) {
-            error.TooNested => return error.ParseFailed,
-            else => return err,
-        }
-    };
-    defer gpa.free(formatted);
-
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
-        return error.SecondParseFailed;
-    };
-    errdefer gpa.free(formatted_twice);
-
-    std.testing.expectEqualStrings(formatted, formatted_twice) catch {
-        return error.FormattingNotStable;
-    };
-    return formatted_twice;
+    // Now format using the collected tokens
+    return formatAstWithTokens(allocator, ast, source, ident_store, tokens.items, root_node);
 }
 
-fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try ModuleEnv.init(gpa, input);
-    defer module_env.deinit();
+/// Formats AST with pre-tokenized source
+pub fn formatAstWithTokens(
+    allocator: std.mem.Allocator,
+    ast: *const AST,
+    source: []const u8,
+    ident_store: *const Ident.Store,
+    tokens: []const tokenize_iter.Token,
+    root_node: ?Node.Idx,
+) ![]u8 {
+    // Create a scratch arena for temporary allocations
+    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer scratch_arena.deinit();
+    const scratch = scratch_arena.allocator();
 
-    var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
-    defer parse_ast.deinit(gpa);
+    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, tokens);
+    defer formatter.deinit();
 
-    // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
-    if (debug and false) {
-        // shouldn't be required in future
-        parse_ast.store.emptyScratch();
+    try formatter.format(root_node);
 
-        std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        std.debug.print("\n==========\n\n", .{});
+    // Ensure the output ends with exactly one newline
+    // Remove any trailing blank lines, then ensure we have exactly one newline
+    while (formatter.output.items.len > 1 and
+        formatter.output.items[formatter.output.items.len - 1] == '\n' and
+        formatter.output.items[formatter.output.items.len - 2] == '\n')
+    {
+        _ = formatter.output.pop();
     }
 
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
-        return error.ParseFailed;
-    };
-
-    var result = std.ArrayList(u8).init(gpa);
-    try formatAst(parse_ast, result.writer().any());
-
-    if (debug) {
-        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
+    // Ensure we end with a newline if we don't already
+    if (formatter.output.items.len == 0 or formatter.output.items[formatter.output.items.len - 1] != '\n') {
+        try formatter.output.append('\n');
     }
-    return try result.toOwnedSlice();
+
+    // Transfer ownership to caller by moving the items
+    const result = try formatter.output.toOwnedSlice();
+
+    // Debug: Check for lines with exactly 4 spaces
+    if (std.debug.runtime_safety) {
+        var i: usize = 0;
+        var line_start: usize = 0;
+        var line_num: usize = 1;
+
+        while (i < result.len) : (i += 1) {
+            if (result[i] == '\n') {
+                const line = result[line_start..i];
+                if (line.len == 4) {
+                    var all_spaces = true;
+                    for (line) |c| {
+                        if (c != ' ') {
+                            all_spaces = false;
+                            break;
+                        }
+                    }
+                    if (all_spaces) {
+                        std.debug.panic("ERROR: Formatter is returning line {} with exactly 4 spaces!\n", .{line_num});
+                    }
+                }
+                line_num += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+
+    // Debug assertion: Ensure file ends with exactly one newline
+    if (std.debug.runtime_safety) {
+        if (result.len == 0) {
+            std.debug.panic("ERROR: Formatter returned empty output!\n", .{});
+        }
+
+        // Check that file ends with exactly one newline
+        if (result[result.len - 1] != '\n') {
+            std.debug.panic("ERROR: Formatted file does not end with a newline! Last char: '{c}'\n", .{result[result.len - 1]});
+        }
+
+        // Check that there's no blank line at the end (no double newline)
+        if (result.len > 1 and result[result.len - 2] == '\n') {
+            std.debug.panic("ERROR: Formatted file ends with a blank line (double newline)!\n", .{});
+        }
+    }
+
+    return result;
 }

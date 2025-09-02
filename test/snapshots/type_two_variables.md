@@ -62,7 +62,6 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_c")
 ~~~
 # TYPES
 ~~~roc

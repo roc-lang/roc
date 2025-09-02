@@ -52,7 +52,7 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - can_basic_scoping.md:15:5:15:16
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **innerResult** is not used anywhere in your code.
@@ -86,7 +86,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

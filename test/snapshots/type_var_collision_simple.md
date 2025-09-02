@@ -74,7 +74,7 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **result3** is not used anywhere in your code.
@@ -124,7 +124,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_d")
 ~~~
 # TYPES
 ~~~roc

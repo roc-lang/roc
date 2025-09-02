@@ -59,7 +59,8 @@ test "integer literal 255 fits in U8" {
 
     // They should unify successfully
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -110,7 +111,8 @@ test "integer literal 256 does not fit in U8" {
 
     // They should NOT unify - type mismatch expected
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -161,7 +163,8 @@ test "integer literal -128 fits in I8" {
 
     // They should unify successfully
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -212,7 +215,8 @@ test "integer literal -129 does not fit in I8" {
 
     // They should NOT unify - type mismatch expected
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -263,7 +267,8 @@ test "negative literal cannot unify with unsigned type" {
 
     // They should NOT unify - type mismatch expected
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -308,7 +313,8 @@ test "float literal that fits in F32" {
 
     // They should unify successfully
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -359,7 +365,8 @@ test "float literal that doesn't fit in F32" {
 
     // They should NOT unify - type mismatch expected
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -410,7 +417,8 @@ test "float literal NaN doesn't fit in Dec" {
 
     // They should NOT unify - type mismatch expected
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -473,7 +481,8 @@ test "two integer literals with different requirements unify to most restrictive
 
     // They should unify successfully
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,
@@ -557,7 +566,8 @@ test "positive and negative literals unify with sign requirement" {
 
     // They should unify successfully
     const result = try unify(
-        &module_env,
+        gpa,
+        &module_env.common.idents,
         &module_env.types,
         &problems,
         &snapshots,

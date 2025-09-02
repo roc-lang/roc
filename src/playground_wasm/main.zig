@@ -871,11 +871,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    var czer = Can.init(&result.parse_ast.?, &env.types);
     defer czer.deinit();
 
-    czer.canonicalizeFile() catch |err| {
-        logDebug("compileSource: canonicalizeFile failed: {}\n", .{err});
+    const root_node_idx: parse.AST.Node.Idx = @enumFromInt(result.parse_ast.?.root_node_idx);
+    _ = czer.canonicalizeFileBlock(allocator, root_node_idx, env.source, &env.common.idents) catch |err| {
+        logDebug("compileSource: canonicalizeFileBlock failed: {}\n", .{err});
         if (err == error.OutOfMemory) {
             // If we're out of memory here, the state is likely unstable.
             // Propagate this error up to halt compilation gracefully.

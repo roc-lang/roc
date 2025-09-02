@@ -89,7 +89,12 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:28
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:28
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:32
+EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:12:28:12:41
+EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:13:28:13:41
+EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:14:32:14:45
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ ** is not expected in an expression.
@@ -220,7 +225,6 @@ all_float_list = float_list ++ my_empty_list
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -72,7 +72,11 @@ valid_multi = |x| [x]
 main = |x| "done"
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - type_var_underscore_conventions.md:5:15:5:16
+UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
+UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
+UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
+UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **x** is not used anywhere in your code.
@@ -190,7 +194,6 @@ main = |x| "done"
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

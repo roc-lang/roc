@@ -106,7 +106,15 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:52
+UNUSED VARIABLE - let_polymorphism_records.md:19:52:19:56
+UNUSED VARIABLE - let_polymorphism_records.md:19:40:19:49
+UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
+UNUSED VARIABLE - let_polymorphism_records.md:19:16:19:25
+STATEMENT IN EXPRESSION CONTEXT - let_polymorphism_records.md:26:25:26:33
+UNUSED VARIABLE - let_polymorphism_records.md:26:20:26:21
+UNSUPPORTED NODE - let_polymorphism_records.md:35:5:35:24
+UNSUPPORTED NODE - let_polymorphism_records.md:35:27:35:46
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **& ** is not expected in an expression.
@@ -292,7 +300,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -9,7 +9,7 @@ const compile = @import("compile");
 const parse = @import("parse");
 const base = @import("base");
 
-const Can = @import("../Can.zig");
+const Can = @import("../mod.zig").Can;
 const ModuleEnv = @import("../ModuleEnv.zig");
 
 const AST = parse.AST;
@@ -32,19 +32,18 @@ test "exposed but not implemented - values" {
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
 
-    var czer = try Can.init(&env, &ast, null);
-    defer czer.deinit();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
 
-    try czer.canonicalizeFile();
+    const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source, &env.common.idents);
 
     // Check that we have an "exposed but not implemented" diagnostic for 'bar'
     var found_bar_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .exposed_but_not_implemented => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .exposed_but_not_implemented => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "bar")) {
                     found_bar_error = true;
                 }
@@ -71,19 +70,18 @@ test "exposed but not implemented - types" {
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
 
-    var czer = try Can.init(&env, &ast, null);
-    defer czer.deinit();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
 
-    try czer.canonicalizeFile();
+    const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source, &env.common.idents);
 
     // Check that we have an "exposed but not implemented" diagnostic for 'OtherType'
     var found_other_type_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .exposed_but_not_implemented => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .exposed_but_not_implemented => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "OtherType")) {
                     found_other_type_error = true;
                 }
@@ -108,20 +106,17 @@ test "redundant exposed entries" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Check that we have redundant exposed warnings
     var found_foo_redundant = false;
     var found_bar_redundant = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .redundant_exposed => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .redundant_exposed => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "foo")) {
                     found_foo_redundant = true;
                 } else if (std.mem.eql(u8, ident_text, "bar")) {
@@ -151,17 +146,14 @@ test "shadowing with exposed items" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Check that we have shadowing warnings
     var shadowing_count: usize = 0;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
             .shadowing_warning => shadowing_count += 1,
             else => {},
         }
@@ -184,19 +176,16 @@ test "shadowing non-exposed items" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Check that we still get shadowing warnings for non-exposed items
     var found_shadowing = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .shadowing_warning => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .shadowing_warning => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "notExposed")) {
                     found_shadowing = true;
                 }
@@ -224,11 +213,10 @@ test "exposed items correctly tracked across shadowing" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Should have:
     // - Shadowing warning for x
     // - No "exposed but not implemented" for x (it is implemented)
@@ -237,18 +225,16 @@ test "exposed items correctly tracked across shadowing" {
     var found_x_shadowing = false;
     var found_z_not_implemented = false;
     var found_unexpected_not_implemented = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .shadowing_warning => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .shadowing_warning => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "x")) {
                     found_x_shadowing = true;
                 }
             },
-            .exposed_but_not_implemented => |d| {
-                const ident_text = env.getIdent(d.ident);
+            .exposed_but_not_implemented => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "z")) {
                     found_z_not_implemented = true;
                 } else if (std.mem.eql(u8, ident_text, "x") or std.mem.eql(u8, ident_text, "y")) {
@@ -280,32 +266,29 @@ test "complex case with redundant, shadowing, and not implemented" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     var found_a_redundant = false;
     var found_a_shadowing = false;
     var found_not_implemented = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
-        const diag = env.store.getDiagnostic(diag_idx);
-        switch (diag) {
-            .redundant_exposed => |d| {
-                const ident_text = env.getIdent(d.ident);
+    for (env.diagnostics.items) |diag| {
+        switch (diag.tag) {
+            .redundant_exposed => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_redundant = true;
                 }
             },
-            .shadowing_warning => |d| {
-                const ident_text = env.getIdent(d.ident);
+            .shadowing_warning => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "a")) {
                     found_a_shadowing = true;
                 }
             },
-            .exposed_but_not_implemented => |d| {
-                const ident_text = env.getIdent(d.ident);
+            .exposed_but_not_implemented => {
+                const ident_text = env.common.getIdent(diag.ident);
                 if (std.mem.eql(u8, ident_text, "NotImplemented")) {
                     found_not_implemented = true;
                 }
@@ -332,11 +315,10 @@ test "exposed_items is populated correctly" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Check that exposed_items contains the correct number of items
     // The exposed items were added during canonicalization
     // Should have exactly 3 entries (duplicates not stored)
@@ -364,11 +346,10 @@ test "exposed_items persists after canonicalization" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // All exposed items should be in exposed_items, even those not implemented
     const x_idx = env.common.idents.findByString("x").?;
     const y_idx = env.common.idents.findByString("y").?;
@@ -394,11 +375,10 @@ test "exposed_items never has entries removed" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // All exposed items should remain in exposed_items
     // Even though foo appears twice and baz is not implemented,
     // exposed_items should have all unique exposed identifiers
@@ -427,11 +407,10 @@ test "exposed_items handles identifiers with different attributes" {
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
-    var czer = try Can.init(&env, &ast, null);
-    defer czer
-        .deinit();
-    try czer
-        .canonicalizeFile();
+    var czer = Can.init(&ast, &env.types);
+    defer czer.deinit(allocator);
+    const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents);
     // Both should be in exposed_items as separate entries
     const foo_idx = env.common.idents.findByString("foo").?;
     const foo_effectful_idx = env.common.idents.findByString("foo!").?;

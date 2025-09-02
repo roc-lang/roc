@@ -115,7 +115,7 @@ pub const IncompatibleListElements = struct {
 /// Problem data for cross-module import type mismatches
 pub const CrossModuleImport = struct {
     import_region: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
+    module_name: base.Ident.Idx,
 };
 
 /// Problem data when function argument types don't match
@@ -139,7 +139,7 @@ pub const IncompatibleFnArgsBoundVar = struct {
 /// Problem data for when if branches have incompatible types
 pub const IncompatibleIfBranches = struct {
     parent_if_expr: CIR.Expr.Idx,
-    last_if_branch: CIR.Expr.IfBranch.Idx,
+    last_branch_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };

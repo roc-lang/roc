@@ -265,20 +265,24 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
         var ast = ast_const;
         defer ast.deinit(self.allocator);
 
-        if (ast.root_node_idx != 0) {
-            const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
-            const stmt = ast.store.getStatement(stmt_idx);
+        // Check if any nodes were parsed
+        if (ast.nodes.len() > 1) { // Skip sentinel node at index 0
+            // Get the first real node (after sentinel)
+            const first_node_idx = @as(AST.Node.Idx, @enumFromInt(1));
+            const first_node = ast.nodes.get(@enumFromInt(@intFromEnum(first_node_idx)));
 
-            switch (stmt) {
-                .decl => |decl| {
-                    const pattern = ast.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        // Extract the identifier name from the pattern
-                        const ident_tok = pattern.ident.ident_tok;
-                        const token_region = ast.tokens.resolve(ident_tok);
-                        const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
+            // Check the node tag to determine what was parsed
+            switch (first_node.tag) {
+                .binop_equals => {
+                    // This is an assignment like `x = 42`
+                    const binop = ast.node_slices.binOp(first_node.payload.binop);
+                    const lhs_node = ast.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
 
-                        // Return borrowed strings (no duplication needed)
+                    // Check if LHS is an identifier
+                    if (lhs_node.tag == .lc or lhs_node.tag == .var_lc) {
+                        const ident = lhs_node.payload.ident;
+                        const ident_name = module_env.common.getIdent(ident);
+
                         return ParseResult{ .assignment = .{
                             .source = input,
                             .var_name = ident_name,
@@ -287,7 +291,8 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                     return ParseResult.expression;
                 },
                 .import => return ParseResult.import,
-                .type_decl => return ParseResult.type_decl,
+                .binop_colon => return ParseResult.type_decl,
+                .binop_colon_equals => return ParseResult.type_decl,
                 else => return ParseResult.expression,
             }
         }
@@ -299,7 +304,7 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
     if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
         var ast = ast_const;
         defer ast.deinit(self.allocator);
-        if (ast.root_node_idx != 0) {
+        if (ast.nodes.len() > 1) { // Check if any nodes were parsed (beyond sentinel)
             return ParseResult.expression;
         }
     } else |_| {
@@ -366,35 +371,32 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
         };
     defer parse_ast.deinit(self.allocator);
 
-    // Empty scratch space
-    parse_ast.store.emptyScratch();
+    // The new AST doesn't have a store that needs emptying
 
-    // Create CIR
-    const cir = module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(self.allocator, "repl");
+    // Create CIR (which mutates AST in place)
+    var cir = can.CIR.init(&parse_ast, &module_env.types);
+    defer cir.deinit(self.allocator);
 
     // Create canonicalizer
-    var czer = Can.init(cir, &parse_ast, null) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
-    };
-    defer czer.deinit();
+    var czer = Can.init(&parse_ast, &module_env.types);
+    defer czer.deinit(self.allocator);
 
-    // Since we're always parsing as expressions now, handle them the same way
-    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    // In AST, we need to find the expression differently
+    // For now, use the first node as a placeholder
+    const expr_idx: AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
 
-    const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
-        return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
-    };
-    const final_expr_idx = canonical_expr.get_idx();
+    const canonical_expr = try czer.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source, &module_env.common.idents);
 
     // Type check
-    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+    // Check.initForCIR needs different parameters for new architecture
+    var regions = base.Region.List{};
+    var checker = Check.initForCIR(self.allocator, &module_env.types, &regions) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
     };
     defer checker.deinit();
 
     // Check the expression (no need to check defs since we're parsing as expressions)
-    _ = checker.checkExpr(final_expr_idx) catch |err| {
+    _ = checker.checkCIRExpr(can.CIR, &cir, canonical_expr) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
     };
 
@@ -408,7 +410,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     self.eval_stack.used = 0;
 
     // Create interpreter
-    var interpreter = eval_mod.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+    var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit(self.roc_ops);
@@ -418,7 +420,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
         interpreter.startTrace(trace_writer);
     }
 
-    const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| {
+    const result = interpreter.eval(canonical_expr, self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
@@ -431,7 +433,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
 
     // Generate debug HTML if enabled
     if (self.debug_store_snapshots) {
-        try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+        try self.generateAndStoreDebugHtml(module_env, canonical_expr);
     }
 
     // Format the result immediately while memory is still valid

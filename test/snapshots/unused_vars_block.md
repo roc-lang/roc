@@ -72,7 +72,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
+UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
+UNUSED VARIABLE - unused_vars_block.md:20:5:20:11
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **another_unused** is not used anywhere in your code.
@@ -124,7 +126,6 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
 ~~~
 # TYPES
 ~~~roc

@@ -51,7 +51,7 @@ const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
-const ModuleEnv = can.ModuleEnv;
+// ModuleEnv should NOT be used in unification
 
 const Region = base.Region;
 const Ident = base.Ident;
@@ -115,8 +115,10 @@ pub const Result = union(enum) {
 };
 
 /// Unify two type variables with context about whether this is from an annotation
-pub fn unifyWithContext(
-    module_env: *ModuleEnv,
+/// The ONE unify function - no backwards compatibility layers
+pub fn unify(
+    gpa: std.mem.Allocator,
+    idents: *const base.Ident.Store,
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
@@ -124,34 +126,6 @@ pub fn unifyWithContext(
     occurs_scratch: *occurs.Scratch,
     a: Var,
     b: Var,
-    from_annotation: bool,
-) std.mem.Allocator.Error!Result {
-    return unifyWithConstraintOrigin(
-        module_env,
-        types,
-        problems,
-        snapshots,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        from_annotation,
-        null,
-    );
-}
-
-/// Unify two types, tracking the origin of the constraint for better error reporting
-pub fn unifyWithConstraintOrigin(
-    module_env: *ModuleEnv,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    from_annotation: bool,
-    constraint_origin_var: ?Var,
 ) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -160,7 +134,7 @@ pub fn unifyWithConstraintOrigin(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier(*types_mod.Store).init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier(*types_mod.Store).init(gpa, idents, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -177,8 +151,8 @@ pub fn unifyWithConstraintOrigin(
                             .expected_snapshot = expected_snapshot,
                             .actual_var = b,
                             .actual_snapshot = actual_snapshot,
-                            .from_annotation = from_annotation,
-                            .constraint_origin_var = constraint_origin_var,
+                            .from_annotation = false,
+                            .constraint_origin_var = null,
                         },
                         .detail = null,
                     } };
@@ -301,7 +275,7 @@ pub fn unifyWithConstraintOrigin(
                 },
             }
         };
-        const problem_idx = try problems.appendProblem(module_env.gpa, problem);
+        const problem_idx = try problems.appendProblem(gpa, problem);
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
@@ -319,30 +293,6 @@ pub fn unifyWithConstraintOrigin(
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(
-    module_env: *ModuleEnv,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-) std.mem.Allocator.Error!Result {
-    // Default to not from annotation for backward compatibility
-    return unifyWithContext(
-        module_env,
-        types,
-        problems,
-        snapshots,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        false, // from_annotation = false by default
-    );
-}
-
 /// A temporary unification context used to unify two type variables within a `Store`.
 ///
 /// `Unifier` is created per unification call and:
@@ -365,7 +315,8 @@ fn Unifier(comptime StoreTypeB: type) type {
     return struct {
         const Self = @This();
 
-        module_env: *ModuleEnv,
+        gpa: std.mem.Allocator,
+        idents: *const base.Ident.Store,
         types_store: StoreTypeB,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
@@ -374,13 +325,15 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         /// Init unifier
         pub fn init(
-            module_env: *ModuleEnv,
+            gpa: std.mem.Allocator,
+            idents: *const base.Ident.Store,
             types_store: *types_mod.Store,
             scratch: *Scratch,
             occurs_scratch: *occurs.Scratch,
         ) Unifier(*types_mod.Store) {
             return .{
-                .module_env = module_env,
+                .gpa = gpa,
+                .idents = idents,
                 .types_store = types_store,
                 .scratch = scratch,
                 .occurs_scratch = occurs_scratch,
@@ -576,7 +529,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     //     self.merge(vars, vars.a.desc.content);
                     //     return;
                     // }
-                    if (TypeIdent.eql(self.module_env.getIdentStore(), a_alias.ident, b_alias.ident)) {
+                    if (TypeIdent.eql(self.idents, a_alias.ident, b_alias.ident)) {
                         try self.unifyTwoAliases(vars, a_alias, b_alias);
                     } else {
                         try self.unifyGuarded(backing_var, b_backing_var);
@@ -834,7 +787,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
+                                self.idents,
                                 self.scratch,
                                 a_gathered_fields.range,
                                 b_gathered_range,
@@ -889,7 +842,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
+                                self.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_fields.range,
@@ -928,7 +881,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
+                                self.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_range,
@@ -965,7 +918,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
+                                self.idents,
                                 self.scratch,
                                 a_gathered_range,
                                 b_gathered_fields.range,
@@ -1017,7 +970,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Partition the fields
                             const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
+                                self.idents,
                                 self.scratch,
                                 a_gathered_fields.range,
                                 b_gathered_range,
@@ -1254,7 +1207,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .int_precision => |prec| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
+                            const req_var_desc = self.types_store.resolveVar(a_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1300,7 +1253,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .num_compact => |b_compact| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
+                            const req_var_desc = self.types_store.resolveVar(a_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1561,7 +1514,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .frac_poly => |b_poly| {
                             // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(b_poly.var_).desc;
+                            const req_var_desc = self.types_store.resolveVar(b_poly.var_).desc;
                             if (req_var_desc.content == .rigid_var) {
                                 return error.TypeMismatch;
                             }
@@ -1772,7 +1725,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 return;
             }
 
-            if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
+            if (!TypeIdent.eql(self.idents, a_type.ident, b_type.ident)) {
                 return error.TypeMismatch;
             }
 
@@ -1913,7 +1866,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Then partition the fields
             const partitioned = Self.partitionFields(
-                self.module_env.getIdentStore(),
+                self.idents,
                 self.scratch,
                 a_gathered_fields.range,
                 b_gathered_fields.range,
@@ -2330,7 +2283,7 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             // Then partition the tags
             const partitioned = Self.partitionTags(
-                self.module_env.getIdentStore(),
+                self.idents,
                 self.scratch,
                 a_gathered_tags.range,
                 b_gathered_tags.range,
@@ -2850,37 +2803,36 @@ const RootModule = @This();
 const TestEnv = struct {
     const Self = @This();
 
-    module_env: *ModuleEnv,
+    gpa: std.mem.Allocator,
+    idents: base.Ident.Store,
+    types: types_mod.Store,
     snapshots: snapshot_mod.Store,
     problems: problem_mod.Store,
     scratch: Scratch,
     occurs_scratch: occurs.Scratch,
 
     /// Init everything needed to test unify
-    /// This includes allocating module_env on the heap
-    ///
-    /// TODO: Is heap allocation unideal here? If we want to optimize tests, we
-    /// could pull module_env's initialization out of here, but this results in
-    /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
-        try module_env.initCIRFields(gpa, "Test");
+        const idents = base.Ident.Store{
+            .interner = try base.SmallStringInterner.initCapacity(gpa, 16),
+        };
         return .{
-            .module_env = module_env,
+            .gpa = gpa,
+            .idents = idents,
+            .types = try types_mod.Store.init(gpa),
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),
             .problems = try problem_mod.Store.initCapacity(gpa, 16),
-            .scratch = try Scratch.init(module_env.gpa),
-            .occurs_scratch = try occurs.Scratch.init(module_env.gpa),
+            .scratch = try Scratch.init(gpa),
+            .occurs_scratch = try occurs.Scratch.init(gpa),
         };
     }
 
-    /// Deinit the test env, including deallocing the module_env from the heap
+    /// Deinit the test env
     fn deinit(self: *Self) void {
-        self.module_env.deinit();
-        self.module_env.gpa.destroy(self.module_env);
+        self.idents.interner.deinit();
+        self.types.deinit();
         self.snapshots.deinit();
-        self.problems.deinit(self.module_env.gpa);
+        self.problems.deinit(self.gpa);
         self.scratch.deinit();
         self.occurs_scratch.deinit();
     }
@@ -2889,7 +2841,7 @@ const TestEnv = struct {
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         return try RootModule.unify(
             self.module_env,
-            &self.module_env.types,
+            &self.types_store,
             &self.problems,
             &self.snapshots,
             &self.scratch,
@@ -2903,8 +2855,8 @@ const TestEnv = struct {
 
     /// Get a desc from a root var
     fn getDescForRootVar(self: *Self, var_: Var) error{VarIsNotRoot}!Desc {
-        switch (self.module_env.types.getSlot(var_)) {
-            .root => |desc_idx| return self.module_env.types.getDesc(desc_idx),
+        switch (self.types_store.getSlot(var_)) {
+            .root => |desc_idx| return self.types_store.getDesc(desc_idx),
             .redirect => return error.VarIsNotRoot,
         }
     }
@@ -2920,14 +2872,14 @@ const TestEnv = struct {
     }
 
     fn mkTypeIdent(self: *Self, name: []const u8) std.mem.Allocator.Error!TypeIdent {
-        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
+        const ident_idx = try self.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return TypeIdent{ .ident_idx = ident_idx };
     }
 
     // helpers - rigid var
 
     fn mkRigidVar(self: *Self, name: []const u8) std.mem.Allocator.Error!Content {
-        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
+        const ident_idx = try self.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return Self.mkRigidVarFromIdent(ident_idx);
     }
 
@@ -2938,7 +2890,7 @@ const TestEnv = struct {
     // helpers - alias
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args);
+        return try self.types_store.mkAlias(try self.mkTypeIdent(name), backing_var, args);
     }
 
     // helpers - nums
@@ -2948,12 +2900,12 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0,
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = requirements } } } });
     }
 
     fn mkNumFlex(self: *Self) std.mem.Allocator.Error!Var {
         // Create a true flex var that can unify with any numeric type
-        return try self.module_env.types.fresh();
+        return try self.types_store.fresh();
     }
 
     fn mkFrac(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
@@ -2962,39 +2914,39 @@ const TestEnv = struct {
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
     }
 
     fn mkFracFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.fresh();
+        const prec_var = try self.types_store.fresh();
         const frac_requirements = Num.FracRequirements{
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
     }
 
     fn mkFracRigid(self: *Self, name: []const u8) std.mem.Allocator.Error!Var {
-        const rigid = try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
+        const rigid = try self.types_store.freshFromContent(try self.mkRigidVar(name));
         const frac_requirements = Num.FracRequirements{
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = rigid, .requirements = frac_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = rigid, .requirements = frac_requirements } } } });
     }
 
     fn mkFracPoly(self: *Self, prec: Num.Frac.Precision) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
+        const prec_var = try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
         const frac_requirements = Num.FracRequirements{
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
     }
 
     fn mkFracExact(self: *Self, prec: Num.Frac.Precision) std.mem.Allocator.Error!Var {
         // Create an exact fraction type that only unifies with the same precision
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
     }
 
     fn mkInt(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
@@ -3002,52 +2954,52 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = int_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = int_requirements } } } });
     }
 
     fn mkIntFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.fresh();
+        const prec_var = try self.types_store.fresh();
         const int_requirements = Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
     }
 
     fn mkIntRigid(self: *Self, name: []const u8) std.mem.Allocator.Error!Var {
-        const rigid = try self.module_env.types.freshFromContent(try self.mkRigidVar(name));
+        const rigid = try self.types_store.freshFromContent(try self.mkRigidVar(name));
         const int_requirements = Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid, .requirements = int_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid, .requirements = int_requirements } } } });
     }
 
     fn mkIntPoly(self: *Self, prec: Num.Int.Precision) std.mem.Allocator.Error!Var {
-        const prec_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
+        const prec_var = try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
         const int_requirements = Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
     }
 
     fn mkIntExact(self: *Self, prec: Num.Int.Precision) std.mem.Allocator.Error!Var {
         // Create an exact integer type that only unifies with the same precision
-        return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
+        return try self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
     }
 
     // helpers - structure - tuple
 
     fn mkTuple(self: *Self, slice: []const Var) std.mem.Allocator.Error!Content {
-        const elems_range = try self.module_env.types.appendVars(slice);
+        const elems_range = try self.types_store.appendVars(slice);
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
     // helpers - nominal type
 
     fn mkNominalType(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkNominal(
+        return try self.types_store.mkNominal(
             try self.mkTypeIdent(name),
             backing_var,
             args,
@@ -3058,26 +3010,26 @@ const TestEnv = struct {
     // helpers - structure - func
 
     fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkFuncPure(args, ret);
+        return try self.types_store.mkFuncPure(args, ret);
     }
 
     fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkFuncEffectful(args, ret);
+        return try self.types_store.mkFuncEffectful(args, ret);
     }
 
     fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        return try self.module_env.types.mkFuncUnbound(args, ret);
+        return try self.types_store.mkFuncUnbound(args, ret);
     }
 
     fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
         // For flex functions, we use unbound since we don't know the effectfulness yet
-        return try self.module_env.types.mkFuncUnbound(args, ret);
+        return try self.types_store.mkFuncUnbound(args, ret);
     }
 
     // helpers - structure - records
 
     fn mkRecordField(self: *Self, name: []const u8, var_: Var) std.mem.Allocator.Error!RecordField {
-        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
+        const ident_idx = try self.idents.insert(self.module_env.gpa, Ident.for_text(name));
         return Self.mkRecordFieldFromIdent(ident_idx, var_);
     }
 
@@ -3088,18 +3040,18 @@ const TestEnv = struct {
     const RecordInfo = struct { record: Record, content: Content };
 
     fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) std.mem.Allocator.Error!RecordInfo {
-        const fields_range = try self.module_env.types.appendRecordFields(fields);
+        const fields_range = try self.types_store.appendRecordFields(fields);
         const record = Record{ .fields = fields_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .record = record } }, .record = record };
     }
 
     fn mkRecordOpen(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.types_store.freshFromContent(.{ .flex_var = null });
         return self.mkRecord(fields, ext_var);
     }
 
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_record });
+        const ext_var = try self.types_store.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
     }
 
@@ -3108,27 +3060,27 @@ const TestEnv = struct {
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
 
     fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.module_env.types.appendVars(args);
+        return try self.types_store.appendVars(args);
     }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
-        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
-        return Tag{ .name = ident_idx, .args = try self.module_env.types.appendVars(args) };
+        const ident_idx = try self.idents.insert(self.module_env.gpa, Ident.for_text(name));
+        return Tag{ .name = ident_idx, .args = try self.types_store.appendVars(args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) std.mem.Allocator.Error!TagUnionInfo {
-        const tags_range = try self.module_env.types.appendTags(tags);
+        const tags_range = try self.types_store.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .tag_union = tag_union } }, .tag_union = tag_union };
     }
 
     fn mkTagUnionOpen(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.types_store.freshFromContent(.{ .flex_var = null });
         return self.mkTagUnion(tags, ext_var);
     }
 
     fn mkTagUnionClosed(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const ext_var = try self.types_store.freshFromContent(.{ .structure = .empty_tag_union });
         return self.mkTagUnion(tags, ext_var);
     }
 };

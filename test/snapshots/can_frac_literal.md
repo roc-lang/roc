@@ -49,7 +49,6 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "F64")
 ~~~
 # TYPES
 ~~~roc

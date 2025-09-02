@@ -1,76 +1,110 @@
-//! Tests for canonicalizing boolean expressions
-const std = @import("std");
-const base = @import("base");
-const types = @import("types");
-const parse = @import("parse");
-const CIR = @import("../CIR.zig");
-const Can = @import("../Can.zig");
-const ModuleEnv = @import("../ModuleEnv.zig");
+//! Tests for boolean canonicalization.
+//!
+//! This module contains unit tests that verify the correct canonicalization
+//! of boolean expressions from parsed AST into the compiler's canonical
+//! internal representation (CIR).
 
+const std = @import("std");
+const TestEnv = @import("TestEnv.zig").TestEnv;
+const CIR = @import("../CIR.zig");
 const testing = std.testing;
 
-const TestEnv = @import("TestEnv.zig").TestEnv;
-
-test "canonicalize True as Bool" {
-    const source = "True";
+test "canonicalize Bool.True" {
+    const source = "Bool.True";
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
 
-    // Get the expression
-    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-
-    // Check if it's a nominal expression (Bool)
-    try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
-
-    // The backing expression should be a tag
-    const backing_expr = test_env.module_env.store.getExpr(expr.e_nominal.backing_expr);
-    try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
-
-    // The tag should be "True"
-    const tag_name = test_env.getIdent(backing_expr.e_tag.name);
-    try testing.expectEqualStrings("True", tag_name);
+    // Check if it's a module access (Bool.True)
+    try testing.expectEqual(CIR.Expr.Tag.module_access, expr.tag);
 }
 
-test "canonicalize False as Bool" {
-    const source = "False";
+test "canonicalize Bool.False" {
+    const source = "Bool.False";
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
 
-    // Get the expression
-    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-
-    // Check if it's a nominal expression (Bool)
-    try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
-
-    // The backing expression should be a tag
-    const backing_expr = test_env.module_env.store.getExpr(expr.e_nominal.backing_expr);
-    try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
-
-    // The tag should be "False"
-    const tag_name = test_env.getIdent(backing_expr.e_tag.name);
-    try testing.expectEqualStrings("False", tag_name);
+    // Check if it's a module access (Bool.False)
+    try testing.expectEqual(CIR.Expr.Tag.module_access, expr.tag);
 }
 
-test "canonicalize random tag not as Bool" {
-    const source = "SomeTag";
+test "canonicalize boolean comparison" {
+    const source = "Bool.True == Bool.False";
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
 
-    // Get the expression
-    const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
+    // Check if it's an equality comparison
+    try testing.expectEqual(CIR.Expr.Tag.binop_double_equals, expr.tag);
+}
 
-    // Check that it's NOT a nominal expression - just a plain tag
-    try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
+test "canonicalize boolean and" {
+    const source = "Bool.True && Bool.False";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
 
-    // The tag should be "SomeTag"
-    const tag_name = test_env.getIdent(expr.e_tag.name);
-    try testing.expectEqualStrings("SomeTag", tag_name);
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
+
+    // Check if it's a logical and
+    try testing.expectEqual(CIR.Expr.Tag.binop_and, expr.tag);
+}
+
+test "canonicalize boolean or" {
+    const source = "Bool.True || Bool.False";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
+
+    // Check if it's a logical or
+    try testing.expectEqual(CIR.Expr.Tag.binop_or, expr.tag);
+}
+
+test "canonicalize boolean not" {
+    const source = "!Bool.True";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
+
+    // Check if it's a logical not
+    try testing.expectEqual(CIR.Expr.Tag.not_lookup, expr.tag);
+}
+
+test "canonicalize if expression with booleans" {
+    const source = "if Bool.True then 1 else 0";
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
+
+    // Check if it's an if expression
+    try testing.expectEqual(CIR.Expr.Tag.if_else, expr.tag);
+}
+
+test "canonicalize when expression with booleans" {
+    const source =
+        \\when x is
+        \\    Bool.True -> 1
+        \\    Bool.False -> 0
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const expr = test_env.getCanonicalExpr(canonical_expr);
+
+    // Check if it's a when expression
+    try testing.expectEqual(CIR.Expr.Tag.match, expr.tag);
 }

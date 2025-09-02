@@ -181,9 +181,8 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag tuple_literal :type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(_size7), Num(_size8), _field, _field2, _field3, _field4, _field5, _field6)")
 ~~~
 # TYPES
 ~~~roc
-(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(_size7), Num(_size8), _field, _field2, _field3, _field4, _field5, _field6)
+# No header found
 ~~~

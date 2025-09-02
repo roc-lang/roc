@@ -11,30 +11,30 @@ const Ident = base.Ident;
 const Scope = @This();
 
 /// Maps an Ident to a Pattern in the Can IR
-idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
+idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Patt.Idx),
+aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Patt.Idx),
 /// Maps type names to their type declaration statements
-type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
+type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Stmt.Idx),
 /// Maps type variables to their type annotation indices
-type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
+type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Type.Idx),
 /// Maps module alias names to their full module names
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 /// Maps module names to their Import.Idx for modules imported in this scope
-imported_modules: std.StringHashMapUnmanaged(CIR.Import.Idx),
+imported_modules: std.StringHashMapUnmanaged(void),
 is_function_boundary: bool,
 
 /// Initialize the scope
 pub fn init(is_function_boundary: bool) Scope {
     return Scope{
-        .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
-        .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
+        .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Patt.Idx){},
+        .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Patt.Idx){},
+        .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Stmt.Idx){},
+        .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Type.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
-        .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
+        .imported_modules = std.StringHashMapUnmanaged(void){},
         .is_function_boundary = is_function_boundary,
     };
 }
@@ -74,7 +74,7 @@ pub const TypeLookupResult = union(enum) {
 
 /// Result of looking up a type variable
 pub const TypeVarLookupResult = union(enum) {
-    found: CIR.TypeAnno.Idx,
+    found: CIR.Type.Idx,
     not_found: void,
 };
 
@@ -121,8 +121,8 @@ pub const TypeIntroduceResult = union(enum) {
 /// Result of introducing a type variable
 pub const TypeVarIntroduceResult = union(enum) {
     success: void,
-    shadowing_warning: CIR.TypeAnno.Idx, // The type variable that was shadowed
-    already_in_scope: CIR.TypeAnno.Idx, // The type variable already exists in this scope
+    shadowing_warning: CIR.Type.Idx, // The type variable that was shadowed
+    already_in_scope: CIR.Type.Idx, // The type variable already exists in this scope
 };
 
 /// Result of introducing a module alias
@@ -141,14 +141,14 @@ pub const ExposedItemIntroduceResult = union(enum) {
 
 /// Result of looking up an imported module
 pub const ImportedModuleLookupResult = union(enum) {
-    found: CIR.Import.Idx,
+    found: void,
     not_found: void,
 };
 
 /// Result of introducing an imported module
 pub const ImportedModuleIntroduceResult = union(enum) {
     success: void,
-    already_imported: CIR.Import.Idx, // The module was already imported in this scope
+    already_imported: void, // The module was already imported in this scope
 };
 
 /// Item kinds in a scope
@@ -275,8 +275,8 @@ pub fn introduceTypeVar(
     scope: *Scope,
     gpa: std.mem.Allocator,
     name: Ident.Idx,
-    type_var_anno: CIR.TypeAnno.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
+    type_var_anno: CIR.Type.Idx,
+    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Type.Idx,
 ) std.mem.Allocator.Error!TypeVarIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_vars.iterator();
@@ -288,7 +288,7 @@ pub fn introduceTypeVar(
     }
 
     // Check for shadowing in parent scopes
-    var shadowed_type_var: ?CIR.TypeAnno.Idx = null;
+    var shadowed_type_var: ?CIR.Type.Idx = null;
     if (parent_lookup_fn) |lookup_fn| {
         shadowed_type_var = lookup_fn(name);
     }
@@ -404,8 +404,8 @@ pub fn introduceExposedItem(
 
 /// Look up an imported module in this scope
 pub fn lookupImportedModule(scope: *const Scope, module_name: []const u8) ImportedModuleLookupResult {
-    if (scope.imported_modules.get(module_name)) |import_idx| {
-        return ImportedModuleLookupResult{ .found = import_idx };
+    if (scope.imported_modules.contains(module_name)) {
+        return ImportedModuleLookupResult{ .found = {} };
     }
     return ImportedModuleLookupResult{ .not_found = {} };
 }
@@ -415,12 +415,11 @@ pub fn introduceImportedModule(
     scope: *Scope,
     gpa: std.mem.Allocator,
     module_name: []const u8,
-    import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!ImportedModuleIntroduceResult {
     if (scope.imported_modules.contains(module_name)) {
-        return ImportedModuleIntroduceResult{ .already_imported = scope.imported_modules.get(module_name).? };
+        return ImportedModuleIntroduceResult{ .already_imported = {} };
     }
 
-    try scope.imported_modules.put(gpa, module_name, import_idx);
+    try scope.imported_modules.put(gpa, module_name, {});
     return ImportedModuleIntroduceResult{ .success = {} };
 }

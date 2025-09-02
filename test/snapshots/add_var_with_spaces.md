@@ -26,7 +26,7 @@ module [add2]
 add2 = x + 2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **x** in this scope.
@@ -53,7 +53,6 @@ add2 = x +      2
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc

@@ -37,7 +37,7 @@ app { # This comment is here
 pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - app_header__nonempty_multiline.md:2:32:2:37
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **main!** in this scope.
@@ -56,7 +56,6 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; No expression to type check
 ~~~
 # TYPES
 ~~~roc
