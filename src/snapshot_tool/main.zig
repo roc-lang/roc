@@ -1468,7 +1468,8 @@ fn processSnapshotContent(
     defer byte_slices.entries.deinit(allocator);
 
     // Create AST for Parser2
-    var ast = try AST.initCapacity(allocator, 1024);
+    // Increase initial capacity to handle large files like let_polymorphism_complex.md
+    var ast = try AST.initCapacity(allocator, 16384);
     defer ast.deinit(allocator);
 
     // Create common environment for Parser2
@@ -1498,6 +1499,7 @@ fn processSnapshotContent(
     defer parser.deinit();
 
     // Parse based on node type
+    std.debug.print("Processing snapshot file: {s}\n", .{output_path});
     const parse_result: ?i32 = switch (content.meta.node_type) {
         .file => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .header => blk: {
@@ -1537,7 +1539,8 @@ fn processSnapshotContent(
     try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx, tokens.items);
 
     // Create a TypeStore for type inference
-    var types_store = try types.Store.initCapacity(allocator, 2048, 512);
+    // Increase capacity to handle large files with many type variables
+    var types_store = try types.Store.initCapacity(allocator, 8192, 2048);
     defer types_store.deinit();
 
     // NOW we can create CIR2 and canonicalize (which will mutate AST into CIR)
@@ -3677,12 +3680,17 @@ fn outputCIR2PattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Comm
 
 /// Generate SOLVED section showing internal type solving details
 fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    std.debug.print("generateSolvedSection called with expr_idx: {?}\n", .{maybe_expr_idx});
     try output.begin_section("SOLVED");
+    std.debug.print("begin_section completed\n", .{});
     try output.begin_code_block("clojure");
+    std.debug.print("begin_code_block completed\n", .{});
 
     // First run type checking to generate constraints
     var regions = Region.List{};
+    std.debug.print("About to call Check.initForCIR2\n", .{});
     var checker = Check.initForCIR2(output.gpa, @constCast(types_store), &regions) catch |err| {
+        std.debug.print("Check.initForCIR2 failed with error: {}\n", .{err});
         try output.md_writer.print("; Type checker init failed: {}\n", .{err});
         try output.end_code_block();
         try output.end_section();
@@ -3692,14 +3700,20 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
+        std.debug.print("About to call checkCIR2Expr with expr_idx: {}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIR2Expr(CIR, cir, expr_idx) catch |err| {
+            std.debug.print("checkCIR2Expr failed with error: {}\n", .{err});
             try output.md_writer.print("; Type checking failed: {}\n", .{err});
         };
+        std.debug.print("checkCIR2Expr completed successfully\n", .{});
     } else {}
 
+    std.debug.print("About to create InferContext type\n", .{});
     // Create type inference context using the passed-in types store
     const InferContext = infer_cir2.InferContext(CIR);
+    std.debug.print("About to call InferContext.init\n", .{});
     var infer_ctx = InferContext.init(output.gpa, @constCast(types_store), cir, @constCast(&env.idents));
+    std.debug.print("InferContext.init completed\n", .{});
 
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression
@@ -4081,6 +4095,7 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
 fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
+    std.debug.print("DEBUG: Starting processSnapshotFileUnified for: {s}\n", .{snapshot_path});
 
     const @"1Mb" = 1024 * 1024;
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {

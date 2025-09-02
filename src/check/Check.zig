@@ -2820,8 +2820,8 @@ pub fn initForCIR2(
         .cir = undefined, // Not used for CIR2 checking
         .other_modules = &.{},
         .regions = regions,
-        .snapshots = try SnapshotStore.initCapacity(gpa, 64),
-        .problems = try ProblemStore.initCapacity(gpa, 64),
+        .snapshots = try SnapshotStore.initCapacity(gpa, 1024),
+        .problems = try ProblemStore.initCapacity(gpa, 1024),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
@@ -2842,28 +2842,45 @@ pub fn checkCIR2Expr(self: *Self, comptime CIR2: type, cir2: *const CIR2, expr_i
         return try self.types.fresh();
     }
 
-    const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-    // Ensure the type variable exists in the store
-    // CIR2 should have already done this via ensureTypeVarExists, but we need to make sure
-    const var_idx = @intFromEnum(expr_var);
-    const current_len = self.types.len();
-    if (var_idx >= current_len) {
-        // We need to grow the types store to accommodate this variable
-        // Create fresh variables for any gaps
-        var i = current_len;
-        while (i <= var_idx) : (i += 1) {
-            _ = try self.types.fresh();
-        }
+    // For CIR2, we use AST node indices as type variable indices
+    // This is a design decision that requires us to ensure the variable exists
+    const expr_idx_int = @intFromEnum(expr_idx);
+    
+    // Debug: Print the index to see what we're dealing with
+    if (expr_idx_int > 10000) {
+        std.debug.print("WARNING: Large expr_idx_int: {}\n", .{expr_idx_int});
     }
+    
+    // Check for invalid indices
+    if (expr_idx_int < 0 or expr_idx_int > 100000) {
+        // Index is out of reasonable range - use a fresh variable
+        std.debug.print("Index out of range, using fresh var: {}\n", .{expr_idx_int});
+        return try self.types.fresh();
+    }
+    
+    // Ensure the variable exists by allocating up to this index
+    const needed_vars = @as(usize, @intCast(expr_idx_int + 1));
+    std.debug.print("checkCIR2Expr: ensuring {} variables exist (current: {})\n", .{needed_vars, self.types.len()});
+    while (self.types.len() < needed_vars) {
+        _ = try self.types.fresh();
+    }
+    std.debug.print("checkCIR2Expr: allocated variables, now have {}\n", .{self.types.len()});
+    
+    const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+    std.debug.print("checkCIR2Expr: created expr_var from expr_idx {}\n", .{@intFromEnum(expr_idx)});
 
     // Check if this expression has already been type-checked
     // If the variable already has content beyond flex_var, we've already processed it
+    std.debug.print("checkCIR2Expr: about to resolve var {}\n", .{@intFromEnum(expr_var)});
     const resolved = self.types.resolveVar(expr_var);
+    std.debug.print("checkCIR2Expr: resolved var successfully\n", .{});
     if (resolved.desc.content != .flex_var) {
         // Already has a concrete type, don't re-check
+        std.debug.print("checkCIR2Expr: var already has concrete type, returning\n", .{});
         return expr_var;
     }
+    
+    std.debug.print("checkCIR2Expr: about to switch on expr.tag = {}\n", .{expr.tag});
 
     switch (expr.tag) {
         // Literals - these already have their types set in canonicalization

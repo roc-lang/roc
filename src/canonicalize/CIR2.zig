@@ -483,7 +483,12 @@ fn getNodeTagPtr(self: *CIR, idx: AST2.Node.Idx) *AST2.Node.Tag {
 
 /// Get an immutable node
 pub fn getNode(self: *const CIR, idx: AST2.Node.Idx) AST2.Node {
-    const node = self.ast.*.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const node_int = @intFromEnum(idx);
+    const nodes_len = self.ast.*.nodes.len();
+    if (node_int >= nodes_len) {
+        std.debug.panic("getNode: node index {} out of bounds (max {})\n", .{ node_int, nodes_len });
+    }
+    const node = self.ast.*.nodes.get(@enumFromInt(node_int));
     return node;
 }
 

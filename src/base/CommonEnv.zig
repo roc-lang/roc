@@ -236,7 +236,7 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(gpa);
-    self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
+    self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 4096);
 
     // if the source is empty, we're done
     if (self.getSourceAll().len == 0) {
