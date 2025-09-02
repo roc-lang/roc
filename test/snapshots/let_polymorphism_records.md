@@ -72,7 +72,7 @@ my_empty_list = []
 my_nonempty_list = [num, frac]
 
 # Record with polymorphic field
-make_container = |value| { data : value, count : 1 }
+make_container = |value| { data: value, count: 1 }
 
 # Used with different types
 int_container = make_container(num)
@@ -171,15 +171,28 @@ update_data = |container, new_value| { container & data: new_value }
                ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **value** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**STATEMENT IN EXPRESSION CONTEXT**
+Found a statement where an expression was expected.
+Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
 
-**let_polymorphism_records.md:26:25:26:30:**
+**let_polymorphism_records.md:26:25:26:33:**
 ```roc
 identity_record = |x| { value: x }
 ```
-                        ^^^^^
+                        ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable **x** is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+
+**let_polymorphism_records.md:26:20:26:21:**
+```roc
+identity_record = |x| { value: x }
+```
+                   ^
 
 
 **UNSUPPORTED NODE**

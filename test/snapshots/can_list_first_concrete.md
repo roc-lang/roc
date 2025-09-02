@@ -32,9 +32,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag list_literal :type "List(_a)")
+(expr :tag list_literal :type "List(Error)")
 ~~~
 # TYPES
 ~~~roc
-List(_a)
+List(Error)
 ~~~

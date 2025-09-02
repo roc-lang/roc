@@ -49,7 +49,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "F64")
 ~~~
 # TYPES
 ~~~roc

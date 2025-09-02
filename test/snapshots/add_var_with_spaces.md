@@ -53,7 +53,7 @@ add2 = x +      2
 ~~~
 # SOLVED
 ~~~clojure
-(expr :tag block :type "_a")
+(expr :tag block :type "Num(_size)")
 ~~~
 # TYPES
 ~~~roc

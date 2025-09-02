@@ -47,7 +47,7 @@ KwMatch OpenSquare CloseSquare OpenCurly LowerIdent OpFatArrow OpenCurly LowerId
 # FORMATTED
 ~~~roc
 match []
-	empty => { ints : [1, 2, 3], strs : ["a", "b", "c"], empty : empty }
+	empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
 ~~~
 # EXPECTED
 NIL
