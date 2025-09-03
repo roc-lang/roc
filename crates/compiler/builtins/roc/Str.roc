@@ -1,6 +1,6 @@
 ## Strings represent text. For example, `"Hi!"` is a string.
 ##
-## This guide starts at a high level and works down to the in-memory representation of strings and their [performance characteristics](#performance). For reasons that will be explained later in this guide, some string operations are in the `Str` module while others (notably [capitalization](#capitalization), [code points](#code-points), [graphemes](#graphemes), and sorting) are in separate packages. There's also a list of recommendations for [when to use code points, graphemes, and UTF-8](#when-to-use).
+## This guide starts at a high level and works down to the in-memory representation of strings and their performance characteristics. For reasons that will be explained later in this guide, some string operations are in the `Str` module while others (notably capitalization, code points, graphemes, and sorting) are in separate packages. There's also a list of recommendations for when to use code points, graphemes, and UTF-8.
 ##
 ## ## Syntax
 ##
@@ -58,9 +58,9 @@
 ## * `\t` becomes a [tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
 ## * `\"` becomes a normal `"` (this lets you write `"` inside a single-line string)
 ## * `\\` becomes a normal `\` (this lets you write `\` without it being treated as an escape)
-## * `\$` becomes a normal `$` (this lets you write `$` followed by `(` without it being treated as [interpolation](#interpolation))
+## * `\$` becomes a normal `$` (this lets you write `$` followed by `(` without it being treated as interpolation)
 ##
-## These work in both single-line and multiline strings. We'll also discuss another escape later, for inserting [Unicode code points](#code-points) into a string.
+## These work in both single-line and multiline strings. We'll also discuss another escape later, for inserting Unicode code points into a string.
 ##
 ## ### Single quote syntax
 ##
@@ -125,7 +125,7 @@
 ##
 ## ### Code Points
 ##
-## Every Unicode text value can be broken down into [Unicode code points](http://www.unicode.org/glossary/#code_point), which are integers between `0` and `285_212_438` that describe components of the text. In memory, every Roc string is a sequence of these integers stored in a format called UTF-8, which will be discussed [later](#utf8).
+## Every Unicode text value can be broken down into [Unicode code points](http://www.unicode.org/glossary/#code_point), which are integers between `0` and `285_212_438` that describe components of the text. In memory, every Roc string is a sequence of these integers stored in a format called UTF-8, which will be discussed later.
 ##
 ## The string `"👩‍👩‍👦‍👦"` happens to be made up of these code points:
 ##
@@ -287,7 +287,7 @@
 ##
 ## This can be much more memory-efficient! However, `List` does not have this optimization (it has some runtime cost, and in the case of `List` it's not anticipated to come up nearly as often), which means when converting a small string to `List U8` it can result in a heap allocation.
 ##
-## Note that this optimization is based entirely on how many UTF-8 bytes the string takes up in memory. It doesn't matter how many [graphemes](#graphemes), [code points](#code-points) or anything else it has; the only factor that determines whether a particular string is eligible for the small string optimization is the number of UTF-8 bytes it takes up in memory!
+## Note that this optimization is based entirely on how many UTF-8 bytes the string takes up in memory. It doesn't matter how many graphemes, code points or anything else it has; the only factor that determines whether a particular string is eligible for the small string optimization is the number of UTF-8 bytes it takes up in memory!
 ##
 ## ### Seamless Slices
 ##
@@ -299,7 +299,7 @@
 ## ["foo", "bar", "baz"] : List Str
 ## ```
 ##
-## All of these strings are small enough that the [small string optimization](#small) will apply, so none of them will be allocated on the heap.
+## All of these strings are small enough that the small string optimization will apply, so none of them will be allocated on the heap.
 ##
 ## Now let's suppose they were long enough that this optimization no longer applied:
 ##
