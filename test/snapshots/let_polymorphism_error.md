@@ -15,7 +15,7 @@ OpenSquare Int Comma Float Comma String CloseSquare ~~~
 (list_literal
   (num_literal_i32 42)
   (frac_literal_small 4.2)
-  (str_literal_big "hello")
+  (str_literal_big "<idx:12>")
 )
 ~~~
 # FORMATTED
@@ -23,7 +23,7 @@ OpenSquare Int Comma Float Comma String CloseSquare ~~~
 [42, 4.2, "hello"]
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - let_polymorphism_error.md:1:6:1:6
 # PROBLEMS
 NIL
 # CANONICALIZE

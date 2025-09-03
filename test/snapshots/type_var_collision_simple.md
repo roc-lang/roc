@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Define some variables that would normally be used for type variables
 a = 1
@@ -31,25 +31,26 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LineComment LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpAssign Int LowerIdent OpAssign Int LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 # Define some variables that would normally be used for type variables
 a = 1

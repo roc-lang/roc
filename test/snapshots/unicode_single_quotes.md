@@ -83,76 +83,31 @@ y = 'u
 '\
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:5:5:7
-PARSE ERROR - :0:0:0:0
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:7:5:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:8:6:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:7:6:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:8:6:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:9:6:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:10:7:5
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID ESCAPE SEQUENCE - :0:0:0:0
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:9:8:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:8:8:9
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:9:9:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:9:5:9:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:9:9:10:5
-PARSE ERROR - unicode_single_quotes.md:9:5:10:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:10:11:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:11:5:11:8
-PARSE ERROR - unicode_single_quotes.md:11:5:11:10
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:11:14:11:15
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:11:15:12:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:12:5:12:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:12:11:13:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:13:9:14:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:14:9:15:5
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:8:5:8:10
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:9:5:9:10
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:10:5:10:11
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:12:5:12:12
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:5:15:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:15:7:16:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:7
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:10:17:5
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:8
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:8:18:1
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:18:1:20:1
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:23:1
-UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:23:1:23:3
-UNSUPPORTED NODE - unicode_single_quotes.md:5:7:5:8
-UNSUPPORTED NODE - unicode_single_quotes.md:5:8:6:5
-UNSUPPORTED NODE - unicode_single_quotes.md:6:5:6:7
-UNSUPPORTED NODE - unicode_single_quotes.md:6:7:6:8
-UNSUPPORTED NODE - unicode_single_quotes.md:6:8:6:9
-UNSUPPORTED NODE - unicode_single_quotes.md:6:9:6:10
-UNSUPPORTED NODE - unicode_single_quotes.md:6:10:7:5
-UNSUPPORTED NODE - unicode_single_quotes.md:7:5:7:9
-UNSUPPORTED NODE - unicode_single_quotes.md:7:9:8:5
-UNSUPPORTED NODE - unicode_single_quotes.md:8:5:8:8
-UNSUPPORTED NODE - unicode_single_quotes.md:8:8:8:9
-UNSUPPORTED NODE - unicode_single_quotes.md:8:9:9:5
-UNSUPPORTED NODE - unicode_single_quotes.md:9:5:10:8
-UNSUPPORTED NODE - unicode_single_quotes.md:10:5:10:10
-UNSUPPORTED NODE - unicode_single_quotes.md:10:10:11:5
-UNSUPPORTED NODE - unicode_single_quotes.md:11:5:11:14
-UNSUPPORTED NODE - unicode_single_quotes.md:11:10:11:14
-UNSUPPORTED NODE - unicode_single_quotes.md:11:14:11:15
-UNSUPPORTED NODE - unicode_single_quotes.md:11:15:12:5
-UNSUPPORTED NODE - unicode_single_quotes.md:12:5:12:11
-UNSUPPORTED NODE - unicode_single_quotes.md:12:11:13:5
-UNSUPPORTED NODE - unicode_single_quotes.md:13:5:13:9
-UNSUPPORTED NODE - unicode_single_quotes.md:13:9:14:5
-UNSUPPORTED NODE - unicode_single_quotes.md:14:5:14:9
-UNSUPPORTED NODE - unicode_single_quotes.md:14:9:15:5
-UNSUPPORTED NODE - unicode_single_quotes.md:15:5:15:7
-UNSUPPORTED NODE - unicode_single_quotes.md:15:7:16:5
-UNSUPPORTED NODE - unicode_single_quotes.md:16:5:16:7
-EXPRESSION IN STATEMENT CONTEXT - unicode_single_quotes.md:16:7:16:10
-UNSUPPORTED NODE - unicode_single_quotes.md:16:10:17:5
-UNSUPPORTED NODE - unicode_single_quotes.md:17:5:17:8
-UNSUPPORTED NODE - unicode_single_quotes.md:17:8:18:1
-UNSUPPORTED NODE - unicode_single_quotes.md:18:1:20:1
-UNSUPPORTED NODE - unicode_single_quotes.md:23:1:23:3
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:11
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:9
+UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:20:7
+PARSE ERROR - unicode_single_quotes.md:23:1:23:3
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+INVALID TUPLE ELEMENT - :0:0:0:0
+UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **'Ã** is not expected in an expression.

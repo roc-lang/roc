@@ -676,7 +676,7 @@ pub const Statement = struct {
     decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
-    } = .{ .pattern = @enumFromInt(0), .expr = @enumFromInt(0) },
+    } = .{ .pattern = @enumFromInt(std.math.maxInt(u32)), .expr = @enumFromInt(std.math.maxInt(u32)) },
 };
 pub const Pattern = struct {
     pub const Idx = enum(u32) { _ };
@@ -739,10 +739,10 @@ pub const Collection = struct {
 pub const Header = union(enum) {
     pub const Idx = enum(u32) { _ };
     app: struct {
-        exposes: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(0), // List of exposed items (exports)
-        packages: collections.NodeSlices(Node.Idx).Idx = @enumFromInt(0), // List of package nodes including platform
-        platform_idx: RecordField.Idx = @enumFromInt(0), // Platform field
-        provides: Collection.Idx = @enumFromInt(0), // Provides collection
+        exposes: collections.NodeSlices(Node.Idx).Idx = collections.NodeSlices(Node.Idx).Idx.NIL, // List of exposed items (exports)
+        packages: collections.NodeSlices(Node.Idx).Idx = collections.NodeSlices(Node.Idx).Idx.NIL, // List of package nodes including platform
+        platform_idx: RecordField.Idx = @enumFromInt(std.math.maxInt(u32)), // Platform field - using max sentinel value
+        provides: Collection.Idx = @enumFromInt(std.math.maxInt(u32)), // Provides collection - using max sentinel value
         region: Position = Position.zero(), // Start position
     },
     module: struct {

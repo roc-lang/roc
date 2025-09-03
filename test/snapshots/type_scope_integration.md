@@ -48,7 +48,8 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-NIL
+TYPE REDECLARED - type_scope_integration.md:7:1:7:10
+UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
 # PROBLEMS
 NIL
 # CANONICALIZE

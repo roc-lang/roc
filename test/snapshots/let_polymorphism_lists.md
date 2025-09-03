@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app [main] { pf: platform "../basic-cli/platform.roc" }
 
 # Basic empty list polymorphism
 my_empty_list = []
@@ -37,25 +37,26 @@ main = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly BlankLine LineComment LowerIdent OpAssign OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound BlankLine LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpAssign OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare LowerIdent OpAssign OpenSquare String Comma String CloseSquare LowerIdent OpAssign OpenSquare Float Comma Float Comma Float CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent LowerIdent OpAssign LowerIdent OpPlus OpPlus LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar Underscore OpBar OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound BlankLine LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
-        (str_literal_big "../basic-cli/platform.roc")
-        (block
-          (lc "main")
-        )
+        (str_literal_big "<idx:69>")
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app [main] { pf: "../basic-cli/platform.roc" platform [] }
 
 # Basic empty list polymorphism
 my_empty_list = []
@@ -89,12 +90,18 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:28
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:28
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:32
-EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:12:28:12:41
-EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:13:28:13:41
-EXPRESSION IN STATEMENT CONTEXT - let_polymorphism_lists.md:14:32:14:45
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:12:26:12:27
+PARSE ERROR - let_polymorphism_lists.md:12:28:12:41
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:13:26:13:27
+PARSE ERROR - let_polymorphism_lists.md:13:28:13:41
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_lists.md:14:30:14:31
+PARSE ERROR - let_polymorphism_lists.md:14:32:14:45
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
+UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
+UNDEFINED VARIABLE - let_polymorphism_lists.md:25:12:25:20
+UNDEFINED VARIABLE - let_polymorphism_lists.md:26:12:26:20
+UNDEFINED VARIABLE - let_polymorphism_lists.md:27:12:27:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ ** is not expected in an expression.

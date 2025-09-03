@@ -96,35 +96,35 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
     // Debug: Print the index to see what we're dealing with
     if (expr_idx_int > 10000) {
-        std.debug.print("WARNING: Large expr_idx_int: {}\n", .{expr_idx_int});
+        // std.debug.print("WARNING: Large expr_idx_int: {}\n", .{expr_idx_int});
     }
 
     // Check for invalid indices
     if (expr_idx_int < 0 or expr_idx_int > 100000) {
         // Index is out of reasonable range - use a fresh variable
-        std.debug.print("Index out of range, using fresh var: {}\n", .{expr_idx_int});
+        // std.debug.print("Index out of range, using fresh var: {}\n", .{expr_idx_int});
         return try self.types.fresh();
     }
 
     // Ensure the variable exists by allocating up to this index
     const needed_vars = @as(usize, @intCast(expr_idx_int + 1));
-    std.debug.print("checkCIRExpr: ensuring {} variables exist (current: {})\n", .{ needed_vars, self.types.len() });
+    // std.debug.print("checkCIRExpr: ensuring {} variables exist (current: {})\n", .{ needed_vars, self.types.len() });
     while (self.types.len() < needed_vars) {
         _ = try self.types.fresh();
     }
-    std.debug.print("checkCIRExpr: allocated variables, now have {}\n", .{self.types.len()});
+    // std.debug.print("checkCIRExpr: allocated variables, now have {}\n", .{self.types.len()});
 
     const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-    std.debug.print("checkCIRExpr: created expr_var from expr_idx {}\n", .{@intFromEnum(expr_idx)});
+    // std.debug.print("checkCIRExpr: created expr_var from expr_idx {}\n", .{@intFromEnum(expr_idx)});
 
     // Check if this expression has already been type-checked
     // If the variable already has content beyond flex_var, we've already processed it
-    std.debug.print("checkCIRExpr: about to resolve var {}\n", .{@intFromEnum(expr_var)});
+    // std.debug.print("checkCIRExpr: about to resolve var {}\n", .{@intFromEnum(expr_var)});
     const resolved = self.types.resolveVar(expr_var);
-    std.debug.print("checkCIRExpr: resolved var successfully\n", .{});
+    // std.debug.print("checkCIRExpr: resolved var successfully\n", .{});
     if (resolved.desc.content != .flex_var) {
         // Already has a concrete type, don't re-check
-        std.debug.print("checkCIRExpr: var already has concrete type, returning\n", .{});
+        // std.debug.print("checkCIRExpr: var already has concrete type, returning\n", .{});
         return expr_var;
     }
 
@@ -228,8 +228,48 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             return expr_var;
         },
 
+        .unary_not, .unary_neg => {
+            // Unary operators - just check the operand and propagate its type
+            // For unary_not, should be Bool -> Bool
+            // For unary_neg, should be Num -> Num
+            // For now, just check the operand and let type inference figure it out
+
+            // The operand is stored in the nodes payload
+            const node = cir.getNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |operand_node| {
+                    const operand_var = try self.checkCIRExpr(CIRType, cir, @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(operand_node))));
+
+                    // For both unary_not and unary_neg, the result type matches the operand type
+                    // unary_not: Bool -> Bool
+                    // unary_neg: Num a -> Num a
+                    _ = try self.unify(expr_var, operand_var);
+                }
+            }
+            return expr_var;
+        },
+
+        .apply_ident, .apply_tag => {
+            // Function/tag application
+            // For now, just return a fresh type variable
+            // TODO: Implement proper function application type checking
+            return expr_var;
+        },
+
+        .binop_equals => {
+            // Assignment expression (not a comparison) - treat as the RHS type
+            const binop = cir.getBinOp(CIRType.Expr.Idx, expr.payload.binop);
+            const rhs_var = try self.checkCIRExpr(CIRType, cir, binop.rhs);
+            // The whole expression has the same type as the RHS
+            _ = try self.unify(expr_var, rhs_var);
+            return expr_var;
+        },
+
         else => {
-            std.debug.print("checkCIRExpr: unhandled expression tag: {}\n", .{expr.tag});
+            // Unhandled expression type - just return the variable
+            // std.debug.print("checkCIRExpr: unhandled expression tag: {}\n", .{expr.tag});
             return expr_var;
         },
     }

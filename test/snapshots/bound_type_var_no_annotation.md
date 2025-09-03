@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/main.roc" }
 
 identity = |x| x
 
@@ -33,25 +33,26 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound BlankLine LowerIdent CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpColon LowerIdent Comma LowerIdent OpArrow OpenRound LowerIdent Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound String CloseRound BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpAssign LowerIdent OpenRound Int CloseRound BlankLine LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 identity = |x| x
 
@@ -78,7 +79,6 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - bound_type_var_no_annotation.md:24:5:24:11
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
 **UNUSED VARIABLE**

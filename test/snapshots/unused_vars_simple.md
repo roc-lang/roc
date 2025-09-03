@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/main.roc" }
 
 # Regular variable that is unused - should warn
 unused_regular = |x| 42
@@ -29,25 +29,26 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar Int BlankLine LineComment LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent OpPlus Int BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpAssign LowerIdent OpenRound Int CloseRound LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 # Regular variable that is unused - should warn
 unused_regular = |x| 42
@@ -71,6 +72,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
+UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **x** is not used anywhere in your code.

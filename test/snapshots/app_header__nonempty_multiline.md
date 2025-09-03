@@ -6,22 +6,24 @@ type=header
 # SOURCE
 ~~~roc
 app # This comment is here
-	{ pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
+	[main!]
+	{ pf: platform "../main.roc", somePkg: "../main.roc" }
 ~~~
 # TOKENS
 ~~~text
-KwApp LineComment OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare Comma LowerIdent OpColon String CloseCurly ~~~
+KwApp LineComment OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 
@@ -33,23 +35,14 @@ KwApp LineComment OpenCurly LowerIdent OpColon String KwPlatform OpenSquare Lowe
 ~~~
 # FORMATTED
 ~~~roc
-app { # This comment is here
-pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
+app [ # This comment is here
+	main!,
+] { pf: "../main.roc" platform [], somePkg: "../main.roc" }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - app_header__nonempty_multiline.md:2:32:2:37
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **main!** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**app_header__nonempty_multiline.md:2:32:2:37:**
-```roc
-	{ pf: "../main.roc" platform [main!], somePkg: "../main.roc" }
-```
-	                              ^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (empty)
@@ -59,5 +52,4 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # TYPES
 ~~~roc
-main : _a
 ~~~

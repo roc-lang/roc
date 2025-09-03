@@ -27,7 +27,7 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_with_alias.md:5:8:5:21
+MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **MyJson.decode** in this scope.

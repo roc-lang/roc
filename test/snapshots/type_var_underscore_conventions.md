@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app [main] { pf: platform "../basic-cli/platform.roc" }
 
 # Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
 single_use : List(elem) -> Str
@@ -30,25 +30,26 @@ main = |x| "done"
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent CloseSquare CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
+KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LowerIdent OpColon LowerIdent OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar String ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
-        (block
-          (lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main] }
+app [main] { pf: "../basic-cli/platform.roc" platform [] }
 
 # Test 1: UNUSED TYPE VARIABLE NAME - single-use variable should start with underscore
 single_use : List elem -> Str
@@ -77,6 +78,7 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
+TYPE MISMATCH - type_var_underscore_conventions.md:9:28:9:37
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **x** is not used anywhere in your code.

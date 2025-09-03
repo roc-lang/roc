@@ -1304,7 +1304,18 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     // Extract string from Extra union
                     const payload = switch (extra) {
                         .bytes_idx => |idx| Node.Payload{ .str_literal_big = idx },
-                        else => Node.Payload{ .str_literal_big = @enumFromInt(0) }, // Default fallback
+                        else => blk: {
+                            // If we don't have a valid bytes_idx, create an empty string
+                            // This is safer than using a dummy index
+                            const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
+                                // If we can't even create an empty string, report malformed node
+                                try self.pushDiagnostic(.malformed_string_literal, region.start, region.end);
+                                const malformed = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .malformed_string_literal });
+                                try self.value_stack.append(self.gpa, malformed);
+                                return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
+                            };
+                            break :blk Node.Payload{ .str_literal_big = empty_idx };
+                        },
                     };
 
                     const node = try self.ast.appendNode(self.gpa, region, .str_literal_big, payload);
@@ -2064,12 +2075,20 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         self.advance();
 
                         // Create string node for path
+                        const path_region = self.currentRegion();
                         const str_val = switch (path_token.extra) {
                             .bytes_idx => |idx| idx,
-                            else => @as(collections.ByteSlices.Idx, @enumFromInt(0)),
+                            else => blk: {
+                                // If we don't have a valid bytes_idx, create an empty string
+                                // This is safer than using a dummy index
+                                const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
+                                    // If we can't even create an empty string, report error
+                                    try self.pushDiagnostic(.malformed_string_literal, path_region.start, path_region.end);
+                                    return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
+                                };
+                                break :blk empty_idx;
+                            },
                         };
-
-                        const path_region = self.currentRegion();
                         const path_node = try self.ast.appendNode(self.gpa, path_region, .str_literal_big, .{ .str_literal_big = str_val });
 
                         // Create package field node
@@ -4539,7 +4558,12 @@ pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) 
     // Get first two non-comment tokens to start
     var first: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa) orelse return @enumFromInt(0);
+        const token = try token_iter.next(self.gpa) orelse {
+            // No tokens found - create a malformed node instead of returning dummy index
+            const empty_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } };
+            try self.pushDiagnostic(.expr_unexpected_token, empty_region.start, empty_region.end);
+            return try self.ast.appendNode(self.gpa, empty_region, .malformed, .{ .malformed = .expr_unexpected_token });
+        };
         switch (token.tag) {
             .LineComment, .DocComment, .BlankLine => continue,
             else => {

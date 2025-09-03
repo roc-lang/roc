@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 # Type variable 'elem' introduced in annotation
 process : List(elem) -> elem
@@ -24,25 +24,26 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpColon LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpBar OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpColon LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpBar OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/platform.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/platform.roc" platform [] }
 
 # Type variable 'elem' introduced in annotation
 process : List elem -> elem
@@ -61,9 +62,11 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:32:11:34
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:34:11:40
-UNSUPPORTED NODE - type_var_namespace.md:11:34:11:52
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
+UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
+UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
+UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
+TYPE MISMATCH - type_var_namespace.md:5:18:14:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **> ** is not expected in an expression.

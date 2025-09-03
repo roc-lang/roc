@@ -23,7 +23,7 @@ OpenSquare Int Comma String Comma Float CloseSquare ~~~
 [42, "world", 3.14]
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - can_list_first_concrete.md:1:2:1:2
 # PROBLEMS
 NIL
 # CANONICALIZE

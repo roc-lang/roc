@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/main.roc" }
 
 identity : a -> a
 identity = |x| {
@@ -18,25 +18,26 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent LineComment LowerIdent OpAssign LowerIdent LineComment LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpColon LowerIdent LineComment LowerIdent OpAssign LowerIdent LineComment LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 identity : a -> a
 identity = |x| {
@@ -50,7 +51,7 @@ identity = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNUSED VARIABLE - type_var_annotation_body_connection.md:7:5:7:10
+TYPE MISMATCH - type_var_annotation_body_connection.md:6:13:6:14
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **thing** is not used anywhere in your code.

@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/main.roc" }
 
 main! = |_| {
     # Regular unused variable - should warn
@@ -29,25 +29,26 @@ main! = |_| {
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign String BlankLine LineComment LowerIdent LineComment OpAssign LineComment Int LineComment BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign String BlankLine LineComment LowerIdent LineComment OpAssign LineComment Int LineComment BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
         (str_literal_big "../basic-cli/main.roc")
-        (block
-          (not_lc "main")
-        )
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/main.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 main! = |_| {
 	# Regular unused variable - should warn
@@ -72,9 +73,8 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
-UNUSED VARIABLE - unused_vars_block.md:20:5:20:11
+UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **another_unused** is not used anywhere in your code.

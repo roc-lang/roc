@@ -116,10 +116,14 @@ pub const Store = struct {
         if (index < self.type_headers.items.len) {
             return self.type_headers.items[index];
         } else {
-            // Return default header if index is out of bounds
+            // This should never happen in correct code - log and return a safe default
+            std.log.err("getTypeHeader: index {} out of bounds (max {})", .{ index, self.type_headers.items.len });
+            // Return a header that represents an error/malformed type
+            // Using empty slices is safe and won't cause memory corruption
+            const empty_slice = collections.NodeSlices(parse.AST.TypeAnno.Idx).empty();
             return CIR.TypeHeader{
-                .name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-                .args = @enumFromInt(0),
+                .name = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = true, .reassignable = false }, .idx = 0 },
+                .args = empty_slice,
             };
         }
     }
@@ -272,8 +276,37 @@ pub fn pushDiagnostic(self: *Self, reason: CIR.CanDiagnostic) std.mem.Allocator.
 /// Creates a malformed node that represents a runtime error in the IR.
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.CanDiagnostic) std.mem.Allocator.Error!RetIdx {
     try self.diagnostics.append(self.gpa, reason);
-    // Return a dummy index for now since the new CIR doesn't have malformed nodes
-    return @enumFromInt(0);
+
+    // We need both an AST node and a CIR to create a malformed node
+    if (self.ast == null or self.cir == null) {
+        // Without AST/CIR, we can't create proper nodes
+        // This shouldn't happen in normal compilation flow
+        // Return a sentinel that won't collide with real indices
+        return @as(RetIdx, @enumFromInt(std.math.maxInt(u32)));
+    }
+
+    // Create a minimal AST node that we can mutate to malformed
+    const ast_node_idx = try self.ast.?.appendNode(self.gpa, reason.region, .malformed, // Start with malformed AST tag
+        .{ .src_bytes_end = reason.region.end });
+
+    // Ensure type variable exists for this node
+    try self.cir.?.ensureTypeVarExists(ast_node_idx);
+
+    // Now mutate it to the appropriate CIR malformed type based on RetIdx
+    const type_name = @typeName(RetIdx);
+    if (std.mem.indexOf(u8, type_name, "Expr") != null) {
+        // This is an expression index
+        return @as(RetIdx, @enumFromInt(@intFromEnum(self.cir.?.createMalformedExpr(ast_node_idx))));
+    } else if (std.mem.indexOf(u8, type_name, "Patt") != null) {
+        // This is a pattern index
+        return @as(RetIdx, @enumFromInt(@intFromEnum(self.cir.?.createMalformedPatt(ast_node_idx))));
+    } else if (std.mem.indexOf(u8, type_name, "Stmt") != null) {
+        // This is a statement index
+        return @as(RetIdx, @enumFromInt(@intFromEnum(self.cir.?.createMalformedStmt(ast_node_idx))));
+    } else {
+        // Default to expression if we can't determine the type
+        return @as(RetIdx, @enumFromInt(@intFromEnum(self.cir.?.createMalformedExpr(ast_node_idx))));
+    }
 }
 
 /// Extract the region from any diagnostic variant

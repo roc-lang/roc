@@ -219,6 +219,9 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
             // Add or replace definition (duplicates the strings for ownership)
             try self.addOrReplaceDefinition(info.source, info.var_name);
 
+            // Free the allocated var_name after using it
+            defer self.allocator.free(info.var_name);
+
             // Return descriptive output for assignments
             return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
         },
@@ -247,7 +250,7 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
 const ParseResult = union(enum) {
     assignment: struct {
         source: []const u8, // Borrowed from input
-        var_name: []const u8, // Borrowed from input
+        var_name: []const u8, // Must be allocator.dupe'd
     },
     import,
     expression,
@@ -260,16 +263,15 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
     var module_env = try ModuleEnv.init(self.allocator, input);
     defer module_env.deinit();
 
-    // Try statement parsing
-    if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
+    // Try parsing as an expression (since parseStatement uses parseFile which is wrong)
+    if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
         var ast = ast_const;
         defer ast.deinit(self.allocator);
 
-        // Check if any nodes were parsed
-        if (ast.nodes.len() > 1) { // Skip sentinel node at index 0
-            // Get the first real node (after sentinel)
-            const first_node_idx = @as(AST.Node.Idx, @enumFromInt(1));
-            const first_node = ast.nodes.get(@enumFromInt(@intFromEnum(first_node_idx)));
+        // Check if we have a valid root node
+        if (ast.root_node_idx != 0) {
+            const root_node_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+            const first_node = ast.nodes.get(@enumFromInt(@intFromEnum(root_node_idx)));
 
             // Check the node tag to determine what was parsed
             switch (first_node.tag) {
@@ -283,9 +285,12 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                         const ident = lhs_node.payload.ident;
                         const ident_name = module_env.common.getIdent(ident);
 
+                        // Duplicate the identifier name since module_env will be deinitialized
+                        const owned_name = try self.allocator.dupe(u8, ident_name);
+
                         return ParseResult{ .assignment = .{
                             .source = input,
-                            .var_name = ident_name,
+                            .var_name = owned_name,
                         } };
                     }
                     return ParseResult.expression;
@@ -296,22 +301,12 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                 else => return ParseResult.expression,
             }
         }
+        // If we didn't match any special forms, treat it as an expression
+        return ParseResult.expression;
     } else |_| {
-        // Statement parse failed, continue to try expression parsing
+        // Parse failed
+        return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
     }
-
-    // Try expression parsing
-    if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
-        var ast = ast_const;
-        defer ast.deinit(self.allocator);
-        if (ast.nodes.len() > 1) { // Check if any nodes were parsed (beyond sentinel)
-            return ParseResult.expression;
-        }
-    } else |_| {
-        // Expression parse failed too
-    }
-
-    return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
 }
 
 /// Build full source including all definitions wrapped in block syntax
@@ -322,7 +317,7 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
     }
 
     var buffer = std.ArrayList(u8).init(self.allocator);
-    defer buffer.deinit();
+    errdefer buffer.deinit();
 
     // Start block
     try buffer.appendSlice("{\n");
@@ -343,7 +338,7 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
     // End block
     try buffer.append('}');
 
-    return try buffer.toOwnedSlice();
+    return buffer.toOwnedSlice();
 }
 
 /// Evaluate source code
@@ -373,19 +368,19 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
 
     // The new AST doesn't have a store that needs emptying
 
-    // Create CIR (which mutates AST in place)
+    // Create CIR/canonicalizer (which mutates AST in place)
     var cir = can.CIR.init(&parse_ast, &module_env.types);
     defer cir.deinit(self.allocator);
 
-    // Create canonicalizer
-    var czer = Can.init(&parse_ast, &module_env.types);
-    defer czer.deinit(self.allocator);
+    // Set the CIR and AST on module_env so the interpreter can access them
+    module_env.cir = &cir;
+    module_env.ast = &parse_ast;
 
     // In AST, we need to find the expression differently
     // For now, use the first node as a placeholder
     const expr_idx: AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
 
-    const canonical_expr = try czer.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source, &module_env.common.idents);
+    const canonical_expr = try cir.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source, &module_env.common.idents);
 
     // Type check
     // Check.initForCIR needs different parameters for new architecture

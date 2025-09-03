@@ -27,7 +27,7 @@ import json.Json
 main = Json.utf8
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_import_json.md:5:8:5:17
+MODULE NOT FOUND - can_import_json.md:3:1:3:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named **Json.utf8** in this scope.

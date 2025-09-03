@@ -3700,6 +3700,13 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
     try output.begin_code_block("clojure");
     std.debug.print("begin_code_block completed\n", .{});
 
+    // Create a ModuleEnv for type checking with the CIR properly set
+    // This is needed because the type checker might call the interpreter
+    // which requires a ModuleEnv with a valid cir field
+    var module_env = try ModuleEnv.init(output.gpa, "");
+    defer module_env.deinit();
+    module_env.cir = @constCast(cir);
+
     // First run type checking to generate constraints
     var regions = Region.List{};
     std.debug.print("About to call Check.initForCIR\n", .{});
@@ -3730,6 +3737,11 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     try output.begin_section("TYPES");
     try output.begin_code_block("roc");
+
+    // Create a ModuleEnv for type checking with the CIR properly set
+    var module_env = try ModuleEnv.init(output.gpa, "");
+    defer module_env.deinit();
+    module_env.cir = @constCast(cir);
 
     // First run type checking to generate constraints (may have already been done in SOLVED section)
     var regions = Region.List{};

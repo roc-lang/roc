@@ -32,22 +32,15 @@ pub fn parse(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 100);
     errdefer ast.deinit(gpa);
 
-    // Initialize byte slices for string/number literals
-    var byte_slices = collections.ByteSlices{ .entries = .{} };
-    errdefer byte_slices.entries.deinit(gpa);
-
     // Placeholder for diagnostics (not used in new parser)
     var messages: [128]tokenize.Diagnostic = undefined;
 
     // Create parser and parse the file
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices);
     defer parser.deinit();
 
     // Parse the entire file
     _ = try parser.parseFile();
-
-    // Transfer ownership of byte_slices to AST
-    ast.byte_slices = byte_slices;
 
     return ast;
 }
@@ -62,21 +55,14 @@ pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Initialize byte slices
-    var byte_slices = collections.ByteSlices{ .entries = .{} };
-    errdefer byte_slices.entries.deinit(gpa);
-
     // Placeholder for diagnostics
     var messages: [128]tokenize.Diagnostic = undefined;
 
     // Create parser and parse expression
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices);
     defer parser.deinit();
 
-    _ = try parser.parseExpr();
-
-    // Transfer ownership
-    ast.byte_slices = byte_slices;
+    ast.root_node_idx = @intCast(@intFromEnum(try parser.parseExprFromSource(messages[0..])));
 
     return ast;
 }
@@ -91,21 +77,14 @@ pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Initialize byte slices
-    var byte_slices = collections.ByteSlices{ .entries = .{} };
-    errdefer byte_slices.entries.deinit(gpa);
-
     // Placeholder for diagnostics
     var messages: [128]tokenize.Diagnostic = undefined;
 
     // Create parser and parse header
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices);
     defer parser.deinit();
 
     _ = try parser.parseHeader();
-
-    // Transfer ownership
-    ast.byte_slices = byte_slices;
 
     return ast;
 }
@@ -120,21 +99,14 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Initialize byte slices
-    var byte_slices = collections.ByteSlices{ .entries = .{} };
-    errdefer byte_slices.entries.deinit(gpa);
-
     // Placeholder for diagnostics
     var messages: [128]tokenize.Diagnostic = undefined;
 
     // Create parser and parse statement
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices);
     defer parser.deinit();
 
     _ = try parser.parseStmt();
-
-    // Transfer ownership
-    ast.byte_slices = byte_slices;
 
     return ast;
 }

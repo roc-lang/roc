@@ -1,4 +1,4 @@
-app { pf: "../basic-cli/platform.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 import pf.Stdout
 

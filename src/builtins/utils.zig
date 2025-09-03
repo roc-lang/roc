@@ -130,8 +130,49 @@ pub const TestEnv = struct {
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.C) void {
         _ = env;
-        _ = roc_realloc;
-        @panic("Test realloc not implemented yet");
+
+        // Basic realloc implementation using the testing allocator
+        const allocator = std.testing.allocator;
+
+        // Calculate where the size metadata is stored for the old allocation
+        const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
+
+        if (@intFromPtr(roc_realloc.answer) == 0) {
+            // Initial allocation
+            const new_total_size = roc_realloc.new_length + size_storage_bytes;
+            const new_slice = allocator.alloc(u8, new_total_size) catch {
+                roc_realloc.answer = @ptrFromInt(@as(usize, 0));
+                return;
+            };
+
+            // Store the total size in metadata
+            const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+            new_size_ptr.* = new_total_size;
+
+            // Return pointer to data (after metadata)
+            roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+            return;
+        }
+
+        // Reallocation of existing memory
+        const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+        const old_total_size = old_size_ptr.*;
+        const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+
+        const new_total_size = roc_realloc.new_length + size_storage_bytes;
+
+        const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+        const new_slice = allocator.realloc(old_slice, new_total_size) catch {
+            roc_realloc.answer = @ptrFromInt(0);
+            return;
+        };
+
+        // Store the new total size in metadata
+        const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+        new_size_ptr.* = new_total_size;
+
+        // Return pointer to data (after metadata)
+        roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
     }
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.C) void {

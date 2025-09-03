@@ -22,8 +22,9 @@ fn createTestEnv() !*ModuleEnv {
 
 /// Helper to parse and canonicalize source code
 fn parseAndCanonicalizeSource(env: *ModuleEnv, source: []const u8) !CIR {
+    _ = source; // Not used yet - would be set in env.common.source
     // Parse the source
-    var ast = try parse.parse(test_allocator, source, env.getIdents());
+    var ast = try parse.parse(&env.common, test_allocator);
     defer ast.deinit(test_allocator);
 
     // Create CIR and canonicalize
@@ -43,7 +44,10 @@ test "let polymorphism - identity function" {
     }
 
     // Create identity function: |x| x
-    const cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create a dummy AST for CIR.init
+    var ast = parse.AST.init(test_allocator);
+    defer ast.deinit(test_allocator);
+    const cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create type variables for the polymorphic identity function

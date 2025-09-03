@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main!] }
+app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 # Type variable 'a' introduced in annotation and used in body
 identity : a -> a
@@ -15,25 +15,26 @@ main! = |_| {}
 ~~~
 # TOKENS
 ~~~text
-KwApp OpenCurly LowerIdent OpColon String KwPlatform OpenSquare LowerIdent OpBang CloseSquare CloseCurly BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (app-header
+  (exposes
+    (not_lc "main")
+)
   (packages
     (binop_colon
       (lc "pf")
       (binop_platform
-        (str_literal_big "../basic-cli/platform.roc")
-        (block
-          (not_lc "main")
-        )
+        (str_literal_big "<idx:52>")
+        (block)
       )
     )
 ))
 ~~~
 # FORMATTED
 ~~~roc
-app { pf: "../basic-cli/platform.roc" platform [main!] }
+app [main!] { pf: "../basic-cli/platform.roc" platform [] }
 
 # Type variable 'a' introduced in annotation and used in body
 identity : a -> a

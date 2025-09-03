@@ -52,7 +52,7 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - can_basic_scoping.md:15:5:15:16
+DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable **innerResult** is not used anywhere in your code.

@@ -69,6 +69,10 @@ test "Repl - string expressions" {
 
     const result = try repl.step("\"Hello, World!\"");
     defer std.testing.allocator.free(result);
+
+    // Debug output to see what we actually get
+    std.debug.print("\nString test - Got: '{s}' (len={d})\n", .{ result, result.len });
+
     try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 
@@ -191,38 +195,39 @@ test "Repl - minimal interpreter integration" {
     var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
     defer parse_ast.deinit(gpa);
 
-    // Step 3: Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(gpa, "test");
-
-    // Step 4: Canonicalize
+    // Step 3: Canonicalize
     var czer = Can.init(&parse_ast, &module_env.types);
     defer czer.deinit(gpa);
+
+    // Set the CIR pointer so the interpreter can access it
+    module_env.cir = &czer;
+    module_env.ast = &parse_ast;
 
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, module_env.common.source, &module_env.common.idents);
 
-    // Step 5: Type check
+    // Step 4: Type check
     var checker = try Check.initForCIR(gpa, &module_env.types, &module_env.store.regions);
     defer checker.deinit();
 
     _ = try checker.checkCIRExpr(can.CIR, &czer, canonical_expr_idx);
 
-    // Step 6: Create evaluation stack
+    // Step 5: Create evaluation stack
     var eval_stack = try Stack.initCapacity(gpa, 1024);
     defer eval_stack.deinit();
 
-    // Step 7: Create layout cache
+    // Step 6: Create layout cache
     var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
     defer layout_cache.deinit();
 
-    // Step 8: Create interpreter
+    // Step 7: Create interpreter
     var interpreter = try eval.Interpreter.init(gpa, &module_env, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit(test_env.get_ops());
 
-    // Step 9: Evaluate
+    // Step 8: Evaluate
     const result = try interpreter.eval(canonical_expr_idx, test_env.get_ops());
 
-    // Step 10: Verify result
+    // Step 9: Verify result
     try testing.expect(result.layout.tag == .scalar);
     try testing.expect(result.layout.data.scalar.tag == .int);
 

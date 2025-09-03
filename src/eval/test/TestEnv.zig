@@ -139,15 +139,29 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("testRocDbg not implemented yet");
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+
+    // Basic implementation - just log the debug message
+    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+    std.log.debug("ROC DBG: {s}", .{msg_slice});
+
+    // Store the debug output if we have somewhere to put it
+    _ = test_env;
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+
+    // Basic implementation - log the failure
+    const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
+    std.log.err("EXPECT FAILED: {s}", .{msg_slice});
+
+    // Mark test as failed if we have an interpreter
+    if (test_env.interpreter) |interp| {
+        interp.has_crashed = true;
+        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch "EXPECT FAILED";
+        interp.crash_message = owned_msg;
+    }
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

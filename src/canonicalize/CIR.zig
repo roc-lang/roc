@@ -206,6 +206,9 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
         try self.scope_state.scopes.append(allocator, Scope.init(false));
     }
 
+    // Note: Header nodes (app_header, module_header, etc.) are NOT converted to CIR
+    // They're metadata that doesn't get evaluated, only the block content is canonicalized
+
     const block_node = self.getNode(block_idx);
     std.debug.assert(block_node.tag == .block);
 
@@ -272,6 +275,12 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // The block itself should be mutated to an expression block
     self.mutateToExpr(block_idx, .block);
     try self.ensureTypeVarExists(block_idx);
+
+    // Debug verification: ensure ALL nodes have been converted to CIR tags
+    if (std.debug.runtime_safety) {
+        self.verifyAllNodesAreCIR();
+    }
+
     return asExprIdx(block_idx);
 }
 
@@ -297,6 +306,63 @@ fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlices) !
         .used_patterns = .{},
         .expect_statements = .{},
     };
+}
+
+/// Debug function to verify all code nodes have been converted to CIR tags
+/// Note: Header nodes are intentionally NOT converted as they're just metadata
+fn verifyAllNodesAreCIR(self: *const CIR) void {
+    const nodes_len = self.ast.*.nodes.len();
+
+    // Skip index 0 (sentinel node)
+    var i: usize = 1;
+    while (i < nodes_len) : (i += 1) {
+        const node = self.ast.*.nodes.get(@enumFromInt(i));
+        const tag_value = @as(u8, @intFromEnum(node.tag));
+
+        // Check if this is still an AST tag (not converted to CIR)
+        if (tag_value < STMT_TAG_START) {
+            // Skip header nodes - they don't need conversion
+            switch (node.tag) {
+                // Header nodes and their components
+                .app_header,
+                .module_header,
+                .hosted_header,
+                .package_header,
+                .platform_header,
+                // Components that only appear in headers
+                .binop_platform,
+                // Identifiers in headers (like main! in exposes) are ok
+                .lc,
+                .var_lc,
+                .not_lc,
+                .uc,
+                .dot_lc,
+                // String literals in headers are ok
+                .str_literal_small,
+                .str_literal_big,
+                => continue, // These are allowed to remain as AST nodes
+
+                else => {
+                    // This is a code node that should have been converted
+                    std.debug.print(
+                        "ERROR: Node at index {} still has AST tag {} ({s})\n",
+                        .{ i, tag_value, @tagName(node.tag) },
+                    );
+                    std.debug.print("  Region: start={}, end={}\n", .{
+                        node.region.start.offset,
+                        node.region.end.offset,
+                    });
+
+                    std.debug.panic(
+                        "Code node not converted to CIR! This is a bug in canonicalization.\n",
+                        .{},
+                    );
+                },
+            }
+        }
+    }
+
+    // All code nodes successfully verified as CIR tags
 }
 
 /// Deinitialize the CIR and free all memory
@@ -501,6 +567,7 @@ pub fn getNode(self: *const CIR, idx: AST.Node.Idx) AST.Node {
         std.debug.panic("getNode: node index {} out of bounds (max {})\n", .{ node_int, nodes_len });
     }
     const node = self.ast.*.nodes.get(@enumFromInt(node_int));
+
     return node;
 }
 
@@ -526,6 +593,24 @@ fn mutateToPatt(self: *CIR, idx: AST.Node.Idx, new_tag: PattTag) void {
     // Cast the tag field to u8 and overwrite it
     const tag_u8_ptr = @as(*u8, @ptrCast(tag_ptr));
     tag_u8_ptr.* = @intFromEnum(new_tag);
+}
+
+/// Create a malformed expression node
+pub fn createMalformedExpr(self: *CIR, idx: AST.Node.Idx) Expr.Idx {
+    self.mutateToExpr(idx, .malformed);
+    return asExprIdx(idx);
+}
+
+/// Create a malformed pattern node
+pub fn createMalformedPatt(self: *CIR, idx: AST.Node.Idx) Patt.Idx {
+    self.mutateToPatt(idx, .malformed);
+    return asPattIdx(idx);
+}
+
+/// Create a malformed statement node
+pub fn createMalformedStmt(self: *CIR, idx: AST.Node.Idx) Stmt.Idx {
+    self.mutateToStmt(idx, .malformed);
+    return asStmtIdx(idx);
 }
 
 /// Cast an AST node index to a Stmt index (same underlying value)
@@ -1395,9 +1480,17 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             }
 
             // Otherwise it's a regular block
+            // Check if this is a top-level block (for REPL)
+            // A top-level block is one that is the root node of the AST
+            const is_top_level = (@intFromEnum(node_idx) == self.ast.*.root_node_idx);
+
             // Push a new scope for the block
             try self.scope_state.pushScope(allocator, false); // false = not a function boundary
-            defer self.popScopeAndCheckUnused(allocator) catch {};
+
+            // Only pop scope if not top-level (REPL needs to keep the scope)
+            if (!is_top_level) {
+                defer self.popScopeAndCheckUnused(allocator) catch {};
+            }
 
             // Canonicalize all nodes in the block with proper scope tracking
             iter = self.ast.*.node_slices.nodes(&nodes_idx);
@@ -2281,11 +2374,17 @@ test "CIR2 canonicalize simple number literal" {
     var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices);
     defer parser.deinit();
 
-    // Parse as an expression
-    const node_idx = try parser.parseExpr();
+    // Parse as an expression (need to use parseExprFromSource to set up tokenizer)
+    const node_idx = try parser.parseExprFromSource(msg_slice);
 
     // Verify we got a num_literal_i32 node
     const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+
+    // Debug: Print what tag we actually got
+    if (node.tag != .num_literal_i32) {
+        std.debug.print("\nExpected .num_literal_i32 but got tag: {}\n", .{node.tag});
+    }
+
     try testing.expect(node.tag == .num_literal_i32);
     try testing.expectEqual(@as(i32, 42), node.payload.num_literal_i32);
 
@@ -3398,47 +3497,57 @@ fn collectPatternIdents(self: *CIR, allocator: Allocator, patt_idx: Patt.Idx, id
     const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(patt_idx)));
     const node = self.getNode(node_idx);
 
-    switch (node.tag) {
-        .ident, .var_ident => {
-            // Simple identifier pattern - add it to the list
-            if (node.payload == .ident) {
+    // Check if this is a canonicalized pattern by looking at the tag value
+    const tag_value = @intFromEnum(node.tag);
+
+    // If it's a pattern tag (>= PATT_TAG_START), handle as pattern
+    if (tag_value >= PATT_TAG_START) {
+        const patt_tag = @as(PattTag, @enumFromInt(tag_value));
+        switch (patt_tag) {
+            .ident, .var_ident => {
+                // Simple identifier pattern - add it to the list
+                // The payload should be an ident for these tags
                 try idents.append(node.payload.ident);
-            }
-        },
-        .underscore => {
-            // Underscore pattern - no identifier to collect
-        },
-        .list, .tuple => {
-            // Recursively collect from nested patterns
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |child_node| {
-                    const child_patt = asPattIdx(child_node);
-                    try self.collectPatternIdents(allocator, child_patt, idents);
-                }
-            }
-        },
-        .record => {
-            // Collect identifiers from record field patterns
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |field_node| {
-                    const field = self.getNode(field_node);
-                    if (field.tag == .binop_colon and field.payload == .binop) {
-                        // Field pattern: fieldName : pattern
-                        const binop = self.ast.*.node_slices.binOp(field.payload.binop);
-                        // Collect from the pattern part (right side)
-                        const rhs_patt = asPattIdx(binop.rhs);
-                        try self.collectPatternIdents(allocator, rhs_patt, idents);
+            },
+            .underscore => {
+                // Underscore pattern - no identifier to collect
+            },
+            .list, .tuple => {
+                // Recursively collect from nested patterns
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child_node| {
+                        const child_patt = asPattIdx(child_node);
+                        try self.collectPatternIdents(allocator, child_patt, idents);
                     }
                 }
-            }
-        },
-        else => {
-            // Other pattern types - may need to handle more cases
-        },
+            },
+            .record => {
+                // Collect identifiers from record field patterns
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |field_node| {
+                        const field = self.getNode(field_node);
+                        if (field.tag == .binop_colon) {
+                            // Field pattern: fieldName : pattern
+                            // Assume binop payload if it's a colon
+                            const binop = self.ast.*.node_slices.binOp(field.payload.binop);
+                            // Collect from the pattern part (right side)
+                            const rhs_patt = asPattIdx(binop.rhs);
+                            try self.collectPatternIdents(allocator, rhs_patt, idents);
+                        }
+                    }
+                }
+            },
+            else => {
+                // Other pattern types - may need to handle more cases
+            },
+        }
+    } else {
+        // Not a canonicalized pattern - shouldn't happen if called after canonicalizePatt
+        // but handle gracefully
     }
 }
 
@@ -3453,16 +3562,25 @@ fn collectFreeVariables(
 ) !void {
     const node = self.getNode(expr_node);
 
-    switch (node.tag) {
-        .expr_lookup => {
-            // Variable reference - check if it's a capture
-            if (node.payload == .ident) {
+    // Check if this is a canonicalized expression by looking at the tag value
+    const tag_value = @intFromEnum(node.tag);
+
+    // Calculate the maximum expression tag value (malformed is the last one)
+    const max_expr_tag = @intFromEnum(ExprTag.malformed);
+
+    // If it's an expression tag (>= EXPR_TAG_START and <= max), handle as expression
+    if (tag_value >= EXPR_TAG_START and tag_value <= max_expr_tag) {
+        const expr_tag = @as(ExprTag, @enumFromInt(tag_value));
+        switch (expr_tag) {
+            .lookup, .neg_lookup, .not_lookup => {
+                // Variable reference - check if it's a capture
+                // The payload should be an ident for these tags
                 const ident = node.payload.ident;
 
                 // Check if this is a parameter (not a capture)
                 var is_param = false;
                 for (param_idents.items) |param| {
-                    if (@intFromEnum(param) == @intFromEnum(ident)) {
+                    if (param.idx == ident.idx) {
                         is_param = true;
                         break;
                     }
@@ -3471,11 +3589,11 @@ fn collectFreeVariables(
                 if (!is_param) {
                     // Check if it's from outer scope (potential capture)
                     for (outer_scope_vars.items) |outer_var| {
-                        if (@intFromEnum(outer_var) == @intFromEnum(ident)) {
+                        if (outer_var.idx == ident.idx) {
                             // This is a capture - add it if not already present
                             var already_captured = false;
                             for (captures.items) |cap| {
-                                if (@intFromEnum(cap) == @intFromEnum(ident)) {
+                                if (cap.idx == ident.idx) {
                                     already_captured = true;
                                     break;
                                 }
@@ -3487,53 +3605,16 @@ fn collectFreeVariables(
                         }
                     }
                 }
-            }
-        },
-        .expr_bin_op, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
-            // Binary operations - check both sides
-            if (node.payload == .binop) {
+            },
+            .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_double_question, .binop_double_slash, .binop_thick_arrow, .binop_thin_arrow, .binop_colon, .binop_equals => {
+                // Binary operations - check both sides
+                // Binops should have binop payload
                 const binop = self.ast.*.node_slices.binOp(node.payload.binop);
                 try self.collectFreeVariables(allocator, binop.lhs, captures, param_idents, outer_scope_vars);
                 try self.collectFreeVariables(allocator, binop.rhs, captures, param_idents, outer_scope_vars);
-            }
-        },
-        .expr_call, .expr_apply => {
-            // Function calls - check function and arguments
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |child| {
-                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
-                }
-            }
-        },
-        .expr_if => {
-            // If expressions - check condition, then, and else branches
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |child| {
-                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
-                }
-            }
-        },
-        .expr_lambda, .lambda => {
-            // Nested lambda - don't traverse into it
-            // It has its own capture analysis
-        },
-        .expr_list_literal, .expr_tuple_literal, .expr_record_literal => {
-            // Collection literals - check all elements
-            const nodes_idx = node.payload.nodes;
-            if (!nodes_idx.isNil()) {
-                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                while (iter.next()) |child| {
-                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
-                }
-            }
-        },
-        else => {
-            // For other expression types, recursively check child nodes if any
-            if (node.payload == .nodes) {
+            },
+            .apply_ident => {
+                // Function calls - check function and arguments
                 const nodes_idx = node.payload.nodes;
                 if (!nodes_idx.isNil()) {
                     var iter = self.ast.*.node_slices.nodes(&nodes_idx);
@@ -3541,8 +3622,134 @@ fn collectFreeVariables(
                         try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
                     }
                 }
-            }
-        },
+            },
+            .apply_tag => {
+                // Tag applications - for simple tags without arguments, there's nothing to collect
+                // For tags with arguments, we need to check the arguments
+                // We can't check the tag directly since it's been mutated, so we'll try to check
+                // if there are nodes to process
+                // TODO: This is a workaround - ideally we'd track whether this is a simple tag or not
+                // For now, skip processing to avoid crashes
+            },
+            .if_else => {
+                // If expressions - check all branches
+                // if_branches is stored as u32 but represents a nodes index
+                const if_branches_u32 = node.payload.if_branches;
+                const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .lambda => {
+                // Nested lambda - don't traverse into it
+                // It has its own capture analysis
+            },
+            .list_literal, .tuple_literal, .record_literal => {
+                // Collection literals - check all elements
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big, .empty_list, .empty_record => {
+                // Literals have no free variables to collect
+            },
+            .str_interpolation => {
+                // String interpolation - check all interpolated expressions
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .module_access => {
+                // Module access like Bool.True - uses binop payload
+                // Module access doesn't have free variables, it's a qualified name
+            },
+            .where_clause => {
+                // Where clause - check the expression and constraints
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .block => {
+                // Block expression - check all statements
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .for_loop, .while_loop => {
+                // Loop expressions - check condition and body
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .record_access => {
+                // Record field access - check the record expression
+                const binop = self.ast.*.node_slices.binOp(node.payload.binop);
+                try self.collectFreeVariables(allocator, binop.lhs, captures, param_idents, outer_scope_vars);
+                // rhs is the field name, not an expression
+            },
+            .record_accessor, .dot_num => {
+                // Accessor functions like .foo or .0 - these are functions, no free variables
+            },
+            .match => {
+                // Match expression - check scrutinee and all branches
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .unary_neg, .unary_not, .unary_double_dot => {
+                // Unary operations - check the operand
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    if (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .crash => {
+                // Crash expression - check the message expression
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    if (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            },
+            .malformed => {
+                // Malformed expression - skip
+            },
+        }
+    } else {
+        // Not a canonicalized expression - shouldn't happen if called after canonicalizeExpr
+        // but handle gracefully
     }
 }
 
@@ -3574,8 +3781,8 @@ test "CIR2 canonicalize mutable variable declaration" {
     var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices);
     defer parser.deinit();
 
-    // Parse the statement
-    const node_idx = try parser.parseExpr();
+    // Parse the statement (need to use parseExprFromSource to set up tokenizer)
+    const node_idx = try parser.parseExprFromSource(msg_slice);
 
     // Verify we got a binop_equals node with var_lc on the left
     const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));

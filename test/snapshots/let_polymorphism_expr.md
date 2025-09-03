@@ -50,7 +50,7 @@ match []
 	empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
 ~~~
 # EXPECTED
-UNSUPPORTED NODE - let_polymorphism_expr.md:2:5:2:70
+NIL
 # PROBLEMS
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.

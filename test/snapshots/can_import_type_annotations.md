@@ -100,35 +100,14 @@ Err(err)
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:17:21:17:23
-PARSE ERROR - can_import_type_annotations.md:17:28:17:29
-PARSE ERROR - can_import_type_annotations.md:17:29:17:36
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:17:42:18:9
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:18:18:18:21
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:20:1:22:1
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:35:31:35:33
-PARSE ERROR - can_import_type_annotations.md:36:17:36:20
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:38:18:38:21
-UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:39:5:39:6
-UNDEFINED VARIABLE - can_import_type_annotations.md:8:24:8:44
+MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
+MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
+MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
+UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
+UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
-UNDEFINED VARIABLE - can_import_type_annotations.md:11:21:11:31
-UNDEFINED VARIABLE - can_import_type_annotations.md:15:14:15:25
-UNSUPPORTED NODE - can_import_type_annotations.md:15:26:15:38
-UNSUPPORTED NODE - can_import_type_annotations.md:17:9:17:23
-UNDEFINED VARIABLE - can_import_type_annotations.md:17:37:17:41
-UNDEFINED VARIABLE - can_import_type_annotations.md:18:13:18:16
-UNDEFINED VARIABLE - can_import_type_annotations.md:18:25:18:28
-UNUSED VARIABLE - can_import_type_annotations.md:14:14:14:21
-UNSUPPORTED NODE - can_import_type_annotations.md:20:1:22:1
-UNDEFINED VARIABLE - can_import_type_annotations.md:23:10:23:28
-UNSUPPORTED NODE - can_import_type_annotations.md:27:40:27:61
-UNSUPPORTED NODE - can_import_type_annotations.md:33:9:36:37
-UNUSED VARIABLE - can_import_type_annotations.md:31:28:31:35
-UNSUPPORTED NODE - can_import_type_annotations.md:38:9:38:17
-UNSUPPORTED NODE - can_import_type_annotations.md:38:18:38:21
-UNSUPPORTED NODE - can_import_type_annotations.md:38:21:38:29
-UNSUPPORTED NODE - can_import_type_annotations.md:39:5:39:6
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
+MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **Ok** is not expected in an expression.
