@@ -263,6 +263,7 @@ jobs:
       - name: Remove things that dont work on musl
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
+          rm basic-webserver-platform/ci/expect_scripts/file-accessed-modified-created-time.exp
           rm basic-webserver-platform/examples/file-accessed-modified-created-time.roc
           sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' basic-webserver-platform/platform/File.roc
           rm basic-webserver-platform/platform/File.roc.bak
@@ -272,5 +273,5 @@ jobs:
           # no need to build platform anymore
           cd basic-webserver-platform
           # This one does not work on musl
-          rm ci/expect_scripts/file-accessed-modified-created-time.exp
+
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
