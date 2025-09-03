@@ -12,7 +12,7 @@ permissions: {}
 
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.gz
+  ARCHIVE_FORMAT: .tar.br
   RELEASE_TAG: 0.13.0
 
 jobs:
