@@ -222,8 +222,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     const binop = self.cir.ast.node_slices.binOp(&binop_idx);
 
                     // Infer types of left and right operands
-                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
-                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                    const lhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
 
                     const lhs_type = try self.inferExpr(lhs_expr_idx);
                     const rhs_type = try self.inferExpr(rhs_expr_idx);
@@ -241,8 +241,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     const binop = self.cir.ast.node_slices.binOp(&binop_idx);
 
                     // Infer types of both operands to ensure they're compatible
-                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
-                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                    const lhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
 
                     _ = try self.inferExpr(lhs_expr_idx);
                     _ = try self.inferExpr(rhs_expr_idx);
@@ -258,7 +258,7 @@ pub fn InferContext(comptime CIR2: type) type {
                     const binop = self.cir.ast.node_slices.binOp(&binop_idx);
 
                     // The left operand is the expression, the right is the type annotation
-                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const lhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
                     const lhs_type = try self.inferExpr(lhs_expr_idx);
 
                     // Parse the type annotation from the right operand
@@ -278,8 +278,8 @@ pub fn InferContext(comptime CIR2: type) type {
                     const binop = self.cir.ast.node_slices.binOp(&binop_idx);
 
                     // Infer types of both operands - they should both be boolean
-                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
-                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                    const lhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR2.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
 
                     _ = try self.inferExpr(lhs_expr_idx);
                     _ = try self.inferExpr(rhs_expr_idx);
@@ -444,7 +444,7 @@ pub fn InferContext(comptime CIR2: type) type {
         }
 
         /// Parse a type annotation from an AST node and return its type variable
-        fn parseTypeAnnotation(self: *Self, node_idx: CIR.Node.Idx) !Var {
+        fn parseTypeAnnotation(self: *Self, node_idx: CIR2.Node.Idx) !Var {
             const node = self.cir.ast.getNode(@enumFromInt(@intFromEnum(node_idx)));
 
             switch (node.tag) {
@@ -668,8 +668,8 @@ pub fn InferContext(comptime CIR2: type) type {
             const lhs_num = switch (lhs_resolved.desc.content) {
                 .structure => |s| switch (s) {
                     .num => |n| n,
-                    .int => |precision| types.NumBound{ .int_exact = precision },
-                    .frac => |precision| types.NumBound{ .frac_exact = precision },
+                    .int => |precision| types_mod.NumBound{ .int_exact = precision },
+                    .frac => |precision| types_mod.NumBound{ .frac_exact = precision },
                     else => {
                         // Not a numeric type - return error
                         return error.TypeMismatch;
@@ -687,8 +687,8 @@ pub fn InferContext(comptime CIR2: type) type {
             const rhs_num = switch (rhs_resolved.desc.content) {
                 .structure => |s| switch (s) {
                     .num => |n| n,
-                    .int => |precision| types.NumBound{ .int_exact = precision },
-                    .frac => |precision| types.NumBound{ .frac_exact = precision },
+                    .int => |precision| types_mod.NumBound{ .int_exact = precision },
+                    .frac => |precision| types_mod.NumBound{ .frac_exact = precision },
                     else => {
                         return error.TypeMismatch;
                     },
@@ -714,7 +714,7 @@ pub fn InferContext(comptime CIR2: type) type {
         }
 
         /// Unify two numeric bounds to find their least upper bound
-        fn unifyNumBounds(self: *Self, lhs: types.NumBound, rhs: types.NumBound) !types.NumBound {
+        fn unifyNumBounds(self: *Self, lhs: types_mod.NumBound, rhs: types_mod.NumBound) !types_mod.NumBound {
             _ = self;
 
             // Handle exact types first
@@ -755,11 +755,11 @@ pub fn InferContext(comptime CIR2: type) type {
                         // Mixed signed/unsigned - promote to signed with larger width
                         const max_bits = @max(lhs_bits, rhs_bits);
                         break :blk switch (max_bits) {
-                            8 => types.IntPrecision.i16, // Promote to avoid overflow
-                            16 => types.IntPrecision.i32,
-                            32 => types.IntPrecision.i64,
-                            64 => types.IntPrecision.i128,
-                            128 => types.IntPrecision.i128,
+                            8 => types_mod.IntPrecision.i16, // Promote to avoid overflow
+                            16 => types_mod.IntPrecision.i32,
+                            32 => types_mod.IntPrecision.i64,
+                            64 => types_mod.IntPrecision.i128,
+                            128 => types_mod.IntPrecision.i128,
                             else => unreachable,
                         };
                     } else if (lhs_bits >= rhs_bits) {
@@ -779,15 +779,15 @@ pub fn InferContext(comptime CIR2: type) type {
 
                 const unified_prec = switch (lhs_prec) {
                     .f32 => switch (rhs_prec) {
-                        .f32 => types.FracPrecision.f32,
-                        .f64 => types.FracPrecision.f64,
-                        .dec => types.FracPrecision.dec,
+                        .f32 => types_mod.FracPrecision.f32,
+                        .f64 => types_mod.FracPrecision.f64,
+                        .dec => types_mod.FracPrecision.dec,
                     },
                     .f64 => switch (rhs_prec) {
-                        .f32, .f64 => types.FracPrecision.f64,
-                        .dec => types.FracPrecision.dec,
+                        .f32, .f64 => types_mod.FracPrecision.f64,
+                        .dec => types_mod.FracPrecision.dec,
                     },
-                    .dec => types.FracPrecision.dec,
+                    .dec => types_mod.FracPrecision.dec,
                 };
 
                 return .{ .frac_exact = unified_prec };

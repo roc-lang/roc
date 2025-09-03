@@ -3218,18 +3218,67 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             return .continue_processing;
         },
 
-        else => {
-            // Log unimplemented state for debugging, but don't crash
-            std.debug.print("WARNING: State not implemented: {s}\n", .{@tagName(state)});
+        .file_header_done => {
+            // Header parsing is complete, transition to statement parsing
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .file_stmt_loop);
+            return .continue_processing;
+        },
 
-            // Pop the unimplemented state and continue
+        .primary_ident, .primary_number, .primary_string, .primary_list, .primary_record, .primary_if, .primary_match, .primary_lambda => {
+            // These primary expression states are deprecated
+            // They've been consolidated into expr_primary which handles all primary expressions
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .expr_primary);
+            return .continue_processing;
+        },
+
+        .expr_combine => {
+            // Expression combination state - deprecated, use expr_done instead
+            _ = self.state_stack.pop();
+            try self.state_stack.append(self.gpa, .expr_done);
+            return .continue_processing;
+        },
+
+        .done => {
+            // Parsing is complete
+            _ = self.state_stack.pop();
+            return .complete;
+        },
+
+        .parse_error => {
+            // Parse error state - recover by continuing to next statement
             _ = self.state_stack.pop();
 
-            // Create a malformed node to indicate the error
+            // Create error node to mark the location
             const region = self.currentRegion();
-            const node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .state_not_implemented });
-            try self.value_stack.append(self.gpa, node);
+            const error_node = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .expr_unexpected_token });
+            try self.value_stack.append(self.gpa, error_node);
 
+            // Skip to next viable parsing position
+            // Look for statement boundaries or structural tokens
+            while (self.peek() != .EndOfFile) {
+                switch (self.peek()) {
+                    // Statement starters
+                    .LowerIdent,
+                    .UpperIdent,
+                    .KwIf,
+                    .KwMatch,
+                    .KwFor,
+                    .KwWhile,
+                    .KwReturn,
+                    .KwCrash,
+                    // Structural tokens that might start new context
+                    .OpenCurly,
+                    .OpenSquare,
+                    .OpenRound,
+                    => break,
+                    else => self.advance(),
+                }
+            }
+
+            // Try to continue with statement parsing
+            try self.state_stack.append(self.gpa, .stmt_start);
             return .continue_processing;
         },
     }

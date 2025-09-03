@@ -1801,6 +1801,20 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
         // Lambda expressions from |x| body syntax
         .lambda => {
+            // Collect free variables from outer scope before creating new scope
+            // These are potential captures - we'll filter them later
+            var outer_scope_vars = std.ArrayList(Ident.Idx).init(allocator);
+            defer outer_scope_vars.deinit();
+
+            // Collect all identifiers available in the current scope
+            // These could become captures if referenced in the lambda body
+            for (self.scope_state.scopes.items) |scope| {
+                var iter = scope.idents.iterator();
+                while (iter.next()) |entry| {
+                    try outer_scope_vars.append(entry.key_ptr.*);
+                }
+            }
+
             // Push a new scope for the lambda (this is a function boundary)
             try self.scope_state.pushScope(allocator, true); // true = function boundary
             defer self.popScopeAndCheckUnused(allocator) catch {};
@@ -1808,6 +1822,9 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             // Parser creates lambda nodes with body_then_args payload
             // Format: [body, param1, param2, ...]
             const nodes_idx = node.payload.body_then_args;
+            var param_idents = std.ArrayList(Ident.Idx).init(allocator);
+            defer param_idents.deinit();
+
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
@@ -1815,14 +1832,31 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 const body_node = iter.next();
 
                 // Process parameters first and add them to scope
+                // Also track parameter identifiers so we can exclude them from captures
                 while (iter.next()) |param_node| {
-                    _ = try self.canonicalizePatt(allocator, param_node);
-                    // Pattern canonicalization registers names in scope
+                    const patt_idx = try self.canonicalizePatt(allocator, param_node);
+                    // Collect parameter identifiers
+                    try self.collectPatternIdents(allocator, patt_idx, &param_idents);
                 }
 
                 // Now process the body with parameters in scope
                 if (body_node) |body| {
                     _ = try self.canonicalizeExpr(allocator, body, raw_src, idents);
+
+                    // After canonicalizing the body, analyze captures
+                    // Captures are free variables: referenced in body, not parameters, from outer scope
+                    var captures = std.ArrayList(Ident.Idx).init(allocator);
+                    defer captures.deinit();
+
+                    try self.collectFreeVariables(allocator, body, &captures, &param_idents, &outer_scope_vars);
+
+                    // Store captures with the lambda
+                    // For now, just track that we analyzed captures
+                    // In a full implementation, we'd store these in the CIR
+                    if (captures.items.len > 0) {
+                        // Lambda has captures - this will become a closure at runtime
+                        // The interpreter will need to capture these values when creating the closure
+                    }
                 }
             }
 
@@ -3357,6 +3391,160 @@ pub const Scope = struct {
         self.idents.deinit(allocator);
     }
 };
+
+/// Helper function to collect all identifiers from a pattern
+fn collectPatternIdents(self: *CIR, allocator: Allocator, patt_idx: Patt.Idx, idents: *std.ArrayList(Ident.Idx)) !void {
+    // Get the AST node for this pattern
+    const node_idx = @as(AST.Node.Idx, @enumFromInt(@intFromEnum(patt_idx)));
+    const node = self.getNode(node_idx);
+
+    switch (node.tag) {
+        .ident, .var_ident => {
+            // Simple identifier pattern - add it to the list
+            if (node.payload == .ident) {
+                try idents.append(node.payload.ident);
+            }
+        },
+        .underscore => {
+            // Underscore pattern - no identifier to collect
+        },
+        .list, .tuple => {
+            // Recursively collect from nested patterns
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |child_node| {
+                    const child_patt = asPattIdx(child_node);
+                    try self.collectPatternIdents(allocator, child_patt, idents);
+                }
+            }
+        },
+        .record => {
+            // Collect identifiers from record field patterns
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |field_node| {
+                    const field = self.getNode(field_node);
+                    if (field.tag == .binop_colon and field.payload == .binop) {
+                        // Field pattern: fieldName : pattern
+                        const binop = self.ast.*.node_slices.binOp(field.payload.binop);
+                        // Collect from the pattern part (right side)
+                        const rhs_patt = asPattIdx(binop.rhs);
+                        try self.collectPatternIdents(allocator, rhs_patt, idents);
+                    }
+                }
+            }
+        },
+        else => {
+            // Other pattern types - may need to handle more cases
+        },
+    }
+}
+
+/// Helper function to collect free variables referenced in an expression
+fn collectFreeVariables(
+    self: *CIR,
+    allocator: Allocator,
+    expr_node: AST.Node.Idx,
+    captures: *std.ArrayList(Ident.Idx),
+    param_idents: *const std.ArrayList(Ident.Idx),
+    outer_scope_vars: *const std.ArrayList(Ident.Idx),
+) !void {
+    const node = self.getNode(expr_node);
+
+    switch (node.tag) {
+        .expr_lookup => {
+            // Variable reference - check if it's a capture
+            if (node.payload == .ident) {
+                const ident = node.payload.ident;
+
+                // Check if this is a parameter (not a capture)
+                var is_param = false;
+                for (param_idents.items) |param| {
+                    if (@intFromEnum(param) == @intFromEnum(ident)) {
+                        is_param = true;
+                        break;
+                    }
+                }
+
+                if (!is_param) {
+                    // Check if it's from outer scope (potential capture)
+                    for (outer_scope_vars.items) |outer_var| {
+                        if (@intFromEnum(outer_var) == @intFromEnum(ident)) {
+                            // This is a capture - add it if not already present
+                            var already_captured = false;
+                            for (captures.items) |cap| {
+                                if (@intFromEnum(cap) == @intFromEnum(ident)) {
+                                    already_captured = true;
+                                    break;
+                                }
+                            }
+                            if (!already_captured) {
+                                try captures.append(ident);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        },
+        .expr_bin_op, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
+            // Binary operations - check both sides
+            if (node.payload == .binop) {
+                const binop = self.ast.*.node_slices.binOp(node.payload.binop);
+                try self.collectFreeVariables(allocator, binop.lhs, captures, param_idents, outer_scope_vars);
+                try self.collectFreeVariables(allocator, binop.rhs, captures, param_idents, outer_scope_vars);
+            }
+        },
+        .expr_call, .expr_apply => {
+            // Function calls - check function and arguments
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |child| {
+                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                }
+            }
+        },
+        .expr_if => {
+            // If expressions - check condition, then, and else branches
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |child| {
+                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                }
+            }
+        },
+        .expr_lambda, .lambda => {
+            // Nested lambda - don't traverse into it
+            // It has its own capture analysis
+        },
+        .expr_list_literal, .expr_tuple_literal, .expr_record_literal => {
+            // Collection literals - check all elements
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |child| {
+                    try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                }
+            }
+        },
+        else => {
+            // For other expression types, recursively check child nodes if any
+            if (node.payload == .nodes) {
+                const nodes_idx = node.payload.nodes;
+                if (!nodes_idx.isNil()) {
+                    var iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    while (iter.next()) |child| {
+                        try self.collectFreeVariables(allocator, child, captures, param_idents, outer_scope_vars);
+                    }
+                }
+            }
+        },
+    }
+}
 
 test "CIR2 canonicalize mutable variable declaration" {
     const testing = std.testing;

@@ -613,7 +613,6 @@ pub const Diagnostic = struct {
         // Expression errors
         expr_unexpected_token,
         expr_no_space_dot_int,
-        state_not_implemented,
         no_else,
         expected_expr_bar,
         backslash_not_valid_lambda_syntax,
@@ -875,7 +874,6 @@ fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnost
         .expected_arrow_after_pattern => "EXPECTED ARROW AFTER PATTERN",
         .expected_identifier_after_as => "EXPECTED IDENTIFIER AFTER 'AS'",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
-        .state_not_implemented => "PARSER STATE NOT IMPLEMENTED",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .statement_unexpected_token => "UNEXPECTED TOKEN",
@@ -953,13 +951,6 @@ fn parseDiagnosticToReport(self: *const @This(), env: *const CommonEnv, diagnost
             try report.document.addReflowingText("I was expecting a valid expression, but I found something that doesn't belong here.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("This could be a missing operator, incorrect syntax, or a token in the wrong place.");
-        },
-        .state_not_implemented => {
-            try report.document.addText("Parser encountered an unimplemented state.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This is a limitation in the current parser implementation. The feature you're trying to use may not be fully implemented yet.");
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Please report this issue with your code example to help improve the parser.");
         },
         else => {
             // Generic parse error message

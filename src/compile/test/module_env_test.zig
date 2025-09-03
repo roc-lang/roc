@@ -4,13 +4,14 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const canonicalize = @import("canonicalize");
+const canonicalize = @import("can");
 const parse = @import("parse");
 
 const testing = std.testing;
 const test_allocator = testing.allocator;
 const ModuleEnv = canonicalize.ModuleEnv;
 const CIR = canonicalize.CIR;
+const AST = parse.AST;
 
 test "module env - create and destroy" {
     const env = try test_allocator.create(ModuleEnv);
@@ -28,7 +29,9 @@ test "module env - add expression with type" {
     defer env.deinit();
 
     // Create a simple CIR with an integer literal
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create an AST first
+    var ast = AST{};
+    var cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create an integer literal expression
@@ -99,7 +102,9 @@ test "module env - type variable association" {
     defer env.deinit();
 
     // Create a CIR
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create an AST first
+    var ast = AST{};
+    var cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create various expressions and verify they get type variables
@@ -125,7 +130,9 @@ test "module env - pattern management" {
     defer env.deinit();
 
     // Create a CIR
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create an AST first
+    var ast = AST{};
+    var cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create a pattern (identifier pattern)
@@ -147,11 +154,14 @@ test "module env - scope management" {
     defer env.deinit();
 
     // Create a CIR with scope tracking
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create an AST first
+    var ast = AST{};
+    var cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create a scope
-    const Scope = @import("canonicalize/Scope.zig");
+    const can = @import("can");
+    const Scope = can.Scope;
     var scope = Scope.init(false);
     defer scope.deinit(test_allocator);
 
@@ -178,7 +188,9 @@ test "module env - binary operation creation" {
     defer env.deinit();
 
     // Create a CIR
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    // Need to create an AST first
+    var ast = AST{};
+    var cir = CIR.init(&ast, &env.types);
     defer cir.deinit(test_allocator);
 
     // Create operands

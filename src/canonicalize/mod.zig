@@ -8,6 +8,8 @@ pub const CIR = @import("CIR.zig");
 pub const Can = CIR;
 /// The Module Environment after canonicalization (used also for type checking and serialization)
 pub const ModuleEnv = @import("ModuleEnv.zig");
+/// The Scope type for managing identifier scopes
+pub const Scope = @import("Scope.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());

@@ -849,11 +849,11 @@ pub const Interpreter = struct {
 
             .apply_ident, .apply_anon, .method_call => {
                 // Handle function applications like foo(bar, baz)
-                const expr = self.env.cir.?.getExpr(expr_idx);
+                const apply_expr = self.env.cir.?.getExpr(expr_idx);
 
                 // Function applications use the nodes payload to store function + arguments
                 // The first node is the function, followed by arguments
-                const nodes_idx = expr.payload.nodes;
+                const nodes_idx = apply_expr.payload.nodes;
 
                 // Get iterator over the function and argument nodes
                 var nodes_iter = self.env.cir.?.ast.node_slices.nodes(&nodes_idx);
@@ -906,10 +906,10 @@ pub const Interpreter = struct {
             // Unary minus operation
             .unary_neg => {
                 // Handle unary negation like -(foo())
-                const expr = self.env.cir.?.getExpr(expr_idx);
+                const unary_expr = self.env.cir.?.getExpr(expr_idx);
 
                 // Unary operations use the nodes payload to store the operand
-                const nodes_idx = expr.payload.nodes;
+                const nodes_idx = unary_expr.payload.nodes;
                 var nodes_iter = self.env.cir.?.ast.node_slices.nodes(&nodes_idx);
 
                 // Should have exactly one operand
@@ -945,10 +945,10 @@ pub const Interpreter = struct {
             // Unary not operation
             .unary_not => {
                 // Handle unary boolean negation like !(foo())
-                const expr = self.env.cir.?.getExpr(expr_idx);
+                const not_expr = self.env.cir.?.getExpr(expr_idx);
 
                 // Unary operations use the nodes payload to store the operand
-                const nodes_idx = expr.payload.nodes;
+                const nodes_idx = not_expr.payload.nodes;
                 var nodes_iter = self.env.cir.?.ast.node_slices.nodes(&nodes_idx);
 
                 // Should have exactly one operand
@@ -983,10 +983,10 @@ pub const Interpreter = struct {
 
             .block => {
                 // Handle block evaluation like { stmt1; stmt2; final_expr }
-                const expr = self.env.cir.?.getExpr(expr_idx);
+                const block_expr = self.env.cir.?.getExpr(expr_idx);
 
                 // Blocks use the nodes payload to store statements + final expression
-                const nodes_idx = expr.payload.nodes;
+                const nodes_idx = block_expr.payload.nodes;
                 var nodes_iter = self.env.cir.?.ast.node_slices.nodes(&nodes_idx);
 
                 // Collect all nodes in the block
@@ -1067,11 +1067,11 @@ pub const Interpreter = struct {
 
             .record_access => {
                 // Handle record field access like record.field
-                const expr = self.env.cir.?.getExpr(expr_idx);
+                const access_expr = self.env.cir.?.getExpr(expr_idx);
 
                 // Record access is represented as a binary operation:
                 // record.field becomes binop_dot with record as LHS and field as RHS
-                const binop_idx = expr.payload.binop;
+                const binop_idx = access_expr.payload.binop;
                 const binop = self.env.cir.?.ast.node_slices.binOp(&binop_idx);
 
                 self.traceInfo("Record access: record={}, field={}", .{ binop.lhs, binop.rhs });
@@ -3240,7 +3240,6 @@ pub const Interpreter = struct {
         }
 
         // Perform additional free variable analysis on the lambda body
-        const lambda_expr = self.env.cir.?.getExpr(closure_expr.lambda_idx);
         const free_vars = try self.findFreeVariables(closure_expr.body_idx, &captured_vars);
         defer free_vars.deinit();
 

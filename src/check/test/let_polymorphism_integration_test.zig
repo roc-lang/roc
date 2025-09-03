@@ -5,7 +5,7 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const types = @import("types");
-const canonicalize = @import("canonicalize");
+const canonicalize = @import("can");
 const check = @import("../mod.zig");
 
 const testing = std.testing;
@@ -27,7 +27,7 @@ fn parseAndCanonicalizeSource(env: *ModuleEnv, source: []const u8) !CIR {
     defer ast.deinit(test_allocator);
 
     // Create CIR and canonicalize
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    const cir = CIR.init(&ast, &env.types);
     // Note: In real usage, canonicalization would happen here
     // For these tests, we're focusing on the type checking aspects
 
@@ -43,7 +43,7 @@ test "let polymorphism - identity function" {
     }
 
     // Create identity function: |x| x
-    var cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
+    const cir = CIR.init(&env.byte_slices, &env.types, env.getIdents());
     defer cir.deinit(test_allocator);
 
     // Create type variables for the polymorphic identity function
