@@ -137,15 +137,42 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("testRocDbg not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract debug output from RocDbg struct
+    const debug_output = dbg_args.utf8_bytes[0..dbg_args.len];
+
+    // In REPL context, debug output should be displayed to the user
+    // Print to stdout so it appears in the REPL output stream
+    const stdout = std.io.getStdOut().writer();
+    stdout.print("[REPL DBG] {s}\n", .{debug_output}) catch {
+        // If we can't write to stdout, try stderr as fallback
+        std.io.getStdErr().writer().print("[REPL DBG] {s}\n", .{debug_output}) catch {
+            // If all output fails, this is a critical error - use the panic
+            @panic("Failed to output debug information in REPL");
+        };
+    };
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract expect failure message from RocExpectFailed struct
+    const expect_output = expect_args.utf8_bytes[0..expect_args.len];
+
+    // In REPL context, expect failures should be displayed to the user as errors
+    // Print to stderr with clear indication this is an expect failure
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[REPL EXPECT FAILED] {s}\n", .{expect_output}) catch {
+        // If we can't write to stderr, try stdout as fallback
+        std.io.getStdOut().writer().print("[REPL EXPECT FAILED] {s}\n", .{expect_output}) catch {
+            // If all output fails, this is a critical error - use the panic
+            @panic("Failed to output expect failure information in REPL");
+        };
+    };
+
+    // In REPL context, expect failures are user errors to be displayed, not fatal
+    // Don't exit - let the REPL continue running so the user can fix their code
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

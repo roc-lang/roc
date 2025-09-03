@@ -400,7 +400,7 @@ test "exposed_items handles identifiers with different attributes" {
         \\module [foo, foo!]
         \\
         \\foo = 42
-        \\foo! = \x -> x + 1
+        \\foo! = |x| x + 1
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();

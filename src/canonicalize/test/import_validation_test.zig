@@ -248,12 +248,12 @@ test "import interner - comprehensive usage example" {
         \\import Result exposing [Result, withDefault]
         \\
         \\process : List Str -> Dict Str Nat
-        \\process = \items ->
+        \\process = |items|
         \\    items
         \\    |> List.map Str.toLower
-        \\    |> List.filter \item -> Str.length item > 3
-        \\    |> List.foldl Dict.empty \dict, item ->
-        \\        Dict.update dict item \maybeCount ->
+        \\    |> List.filter |item| Str.length item > 3
+        \\    |> List.foldl Dict.empty |dict, item|
+        \\        Dict.update dict item |maybeCount|
         \\            when maybeCount is
         \\                Present count -> Present (count + 1)
         \\                Missing -> Present 1
@@ -329,9 +329,9 @@ test "module scopes - imports work in module scope" {
         \\import List
         \\import Dict
         \\
-        \\process = \items ->
+        \\process = |items|
         \\    # List and Dict are available here
-        \\    list = List.map items \x -> x + 1
+        \\    list = List.map items |x| x + 1
         \\    dict = Dict.empty
         \\    { list, dict }
     ;
@@ -372,7 +372,7 @@ test "module-qualified lookups with e_lookup_external" {
         \\import Dict
         \\
         \\main =
-        \\    list = List.map [1, 2, 3] \x -> x * 2
+        \\    list = List.map [1, 2, 3] |x| x * 2
         \\    dict = Dict.insert Dict.empty "key" "value"
         \\    List.len list
     ;

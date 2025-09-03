@@ -24,7 +24,7 @@ const test_allocator = testing.allocator;
 //         \\Color : [Red, Green, Blue]
 //         \\
 //         \\describe : Color -> Str
-//         \\describe = \color ->
+//         \\describe = |color|
 //         \\    when color is
 //         \\        Red -> "red"
 //         \\        Green -> "green"
@@ -122,7 +122,7 @@ const test_allocator = testing.allocator;
 //         \\Person := { name: Str, age: U32 }
 //         \\
 //         \\greet : Person -> Str
-//         \\greet = \person -> "Hello from Data module!"
+//         \\greet = |person| "Hello from Data module!"
 //     ;
 //
 //     var data_parse_ir = parse.parse(&data_env, data_source);
@@ -222,7 +222,7 @@ const test_allocator = testing.allocator;
 //         \\Point := { x: F64, y: F64 }
 //         \\
 //         \\distance : Point, Point -> F64
-//         \\distance = \p1, p2 ->
+//         \\distance = |p1, p2|
 //         \\    dx = p1.x - p2.x
 //         \\    dy = p1.y - p2.y
 //         \\    Num.sqrt (dx * dx + dy * dy)

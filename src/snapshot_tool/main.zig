@@ -4392,15 +4392,28 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
 }
 
 fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("snapshotRocDbg not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract debug output from RocDbg struct
+    const debug_output = dbg_args.utf8_bytes[0..dbg_args.len];
+
+    // For snapshot testing, debug output should be logged with appropriate prefix
+    std.log.info("[SNAPSHOT DBG] {s}", .{debug_output});
+
+    // Debug output in snapshot tests is informational only - don't exit
 }
 
 fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("snapshotRocExpectFailed not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract expect failure message from RocExpectFailed struct
+    const expect_output = expect_args.utf8_bytes[0..expect_args.len];
+
+    // For snapshot testing, expect failures are part of the test output that should be captured
+    std.log.err("[SNAPSHOT EXPECT FAILED] {s}", .{expect_output});
+
+    // In snapshot testing, expect failures are test results to be captured, not fatal errors
+    // Don't exit - let the snapshot tool handle the failure as part of test output
 }
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

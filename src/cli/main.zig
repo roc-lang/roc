@@ -1458,15 +1458,41 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("testRocDbg not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract debug output from RocDbg struct
+    const debug_output = dbg_args.utf8_bytes[0..dbg_args.len];
+
+    // Print debug output to stderr with "[DBG]" prefix for test identification
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[DBG] {s}\n", .{debug_output}) catch {
+        // If we can't write to stderr, write to stdout as fallback
+        std.io.getStdOut().writer().print("[DBG] {s}\n", .{debug_output}) catch {
+            // If all output fails, this is a critical error - use the panic
+            @panic("Failed to output debug information");
+        };
+    };
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract expect failure message from RocExpectFailed struct
+    const expect_output = expect_args.utf8_bytes[0..expect_args.len];
+
+    // Print expect failure to stderr with "[EXPECT FAILED]" prefix for test identification
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[EXPECT FAILED] {s}\n", .{expect_output}) catch {
+        // If we can't write to stderr, write to stdout as fallback
+        std.io.getStdOut().writer().print("[EXPECT FAILED] {s}\n", .{expect_output}) catch {
+            // If all output fails, this is a critical error - use the panic
+            @panic("Failed to output expect failure information");
+        };
+    };
+
+    // For testing purposes, expect failures should cause the test to fail
+    // Exit with non-zero status to indicate test failure
+    std.process.exit(1);
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

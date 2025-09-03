@@ -217,51 +217,77 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Type check arithmetic operations
                     // Due to CIR construction, binops might not have the expected payload
                     // For now, just return a numeric type
-                    const num_content = Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } };
-                    try self.store.setVarContent(expr_var, num_content);
+                    // For arithmetic operations, we need to infer the types of both operands
+                    const binop_idx = expr.payload.binop;
+                    const binop = self.cir.ast.node_slices.binOp(&binop_idx);
+
+                    // Infer types of left and right operands
+                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+
+                    const lhs_type = try self.inferExpr(lhs_expr_idx);
+                    const rhs_type = try self.inferExpr(rhs_expr_idx);
+
+                    // Unify the numeric types - both operands must have compatible numeric types
+                    const unified_type = try self.unifyNumericTypes(lhs_type, rhs_type);
+
+                    // Set the result type to the unified numeric type
+                    try self.store.setVarContent(expr_var, try self.store.getVarContent(unified_type));
                     return expr_var;
-
-                    // TODO: Fix this once CIR payload is corrected
-                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    // const lhs_type = try self.inferExpr(binop.lhs);
-                    // const rhs_type = try self.inferExpr(binop.rhs);
-
-                    // // For arithmetic, use the left operand's type as the result type
-                    // // Both operands should be numeric
-                    // _ = rhs_type; // Right operand type is also inferred for completeness
-                    // return lhs_type;
                 },
                 .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte => {
-                    // Comparison operators return Bool
-                    // For now, just return Bool
+                    // Comparison operators return Bool but we need to check operand types
+                    const binop_idx = expr.payload.binop;
+                    const binop = self.cir.ast.node_slices.binOp(&binop_idx);
+
+                    // Infer types of both operands to ensure they're compatible
+                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+
+                    _ = try self.inferExpr(lhs_expr_idx);
+                    _ = try self.inferExpr(rhs_expr_idx);
+
+                    // All comparison operators return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
                     try self.store.setVarContent(expr_var, bool_content);
                     return expr_var;
-
-                    // TODO: Fix this once CIR payload is corrected
-                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    // _ = try self.inferExpr(binop.lhs);
-                    // _ = try self.inferExpr(binop.rhs);
                 },
                 .binop_colon => {
-                    // Type annotation - should have been populated during type checking
-                    return expr_var;
+                    // Type annotation - infer the type of the left operand and ensure it matches annotation
+                    const binop_idx = expr.payload.binop;
+                    const binop = self.cir.ast.node_slices.binOp(&binop_idx);
 
-                    // TODO: Fix this once CIR payload is corrected
-                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    // return try self.inferExpr(binop.lhs);
+                    // The left operand is the expression, the right is the type annotation
+                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const lhs_type = try self.inferExpr(lhs_expr_idx);
+
+                    // Parse the type annotation from the right operand
+                    const annotation_type = try self.parseTypeAnnotation(binop.rhs);
+
+                    // Unify the inferred type with the annotation
+                    // This ensures the expression matches its type annotation
+                    try self.unifyTypes(lhs_type, annotation_type);
+
+                    // Return the annotated type (which should now match the inferred type)
+                    try self.store.setVarContent(expr_var, try self.store.getVarContent(annotation_type));
+                    return expr_var;
                 },
                 .binop_and, .binop_or => {
-                    // Boolean operators
-                    // For now, just return Bool
+                    // Boolean operators - ensure both operands are boolean
+                    const binop_idx = expr.payload.binop;
+                    const binop = self.cir.ast.node_slices.binOp(&binop_idx);
+
+                    // Infer types of both operands - they should both be boolean
+                    const lhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                    const rhs_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+
+                    _ = try self.inferExpr(lhs_expr_idx);
+                    _ = try self.inferExpr(rhs_expr_idx);
+
+                    // Boolean operators return Bool
                     const bool_content = try self.store.mkBool(self.allocator, self.idents, null);
                     try self.store.setVarContent(expr_var, bool_content);
                     return expr_var;
-
-                    // TODO: Fix this once CIR payload is corrected
-                    // const binop = self.cir.getBinOp(CIR2.Expr.Idx, expr.payload.binop);
-                    // _ = try self.inferExpr(binop.lhs);
-                    // _ = try self.inferExpr(binop.rhs);
                 },
                 .if_else => {
                     // If expression - should have been populated during type checking
@@ -415,6 +441,392 @@ pub fn InferContext(comptime CIR2: type) type {
                     return expr_var;
                 },
             }
+        }
+
+        /// Parse a type annotation from an AST node and return its type variable
+        fn parseTypeAnnotation(self: *Self, node_idx: CIR.Node.Idx) !Var {
+            const node = self.cir.ast.getNode(@enumFromInt(@intFromEnum(node_idx)));
+
+            switch (node.tag) {
+                .uc => {
+                    // Uppercase identifier - could be a type name
+                    const ident_idx = node.payload.ident;
+                    const type_name = self.idents.get(ident_idx);
+
+                    // Map common type names to their type representations
+                    if (std.mem.eql(u8, type_name, "I8")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .i8 } });
+                    } else if (std.mem.eql(u8, type_name, "I16")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .i16 } });
+                    } else if (std.mem.eql(u8, type_name, "I32")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .i32 } });
+                    } else if (std.mem.eql(u8, type_name, "I64")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .i64 } });
+                    } else if (std.mem.eql(u8, type_name, "I128")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .i128 } });
+                    } else if (std.mem.eql(u8, type_name, "U8")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .u8 } });
+                    } else if (std.mem.eql(u8, type_name, "U16")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .u16 } });
+                    } else if (std.mem.eql(u8, type_name, "U32")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .u32 } });
+                    } else if (std.mem.eql(u8, type_name, "U64")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .u64 } });
+                    } else if (std.mem.eql(u8, type_name, "U128")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .int = .u128 } });
+                    } else if (std.mem.eql(u8, type_name, "F32")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .frac = .f32 } });
+                    } else if (std.mem.eql(u8, type_name, "F64")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .frac = .f64 } });
+                    } else if (std.mem.eql(u8, type_name, "Dec")) {
+                        return try self.store.freshFromContent(.{ .structure = .{ .frac = .dec } });
+                    } else if (std.mem.eql(u8, type_name, "Bool")) {
+                        return try self.store.mkBool(self.allocator, self.idents, null);
+                    } else if (std.mem.eql(u8, type_name, "Str")) {
+                        return try self.store.mkStr(self.allocator, self.idents, null);
+                    } else if (std.mem.eql(u8, type_name, "List")) {
+                        // List needs a type parameter - for now create unbound list
+                        const elem_var = try self.store.fresh();
+                        return try self.store.mkList(self.allocator, self.idents, elem_var, null);
+                    } else {
+                        // Unknown type - create a fresh variable for now
+                        // In a complete implementation, this would look up user-defined types
+                        return try self.store.fresh();
+                    }
+                },
+                .lc => {
+                    // Lowercase identifier - type variable
+                    // Create a fresh type variable
+                    return try self.store.fresh();
+                },
+                .binop_thin_arrow => {
+                    // Function type annotation: arg -> ret
+                    const binop_idx = node.payload.binop;
+                    const binop = self.cir.ast.node_slices.binOp(&binop_idx);
+
+                    // Parse argument and return types
+                    const arg_type = try self.parseTypeAnnotation(binop.lhs);
+                    const ret_type = try self.parseTypeAnnotation(binop.rhs);
+
+                    // Create function type
+                    const func_var = try self.store.fresh();
+                    const args_range = try self.store.appendVars(&[_]Var{arg_type});
+                    const func_content = Content{ .structure = .{ .fn_unbound = .{
+                        .args = args_range,
+                        .ret = ret_type,
+                        .needs_instantiation = false,
+                    } } };
+                    try self.store.setVarContent(func_var, func_content);
+
+                    return func_var;
+                },
+                .apply_uc => {
+                    // Type application like List a
+                    // For now, just parse as the base type
+                    const nodes_idx = node.payload.nodes;
+                    var nodes_iter = self.cir.ast.node_slices.nodes(&nodes_idx);
+
+                    if (nodes_iter.next()) |type_constructor_idx| {
+                        return try self.parseTypeAnnotation(type_constructor_idx);
+                    }
+
+                    // No constructor - create fresh variable
+                    return try self.store.fresh();
+                },
+                .record_literal => {
+                    // Record type { field1: Type1, field2: Type2 }
+                    // For now, create an empty record type
+                    // A complete implementation would parse all fields
+                    return try self.store.mkEmptyRecord(self.allocator, self.idents, null);
+                },
+                .tuple_literal => {
+                    // Tuple type (Type1, Type2)
+                    // For now, create a fresh variable
+                    // A complete implementation would parse all elements
+                    return try self.store.fresh();
+                },
+                else => {
+                    // Unsupported annotation - create fresh variable
+                    return try self.store.fresh();
+                },
+            }
+        }
+
+        /// Unify two types, ensuring they are compatible
+        fn unifyTypes(self: *Self, type1: Var, type2: Var) !void {
+            const resolved1 = self.store.resolveVar(type1);
+            const resolved2 = self.store.resolveVar(type2);
+
+            // If either is a flex variable, bind it to the other
+            if (resolved1.desc.content == .flex_var) {
+                try self.store.setVarContent(type1, resolved2.desc.content);
+                return;
+            }
+            if (resolved2.desc.content == .flex_var) {
+                try self.store.setVarContent(type2, resolved1.desc.content);
+                return;
+            }
+
+            // Check if types are compatible
+            switch (resolved1.desc.content) {
+                .structure => |s1| switch (s1) {
+                    .num => |n1| {
+                        // Numeric types can unify with other numeric types
+                        switch (resolved2.desc.content) {
+                            .structure => |s2| switch (s2) {
+                                .num => |n2| {
+                                    // Unify numeric bounds
+                                    const unified = try self.unifyNumBounds(n1, n2);
+                                    try self.store.setVarContent(type1, .{ .structure = .{ .num = unified } });
+                                    try self.store.setVarContent(type2, .{ .structure = .{ .num = unified } });
+                                },
+                                .int, .frac => {
+                                    // Num can unify with specific int/frac
+                                    try self.store.setVarContent(type1, resolved2.desc.content);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    .int => |prec1| {
+                        switch (resolved2.desc.content) {
+                            .structure => |s2| switch (s2) {
+                                .int => |prec2| {
+                                    // Both are integers - must have same precision
+                                    if (prec1 != prec2) {
+                                        return error.TypeMismatch;
+                                    }
+                                },
+                                .num => {
+                                    // Int can unify with num - bind num to int
+                                    try self.store.setVarContent(type2, resolved1.desc.content);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    .frac => |prec1| {
+                        switch (resolved2.desc.content) {
+                            .structure => |s2| switch (s2) {
+                                .frac => |prec2| {
+                                    // Both are fractions - must have same precision
+                                    if (prec1 != prec2) {
+                                        return error.TypeMismatch;
+                                    }
+                                },
+                                .num => {
+                                    // Frac can unify with num - bind num to frac
+                                    try self.store.setVarContent(type2, resolved1.desc.content);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    .bool, .str => {
+                        // Bool and Str must match exactly
+                        if (!std.meta.eql(resolved1.desc.content, resolved2.desc.content)) {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .list => |elem1| {
+                        switch (resolved2.desc.content) {
+                            .structure => |s2| switch (s2) {
+                                .list => |elem2| {
+                                    // Recursively unify element types
+                                    try self.unifyTypes(elem1, elem2);
+                                },
+                                else => return error.TypeMismatch,
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    },
+                    else => {
+                        // For other structural types, check exact equality for now
+                        if (!std.meta.eql(resolved1.desc.content, resolved2.desc.content)) {
+                            return error.TypeMismatch;
+                        }
+                    },
+                },
+                else => {
+                    // For other types, check exact equality
+                    if (!std.meta.eql(resolved1.desc.content, resolved2.desc.content)) {
+                        return error.TypeMismatch;
+                    }
+                },
+            }
+        }
+
+        /// Unify two numeric types to find their common type
+        fn unifyNumericTypes(self: *Self, lhs_type: Var, rhs_type: Var) !Var {
+            const lhs_resolved = self.store.resolveVar(lhs_type);
+            const rhs_resolved = self.store.resolveVar(rhs_type);
+
+            // Extract numeric content from both types
+            const lhs_num = switch (lhs_resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .num => |n| n,
+                    .int => |precision| types.NumBound{ .int_exact = precision },
+                    .frac => |precision| types.NumBound{ .frac_exact = precision },
+                    else => {
+                        // Not a numeric type - return error
+                        return error.TypeMismatch;
+                    },
+                },
+                .flex_var => {
+                    // If LHS is unbound, use RHS type
+                    return rhs_type;
+                },
+                else => {
+                    return error.TypeMismatch;
+                },
+            };
+
+            const rhs_num = switch (rhs_resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .num => |n| n,
+                    .int => |precision| types.NumBound{ .int_exact = precision },
+                    .frac => |precision| types.NumBound{ .frac_exact = precision },
+                    else => {
+                        return error.TypeMismatch;
+                    },
+                },
+                .flex_var => {
+                    // If RHS is unbound, use LHS type
+                    return lhs_type;
+                },
+                else => {
+                    return error.TypeMismatch;
+                },
+            };
+
+            // Unify the numeric bounds
+            const unified_num = try self.unifyNumBounds(lhs_num, rhs_num);
+
+            // Create a new variable with the unified type
+            const unified_var = try self.store.fresh();
+            const unified_content = Content{ .structure = .{ .num = unified_num } };
+            try self.store.setVarContent(unified_var, unified_content);
+
+            return unified_var;
+        }
+
+        /// Unify two numeric bounds to find their least upper bound
+        fn unifyNumBounds(self: *Self, lhs: types.NumBound, rhs: types.NumBound) !types.NumBound {
+            _ = self;
+
+            // Handle exact types first
+            if (lhs == .int_exact and rhs == .int_exact) {
+                // Both are exact integers - unify to the larger precision
+                const lhs_prec = lhs.int_exact;
+                const rhs_prec = rhs.int_exact;
+
+                // Get the larger precision
+                const unified_prec = blk: {
+                    // Compare bit widths
+                    const lhs_bits: u8 = switch (lhs_prec) {
+                        .i8, .u8 => 8,
+                        .i16, .u16 => 16,
+                        .i32, .u32 => 32,
+                        .i64, .u64 => 64,
+                        .i128, .u128 => 128,
+                    };
+                    const rhs_bits: u8 = switch (rhs_prec) {
+                        .i8, .u8 => 8,
+                        .i16, .u16 => 16,
+                        .i32, .u32 => 32,
+                        .i64, .u64 => 64,
+                        .i128, .u128 => 128,
+                    };
+
+                    // Check signedness compatibility
+                    const lhs_signed = switch (lhs_prec) {
+                        .i8, .i16, .i32, .i64, .i128 => true,
+                        .u8, .u16, .u32, .u64, .u128 => false,
+                    };
+                    const rhs_signed = switch (rhs_prec) {
+                        .i8, .i16, .i32, .i64, .i128 => true,
+                        .u8, .u16, .u32, .u64, .u128 => false,
+                    };
+
+                    if (lhs_signed != rhs_signed) {
+                        // Mixed signed/unsigned - promote to signed with larger width
+                        const max_bits = @max(lhs_bits, rhs_bits);
+                        break :blk switch (max_bits) {
+                            8 => types.IntPrecision.i16, // Promote to avoid overflow
+                            16 => types.IntPrecision.i32,
+                            32 => types.IntPrecision.i64,
+                            64 => types.IntPrecision.i128,
+                            128 => types.IntPrecision.i128,
+                            else => unreachable,
+                        };
+                    } else if (lhs_bits >= rhs_bits) {
+                        break :blk lhs_prec;
+                    } else {
+                        break :blk rhs_prec;
+                    }
+                };
+
+                return .{ .int_exact = unified_prec };
+            }
+
+            if (lhs == .frac_exact and rhs == .frac_exact) {
+                // Both are exact fractions - unify to the larger precision
+                const lhs_prec = lhs.frac_exact;
+                const rhs_prec = rhs.frac_exact;
+
+                const unified_prec = switch (lhs_prec) {
+                    .f32 => switch (rhs_prec) {
+                        .f32 => types.FracPrecision.f32,
+                        .f64 => types.FracPrecision.f64,
+                        .dec => types.FracPrecision.dec,
+                    },
+                    .f64 => switch (rhs_prec) {
+                        .f32, .f64 => types.FracPrecision.f64,
+                        .dec => types.FracPrecision.dec,
+                    },
+                    .dec => types.FracPrecision.dec,
+                };
+
+                return .{ .frac_exact = unified_prec };
+            }
+
+            // Handle unbound types
+            if (lhs == .num_unbound and rhs == .num_unbound) {
+                // Both unbound - merge constraints
+                const sign_needed = lhs.num_unbound.sign_needed or rhs.num_unbound.sign_needed;
+                const bits_needed = @max(lhs.num_unbound.bits_needed, rhs.num_unbound.bits_needed);
+                return .{ .num_unbound = .{ .sign_needed = sign_needed, .bits_needed = bits_needed } };
+            }
+
+            // If one is exact int and other is unbound num, use the exact int
+            if (lhs == .int_exact and rhs == .num_unbound) {
+                return lhs;
+            }
+            if (rhs == .int_exact and lhs == .num_unbound) {
+                return rhs;
+            }
+
+            // If one is exact frac and other is unbound num, use the exact frac
+            if (lhs == .frac_exact and rhs == .num_unbound) {
+                return lhs;
+            }
+            if (rhs == .frac_exact and lhs == .num_unbound) {
+                return rhs;
+            }
+
+            // Mixed int/frac - promote to frac
+            if ((lhs == .int_exact and rhs == .frac_exact) or
+                (lhs == .frac_exact and rhs == .int_exact))
+            {
+                // Default to f64 for mixed int/frac
+                return .{ .frac_exact = .f64 };
+            }
+
+            // Default case - return unbound num
+            return .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } };
         }
 
         /// Infer the type of a CIR2 pattern

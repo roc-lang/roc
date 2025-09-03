@@ -998,7 +998,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     const test_files = [_]struct { path: []const u8, content: []const u8 }{
         .{ .path = "README.md", .content = "# Test Project\n\nThis is a test." },
         .{ .path = "src/main.roc", .content = "app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"" },
-        .{ .path = "src/utils.roc", .content = "module [helper]\n\nhelper = \\x -> x + 1" },
+        .{ .path = "src/utils.roc", .content = "module [helper]\n\nhelper = |x| x + 1" },
         .{ .path = "test/test1.roc", .content = "# Test file 1\nexpect 1 == 1" },
         .{ .path = "test/test2.roc", .content = "# Test file 2\nexpect 2 + 2 == 4" },
         .{ .path = "docs/guide.txt", .content = "User Guide\n==========\n\nStep 1: ...\nStep 2: ..." },
@@ -1358,7 +1358,7 @@ test "download from local server" {
     {
         const file = try tmp.dir.createFile("src/lib.roc", .{});
         defer file.close();
-        try file.writeAll("module [helper]\n\nhelper = \\x -> x * 2");
+        try file.writeAll("module [helper]\n\nhelper = |x| x * 2");
     }
 
     // Bundle the files
@@ -1487,7 +1487,7 @@ test "download from local server" {
     {
         const content = try extract_tmp.dir.readFileAlloc(allocator, "src/lib.roc", 1024);
         defer allocator.free(content);
-        try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", content);
+        try testing.expectEqualStrings("module [helper]\n\nhelper = |x| x * 2", content);
     }
 
     // Verify directory structure

@@ -460,7 +460,7 @@
 //     try writeFile(tmp.dir, "app/Utils.roc",
 //         \\module [compute]
 //         \\
-//         \\compute = \n -> n * 2
+//         \\compute = |n| n * 2
 //     );
 
 //     // Build in multi-threaded mode to exercise the global queue phase progression
@@ -1026,7 +1026,7 @@
 //     try writeFile(tmp.dir, "app/Utils.roc",
 //         \\module [double]
 //         \\
-//         \\double = \n -> n * 2
+//         \\double = |n| n * 2
 //     );
 
 //     try writeFile(tmp.dir, "app/Main.roc",
