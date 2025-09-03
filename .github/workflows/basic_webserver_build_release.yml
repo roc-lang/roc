@@ -271,6 +271,8 @@ jobs:
         run: |
           # no need to build platform anymore
           cd basic-webserver-platform
+          ls
+          ls examples
           # this one does not work when building with musl
           rm examples/file-accessed-modified-created-time.roc
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
