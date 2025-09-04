@@ -245,6 +245,20 @@ var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
 
+/// Reset all global state and allocator
+fn resetGlobalState() void {
+    // Make sure everything is null
+    compiler_data = null;
+    repl_instance = null;
+    host_message_buffer = null;
+    host_response_buffer = null;
+    repl_instance = null;
+    repl_roc_ops = null;
+
+    // Reset allocator to clear all allocations
+    fba.reset();
+}
+
 /// Writes a formatted string to the in-memory debug log.
 fn logDebug(comptime format: []const u8, args: anytype) void {
     if (debug_log_oom) {
@@ -596,16 +610,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeReplInitResponse(response_buffer);
         },
         .RESET => {
-            // Make sure everything is null
-            compiler_data = null;
-            repl_instance = null;
-            host_message_buffer = null;
-            host_response_buffer = null;
-            repl_instance = null;
-            repl_roc_ops = null;
-
-            // Reset allocator to clear all allocations
-            fba.reset();
+            resetGlobalState();
 
             current_state = .READY;
 
@@ -645,16 +650,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             try writeHoverInfoResponse(response_buffer, data, message_json);
         },
         .RESET => {
-            // Make sure everything is null
-            compiler_data = null;
-            repl_instance = null;
-            host_message_buffer = null;
-            host_response_buffer = null;
-            repl_instance = null;
-            repl_roc_ops = null;
-
-            // Reset allocator to clear all allocations
-            fba.reset();
+            resetGlobalState();
 
             current_state = .READY;
 
@@ -717,16 +713,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
-            // Make sure everything is null
-            compiler_data = null;
-            repl_instance = null;
-            host_message_buffer = null;
-            host_response_buffer = null;
-            repl_instance = null;
-            repl_roc_ops = null;
-
-            // Reset allocator to clear all allocations
-            fba.reset();
+            resetGlobalState();
 
             current_state = .READY;
 
