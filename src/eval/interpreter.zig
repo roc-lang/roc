@@ -1333,8 +1333,27 @@ pub const Interpreter = struct {
                 // Initialize the closure
                 std.debug.assert(result_value.ptr != null);
                 const closure: *Closure = @ptrCast(@alignCast(result_value.ptr.?));
-                closure.captures_layout_idx = captures_layout_idx;
-                closure.lambda_expr_idx = expr_idx;
+
+                // Extract body from lambda's body_then_args payload
+                // Lambda expressions have body_then_args payload: [body, param1, param2, ...]
+                const body_then_args = expr.payload.body_then_args;
+                var body_idx: CIR.Expr.Idx = @enumFromInt(0);
+
+                if (!body_then_args.isNil()) {
+                    var iter = cir.ast.node_slices.nodes(&body_then_args);
+                    // First element is the body
+                    if (iter.next()) |body_node| {
+                        body_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(body_node)));
+                    }
+                }
+
+                closure.* = Closure{
+                    .body_idx = body_idx,
+                    .params = @enumFromInt(0), // Not used in simple lambdas
+                    .captures_pattern_idx = @enumFromInt(0), // Not used in our direct binding approach
+                    .captures_layout_idx = captures_layout_idx,
+                    .lambda_expr_idx = expr_idx,
+                };
             },
 
             .apply_tag => {
@@ -2602,9 +2621,31 @@ pub const Interpreter = struct {
         });
 
         // 2. Bind the explicit parameters to their arguments.
-        // New CIR doesn't have slicePatterns - needs complete rewrite
-        const param_ids = &[_]CIR.Patt.Idx{};
-        std.debug.assert(param_ids.len == arg_count);
+        // Extract parameters from the lambda expression (cir already declared above)
+        const lambda_expr = cir.getExpr(closure.lambda_expr_idx);
+
+        // Lambda expressions have body_then_args payload: [body, param1, param2, ...]
+        var param_patterns = std.ArrayList(CIR.Patt.Idx).init(self.allocator);
+        defer param_patterns.deinit();
+
+        if (!lambda_expr.payload.body_then_args.isNil()) {
+            var iter = cir.ast.node_slices.nodes(&lambda_expr.payload.body_then_args);
+            // Skip the body (first element)
+            _ = iter.next();
+
+            // Collect parameter patterns
+            while (iter.next()) |param_node| {
+                // Each parameter is a pattern node
+                const param_patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(param_node)));
+                try param_patterns.append(param_patt_idx);
+            }
+        }
+
+        // Verify we have the expected number of parameters
+        if (param_patterns.items.len != arg_count) {
+            self.traceError("Parameter count mismatch: expected {}, got {}", .{ param_patterns.items.len, arg_count });
+            return error.InvalidStackState;
+        }
 
         // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
         // peek(1) is captures_view
@@ -2612,7 +2653,7 @@ pub const Interpreter = struct {
         // peek(3) is closure
         // peek(4) is argN (last argument)
         // peek(3 + arg_count) is arg1 (first argument)
-        for (param_ids, 0..) |param_idx, i| {
+        for (param_patterns.items, 0..) |param_idx, i| {
             // For parameter i, we want argument i (0-indexed)
             // arg0 is at peek(3 + arg_count), arg1 is at peek(3 + arg_count - 1), etc.
             const arg_index_from_top = 3 + arg_count - i;

@@ -1875,12 +1875,6 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
     }
 }
 
-test "SafeMultiList CompactWriter verify exact memory layout" {
-    // SKIP: This test attempts to verify uninitialized memory patterns, which is undefined behavior.
-    // The serialization correctly handles initialized data, and other tests verify correctness.
-    return error.SkipZigTest;
-}
-
 test "SafeMultiList CompactWriter stress test many field types" {
     const gpa = testing.allocator;
 

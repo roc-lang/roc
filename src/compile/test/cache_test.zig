@@ -307,11 +307,69 @@ test "Header alignment" {
     try testing.expect(@sizeOf(Header) % SERIALIZATION_ALIGNMENT == 0);
 }
 
-test "create and restore cache - SKIPPED" {
-    // Skipped: needs CIR reimplementation - Can.canonicalizeFile() no longer exists
-    // The test code has been removed to avoid unreachable code errors
-    // Original test created a cache, serialized it, and restored it
-    return error.SkipZigTest;
+test "create and restore cache" {
+    const allocator = testing.allocator;
+
+    // Create a simple Roc source to cache
+    const source = "x = 42\ny = x + 1\ny";
+
+    // Create a ModuleEnv for testing
+    var module_env = try allocator.create(ModuleEnv);
+    defer allocator.destroy(module_env);
+    module_env.* = try ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+
+    module_env.common.source = source;
+    try module_env.common.calcLineStarts(allocator);
+
+    // Parse the source
+    var ast = try parse.parse(&module_env.common, allocator);
+    defer ast.deinit(allocator);
+
+    // Initialize CIR fields
+    try module_env.initCIRFields(allocator, "test_module");
+
+    // Create CIR
+    var cir = Can.CIR.init(&ast, &module_env.types);
+    defer cir.deinit(allocator);
+
+    // Canonicalize the source
+    const root_node = @as(parse.AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+    _ = try cir.canonicalizeFileBlock(allocator, root_node, source, &module_env.common.idents, &module_env.common, null);
+
+    // Store CIR reference in ModuleEnv
+    module_env.cir = &cir;
+
+    // Create an arena for serialization
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    // Create the cache
+    const cache_data = try CacheModule.create(allocator, arena_allocator, module_env, module_env, // ModuleEnv contains the CIR
+        0, // error_count
+        0 // warning_count
+    );
+    defer allocator.free(cache_data);
+
+    // Verify we can read back the header
+    const header = try Header.initFromBytes(cache_data);
+    try testing.expectEqual(@as(u32, 0x524F4343), header.magic); // "ROCC" in ASCII
+    try testing.expectEqual(@as(u32, 1), header.version);
+    try testing.expectEqual(@as(u32, 0), header.error_count);
+    try testing.expectEqual(@as(u32, 0), header.warning_count);
+
+    // Create a CacheModule from the data
+    const cache_module = CacheModule{
+        .header = header,
+        .data = cache_data[@sizeOf(Header)..],
+    };
+
+    // Verify we can access the cached data
+    try testing.expect(cache_module.data.len > 0);
+
+    // TODO: Implement full deserialization once ModuleEnv.Serialized is complete
+    // For now, just verify that caching works without crashing
 }
 
 test "formatDataSize bytes" {
