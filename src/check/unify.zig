@@ -1589,7 +1589,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 },
                                 .frac => return error.TypeMismatch,
                             }
-                            self.merge(vars, vars.b.desc.content);
+                            self.merge(vars, vars.a.desc.content);
                         },
                         else => return error.TypeMismatch,
                     }
