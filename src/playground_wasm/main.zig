@@ -126,6 +126,7 @@ const CompilerStageData = struct {
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
     ast_html: ?[]const u8 = null,
+    formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
     tokenize_reports: std.ArrayList(reporting.Report),
@@ -152,6 +153,7 @@ const CompilerStageData = struct {
         // Free pre-generated HTML
         if (self.tokens_html) |html| allocator.free(html);
         if (self.ast_html) |html| allocator.free(html);
+        if (self.formatted_code) |code| allocator.free(code);
 
         // Deinit reports, which may reference data in the AST or ModuleEnv
         for (self.tokenize_reports.items) |*report| {
@@ -817,7 +819,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Generate AST HTML
-    var ast_html_buffer = std.ArrayList(u8).init(allocator);
+    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
     const ast_writer = ast_html_buffer.writer().any();
     {
         const file = parse_ast.store.getFile();
@@ -829,9 +831,23 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
         try tree.toHtml(ast_writer);
     }
-    // the AST HTML is stored in our heap and will be cleaned up when the module is RESET
-    // no need to free it here, we will re-use whenever the AST is queried
-    result.ast_html = ast_html_buffer.items;
+
+    result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
+        return err;
+    };
+
+    // Generate formatted code
+    var formatted_code_buffer = std.ArrayList(u8).init(temp_alloc);
+    fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
+        logDebug("compileSource: formatAst failed: {}\n", .{err});
+        return err;
+    };
+
+    result.formatted_code = allocator.dupe(u8, formatted_code_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
+        return err;
+    };
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -1260,27 +1276,10 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
-    if (data.parse_ast) |*parse_ast| {
-        // Create a local arena for formatting
-        var local_arena = std.heap.ArenaAllocator.init(allocator);
-        defer local_arena.deinit();
-        const temp_alloc = local_arena.allocator();
-
-        var formatted = std.ArrayList(u8).init(temp_alloc);
-        defer formatted.deinit();
-
-        // Format the AST - in the playground we only deal with file-level parsing
-        fmt.formatAst(parse_ast.*, formatted.writer().any()) catch {
-            try writeJsonString(w, "Formatting failed");
-            try w.writeAll("\"}");
-            try resp_writer.finalize();
-            return;
-        };
-
-        // Return the formatted code
-        try writeJsonString(w, formatted.items);
+    if (data.formatted_code) |formatted| {
+        try writeJsonString(w, formatted);
     } else {
-        try writeJsonString(w, "Parse AST not available for formatting");
+        try writeJsonString(w, "Formatted code not available");
     }
 
     try w.writeAll("\"}");
