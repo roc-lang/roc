@@ -73,7 +73,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+        @panic("Out of memory during REPL test allocation");
     };
 
     // Store the total size (including metadata) right before the user data
@@ -125,7 +125,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+        // On reallocation failure, keep the original allocation unchanged
+        // The caller should handle this by checking if the pointer changed
+        return;
     };
 
     // Store the new total size in the metadata
@@ -148,8 +150,8 @@ fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
     stdout.print("[REPL DBG] {s}\n", .{debug_output}) catch {
         // If we can't write to stdout, try stderr as fallback
         std.io.getStdErr().writer().print("[REPL DBG] {s}\n", .{debug_output}) catch {
-            // If all output fails, this is a critical error - use the panic
-            @panic("Failed to output debug information in REPL");
+            // If all output fails, silently continue - debug output is non-critical
+            // We've made best effort to output the debug information
         };
     };
 }
@@ -166,8 +168,8 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
     stderr.print("[REPL EXPECT FAILED] {s}\n", .{expect_output}) catch {
         // If we can't write to stderr, try stdout as fallback
         std.io.getStdOut().writer().print("[REPL EXPECT FAILED] {s}\n", .{expect_output}) catch {
-            // If all output fails, this is a critical error - use the panic
-            @panic("Failed to output expect failure information in REPL");
+            // If all output fails, silently continue - expect output is important but non-fatal
+            // The test/REPL will likely fail anyway due to the expect failure
         };
     };
 

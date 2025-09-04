@@ -136,18 +136,25 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
         interpreter.endTrace();
     }
 
-    // For boolean results, we can read the underlying byte value
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        // Boolean represented as integer
-        const int_val = result.asI128();
-        const bool_val = int_val != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    } else {
-        // Try reading as raw byte (for boolean tag values)
+    // For boolean results, we need to handle the bool scalar layout
+    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
+        // Boolean represented as a u8 with values 0 (False) or 1 (True)
         std.debug.assert(result.ptr != null);
         const bool_ptr = @as(*const u8, @ptrCast(result.ptr.?));
         const bool_val = bool_ptr.* != 0;
         try std.testing.expectEqual(expected_bool, bool_val);
+    } else if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+        // Fallback: Boolean represented as integer (shouldn't happen with proper bool support)
+        const int_val = result.asI128();
+        const bool_val = int_val != 0;
+        try std.testing.expectEqual(expected_bool, bool_val);
+    } else {
+        // Unexpected layout for boolean
+        std.debug.print("Unexpected layout for boolean result: tag={}, scalar_tag={}\n", .{
+            result.layout.tag,
+            if (result.layout.tag == .scalar) result.layout.data.scalar.tag else .int,
+        });
+        return error.TypeMismatch;
     }
 }
 
@@ -384,6 +391,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Canonicalize the expression
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try czer.canonicalizeExpr(allocator, expr_idx, module_env.common.source, &module_env.common.idents);
+
+    // CRITICAL: Set the CIR and AST on module_env so the interpreter can access them
+    module_env.cir = czer;
+    module_env.ast = parse_ast;
 
     // Create type checker
     const checker = try allocator.create(Check);

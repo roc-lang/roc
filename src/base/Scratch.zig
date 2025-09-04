@@ -28,7 +28,7 @@ pub fn Scratch(comptime T: type) type {
             return @as(u32, @intCast(self.items.items.len));
         }
 
-        /// Places a new index of type `T` in the scratch.  Will panic on OOM.
+        /// Places a new index of type `T` in the scratch. Returns error on OOM.
         pub fn append(self: *Self, gpa: std.mem.Allocator, idx: T) std.mem.Allocator.Error!void {
             try self.items.append(gpa, idx);
         }

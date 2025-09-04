@@ -1309,8 +1309,8 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                             // This is safer than using a dummy index
                             const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
                                 // If we can't even create an empty string, report malformed node
-                                try self.pushDiagnostic(.malformed_string_literal, region.start, region.end);
-                                const malformed = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .malformed_string_literal });
+                                try self.pushDiagnostic(.internal_parser_error, region.start, region.end);
+                                const malformed = try self.ast.appendNode(self.gpa, region, .malformed, .{ .malformed = .internal_parser_error });
                                 try self.value_stack.append(self.gpa, malformed);
                                 return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
                             };
@@ -2083,7 +2083,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                                 // This is safer than using a dummy index
                                 const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
                                     // If we can't even create an empty string, report error
-                                    try self.pushDiagnostic(.malformed_string_literal, path_region.start, path_region.end);
+                                    try self.pushDiagnostic(.internal_parser_error, path_region.start, path_region.end);
                                     return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
                                 };
                                 break :blk empty_idx;

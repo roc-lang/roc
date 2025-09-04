@@ -455,6 +455,19 @@ pub fn asRocStr(self: StackValue) *RocStr {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
+/// Get this value as a RocList pointer
+pub fn asRocList(self: StackValue) *RocList {
+    std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
+    return @ptrCast(@alignCast(self.ptr.?));
+}
+
+/// Get this value as a RocBox pointer
+/// NOTE: RocBox is not implemented yet in builtins
+pub fn asRocBox(self: StackValue) *anyopaque {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    return @ptrCast(@alignCast(self.ptr.?));
+}
+
 /// Get this value as a closure pointer
 pub fn asClosure(self: StackValue) *const Closure {
     std.debug.assert(self.layout.tag == .closure);
@@ -526,26 +539,70 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
 }
 
 /// Increment reference count for refcounted types
-pub fn incref(self: StackValue) void {
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
-        roc_str.incref(1);
-        return;
+pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
+    switch (self.layout.tag) {
+        .scalar => switch (self.layout.data.scalar.tag) {
+            .str => {
+                const roc_str = self.asRocStr();
+                roc_str.incref(1);
+                return;
+            },
+            else => {},
+        },
+        .list, .list_of_zst => {
+            const roc_list = self.asRocList();
+            const elements_refcounted = if (self.layout.tag == .list)
+                layout_cache.getLayout(self.layout.data.list).isRefcounted()
+            else
+                false;
+            roc_list.incref(1, elements_refcounted);
+            return;
+        },
+        .box, .box_of_zst => {
+            // RocBox refcounting not implemented yet
+            // When implemented, would call:
+            // const roc_box = self.asRocBox();
+            // roc_box.incref(1, content_refcounted);
+            return;
+        },
+        else => {},
     }
-    // TODO: Add support for other refcounted types (lists, boxes) when implemented
     // Called incref on a non-refcounted value
     std.debug.assert(false);
     unreachable;
 }
 
 /// Decrement reference count for refcounted types
-pub fn decref(self: StackValue, ops: *RocOps) void {
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
-        roc_str.decref(ops);
-        return;
+pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
+    switch (self.layout.tag) {
+        .scalar => switch (self.layout.data.scalar.tag) {
+            .str => {
+                const roc_str = self.asRocStr();
+                roc_str.decref(ops);
+                return;
+            },
+            else => {},
+        },
+        .list, .list_of_zst => {
+            const roc_list = self.asRocList();
+            const elements_refcounted = if (self.layout.tag == .list)
+                layout_cache.getLayout(self.layout.data.list).isRefcounted()
+            else
+                false;
+            // For now, just skip decref for lists - needs proper implementation
+            // roc_list.decref(alignment, element_width, elements_refcounted, dec, ops);
+            _ = .{ roc_list, elements_refcounted, ops };
+            return;
+        },
+        .box, .box_of_zst => {
+            // RocBox refcounting not implemented yet
+            // When implemented, would call:
+            // const roc_box = self.asRocBox();
+            // roc_box.decref(ops, 1, content_refcounted);
+            return;
+        },
+        else => {},
     }
-    // TODO: Add support for other refcounted types (lists, boxes) when implemented
     // Called decref on a non-refcounted value
     std.debug.assert(false);
     unreachable;

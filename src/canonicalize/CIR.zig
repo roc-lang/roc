@@ -210,10 +210,43 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // They're metadata that doesn't get evaluated, only the block content is canonicalized
 
     const block_node = self.getNode(block_idx);
-    std.debug.assert(block_node.tag == .block);
+
+    // If the root node is not a block, create a synthetic block from all statements
+    const nodes_idx = if (block_node.tag != .block) blk: {
+        // When we have a file with a header, the root isn't a block
+        // Instead, we need to collect all top-level statements
+        var top_level_stmts = std.ArrayList(AST.Node.Idx).init(allocator);
+        defer top_level_stmts.deinit();
+
+        // Iterate through all nodes after the header
+        var i: u32 = 1;
+        while (i < self.ast.*.nodes.len()) : (i += 1) {
+            const node_idx: AST.Node.Idx = @enumFromInt(i);
+            const node = self.getNode(node_idx);
+
+            // Skip header-related nodes and already converted nodes
+            const tag_value = @intFromEnum(node.tag);
+            if (tag_value >= STMT_TAG_START) continue; // Already converted
+
+            // Add definitions and statements
+            switch (node.tag) {
+                .binop_equals, // assignments
+                .import, // import statements
+                => try top_level_stmts.append(node_idx),
+                else => {},
+            }
+        }
+
+        // Create a slice from the collected statements
+        if (top_level_stmts.items.len > 0) {
+            const slice_idx = try self.ast.*.node_slices.append(allocator, top_level_stmts.items);
+            break :blk slice_idx;
+        } else {
+            break :blk collections.NodeSlices(AST.Node.Idx).Idx.NIL;
+        }
+    } else block_node.payload.nodes;
 
     // Get the statements from the block
-    const nodes_idx = block_node.payload.nodes;
     var statements = std.ArrayList(AST.Node.Idx).init(allocator);
     defer statements.deinit();
 
@@ -321,23 +354,17 @@ fn verifyAllNodesAreCIR(self: *const CIR) void {
 
         // Check if this is still an AST tag (not converted to CIR)
         if (tag_value < STMT_TAG_START) {
-            // Skip header nodes - they don't need conversion
+            // Skip non-statement nodes that don't need conversion
             switch (node.tag) {
-                // Header nodes and their components
-                .app_header,
-                .module_header,
-                .hosted_header,
-                .package_header,
-                .platform_header,
-                // Components that only appear in headers
-                .binop_platform,
-                // Identifiers in headers (like main! in exposes) are ok
+                // Import statements (handled separately)
+                .import,
+                // Identifiers that might appear in headers
                 .lc,
                 .var_lc,
                 .not_lc,
                 .uc,
                 .dot_lc,
-                // String literals in headers are ok
+                // String literals
                 .str_literal_small,
                 .str_literal_big,
                 => continue, // These are allowed to remain as AST nodes
@@ -1471,8 +1498,15 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         // Single colon binop → treat as single-field record
                         self.mutateToExpr(node_idx, .record_literal);
 
-                        // Canonicalize the field (the colon binop)
-                        _ = try self.canonicalizeExpr(allocator, fn_idx, raw_src, idents);
+                        // Now canonicalize the single field properly as a record field
+                        // We already confirmed fn_node.tag == .binop_colon above
+                        const ast_binop = self.ast.*.node_slices.binOp(fn_node.payload.binop);
+
+                        // Canonicalize the value expression (RHS of the colon)
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                        // LHS (field name) should remain as identifier - don't canonicalize it
+                        // It will be accessed directly during evaluation
 
                         return asExprIdx(node_idx);
                     }
@@ -2009,9 +2043,22 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 self.mutateToExpr(node_idx, .module_access);
                 try self.ensureTypeVarExists(node_idx);
                 return asExprIdx(node_idx);
+            } else if (rhs_tag == .dot_lc) {
+                // This is record field access like record.field or {x: 42}.x
+                // The right side is a dot followed by lowercase identifier (field name)
+
+                // Canonicalize the record expression (LHS)
+                _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+
+                // Don't canonicalize the field name as an expression - it should stay an identifier
+                // The field name will be accessed directly by the interpreter
+
+                self.mutateToExpr(node_idx, .record_access);
+                try self.ensureTypeVarExists(node_idx);
+                return asExprIdx(node_idx);
             } else {
-                // This shouldn't happen - binop_pipe should only be module access
-                // If we see this, it's a parser bug
+                // This shouldn't happen - binop_pipe should be module access or record access
+                // If we see this, it's a parser bug or unsupported syntax
                 try self.pushDiagnostic(allocator, .unsupported_node, node_region);
                 self.mutateToExpr(node_idx, .malformed);
                 return asExprIdx(node_idx);
@@ -2172,10 +2219,22 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .binop_dot => {
             // Field access (e.g., foo.bar)
             const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
-            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-            self.mutateToExpr(node_idx, .record_accessor); // Field access like foo.bar
+            // Canonicalize the record expression (LHS)
+            _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+
+            // For RHS (field name), check if it's a simple identifier that should remain as-is
+            // Don't canonicalize the field name as an expression - it should stay an identifier
+            const rhs_node = self.getNode(ast_binop.rhs);
+            if (rhs_node.tag == .lc or rhs_node.tag == .dot_lc) {
+                // Field name is a simple identifier - don't canonicalize as expression
+                // The field name will be accessed directly by the interpreter
+            } else {
+                // Complex RHS might be a method call or computed field access
+                _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+            }
+
+            self.mutateToExpr(node_idx, .record_access); // Use the correct tag for record field access
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
         },

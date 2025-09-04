@@ -54,10 +54,8 @@ pub const ReportingConfig = struct {
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
 
-    pub fn init() ReportingConfig {
-        return initFromEnv(std.heap.page_allocator) catch |err| switch (err) {
-            error.OutOfMemory => @panic("Out of memory while initializing reporting config"),
-        };
+    pub fn init() !ReportingConfig {
+        return initFromEnv(std.heap.page_allocator);
     }
 
     pub fn initFromEnv(allocator: Allocator) !ReportingConfig {

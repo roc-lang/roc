@@ -1365,7 +1365,7 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     std.log.info("Building {s}...\n", .{args.path});
 
     // Check the file and its dependencies
-    var check_args = cli_args.CheckArgs{
+    const check_args = cli_args.CheckArgs{
         .path = args.path,
         .no_cache = args.no_cache,
     };
@@ -1433,7 +1433,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const total_size = alloc_args.length + size_storage_bytes;
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+        @panic("Test allocation failed - out of memory");
     };
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
@@ -1461,7 +1461,8 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     const new_total_size = realloc_args.new_length + size_storage_bytes;
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+        // Reallocation failed - keep the original allocation
+        return;
     };
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;

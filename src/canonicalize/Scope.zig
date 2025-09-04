@@ -190,7 +190,7 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
     };
 }
 
-/// Put an item in the scope, panics on OOM
+/// Put an item in the scope, returns error on OOM
 pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
     .ident, .alias => CIR.Pattern.Idx,
     .type_decl => CIR.Statement.Idx,

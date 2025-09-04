@@ -8,10 +8,7 @@ const Filesystem = fs_mod.Filesystem;
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
-// Helper function to handle OOM errors
-fn handleOom() noreturn {
-    @panic("Out of memory");
-}
+// Note: OOM errors are now propagated to callers
 
 /// Global storage for source code provided from JavaScript
 pub var global_source: ?[]const u8 = null;
@@ -29,7 +26,12 @@ pub fn setSource(allocator: Allocator, source: []const u8) void {
     }
 
     // Store new source
-    global_source = allocator.dupe(u8, source) catch handleOom();
+    // Note: In WASM context, we can't easily propagate errors from this function
+    // If allocation fails, we keep the previous source
+    global_source = allocator.dupe(u8, source) catch {
+        // Keep previous source on allocation failure
+        return;
+    };
     global_allocator = allocator;
 }
 
@@ -65,7 +67,7 @@ fn readFileWasm(relative_path: []const u8, allocator: Allocator) Filesystem.Read
         std.mem.endsWith(u8, relative_path, "/main.roc"))
     {
         if (global_source) |source| {
-            return allocator.dupe(u8, source) catch handleOom();
+            return allocator.dupe(u8, source) catch error.OutOfMemory;
         } else {
             return error.FileNotFound;
         }
@@ -128,7 +130,7 @@ fn baseNameWasm(absolute_path: []const u8) ?[]const u8 {
 
 fn canonicalizeWasm(root_relative_path: []const u8, allocator: Allocator) Filesystem.CanonicalizeError![]const u8 {
     // For WASM, just return a clean version of the path
-    return allocator.dupe(u8, root_relative_path) catch handleOom();
+    return allocator.dupe(u8, root_relative_path) catch error.OutOfMemory;
 }
 
 fn makePathWasm(path: []const u8) Filesystem.MakePathError!void {

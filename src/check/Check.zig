@@ -94,41 +94,27 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
     // This is a design decision that requires us to ensure the variable exists
     const expr_idx_int = @intFromEnum(expr_idx);
 
-    // Debug: Print the index to see what we're dealing with
-    if (expr_idx_int > 10000) {
-        // std.debug.print("WARNING: Large expr_idx_int: {}\n", .{expr_idx_int});
-    }
-
     // Check for invalid indices
     if (expr_idx_int < 0 or expr_idx_int > 100000) {
         // Index is out of reasonable range - use a fresh variable
-        // std.debug.print("Index out of range, using fresh var: {}\n", .{expr_idx_int});
         return try self.types.fresh();
     }
 
     // Ensure the variable exists by allocating up to this index
     const needed_vars = @as(usize, @intCast(expr_idx_int + 1));
-    // std.debug.print("checkCIRExpr: ensuring {} variables exist (current: {})\n", .{ needed_vars, self.types.len() });
     while (self.types.len() < needed_vars) {
         _ = try self.types.fresh();
     }
-    // std.debug.print("checkCIRExpr: allocated variables, now have {}\n", .{self.types.len()});
 
     const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-    // std.debug.print("checkCIRExpr: created expr_var from expr_idx {}\n", .{@intFromEnum(expr_idx)});
 
     // Check if this expression has already been type-checked
     // If the variable already has content beyond flex_var, we've already processed it
-    // std.debug.print("checkCIRExpr: about to resolve var {}\n", .{@intFromEnum(expr_var)});
     const resolved = self.types.resolveVar(expr_var);
-    // std.debug.print("checkCIRExpr: resolved var successfully\n", .{});
     if (resolved.desc.content != .flex_var) {
         // Already has a concrete type, don't re-check
-        // std.debug.print("checkCIRExpr: var already has concrete type, returning\n", .{});
         return expr_var;
     }
-
-    std.debug.print("checkCIRExpr: about to switch on expr.tag = {}\n", .{expr.tag});
 
     switch (expr.tag) {
         // Literals - these already have their types set in canonicalization
@@ -269,7 +255,6 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
         else => {
             // Unhandled expression type - just return the variable
-            // std.debug.print("checkCIRExpr: unhandled expression tag: {}\n", .{expr.tag});
             return expr_var;
         },
     }

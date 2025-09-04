@@ -104,13 +104,13 @@ pub const EvalError = error{
     StringOrderingNotSupported,
     UnsupportedWorkItem,
     UnexpectedWorkItem,
-    RuntimeCrash,
     InvalidBindingsState,
     TupleIndexOutOfBounds,
     RecordIndexOutOfBounds,
     InvalidBooleanTag,
     InvalidTagTarget,
     NotImplemented,
+    NameNotFound,
 };
 
 /// Maximum number of capture fields allowed in a closure
@@ -125,7 +125,6 @@ const WorkKind = enum {
     w_binop_mul,
     w_binop_div,
     w_binop_div_trunc,
-    w_binop_rem,
     w_binop_eq,
     w_binop_ne,
     w_binop_gt,
@@ -432,7 +431,7 @@ pub const Interpreter = struct {
                     // For nominal backing expressions, use the predetermined layout
                     try self.evalExpr(work.expr_idx, roc_ops, work.extra.layout_idx);
                 },
-                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                     try self.completeBinop(work.kind, roc_ops);
                 },
                 .w_unary_minus => {
@@ -708,9 +707,33 @@ pub const Interpreter = struct {
                 const int_val: i128 = switch (expr.tag) {
                     .num_literal_i32, .int_literal_i32 => @as(i128, expr.payload.num_literal_i32),
                     .num_literal_big, .int_literal_big => blk: {
-                        // Big literals are stored in byte slices - for now use 0
-                        // TODO: Implement big literal extraction from byte slices
-                        break :blk 0;
+                        // Big literals are stored in ByteSlices
+                        const byte_slice_idx = @as(collections.ByteSlices.Idx, @enumFromInt(expr.payload.num_literal_i32));
+                        const bytes = cir.ast.byte_slices.slice(byte_slice_idx);
+
+                        // Parse the digits from the byte slice
+                        // The bytes contain ASCII digits that need to be parsed
+                        var result: i128 = 0;
+                        var is_negative = false;
+                        var i: usize = 0;
+
+                        // Check for negative sign
+                        if (bytes.len > 0 and bytes[0] == '-') {
+                            is_negative = true;
+                            i = 1;
+                        }
+
+                        // Parse digits
+                        while (i < bytes.len) : (i += 1) {
+                            const digit = bytes[i] - '0';
+                            result = result * 10 + digit;
+                        }
+
+                        if (is_negative) {
+                            result = -result;
+                        }
+
+                        break :blk result;
                     },
                     else => unreachable,
                 };
@@ -752,8 +775,45 @@ pub const Interpreter = struct {
                     },
                     .frac_literal_big => blk: {
                         // Big frac is stored as an index into ByteSlices
-                        // For now, default to 0.0 - TODO: implement proper extraction
-                        break :blk 0.0;
+                        const byte_slice_idx = expr.payload.frac_literal_big;
+                        const bytes = cir.ast.byte_slices.slice(byte_slice_idx);
+
+                        // Parse the fractional value from the byte slice
+                        // Format: digits before decimal, then '.', then digits after
+                        var result: f64 = 0.0;
+                        var is_negative = false;
+                        var i: usize = 0;
+
+                        // Check for negative sign
+                        if (bytes.len > 0 and bytes[0] == '-') {
+                            is_negative = true;
+                            i = 1;
+                        }
+
+                        // Parse integer part
+                        while (i < bytes.len and bytes[i] != '.') : (i += 1) {
+                            const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
+                            result = result * 10.0 + digit;
+                        }
+
+                        // Skip decimal point
+                        if (i < bytes.len and bytes[i] == '.') {
+                            i += 1;
+
+                            // Parse fractional part
+                            var divisor: f64 = 10.0;
+                            while (i < bytes.len) : (i += 1) {
+                                const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
+                                result += digit / divisor;
+                                divisor *= 10.0;
+                            }
+                        }
+
+                        if (is_negative) {
+                            result = -result;
+                        }
+
+                        break :blk result;
                     },
                     else => unreachable,
                 };
@@ -782,19 +842,6 @@ pub const Interpreter = struct {
                 self.traceEnter("PUSH frac_literal {}", .{frac_val});
             },
 
-            // Zero-argument tags (e.g., True, False)
-            .apply_tag => {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                std.debug.assert(result_value.ptr != null);
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
-                // New CIR doesn't provide tag payload the same way - needs extraction
-                // For now, just set to 0
-                tag_ptr.* = 0;
-            },
-
             // Empty record
             .empty_record => {
                 const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
@@ -818,7 +865,7 @@ pub const Interpreter = struct {
             },
 
             // Binary operations
-            .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
+            .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
                 // Get the binop data from the CIR
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
 
@@ -827,6 +874,7 @@ pub const Interpreter = struct {
                     .binop_minus => .w_binop_sub,
                     .binop_star => .w_binop_mul,
                     .binop_slash => .w_binop_div,
+                    .binop_double_slash => .w_binop_div_trunc,
                     .binop_double_equals => .w_binop_eq,
                     .binop_not_equals => .w_binop_ne,
                     .binop_gt => .w_binop_gt,
@@ -1129,7 +1177,7 @@ pub const Interpreter = struct {
             .str_literal_big => {
                 // For big strings, the payload contains an index into the ByteSlices store
                 const str_expr = cir.getExpr(expr_idx);
-                const str_idx = @as(collections.ByteSlices.Idx, @enumFromInt(@intFromEnum(str_expr.payload.str_literal_big)));
+                const str_idx = str_expr.payload.str_literal_big;
                 const str_content = cir.ast.byte_slices.slice(str_idx);
 
                 // Allocate stack space for RocStr
@@ -1167,15 +1215,94 @@ pub const Interpreter = struct {
 
             .crash => {
                 // Handle crash expression
-                return error.RuntimeCrash;
+                return error.Crash;
             },
 
             .record_literal => {
-                // Get record layout and create empty record for now
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                _ = try self.pushStackValue(expr_layout);
-                // Record initialization - skip for now
+                // Handle record literals like {x: 42, y: 10}
+                const record_expr = cir.getExpr(expr_idx);
+                const nodes_idx = record_expr.payload.nodes;
+
+                // Count fields
+                var field_count: u32 = 0;
+                var counter = cir.ast.node_slices.nodes(&nodes_idx);
+                while (counter.next()) |_| {
+                    field_count += 1;
+                }
+
+                // Schedule record field evaluation completion
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_record_fields,
+                    .expr_idx = expr_idx,
+                    .extra = .{ .current_field_idx = 0 },
+                });
+
+                // Schedule evaluation of each field value (in reverse order for stack)
+                var fields_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var field_exprs = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
+                defer field_exprs.deinit();
+
+                while (fields_iter.next()) |field_node| {
+                    // Each field is a binop_colon with field name on left, value on right
+                    const field_expr = cir.getExpr(@as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node))));
+                    if (field_expr.tag == .binop_colon) {
+                        const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
+                        // We only need to evaluate the value (rhs), not the field name (lhs)
+                        try field_exprs.append(field_binop.rhs);
+                    }
+                }
+
+                // Push in reverse order so they evaluate left-to-right
+                var i = field_exprs.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = field_exprs.items[i],
+                        .extra = .{ .nothing = {} },
+                    });
+                }
+            },
+
+            .tuple_literal => {
+                // Handle tuple literals like (10, 20)
+                const tuple_expr = cir.getExpr(expr_idx);
+                const nodes_idx = tuple_expr.payload.nodes;
+
+                // Count elements
+                var element_count: u32 = 0;
+                var counter = cir.ast.node_slices.nodes(&nodes_idx);
+                while (counter.next()) |_| {
+                    element_count += 1;
+                }
+
+                // Schedule tuple evaluation completion
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_tuple_elements,
+                    .expr_idx = expr_idx,
+                    .extra = .{ .current_element_idx = 0 },
+                });
+
+                // Schedule evaluation of each element (in reverse order for stack)
+                var elements = cir.ast.node_slices.nodes(&nodes_idx);
+                var element_exprs = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
+                defer element_exprs.deinit();
+
+                while (elements.next()) |element_node| {
+                    const element_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(element_node)));
+                    try element_exprs.append(element_expr_idx);
+                }
+
+                // Push in reverse order so they evaluate left-to-right
+                var i = element_exprs.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    self.schedule_work(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = element_exprs.items[i],
+                        .extra = .{ .nothing = {} },
+                    });
+                }
             },
 
             .lambda => {
@@ -1191,46 +1318,74 @@ pub const Interpreter = struct {
                 closure.lambda_expr_idx = expr_idx;
             },
 
-            .tuple_literal => {
-                // Create tuple layout and allocate space
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const tuple_value = try self.pushStackValue(expr_layout);
+            .apply_tag => {
+                // Handle tag application - this includes True and False
+                // Get the tag identifier from the payload
+                const tag_ident = expr.payload.ident;
+                const tag_name = self.env.getIdent(tag_ident);
 
-                // Get tuple elements from the nodes payload
-                const nodes_idx = expr.payload.nodes;
-                if (!nodes_idx.isNil()) {
-                    var element_exprs = std.ArrayList(CIR.Expr.Idx).init(self.env.gpa);
-                    defer element_exprs.deinit();
+                // Check if this is a boolean tag (True/False)
+                if (std.mem.eql(u8, tag_name, "True") or std.mem.eql(u8, tag_name, "False")) {
+                    // This is a boolean literal
+                    const bool_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(bool_layout);
 
-                    // Collect all element expressions
-                    var iter = cir.ast.node_slices.nodes(&nodes_idx);
-                    while (iter.next()) |node_idx| {
-                        const element_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
-                        try element_exprs.append(element_expr_idx);
-                    }
+                    // Set the boolean value: True = 1, False = 0
+                    const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                    bool_ptr.* = if (std.mem.eql(u8, tag_name, "True")) 1 else 0;
+                    result_value.is_initialized = true;
 
-                    // Schedule evaluation of tuple elements
-                    if (element_exprs.items.len > 0) {
-                        // Schedule work to evaluate the first element
-                        self.schedule_work(WorkItem{
-                            .kind = .w_eval_tuple_elements,
-                            .expr_idx = expr_idx,
-                            .extra = .{ .current_element_idx = 0 },
-                        });
-
-                        // Schedule evaluation of the first element expression
-                        self.schedule_work(WorkItem{
-                            .kind = .w_eval_expr_structural,
-                            .expr_idx = element_exprs.items[0],
-                            .extra = .{ .nothing = {} },
-                        });
-                    }
+                    self.traceInfo("Boolean literal: {s} = {}", .{ tag_name, bool_ptr.* });
+                } else {
+                    // Other tags not yet implemented
+                    self.traceError("Tag application not implemented for: {s}", .{tag_name});
+                    return error.NotImplemented;
                 }
+            },
 
-                // Trace the tuple evaluation
-                _ = tuple_value; // Use tuple_value to avoid unused variable warning
-                self.traceInfo("Scheduled tuple literal evaluation", .{});
+            .module_access => {
+                // Handle module access like Bool.True
+                // Module access uses binop payload where lhs is module, rhs is member
+                const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
+
+                // Get module name from lhs
+                const module_expr = cir.getExpr(binop.lhs);
+                if (module_expr.tag != .lookup) {
+                    self.traceError("Module access expects lookup on lhs, got: {s}", .{@tagName(module_expr.tag)});
+                    return error.TypeMismatch;
+                }
+                const module_ident = module_expr.payload.ident;
+                const module_name = self.env.getIdent(module_ident);
+
+                // Get member name from rhs
+                const member_expr = cir.getExpr(binop.rhs);
+                if (member_expr.tag != .lookup) {
+                    self.traceError("Module access expects lookup on rhs", .{});
+                    return error.TypeMismatch;
+                }
+                const member_ident = member_expr.payload.ident;
+                const member_name = self.env.getIdent(member_ident);
+
+                // Handle Bool.True and Bool.False
+                if (std.mem.eql(u8, module_name, "Bool")) {
+                    if (std.mem.eql(u8, member_name, "True") or std.mem.eql(u8, member_name, "False")) {
+                        const bool_layout = Layout.boolType();
+                        var result_value = try self.pushStackValue(bool_layout);
+
+                        // Set the boolean value
+                        const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                        bool_ptr.* = if (std.mem.eql(u8, member_name, "True")) 1 else 0;
+                        result_value.is_initialized = true;
+
+                        self.traceInfo("Bool.{s} = {}", .{ member_name, bool_ptr.* });
+                    } else {
+                        self.traceError("Unknown Bool member: {s}", .{member_name});
+                        return error.NameNotFound;
+                    }
+                } else {
+                    self.traceError("Module access not implemented for: {s}.{s}", .{ module_name, member_name });
+                    return error.NotImplemented;
+                }
             },
 
             .match => {
@@ -1368,7 +1523,7 @@ pub const Interpreter = struct {
         // Perform the operation and write to our result_value
         switch (kind) {
             // Arithmetic operations - support both integer and fractional operands
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc => {
                 // Check if both operands are integers
                 if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
                     const lhs_val = lhs.asI128();
@@ -1391,10 +1546,6 @@ pub const Interpreter = struct {
                         .w_binop_div_trunc => {
                             if (rhs_val == 0) return error.DivisionByZero;
                             break :result_val @divTrunc(lhs_val, rhs_val);
-                        },
-                        .w_binop_rem => {
-                            if (rhs_val == 0) return error.DivisionByZero;
-                            break :result_val @rem(lhs_val, rhs_val);
                         },
                         else => unreachable,
                     };
@@ -1440,10 +1591,6 @@ pub const Interpreter = struct {
                                 if (rhs_dec.num == 0) return error.DivisionByZero;
                                 const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
                                 break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-                            },
-                            .w_binop_rem => result_dec: {
-                                if (rhs_dec.num == 0) return error.DivisionByZero;
-                                break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
                             },
                             else => unreachable,
                         };
@@ -1494,10 +1641,6 @@ pub const Interpreter = struct {
                             const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
                             break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
                         },
-                        .w_binop_rem => result_dec: {
-                            if (rhs_dec.num == 0) return error.DivisionByZero;
-                            break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
-                        },
                         else => unreachable,
                     };
 
@@ -1531,7 +1674,10 @@ pub const Interpreter = struct {
                         else => unreachable,
                     };
 
-                    result_value.setBool(bool_result);
+                    // Set the boolean value directly
+                    const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                    bool_ptr.* = bool_result;
+                    result_value.is_initialized = true;
                 }
                 // Check if both operands are decimals
                 else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
@@ -1557,7 +1703,10 @@ pub const Interpreter = struct {
                             else => unreachable,
                         };
 
-                        result_value.setBool(bool_result);
+                        // Set the boolean value directly
+                        const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                        bool_ptr.* = bool_result;
+                        result_value.is_initialized = true;
                         self.traceInfo("Decimal comparison: {} {s} {} = {}", .{ lhs_dec.num, @tagName(kind), rhs_dec.num, bool_result });
                     } else {
                         self.traceError("comparison operations on fractional types only support Dec precision", .{});
@@ -1588,7 +1737,10 @@ pub const Interpreter = struct {
                         else => unreachable,
                     };
 
-                    result_value.setBool(bool_result);
+                    // Set the boolean value directly
+                    const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                    bool_ptr.* = bool_result;
+                    result_value.is_initialized = true;
                     self.traceInfo("String comparison: \"{s}\" {s} \"{s}\" = {}", .{ lhs_str.asSlice(), @tagName(kind), rhs_str.asSlice(), bool_result });
 
                     // Decref both strings after we're done with them
@@ -1623,7 +1775,10 @@ pub const Interpreter = struct {
                     else => unreachable,
                 };
 
-                result_value.setBool(bool_result);
+                // Set the boolean value directly
+                const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                bool_ptr.* = bool_result;
+                result_value.is_initialized = true;
             },
 
             else => {
@@ -1984,18 +2139,18 @@ pub const Interpreter = struct {
             },
             .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte => {
                 // Comparison - result is Bool
-                // Bool is a tag union in Roc
-                // For now, return a placeholder type variable
+                // Bool is a tag union in Roc: [True, False]
                 const bool_var = try self.type_store.fresh();
-                // TODO: Properly represent Bool as tag union { True, False }
+                const bool_content = try self.type_store.mkBool(self.allocator, @constCast(&self.env.common.idents), null);
+                try self.type_store.setVarContent(bool_var, bool_content);
                 return bool_var;
             },
             .binop_and, .binop_or => {
                 // Boolean operation - result is Bool
-                // Bool is a tag union in Roc
-                // For now, return a placeholder type variable
+                // Bool is a tag union in Roc: [True, False]
                 const bool_var = try self.type_store.fresh();
-                // TODO: Properly represent Bool as tag union { True, False }
+                const bool_content = try self.type_store.mkBool(self.allocator, @constCast(&self.env.common.idents), null);
+                try self.type_store.setVarContent(bool_var, bool_content);
                 return bool_var;
             },
             .if_else => {
@@ -2293,21 +2448,41 @@ pub const Interpreter = struct {
         // Simplified if/else handling for new CIR
         // The if_else expression should have two branches: then and else
 
-        // Based on the condition, choose which branch to evaluate
-        const branch_to_eval = if (cond_val != 0)
-            branch_index // True branch (then)
-        else
-            branch_index + 1; // False branch (else)
+        // Note: branch_index parameter is not used in this implementation
+        _ = branch_index;
 
-        // For now, we'll just schedule the appropriate branch for evaluation
-        // A full implementation would need to extract the actual branch expressions from the CIR
+        // Extract the branch expressions from the CIR using the proper structure
+        const if_branches_u32 = expr.payload.if_branches;
+        const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
 
-        self.traceInfo("If condition evaluated to {}, taking branch {}", .{ cond_val != 0, branch_to_eval });
+        // Get iterator over the branches: [condition, then_branch, else_branch]
+        var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
 
-        // Skip the branch evaluation for now
-        // This avoids the NotImplemented error but may not execute the correct branch
+        // Skip condition (already evaluated)
+        _ = iter.next().?;
 
-        self.traceWarn("If/else branch evaluation simplified for new CIR", .{});
+        // Extract then and else branches
+        const then_branch_node = iter.next() orelse {
+            self.traceError("If expression missing then branch", .{});
+            return error.InvalidBranchNode;
+        };
+        const else_branch_node = iter.next() orelse {
+            self.traceError("If expression missing else branch", .{});
+            return error.InvalidBranchNode;
+        };
+
+        // Choose the branch to evaluate based on condition
+        const branch_to_evaluate = if (cond_val != 0) then_branch_node else else_branch_node;
+
+        self.traceInfo("If condition evaluated to {}, evaluating {s} branch", .{ cond_val != 0, if (cond_val != 0) @as([]const u8, "then") else @as([]const u8, "else") });
+
+        // Schedule evaluation of the chosen branch
+        const branch_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(branch_to_evaluate)));
+        self.schedule_work(WorkItem{
+            .kind = .w_eval_expr_structural,
+            .expr_idx = branch_expr_idx,
+            .extra = .{ .nothing = {} },
+        });
     }
 
     fn handleLambdaCall(self: *Interpreter, expr_idx: CIR.Expr.Idx, arg_count: u32, roc_ops: *RocOps) !void {
@@ -2553,6 +2728,14 @@ pub const Interpreter = struct {
         const record_data = self.layout_cache.getRecordData(record_layout.data.record.idx);
         const sorted_fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
 
+        // Step 0: Create the record on the stack if this is the first call
+        if (current_field_idx == 0) {
+            // First call - create the empty record structure
+            var record_value = try self.pushStackValue(record_layout);
+            record_value.is_initialized = true;
+            self.traceInfo("Created empty record structure for record_expr_idx={}", .{record_expr_idx});
+        }
+
         // Step 1: Copy the value of the *previous* field (if any) into the record structure.
         if (current_field_idx > 0) {
             const prev_field_index_in_sorted = current_field_idx - 1;
@@ -2597,16 +2780,33 @@ pub const Interpreter = struct {
             if (record_expr.tag != .record_literal) {
                 return error.TypeMismatch;
             }
-            // New CIR doesn't provide record fields the same way - needs rewrite
-            const cir_fields = &[_]CIR.Expr.Idx{};
 
-            // Look for the current field CIR.Expr.Idx
+            // Access record fields through the nodes payload
+            const nodes_idx = record_expr.payload.nodes;
+            var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+
+            // Find the field we're looking for by iterating through all record field expressions
             var value_expr_idx: ?CIR.Expr.Idx = null;
-            for (cir_fields) |field_idx| {
-                const field = cir.getRecordField(field_idx);
-                if (field.name == current_field_name) {
-                    value_expr_idx = field.value;
-                    break;
+            while (nodes_iter.next()) |field_node_idx| {
+                // Convert AST.Node.Idx to CIR.Expr.Idx
+                const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node_idx)));
+                // Each field is a binop_colon expression: field_name : field_value
+                const field_expr = cir.getExpr(field_expr_idx);
+                if (field_expr.tag == .binop_colon) {
+                    // Get the binop structure using the correct accessor
+                    const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
+
+                    // Get the field name from the left side of the colon
+                    const field_name_expr = cir.getExpr(field_binop.lhs);
+
+                    if (field_name_expr.tag == .lookup) {
+                        const field_name_ident = field_name_expr.payload.ident;
+                        if (field_name_ident == current_field_name) {
+                            // Found our field! The value is on the right side of the colon
+                            value_expr_idx = field_binop.rhs;
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -2926,8 +3126,79 @@ pub const Interpreter = struct {
                 // This whole case needs rewriting
                 _ = tuple_accessor;
             },
+            .applied_tag => {
+                // Tag pattern - tags are represented as records or scalars
+                // For now, bind the whole tag value without checking its type
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .list_destructure => {
+                // List pattern - check if the value is a list
+                if (value.layout.tag != .list) {
+                    return error.LayoutError;
+                }
+
+                // For now, bind the whole list value
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .num_literal_i32, .int_literal_i32, .int_literal_i64, .num_literal_big, .int_literal_big => {
+                // Numeric literal pattern - used in pattern matching
+                // This would need to compare the value with the literal
+                // For now, just check if it's a number
+                if (value.layout.tag != .scalar or value.layout.data.scalar.tag != .int) {
+                    return error.LayoutError;
+                }
+
+                // Pattern matching against literals requires comparison
+                // For now, just bind the value
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .str_literal_small, .str_literal_big => {
+                // String literal pattern - used in pattern matching
+                if (value.layout.tag != .scalar or value.layout.data.scalar.tag != .str) {
+                    return error.LayoutError;
+                }
+
+                // Pattern matching against string literals requires comparison
+                // For now, just bind the value
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .as => {
+                // 'as' pattern - binds the value and continues matching
+                // For now, just bind the value
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
+            .double_dot_ident => {
+                // Rest pattern (..others) - captures remaining fields/elements
+                // This is typically used in record or list destructuring
+                const binding = Binding{
+                    .pattern_idx = pattern_idx,
+                    .value = value.moveForBinding(),
+                };
+                try self.bindings_stack.append(binding);
+            },
             else => {
-                // TODO: handle other patterns
+                // Unhandled pattern type
+                self.traceInfo("Unhandled pattern type: {s}", .{@tagName(pattern.tag)});
                 return error.LayoutError;
             },
         }
@@ -2983,7 +3254,7 @@ pub const Interpreter = struct {
 
         switch (work.kind) {
             // Binary operations
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
+            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
                 try self.completeBinop(work.kind, roc_ops);
             },
 
@@ -2993,12 +3264,7 @@ pub const Interpreter = struct {
 
             // Control flow
             .w_lambda_return => try self.handleLambdaReturn(roc_ops),
-            .w_if_check_condition => {
-                // Extract branch index from extra data - this is a simplified handler
-                // The actual implementation would need more context about branches
-                std.log.warn("if_check_condition work item not fully implemented in processWorkItem", .{});
-                return error.UnsupportedWorkItem;
-            },
+            // w_if_check_condition is handled in the main eval loop, not here
 
             // Record/tuple evaluation
             .w_eval_record_fields => try self.handleRecordFields(work.expr_idx, work.extra.current_field_idx),
@@ -3046,11 +3312,108 @@ pub const Interpreter = struct {
             // String interpolation segments work is just a marker, no action needed
             .w_str_interpolate_segments => {},
 
+            // Tuple elements evaluation
+            .w_eval_tuple_elements => {
+                const element_count = work.extra.arg_count;
+
+                // Get the tuple layout
+                const tuple_layout_idx = try self.getLayoutIdx(work.expr_idx);
+                const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
+
+                // Verify we have a tuple layout
+                if (tuple_layout.tag != .tuple) {
+                    return error.TypeMismatch;
+                }
+
+                // Get the tuple data which contains element layouts and offsets
+                const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple);
+
+                // Allocate space for the tuple
+                var result_value = try self.pushStackValue(tuple_layout);
+
+                // We need to store elements in reverse order since they're popped from stack
+                // Create a temporary array to hold the popped values
+                var elements = try self.allocator.alloc(StackValue, element_count);
+                defer self.allocator.free(elements);
+
+                // Pop all elements from the stack (they're in reverse order)
+                var i: u32 = element_count;
+                while (i > 0) {
+                    i -= 1;
+                    elements[i] = try self.popStackValue();
+                }
+
+                // Now copy each element to its proper location in the tuple
+                for (elements, 0..) |element, idx| {
+                    // Get the field info for this element
+                    const field = tuple_data.fields[idx];
+                    const element_layout = self.layout_cache.getLayout(field.layout_idx);
+
+                    // Verify the layouts match
+                    if (!element.layout.isEquivalent(element_layout)) {
+                        return error.TypeMismatch;
+                    }
+
+                    // Copy element to tuple at the field's offset
+                    if (result_value.ptr != null and element.ptr != null) {
+                        const dest_ptr = @as([*]u8, @ptrCast(result_value.ptr.?)) + field.offset;
+                        const src_ptr = @as([*]const u8, @ptrCast(element.ptr.?));
+                        const size = element_layout.data.size();
+                        @memcpy(dest_ptr[0..size], src_ptr[0..size]);
+                    }
+                }
+
+                result_value.is_initialized = true;
+            },
+
+            // If-else condition check
+            .w_if_check_condition => {
+                // Pop the condition value from the stack
+                const condition_value = try self.popStackValue();
+
+                // Check if it's a boolean
+                if (condition_value.layout.tag != .scalar or condition_value.layout.data.scalar.tag != .bool) {
+                    self.traceError("If condition must be a boolean, got: {}", .{condition_value.layout.tag});
+                    return error.TypeMismatch;
+                }
+
+                // Read the boolean value
+                const bool_ptr = @as(*const u8, @ptrCast(condition_value.ptr.?));
+                const condition = bool_ptr.* != 0;
+
+                self.traceInfo("If condition evaluated to: {}", .{condition});
+
+                // Get the if-else expression to find branches
+                const cir = try self.getCIR();
+                const if_expr = cir.getExpr(work.expr_idx);
+
+                // Get the branches from the payload
+                const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_expr.payload.if_branches));
+                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+
+                // Skip the condition (already evaluated)
+                _ = iter.next();
+
+                // Get then and else branches
+                const then_branch = iter.next() orelse return error.InvalidBranchNode;
+                const else_branch = iter.next() orelse return error.InvalidBranchNode;
+
+                // Schedule evaluation of the appropriate branch
+                const branch_to_eval = if (condition) then_branch else else_branch;
+                const branch_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(branch_to_eval)));
+
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr_structural,
+                    .expr_idx = branch_expr_idx,
+                    .extra = .{ .nothing = {} },
+                });
+            },
+
             // Runtime errors
             .w_crash => {
                 const msg = self.env.getString(work.extra.crash_msg);
                 std.log.err("Runtime crash: {s}", .{msg});
-                return error.RuntimeCrash;
+                return error.Crash;
             },
 
             // These should be handled by the caller
@@ -4210,15 +4573,18 @@ pub const Interpreter = struct {
                 else => {},
             },
             .list, .list_of_zst => {
-                // TODO: Implement list refcounting when needed
                 // For lists, increment refcount
-                // const roc_list: *RocList = @ptrCast(@alignCast(dst_ptr));
-                // roc_list.incref(1, list_elements_refcounted??)
-                self.traceWarn("List refcounting not yet implemented", .{});
+                const roc_list: *builtins.list.RocList = @ptrCast(@alignCast(dst_ptr));
+                // Check if list elements are refcounted
+                const elements_refcounted = if (value_layout.tag == .list)
+                    self.layout_cache.getLayout(value_layout.data.list).isRefcounted()
+                else
+                    false;
+                roc_list.incref(1, elements_refcounted);
             },
             .box, .box_of_zst => {
-                // For boxes, increment refcount
-                // TODO: Implement box refcounting when needed
+                // RocBox refcounting not implemented yet
+                // When implemented, would increment refcount here
                 self.traceWarn("Box refcounting not yet implemented", .{});
             },
             else => {},
@@ -4261,6 +4627,14 @@ pub const Interpreter = struct {
         const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
         const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple.idx);
         const element_layouts = self.layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+
+        // Step 0: Create the tuple on the stack if this is the first call
+        if (current_element_idx == 0) {
+            // First call - create the empty tuple structure
+            var tuple_value = try self.pushStackValue(tuple_layout);
+            tuple_value.is_initialized = true;
+            self.traceInfo("Created empty tuple structure for tuple_expr_idx={}", .{tuple_expr_idx});
+        }
 
         // Step 1: Copy the value of the *previous* element (if any) into the tuple structure.
         if (current_element_idx > 0) {
@@ -4426,8 +4800,33 @@ test "stack-based comparisons" {
 
 /// Get parameter patterns from a closure expression
 fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const CIR.Patt.Idx {
-    // TODO: Implement this for new CIR - for now return empty to allow compilation
-    _ = env_ptr;
-    _ = expr_idx;
-    return &[_]CIR.Patt.Idx{};
+    const cir = env_ptr.cir orelse return error.NoCIR;
+    const expr = cir.getExpr(expr_idx);
+
+    // Lambda expressions have their parameters stored in the payload
+    if (expr.tag != .lambda) {
+        return error.NotLambdaExpression;
+    }
+
+    // Lambda uses body_then_args payload - first is body, rest are args (patterns)
+    const body_then_args = expr.payload.body_then_args;
+
+    // Get the slice iterator - skip first element (body), rest are patterns
+    var iter = cir.ast.node_slices.nodes(&body_then_args);
+    _ = iter.next(); // Skip the body expression
+
+    // Collect the parameter patterns
+    var patterns = std.ArrayList(CIR.Patt.Idx).init(env_ptr.types.allocator);
+    defer patterns.deinit();
+
+    while (iter.next()) |arg_node| {
+        // Convert node index to pattern index
+        const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(arg_node)));
+        try patterns.append(patt_idx);
+    }
+
+    // Return a slice that will persist (allocate on the arena allocator)
+    const result = try env_ptr.types.allocator.alloc(CIR.Patt.Idx, patterns.items.len);
+    @memcpy(result, patterns.items);
+    return result;
 }

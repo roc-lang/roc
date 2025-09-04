@@ -141,8 +141,7 @@ pub const TestEnv = struct {
             // Initial allocation
             const new_total_size = roc_realloc.new_length + size_storage_bytes;
             const new_slice = allocator.alloc(u8, new_total_size) catch {
-                roc_realloc.answer = @ptrFromInt(@as(usize, 0));
-                return;
+                @panic("Test reallocation failed - out of memory");
             };
 
             // Store the total size in metadata
@@ -163,8 +162,7 @@ pub const TestEnv = struct {
 
         const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
         const new_slice = allocator.realloc(old_slice, new_total_size) catch {
-            roc_realloc.answer = @ptrFromInt(0);
-            return;
+            @panic("Test reallocation failed - out of memory");
         };
 
         // Store the new total size in metadata

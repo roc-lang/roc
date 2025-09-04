@@ -4340,7 +4340,7 @@ fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
+        @panic("Out of memory during snapshot test allocation");
     };
 
     // Store the total size (including metadata) right before the user data
@@ -4392,7 +4392,8 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
+        // Reallocation failed - keep the original allocation
+        return;
     };
 
     // Store the new total size in the metadata

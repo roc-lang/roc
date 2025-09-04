@@ -1708,7 +1708,7 @@ fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bo
 
     var buf2 = rebuildBufferForTesting(input, &output.tokens, gpa) catch |err| switch (err) {
         error.Unsupported => return,
-        error.OutOfMemory => std.debug.panic("OOM", .{}),
+        error.OutOfMemory => return error.OutOfMemory,
     };
     defer buf2.deinit(gpa);
 

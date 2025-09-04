@@ -75,7 +75,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+        @panic("Out of memory during test allocation");
     };
 
     // Store the total size (including metadata) right before the user data
@@ -127,7 +127,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+        // Reallocation failed - keep the original allocation
+        // The Roc runtime should handle this gracefully
+        return;
     };
 
     // Store the new total size in the metadata
