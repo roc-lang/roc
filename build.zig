@@ -17,7 +17,6 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    const snapshot2_step = b.step("snapshot2", "Run the snapshot2 tool with AST2/Parser2");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("playground-test", "Build the integration test suite for the WASM playground");
 
@@ -90,18 +89,6 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(snapshot_exe);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
-
-    // Add snapshot2 tool for AST2/Parser2
-    const snapshot2_exe = b.addExecutable(.{
-        .name = "snapshot2",
-        .root_source_file = b.path("test/snapshot2/snapshot2_tool.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    roc_modules.addAll(snapshot2_exe);
-    add_tracy(b, roc_modules.build_options, snapshot2_exe, target, false, flag_enable_tracy);
-    install_and_run(b, no_bin, snapshot2_exe, snapshot2_step, snapshot2_step);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
