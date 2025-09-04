@@ -57,7 +57,7 @@ pub fn getLineText(source: []const u8, line_starts: []const u32, start_line_idx:
 
 /// Record the offsets for the start of each line in the source code
 pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(u32) {
-    var line_starts = try collections.SafeList(u32).initCapacity(gpa, 4096);
+    var line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
 
     // if the source is empty, return an empty list of line starts
     if (source.len == 0) {

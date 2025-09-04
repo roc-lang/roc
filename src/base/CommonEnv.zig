@@ -37,7 +37,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = try Ident.Store.initCapacity(gpa, 1024),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .exposed_items = ExposedItems.init(),
-        .line_starts = try RegionInfo.findLineStarts(gpa, source),
+        .line_starts = try SafeList(u32).initCapacity(gpa, 256),
         .source = source,
     };
 }
@@ -236,7 +236,7 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(gpa);
-    self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 4096);
+    self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
 
     // if the source is empty, we're done
     if (self.getSourceAll().len == 0) {
@@ -296,6 +296,10 @@ test "CommonEnv.Serialized roundtrip" {
     _ = try original.insertString(gpa, "test string");
     try original.addExposedById(gpa, hello_idx);
 
+    _ = try original.line_starts.append(gpa, 0);
+    _ = try original.line_starts.append(gpa, 10);
+    _ = try original.line_starts.append(gpa, 20);
+
     // Create a CompactWriter
     var writer = CompactWriter.init();
     defer writer.deinit(gpa);
@@ -330,8 +334,8 @@ test "CommonEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 3), env.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.line_starts.items.items[0]);
-    try testing.expectEqual(@as(u32, 12), env.line_starts.items.items[1]); // after "hello world\n"
-    try testing.expectEqual(@as(u32, 24), env.line_starts.items.items[2]); // after "test line 2\n"
+    try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
 
     try testing.expectEqualStrings(source, env.source);
 }
