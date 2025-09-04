@@ -64,7 +64,6 @@ pub const Token = struct {
         StringStart, // the " that starts a string (for interpolation)
         StringEnd, // the " that ends a string (for interpolation)
         MultilineStringStart, // the """ that starts a multiline string (for interpolation)
-        MultilineStringEnd, // the """ that ends a multiline string (for interpolation)
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
@@ -238,7 +237,6 @@ pub const Token = struct {
                 .StringStart,
                 .StringEnd,
                 .MultilineStringStart,
-                .MultilineStringEnd,
                 .StringPart,
                 .SingleQuote,
                 .Int,
@@ -2309,9 +2307,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 return error.Unsupported;
             },
             .MalformedString => {
-                return error.Unsupported;
-            },
-            .MultilineStringEnd => {
                 return error.Unsupported;
             },
             .IntBase => {
