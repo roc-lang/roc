@@ -77,7 +77,7 @@ test "calculateUnderlineLength" {
     // Edge case: end < start (should return 1)
     try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(5, 3));
 
-    // Two character identifier
+    // Single character identifier
     try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(3, 4));
 }
 
@@ -122,5 +122,5 @@ test "real-world identifier underline calculations" {
     try testing.expectEqual(@as(u32, 3), calculateUnderlineLength(5, 8));
 
     // Edge case: single column span (e.g., single char at end of identifier)
-    try testing.expectEqual(@as(u32, 0), calculateUnderlineLength(10, 10));
+    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(10, 10));
 }

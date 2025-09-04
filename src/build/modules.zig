@@ -31,6 +31,7 @@ pub const ModuleType = enum {
     ipc,
     repl,
     fmt,
+    watch,
     bundle,
     unbundle,
     base58,
@@ -55,6 +56,7 @@ pub const ModuleType = enum {
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58 },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
@@ -81,6 +83,7 @@ pub const RocModules = struct {
     ipc: *Module,
     repl: *Module,
     fmt: *Module,
+    watch: *Module,
     bundle: *Module,
     unbundle: *Module,
     base58: *Module,
@@ -110,6 +113,7 @@ pub const RocModules = struct {
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
             .repl = b.addModule("repl", .{ .root_source_file = b.path("src/repl/mod.zig") }),
             .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
+            .watch = b.addModule("watch", .{ .root_source_file = b.path("src/watch/watch.zig") }),
             .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
@@ -146,6 +150,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .watch,
             .bundle,
             .unbundle,
             .base58,
@@ -181,6 +186,7 @@ pub const RocModules = struct {
         step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
+        step.root_module.addImport("watch", self.watch);
 
         // Don't add bundle module for WASM targets (zstd C library not available)
         if (step.rootModuleTarget().cpu.arch != .wasm32) {
@@ -215,6 +221,7 @@ pub const RocModules = struct {
             .ipc => self.ipc,
             .repl => self.repl,
             .fmt => self.fmt,
+            .watch => self.watch,
             .bundle => self.bundle,
             .unbundle => self.unbundle,
             .base58 => self.base58,
@@ -230,7 +237,7 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [18]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [19]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -247,6 +254,7 @@ pub const RocModules = struct {
             .ipc,
             .repl,
             .fmt,
+            .watch,
             .bundle,
             .unbundle,
             .base58,
@@ -266,6 +274,13 @@ pub const RocModules = struct {
                 // Unbundle module doesn't need libc (uses Zig's std zstandard)
                 .link_libc = (module_type == .ipc or module_type == .bundle),
             });
+
+            // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
+            // These frameworks provide the FSEvents API for proper event-driven file system monitoring on macOS.
+            if (module_type == .watch and target.result.os.tag == .macos and target.query.isNative()) {
+                test_step.linkFramework("CoreFoundation");
+                test_step.linkFramework("CoreServices");
+            }
 
             // Add only the necessary dependencies for each module test
             self.addModuleDependencies(test_step, module_type);
