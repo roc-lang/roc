@@ -15,17 +15,17 @@ In this section I’ll explain how lambda sets and specialization lambda sets wo
 Lambda sets are a technique Roc uses for static dispatch of closures. For example,
 
 ```jsx
-id1 = |x| x
-id2 = |x| x
+id1 = \x -> x
+id2 = \x -> x
 f = if True then id1 else id2
 ```
 
 has the elaboration (solved-type annotations)
 
 ```jsx
-id1 = |x| x
+id1 = \x -> x
 ^^^ id1 : a -[[id1]] -> a
-id2 = |x| x
+id2 = \x -> x
 ^^^ id2 : a -[[id2]] -> a
 f = if True then id1 else id2
 ^ f : a -[[id1, id2]] -> a
@@ -38,7 +38,7 @@ In the presence of [abilities](https://docs.google.com/document/d/1kUh53p1Du3fWP
 ```jsx
 Hash has hash : a -> U64 | a has Hash
 
-zeroHash = |_| 0
+zeroHash = \_ -> 0
 
 f = if True then hash else zeroHash
 ```
@@ -54,8 +54,8 @@ Hash has
   hashThunk : a -> ({} -> U64) | a has Hash
 # ^^^^^^^^^ a -[[] + a:hashThunk:1]-> ({} -[[] + a:hashThunk:2]-> U64)
 
-zeroHash = |_| |{}| 0
-#^^^^^^^   a -[[zeroHash]]-> |{}| -[[lam1]]-> U64
+zeroHash = \_ -> \{} -> 0
+#^^^^^^^   a -[[zeroHash]]-> \{} -[[lam1]]-> U64
 
 f = if True then hash else zeroHash
 #^ a -[[zeroHash] + a:hashThunk:1]-> ({} -[[lam1] + a:hashThunk:2]-> U64)
@@ -81,7 +81,7 @@ Now, let’s say we apply `f` to a concrete type, like
 
 ```jsx
 Foo := {}
-hashThunk = |@Foo {}| |{}| 1
+hashThunk = \@Foo {} -> \{} -> 1
 #^^^^^^^^   Foo -[[Foo#hashThunk]]-> \{} -[[lam2]]-> U64
 
 f (@Foo {})
@@ -102,7 +102,7 @@ The unification trace for the call `f (@Foo {})` proceeds as follows. I use `'tN
 Now that the specialization lambdas’ type variables point to concrete types, we can resolve the concrete lambdas of `Foo:hashThunk:1` and `Foo:hashThunk:2`. Cool! Let’s do that. We know that
 
 ```text
-hashThunk = |@Foo {}| |{}| 1
+hashThunk = \@Foo {} -> \{} -> 1
 #^^^^^^^^   Foo -[[Foo#hashThunk]]-> \{} -[[lam2]]-> U64
 ```
 
@@ -135,13 +135,13 @@ G has g : b -> {} | b has G
 #     ^ b -[[] + b:g:1]-> {}
 
 Fo := {}
-f = |@Fo {}| g
+f = \@Fo {} -> g
 #^  Fo -[[Fo#f]]-> (b -[[] + b:g:1]-> {}) | b has G
 #   instantiation with a=Fo of
 #   a -[[] + a:f:1]-> (b -[[] + a:f:2]-> {}) | a has F, b has G
 
 Go := {}
-g = |@Go {}| {}
+g = \@Go {} -> {}
 #^  Go -[[Go#g]]-> {}
 #   instantiation with b=Go of
 #   b -[[] + b:g:1]-> {}
@@ -206,11 +206,11 @@ Okay, so first we’ll enumerate some terminology, and the exact algorithm. Then
 - **The region invariant.** Previously we discussed the “region” of a lambda set in a specialization function definition. The way regions are assigned in the compiler follows a very specific ordering and holds a invariant we’ll call the “region invariant”. First, let’s define a procedure for creating function types and assigning regions:
 
     ```text
-    Type = |region|
+    Type = \region ->
       (Type_atom, region)
     | Type_function region
 
-    Type_function = |region|
+    Type_function = \region ->
       let left_type, new_region = Type (region + 1)
       let right_type, new_region = Type (new_region)
       let func_type = left_type -[Lambda region]-> right_type
@@ -282,13 +282,13 @@ G has g : b -> {} | b has G
 #     ^ b -[[] + b:g:1]-> {}
 
 Fo := {}
-f = |@Fo {}| g
+f = \@Fo {} -> g
 #^  Fo -[[Fo#f]]-> (b -[[] + b:g:1]-> {}) | b has G
 #   instantiation with a=Fo of
 #   a -[[] + a:f:1]-> (b -[[] + a:f:2]-> {}) | a has F, b has G
 
 Go := {}
-g = |@Go {}| {}
+g = \@Go {} -> {}
 #^  Go -[[Go#g]]-> {}
 #   instantiation with b=Go of
 #   b -[[] + b:g:1]-> {}
@@ -414,13 +414,13 @@ F has f : a -> ({} -> b) | a has F, b has G
 G has g : {} -> b | b has G
 
 Fo := {}
-f = |@Fo {}| g
+f = \@Fo {} -> g
 #^  Fo -[[Fo#f]]-> ({} -[[] + b:g:1]-> b) | b has G
 #   instantiation with a=Fo of
 #   a -[[] + a:f:1]-> ({} -[[] + a:f:2]-> b) | a has F, b has G
 
 Go := {}
-g = |{}| @Go {}
+g = \{} -> @Go {}
 #^  {} -[[Go#g]]-> Go
 #   instantiation with b=Go of
 #   {} -[[] + b:g:1]-> b
@@ -441,13 +441,13 @@ G has g : b -> ({} -> {}) | b has G
 #     ^ b -[[] + b:g:1]-> ({} -[[] + b:g:2]-> {}) | b has G
 
 Fo := {}
-f = |@Fo {}, b| |{}| g b
+f = \@Fo {}, b -> \{} -> g b
 #^  Fo, b -[[Fo#f]]-> ({} -[[lamF b]]-> ({} -[[] + b:g:2]]-> {})) | b has G
 #   instantiation with a=Fo of
 #   a, b -[[] + a:f:1]-> ({} -[[] + a:f:2]-> ({} -[[] + a:f:3]-> {})) | a has F, b has G
 
 Go := {}
-g = |@Go {}| |{}| {}
+g = \@Go {} -> \{} -> {}
 #^  {} -[[Go#g]]-> ({} -[[lamG]]-> {})
 #   instantiation with b=Go of
 #   b -[[] + b:g:1]-> ({} -[[] + b:g:2]-> {}) | b has G
@@ -555,15 +555,15 @@ J has j : j -> (k -> {}) | j has J, k has K
 K has k : k -> {} | k has K
 
 C := {}
-j = |@C _| k
+j = \@C _ -> k
 
 D := {}
-j = |@D _| k
+j = \@D _ -> k
 
 E := {}
-k = |@E _| {}
+k = \@E _ -> {}
 
-f = |flag, a, b, c|
+f = \flag, a, b, c ->
   it = when flag is
     A -> j a
     B -> j b
@@ -633,7 +633,7 @@ it : E -[[lamE]]-> {}
 The disjointedness is important - we want to unify unspecialized lambdas whose type variables are equivalent. For example,
 
 ```coffee
-f = |flag, a, c|
+f = \flag, a, c ->
   it = when flag is
     A -> j a
     B -> j a
@@ -669,11 +669,11 @@ You may have observed that step 1 and step 2 of the algorithm are somewhat overk
 This optimization is correct with a change to the region numbering scheme:
 
 ```python
-Type = |region|
+Type = \region ->
   (Type_atom, region)
 | Type_function region
 
-Type_function = |region|
+Type_function = \region ->
   let left_type = Type (region * 2)
   let right_type = Type (region * 2 + 1)
   let func_type = left_type -[Lambda region]-> right_type
