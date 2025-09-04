@@ -596,24 +596,16 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeReplInitResponse(response_buffer);
         },
         .RESET => {
-            // Clean up any complex data structures properly
-            if (compiler_data) |*old_data| {
-                old_data.deinit();
-                compiler_data = null;
-            }
+            // Make sure everything is null
+            compiler_data = null;
+            repl_instance = null;
+            host_message_buffer = null;
+            host_response_buffer = null;
+            repl_instance = null;
+            repl_roc_ops = null;
 
-            // Clean up REPL state
-            cleanupReplState();
-
-            // Clean up host-managed buffers normally
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
+            // Reset allocator to clear all allocations
+            fba.reset();
 
             current_state = .READY;
 
@@ -653,21 +645,16 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             try writeHoverInfoResponse(response_buffer, data, message_json);
         },
         .RESET => {
-            // Clean up any complex data structures properly
-            if (compiler_data) |*old_data| {
-                old_data.deinit();
-                compiler_data = null;
-            }
+            // Make sure everything is null
+            compiler_data = null;
+            repl_instance = null;
+            host_message_buffer = null;
+            host_response_buffer = null;
+            repl_instance = null;
+            repl_roc_ops = null;
 
-            // Clean up host-managed buffers normally
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
+            // Reset allocator to clear all allocations
+            fba.reset();
 
             current_state = .READY;
 
@@ -730,18 +717,16 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
-            // Clean up REPL state
-            cleanupReplState();
+            // Make sure everything is null
+            compiler_data = null;
+            repl_instance = null;
+            host_message_buffer = null;
+            host_response_buffer = null;
+            repl_instance = null;
+            repl_roc_ops = null;
 
-            // Clean up host-managed buffers normally
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
+            // Reset allocator to clear all allocations
+            fba.reset();
 
             current_state = .READY;
 
