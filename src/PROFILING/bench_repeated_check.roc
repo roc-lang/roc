@@ -3,7 +3,7 @@
 ##
 ## Compiler phase benchmarks use this file, see `src/PROFILING/exec_bench.roc`.
 ## If the file changes, the benchmarks can't track performance over time.
-## 
+##
 
 module [
     x,
@@ -4234,7 +4234,6 @@ binops = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4298,7 +4297,6 @@ binops_2 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4362,7 +4360,6 @@ binops_3 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4426,7 +4423,6 @@ binops_4 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4490,7 +4486,6 @@ binops_5 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4554,7 +4549,6 @@ binops_6 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4618,7 +4612,6 @@ binops_7 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4682,7 +4675,6 @@ binops_8 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4746,7 +4738,6 @@ binops_9 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4810,7 +4801,6 @@ binops_10 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4874,7 +4864,6 @@ binops_11 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -4938,7 +4927,6 @@ binops_12 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5002,7 +4990,6 @@ binops_13 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5066,7 +5053,6 @@ binops_14 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5130,7 +5116,6 @@ binops_15 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5194,7 +5179,6 @@ binops_16 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5258,7 +5242,6 @@ binops_17 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5322,7 +5305,6 @@ binops_18 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5386,7 +5368,6 @@ binops_19 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5450,7 +5431,6 @@ binops_20 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5514,7 +5494,6 @@ binops_21 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5578,7 +5557,6 @@ binops_22 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5642,7 +5620,6 @@ binops_23 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5706,7 +5683,6 @@ binops_24 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5770,7 +5746,6 @@ binops_25 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5834,7 +5809,6 @@ binops_26 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5898,7 +5872,6 @@ binops_27 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -5962,7 +5935,6 @@ binops_28 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6026,7 +5998,6 @@ binops_29 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6090,7 +6061,6 @@ binops_30 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6154,7 +6124,6 @@ binops_31 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6218,7 +6187,6 @@ binops_32 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6282,7 +6250,6 @@ binops_33 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6346,7 +6313,6 @@ binops_34 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6410,7 +6376,6 @@ binops_35 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6474,7 +6439,6 @@ binops_36 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6538,7 +6502,6 @@ binops_37 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6602,7 +6565,6 @@ binops_38 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6666,7 +6628,6 @@ binops_39 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6730,7 +6691,6 @@ binops_40 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6794,7 +6754,6 @@ binops_41 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6858,7 +6817,6 @@ binops_42 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6922,7 +6880,6 @@ binops_43 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -6986,7 +6943,6 @@ binops_44 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7050,7 +7006,6 @@ binops_45 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7114,7 +7069,6 @@ binops_46 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7178,7 +7132,6 @@ binops_47 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7242,7 +7195,6 @@ binops_48 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7306,7 +7258,6 @@ binops_49 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7370,7 +7321,6 @@ binops_50 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7434,7 +7384,6 @@ binops_51 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7498,7 +7447,6 @@ binops_52 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7562,7 +7510,6 @@ binops_53 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7626,7 +7573,6 @@ binops_54 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7690,7 +7636,6 @@ binops_55 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7754,7 +7699,6 @@ binops_56 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7818,7 +7762,6 @@ binops_57 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7882,7 +7825,6 @@ binops_58 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -7946,7 +7888,6 @@ binops_59 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8010,7 +7951,6 @@ binops_60 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8074,7 +8014,6 @@ binops_61 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8138,7 +8077,6 @@ binops_62 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8202,7 +8140,6 @@ binops_63 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8266,7 +8203,6 @@ binops_64 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8330,7 +8266,6 @@ binops_65 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8394,7 +8329,6 @@ binops_66 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8458,7 +8392,6 @@ binops_67 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8522,7 +8455,6 @@ binops_68 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8586,7 +8518,6 @@ binops_69 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8650,7 +8581,6 @@ binops_70 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8714,7 +8644,6 @@ binops_71 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8778,7 +8707,6 @@ binops_72 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8842,7 +8770,6 @@ binops_73 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8906,7 +8833,6 @@ binops_74 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -8970,7 +8896,6 @@ binops_75 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9034,7 +8959,6 @@ binops_76 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9098,7 +9022,6 @@ binops_77 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9162,7 +9085,6 @@ binops_78 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9226,7 +9148,6 @@ binops_79 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9290,7 +9211,6 @@ binops_80 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9354,7 +9274,6 @@ binops_81 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9418,7 +9337,6 @@ binops_82 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9482,7 +9400,6 @@ binops_83 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9546,7 +9463,6 @@ binops_84 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9610,7 +9526,6 @@ binops_85 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9674,7 +9589,6 @@ binops_86 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9738,7 +9652,6 @@ binops_87 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9802,7 +9715,6 @@ binops_88 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9866,7 +9778,6 @@ binops_89 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9930,7 +9841,6 @@ binops_90 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -9994,7 +9904,6 @@ binops_91 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10058,7 +9967,6 @@ binops_92 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10122,7 +10030,6 @@ binops_93 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10186,7 +10093,6 @@ binops_94 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10250,7 +10156,6 @@ binops_95 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10314,7 +10219,6 @@ binops_96 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10378,7 +10282,6 @@ binops_97 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10442,7 +10345,6 @@ binops_98 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10506,7 +10408,6 @@ binops_99 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10570,7 +10471,6 @@ binops_100 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10634,7 +10534,6 @@ binops_101 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10698,7 +10597,6 @@ binops_102 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10762,7 +10660,6 @@ binops_103 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10826,7 +10723,6 @@ binops_104 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10890,7 +10786,6 @@ binops_105 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -10954,7 +10849,6 @@ binops_106 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11018,7 +10912,6 @@ binops_107 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11082,7 +10975,6 @@ binops_108 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11146,7 +11038,6 @@ binops_109 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11210,7 +11101,6 @@ binops_110 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11274,7 +11164,6 @@ binops_111 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11338,7 +11227,6 @@ binops_112 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11402,7 +11290,6 @@ binops_113 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11466,7 +11353,6 @@ binops_114 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11530,7 +11416,6 @@ binops_115 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11594,7 +11479,6 @@ binops_116 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11658,7 +11542,6 @@ binops_117 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11722,7 +11605,6 @@ binops_118 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11786,7 +11668,6 @@ binops_119 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11850,7 +11731,6 @@ binops_120 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11914,7 +11794,6 @@ binops_121 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -11978,7 +11857,6 @@ binops_122 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12042,7 +11920,6 @@ binops_123 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12106,7 +11983,6 @@ binops_124 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12170,7 +12046,6 @@ binops_125 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12234,7 +12109,6 @@ binops_126 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12298,7 +12172,6 @@ binops_127 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12362,7 +12235,6 @@ binops_128 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12426,7 +12298,6 @@ binops_129 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12490,7 +12361,6 @@ binops_130 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12554,7 +12424,6 @@ binops_131 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12618,7 +12487,6 @@ binops_132 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12682,7 +12550,6 @@ binops_133 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12746,7 +12613,6 @@ binops_134 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12810,7 +12676,6 @@ binops_135 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12874,7 +12739,6 @@ binops_136 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -12938,7 +12802,6 @@ binops_137 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13002,7 +12865,6 @@ binops_138 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13066,7 +12928,6 @@ binops_139 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13130,7 +12991,6 @@ binops_140 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13194,7 +13054,6 @@ binops_141 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13258,7 +13117,6 @@ binops_142 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13322,7 +13180,6 @@ binops_143 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13386,7 +13243,6 @@ binops_144 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13450,7 +13306,6 @@ binops_145 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13514,7 +13369,6 @@ binops_146 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13578,7 +13432,6 @@ binops_147 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13642,7 +13495,6 @@ binops_148 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13706,7 +13558,6 @@ binops_149 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13770,7 +13621,6 @@ binops_150 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13834,7 +13684,6 @@ binops_151 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13898,7 +13747,6 @@ binops_152 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -13962,7 +13810,6 @@ binops_153 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14026,7 +13873,6 @@ binops_154 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14090,7 +13936,6 @@ binops_155 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14154,7 +13999,6 @@ binops_156 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14218,7 +14062,6 @@ binops_157 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14282,7 +14125,6 @@ binops_158 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14346,7 +14188,6 @@ binops_159 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14410,7 +14251,6 @@ binops_160 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14474,7 +14314,6 @@ binops_161 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14538,7 +14377,6 @@ binops_162 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14602,7 +14440,6 @@ binops_163 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14666,7 +14503,6 @@ binops_164 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14730,7 +14566,6 @@ binops_165 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14794,7 +14629,6 @@ binops_166 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14858,7 +14692,6 @@ binops_167 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14922,7 +14755,6 @@ binops_168 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -14986,7 +14818,6 @@ binops_169 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15050,7 +14881,6 @@ binops_170 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15114,7 +14944,6 @@ binops_171 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15178,7 +15007,6 @@ binops_172 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15242,7 +15070,6 @@ binops_173 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15306,7 +15133,6 @@ binops_174 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15370,7 +15196,6 @@ binops_175 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15434,7 +15259,6 @@ binops_176 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15498,7 +15322,6 @@ binops_177 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15562,7 +15385,6 @@ binops_178 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15626,7 +15448,6 @@ binops_179 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15690,7 +15511,6 @@ binops_180 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15754,7 +15574,6 @@ binops_181 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15818,7 +15637,6 @@ binops_182 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15882,7 +15700,6 @@ binops_183 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -15946,7 +15763,6 @@ binops_184 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16010,7 +15826,6 @@ binops_185 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16074,7 +15889,6 @@ binops_186 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16138,7 +15952,6 @@ binops_187 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16202,7 +16015,6 @@ binops_188 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16266,7 +16078,6 @@ binops_189 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16330,7 +16141,6 @@ binops_190 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16394,7 +16204,6 @@ binops_191 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16458,7 +16267,6 @@ binops_192 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16522,7 +16330,6 @@ binops_193 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16586,7 +16393,6 @@ binops_194 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16650,7 +16456,6 @@ binops_195 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16714,7 +16519,6 @@ binops_196 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16778,7 +16582,6 @@ binops_197 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16842,7 +16645,6 @@ binops_198 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16906,7 +16708,6 @@ binops_199 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -16970,7 +16771,6 @@ binops_200 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17034,7 +16834,6 @@ binops_201 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17098,7 +16897,6 @@ binops_202 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17162,7 +16960,6 @@ binops_203 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17226,7 +17023,6 @@ binops_204 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17290,7 +17086,6 @@ binops_205 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17354,7 +17149,6 @@ binops_206 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17418,7 +17212,6 @@ binops_207 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17482,7 +17275,6 @@ binops_208 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17546,7 +17338,6 @@ binops_209 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17610,7 +17401,6 @@ binops_210 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17674,7 +17464,6 @@ binops_211 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17738,7 +17527,6 @@ binops_212 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17802,7 +17590,6 @@ binops_213 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17866,7 +17653,6 @@ binops_214 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17930,7 +17716,6 @@ binops_215 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -17994,7 +17779,6 @@ binops_216 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18058,7 +17842,6 @@ binops_217 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18122,7 +17905,6 @@ binops_218 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18186,7 +17968,6 @@ binops_219 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18250,7 +18031,6 @@ binops_220 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18314,7 +18094,6 @@ binops_221 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18378,7 +18157,6 @@ binops_222 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18442,7 +18220,6 @@ binops_223 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18506,7 +18283,6 @@ binops_224 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18570,7 +18346,6 @@ binops_225 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18634,7 +18409,6 @@ binops_226 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18698,7 +18472,6 @@ binops_227 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18762,7 +18535,6 @@ binops_228 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18826,7 +18598,6 @@ binops_229 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18890,7 +18661,6 @@ binops_230 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -18954,7 +18724,6 @@ binops_231 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19018,7 +18787,6 @@ binops_232 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19082,7 +18850,6 @@ binops_233 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19146,7 +18913,6 @@ binops_234 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19210,7 +18976,6 @@ binops_235 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19274,7 +19039,6 @@ binops_236 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19338,7 +19102,6 @@ binops_237 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19402,7 +19165,6 @@ binops_238 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19466,7 +19228,6 @@ binops_239 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19530,7 +19291,6 @@ binops_240 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19594,7 +19354,6 @@ binops_241 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19658,7 +19417,6 @@ binops_242 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19722,7 +19480,6 @@ binops_243 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19786,7 +19543,6 @@ binops_244 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19850,7 +19606,6 @@ binops_245 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19914,7 +19669,6 @@ binops_246 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -19978,7 +19732,6 @@ binops_247 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20042,7 +19795,6 @@ binops_248 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20106,7 +19858,6 @@ binops_249 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20170,7 +19921,6 @@ binops_250 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20234,7 +19984,6 @@ binops_251 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20298,7 +20047,6 @@ binops_252 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20362,7 +20110,6 @@ binops_253 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20426,7 +20173,6 @@ binops_254 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20490,7 +20236,6 @@ binops_255 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20554,7 +20299,6 @@ binops_256 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20618,7 +20362,6 @@ binops_257 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20682,7 +20425,6 @@ binops_258 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20746,7 +20488,6 @@ binops_259 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20810,7 +20551,6 @@ binops_260 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20874,7 +20614,6 @@ binops_261 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -20938,7 +20677,6 @@ binops_262 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21002,7 +20740,6 @@ binops_263 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21066,7 +20803,6 @@ binops_264 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21130,7 +20866,6 @@ binops_265 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21194,7 +20929,6 @@ binops_266 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21258,7 +20992,6 @@ binops_267 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21322,7 +21055,6 @@ binops_268 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21386,7 +21118,6 @@ binops_269 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21450,7 +21181,6 @@ binops_270 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21514,7 +21244,6 @@ binops_271 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21578,7 +21307,6 @@ binops_272 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21642,7 +21370,6 @@ binops_273 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21706,7 +21433,6 @@ binops_274 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21770,7 +21496,6 @@ binops_275 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21834,7 +21559,6 @@ binops_276 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21898,7 +21622,6 @@ binops_277 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -21962,7 +21685,6 @@ binops_278 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22026,7 +21748,6 @@ binops_279 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22090,7 +21811,6 @@ binops_280 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22154,7 +21874,6 @@ binops_281 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22218,7 +21937,6 @@ binops_282 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22282,7 +22000,6 @@ binops_283 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22346,7 +22063,6 @@ binops_284 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22410,7 +22126,6 @@ binops_285 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22474,7 +22189,6 @@ binops_286 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22538,7 +22252,6 @@ binops_287 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22602,7 +22315,6 @@ binops_288 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22666,7 +22378,6 @@ binops_289 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22730,7 +22441,6 @@ binops_290 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22794,7 +22504,6 @@ binops_291 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22858,7 +22567,6 @@ binops_292 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22922,7 +22630,6 @@ binops_293 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -22986,7 +22693,6 @@ binops_294 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23050,7 +22756,6 @@ binops_295 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23114,7 +22819,6 @@ binops_296 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23178,7 +22882,6 @@ binops_297 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23242,7 +22945,6 @@ binops_298 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23306,7 +23008,6 @@ binops_299 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23370,7 +23071,6 @@ binops_300 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23434,7 +23134,6 @@ binops_301 = (
     4 - 2,
     4 * 2,
     4 / 2,
-    # 4 % 2, # modulo operator not supported in Roc
     4 < 2,
     4 > 2,
     4 <= 2,
@@ -23485,4 +23184,3 @@ mixed_301 = {
         list_from_num: [num_301, num_301, num_301],
     },
 }
-
