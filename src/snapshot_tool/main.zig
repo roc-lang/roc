@@ -1508,7 +1508,7 @@ fn processSnapshotContent(
     }
 
     // Create Parser
-    var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     // Parse based on node type
@@ -1580,7 +1580,7 @@ fn processSnapshotContent(
         // For file content, check if it's a block and use the file canonicalizer
         if (content.meta.node_type == .file and node.tag == .block) {
             // Canonicalize as a file with top-level definitions
-            maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents);
+            maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents, &env, null);
         } else if (isExpressionNode(node.tag)) {
             maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
         } else if (isStatementNode(node.tag)) {

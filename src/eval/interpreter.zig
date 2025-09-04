@@ -941,6 +941,25 @@ pub const Interpreter = struct {
                 const ident_idx = expr.payload.ident;
                 self.traceInfo("evalExpr lookup ident_idx={}", .{ident_idx});
 
+                // Special case: Check if this is a boolean literal (True/False)
+                const ident_name = self.env.getIdent(ident_idx);
+                if (std.mem.eql(u8, ident_name, "True") or std.mem.eql(u8, ident_name, "False")) {
+                    // This is a boolean literal
+                    const bool_layout = Layout.boolType();
+                    var result_value = try self.pushStackValue(bool_layout);
+
+                    // Set the boolean value: True = 1, False = 0
+                    const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
+                    bool_ptr.* = if (std.mem.eql(u8, ident_name, "True")) 1 else 0;
+                    result_value.is_initialized = true;
+
+                    if (expr.tag == .neg_lookup or expr.tag == .not_lookup) {
+                        // Apply negation
+                        bool_ptr.* = if (bool_ptr.* == 1) 0 else 1;
+                    }
+                    return;
+                }
+
                 // Look up the pattern index associated with this identifier
                 // The scope state should have a mapping from ident to pattern
                 const pattern_idx = self.lookupPatternForIdent(ident_idx) orelse {
@@ -3312,60 +3331,6 @@ pub const Interpreter = struct {
             // String interpolation segments work is just a marker, no action needed
             .w_str_interpolate_segments => {},
 
-            // Tuple elements evaluation
-            .w_eval_tuple_elements => {
-                const element_count = work.extra.arg_count;
-
-                // Get the tuple layout
-                const tuple_layout_idx = try self.getLayoutIdx(work.expr_idx);
-                const tuple_layout = self.layout_cache.getLayout(tuple_layout_idx);
-
-                // Verify we have a tuple layout
-                if (tuple_layout.tag != .tuple) {
-                    return error.TypeMismatch;
-                }
-
-                // Get the tuple data which contains element layouts and offsets
-                const tuple_data = self.layout_cache.getTupleData(tuple_layout.data.tuple);
-
-                // Allocate space for the tuple
-                var result_value = try self.pushStackValue(tuple_layout);
-
-                // We need to store elements in reverse order since they're popped from stack
-                // Create a temporary array to hold the popped values
-                var elements = try self.allocator.alloc(StackValue, element_count);
-                defer self.allocator.free(elements);
-
-                // Pop all elements from the stack (they're in reverse order)
-                var i: u32 = element_count;
-                while (i > 0) {
-                    i -= 1;
-                    elements[i] = try self.popStackValue();
-                }
-
-                // Now copy each element to its proper location in the tuple
-                for (elements, 0..) |element, idx| {
-                    // Get the field info for this element
-                    const field = tuple_data.fields[idx];
-                    const element_layout = self.layout_cache.getLayout(field.layout_idx);
-
-                    // Verify the layouts match
-                    if (!element.layout.isEquivalent(element_layout)) {
-                        return error.TypeMismatch;
-                    }
-
-                    // Copy element to tuple at the field's offset
-                    if (result_value.ptr != null and element.ptr != null) {
-                        const dest_ptr = @as([*]u8, @ptrCast(result_value.ptr.?)) + field.offset;
-                        const src_ptr = @as([*]const u8, @ptrCast(element.ptr.?));
-                        const size = element_layout.data.size();
-                        @memcpy(dest_ptr[0..size], src_ptr[0..size]);
-                    }
-                }
-
-                result_value.is_initialized = true;
-            },
-
             // If-else condition check
             .w_if_check_condition => {
                 // Pop the condition value from the stack
@@ -4816,7 +4781,7 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: CIR.Expr.Idx
     _ = iter.next(); // Skip the body expression
 
     // Collect the parameter patterns
-    var patterns = std.ArrayList(CIR.Patt.Idx).init(env_ptr.types.allocator);
+    var patterns = std.ArrayList(CIR.Patt.Idx).init(env_ptr.types.gpa);
     defer patterns.deinit();
 
     while (iter.next()) |arg_node| {
@@ -4826,7 +4791,7 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: CIR.Expr.Idx
     }
 
     // Return a slice that will persist (allocate on the arena allocator)
-    const result = try env_ptr.types.allocator.alloc(CIR.Patt.Idx, patterns.items.len);
+    const result = try env_ptr.types.gpa.alloc(CIR.Patt.Idx, patterns.items.len);
     @memcpy(result, patterns.items);
     return result;
 }

@@ -875,7 +875,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     defer czer.deinit();
 
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(result.parse_ast.?.root_node_idx);
-    _ = czer.canonicalizeFileBlock(allocator, root_node_idx, env.source, &env.common.idents) catch |err| {
+    _ = czer.canonicalizeFileBlock(allocator, root_node_idx, env.source, &env.common.idents, &env.common, null) catch |err| {
         logDebug("compileSource: canonicalizeFileBlock failed: {}\n", .{err});
         if (err == error.OutOfMemory) {
             // If we're out of memory here, the state is likely unstable.

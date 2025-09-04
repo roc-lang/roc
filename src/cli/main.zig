@@ -1570,7 +1570,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Canonicalize the entire module
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
-    _ = try canonicalizer.canonicalizeFileBlock(gpa, root_node_idx, env.common.source, &env.common.idents);
+    _ = try canonicalizer.canonicalizeFileBlock(gpa, root_node_idx, env.common.source, &env.common.idents, &env.common, null);
 
     // Collect expect statements from CIR
     var expects = std.ArrayList(ExpectTest).init(gpa);

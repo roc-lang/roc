@@ -23,8 +23,8 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const Instantiate = types_mod.instantiate.Instantiate;
-const Func = types_mod.Func;
 const Var = types_mod.Var;
+const Func = types_mod.Func;
 const Content = types_mod.Content;
 const testing = std.testing;
 const SnapshotStore = @import("snapshot.zig").Store;
@@ -210,7 +210,52 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
         // Lambda
         .lambda => {
-            // For now, just return a fresh type variable
+            // Lambda expressions need their function type created during type checking
+            // The canonicalizer has processed parameters and body, but hasn't created the function type
+
+            // Get the lambda's body_then_args payload
+            const body_then_args = expr.payload.body_then_args;
+            if (body_then_args.isNil()) {
+                // No body or parameters - shouldn't happen for well-formed lambdas
+                return expr_var;
+            }
+
+            // Parse the lambda structure: [body, param1, param2, ...]
+            // Count parameters first
+            var param_count: usize = 0;
+            var iter = cir.ast.node_slices.nodes(&body_then_args);
+
+            // First node is the body
+            const body_node_idx = iter.next() orelse return expr_var;
+
+            // Count parameters
+            while (iter.next()) |_| {
+                param_count += 1;
+            }
+
+            // Create type variables for parameters
+            var param_vars = std.ArrayList(Var).init(self.gpa);
+            defer param_vars.deinit();
+
+            // Create a type variable for each parameter
+            var i: usize = 0;
+            while (i < param_count) : (i += 1) {
+                // Create a fresh type variable for each parameter
+                const param_var = try self.types.fresh();
+                try param_vars.append(param_var);
+            }
+
+            // Type check the body
+            const body_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(body_node_idx)));
+            const body_var = try self.checkCIRExpr(CIRType, cir, body_expr_idx);
+
+            // Create the function type
+            const func_content = try self.types.mkFuncPure(param_vars.items, body_var);
+            const func_type = try self.types.freshFromContent(func_content);
+
+            // Unify the lambda expression's type with the function type
+            _ = try self.unify(expr_var, func_type);
+
             return expr_var;
         },
 
@@ -239,8 +284,44 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
         .apply_ident, .apply_tag => {
             // Function/tag application
-            // For now, just return a fresh type variable
-            // TODO: Implement proper function application type checking
+            // We need to type check both the function and its arguments
+
+            // Get the apply node to access function and arguments
+            const node = cir.getNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));
+            const nodes_idx = node.payload.nodes;
+
+            if (!nodes_idx.isNil()) {
+                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+
+                // First item is the function/tag being applied
+                const func_node_idx = iter.next() orelse return expr_var;
+
+                // Type check the function expression
+                const func_var = try self.checkCIRExpr(CIRType, cir, @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(func_node_idx))));
+
+                // Type check all arguments and collect their types
+                var arg_vars = std.ArrayList(Var).init(self.gpa);
+                defer arg_vars.deinit();
+
+                while (iter.next()) |arg_node_idx| {
+                    const arg_var = try self.checkCIRExpr(CIRType, cir, @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(arg_node_idx))));
+                    try arg_vars.append(arg_var);
+                }
+
+                // Create a function type constraint: func_var ~ (arg_types -> result_type)
+                // The function being applied should have type (arg1, arg2, ...) -> result
+                // where result unifies with expr_var
+
+                // Create the expected function type
+                const func_content = try self.types.mkFuncPure(arg_vars.items, // May be empty for zero-arg functions
+                    expr_var // The result type is the expression's type
+                );
+                const expected_func_type = try self.types.freshFromContent(func_content);
+
+                // Unify the actual function with the expected function type
+                _ = try self.unify(func_var, expected_func_type);
+            }
+
             return expr_var;
         },
 

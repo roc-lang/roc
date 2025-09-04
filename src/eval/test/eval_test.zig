@@ -39,16 +39,16 @@ test "eval boolean literals" {
     try runExpectBool("True", true, .no_trace);
     try runExpectBool("False", false, .no_trace);
     // Bool.True and Bool.False may not be supported yet - need to check how they're parsed
-    // try runExpectBool("Bool.True", true, .no_trace);
-    // try runExpectBool("Bool.False", false, .no_trace);
+    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False", false, .no_trace);
 }
 
 test "eval unary not operator" {
     try runExpectBool("!True", false, .no_trace);
     try runExpectBool("!False", true, .no_trace);
     // Bool.True/False not supported yet
-    // try runExpectBool("!Bool.True", false, .no_trace);
-    // try runExpectBool("!Bool.False", true, .no_trace);
+    try runExpectBool("!Bool.True", false, .no_trace);
+    try runExpectBool("!Bool.False", true, .no_trace);
 }
 
 test "eval double negation" {
@@ -59,13 +59,13 @@ test "eval double negation" {
 }
 
 test "eval boolean in lambda expressions" {
-    try runExpectBool("(|x| !x)(True)", false, .no_trace);
+    // Let's fix the lambda type inference issue
+    try runExpectBool("(|x| !x)(True)", false, .trace);
     try runExpectBool("(|x| !x)(False)", true, .no_trace);
-    // Not implemented yet -- the closure return type is still flex var
-    // try runExpectBool("(|x, y| x and y)(True, False)", false, .no_trace);
-    // try runExpectBool("(|x, y| x or y)(False, True)", true, .no_trace);
-    // try runExpectBool("(|x| x and !x)(True)", false, .no_trace);
-    // try runExpectBool("(|x| x or !x)(False)", true, .no_trace);
+    try runExpectBool("(|x, y| x and y)(True, False)", false, .no_trace);
+    try runExpectBool("(|x, y| x or y)(False, True)", true, .no_trace);
+    try runExpectBool("(|x| x and !x)(True)", false, .no_trace);
+    try runExpectBool("(|x| x or !x)(False)", true, .no_trace);
 }
 
 test "eval unary not in conditional expressions" {
@@ -81,22 +81,22 @@ test "if-else" {
     try runExpectInt("if False 42 else 99", 99, .no_trace);
 
     // Comparison operators don't work yet
-    // try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
-    // try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
-    // try runExpectInt("if (5 > 3) 100 else 200", 100, .no_trace);
-    // try runExpectInt("if (3 > 5) 100 else 200", 200, .no_trace);
+    try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
+    try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
+    try runExpectInt("if (5 > 3) 100 else 200", 100, .no_trace);
+    try runExpectInt("if (3 > 5) 100 else 200", 200, .no_trace);
 }
 
 test "nested if-else" {
-    // Simple nested if with boolean conditions
-    try runExpectInt("if True (if True 100 else 200) else 300", 100, .no_trace);
-    try runExpectInt("if True (if False 100 else 200) else 300", 200, .no_trace);
-    try runExpectInt("if False (if True 100 else 200) else 300", 300, .no_trace);
+    // Simple nested if with boolean conditions (using blocks to avoid function application)
+    try runExpectInt("if True {if True 100 else 200} else 300", 100, .no_trace);
+    try runExpectInt("if True {if False 100 else 200} else 300", 200, .no_trace);
+    try runExpectInt("if False {if True 100 else 200} else 300", 300, .no_trace);
 
     // Comparison operators don't work yet
-    // try runExpectInt("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
-    // try runExpectInt("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
-    // try runExpectInt("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
+    try runExpectInt("if (1 == 1) {if (2 == 2) 100 else 200} else 300", 100, .no_trace);
+    try runExpectInt("if (1 == 1) {if (2 == 3) 100 else 200} else 300", 200, .no_trace);
+    try runExpectInt("if (1 == 2) {if (2 == 2) 100 else 200} else 300", 300, .no_trace);
 }
 
 test "eval single element record" {
@@ -421,11 +421,11 @@ test "lambdas with unary minus" {
 
 test "lambdas closures" {
     // Curried functions still have interpreter issues with TypeMismatch
-    return error.SkipZigTest;
-    // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
-    // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
-    // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
-    // try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    // return error.SkipZigTest;
+    try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
 }
 
 test "lambdas with capture" {
@@ -448,17 +448,16 @@ test "lambdas with capture" {
 }
 
 test "lambdas nested closures" {
-    // Nested closures still have interpreter issues with TypeMismatch
-    return error.SkipZigTest;
-    // try runExpectInt(
-    //     \\(((|a| {
-    //     \\    a_loc = a * 2
-    //     \\    |b| {
-    //     \\        b_loc = a_loc + b
-    //     \\        |c| b_loc + c
-    //     \\    }
-    //     \\})(100))(20))(3)
-    // , 223, .no_trace);
+    // Test nested closures - this should now work with proper lambda type inference!
+    try runExpectInt(
+        \\(((|a| {
+        \\    a_loc = a * 2
+        \\    |b| {
+        \\        b_loc = a_loc + b
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100))(20))(3)
+    , 223, .trace); // Enable tracing to see what happens
 }
 
 // Helper function to test that evaluation succeeds without checking specific values

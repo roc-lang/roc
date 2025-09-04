@@ -74,7 +74,7 @@ byte_slices: *collections.ByteSlices, // Reference to tokenizer's ByteSlices
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 scratch_op_stack: std.ArrayListUnmanaged(OpInfo), // For operator precedence parsing
 scratch_bytes: std.ArrayListUnmanaged(u8), // For string building
-diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic), // Reference to caller's diagnostics
 // Token-fed parsing state
 needs_token: bool = false, // Set to true when advance() needs a new token
 token_iterator: ?*tokenize_iter.TokenIterator = null, // Optional token iterator for parseExprFromSource
@@ -211,7 +211,7 @@ fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []cons
         .scratch_nodes = .{},
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
-        .diagnostics = .{},
+        .diagnostics = undefined, // Will be set by init()
         .state_stack = .{},
         .value_stack = .{},
         .min_bp_stack = .{},
@@ -227,9 +227,11 @@ pub fn parseAndCollectTokens(
     messages: []tokenize_iter.Diagnostic,
     ast: *AST,
     byte_slices: *collections.ByteSlices,
+    diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic),
 ) !struct { tokens: std.ArrayList(Token), root: ?Node.Idx } {
     // Initialize the parser in token-fed mode
     var parser = try initStateMachine(env, allocator, source, ast, byte_slices);
+    parser.diagnostics = diagnostics;
     defer parser.deinit();
 
     // Create tokenizer
@@ -306,9 +308,12 @@ pub fn init(
     messages: []tokenize_iter.Diagnostic,
     ast: *AST,
     byte_slices: *collections.ByteSlices,
+    diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic),
 ) !Parser {
     _ = messages;
-    return initStateMachine(env, allocator, source, ast, byte_slices);
+    var parser = try initStateMachine(env, allocator, source, ast, byte_slices);
+    parser.diagnostics = diagnostics;
+    return parser;
 }
 
 // Helper functions for type conversions
@@ -624,7 +629,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scratch_op_stack.deinit(parser.gpa);
     parser.scratch_bytes.deinit(parser.gpa);
-    parser.diagnostics.deinit(parser.gpa);
+    // Don't deinit diagnostics - it's a reference to AST's diagnostics, not owned by parser
     parser.state_stack.deinit(parser.gpa);
     parser.value_stack.deinit(parser.gpa);
     parser.min_bp_stack.deinit(parser.gpa);
@@ -638,9 +643,13 @@ fn getDiagnostics(self: *const Parser) []const AST.Diagnostic {
 }
 
 /// Take ownership of the diagnostics array
+/// NOTE: This no longer makes sense since Parser doesn't own diagnostics
+/// Kept for compatibility but should be removed
 fn takeOwnedDiagnostics(self: *Parser) std.ArrayListUnmanaged(AST.Diagnostic) {
-    const result = self.diagnostics;
-    self.diagnostics = .{};
+    // Can't take ownership of something we don't own
+    // Return a copy instead
+    var result = std.ArrayListUnmanaged(AST.Diagnostic){};
+    result.appendSlice(self.gpa, self.diagnostics.items) catch return .{};
     return result;
 }
 
@@ -5100,6 +5109,20 @@ fn parseTupleOrParenthesized(self: *Parser) Error!Node.Idx {
 fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     const start_pos = self.ast.start(func);
     const func_region = self.ast.getRegion(func);
+
+    // Check if there's whitespace before the opening paren
+    // If there is, emit a diagnostic warning
+    const open_paren_region = self.currentRegion();
+    if (func_region.end.offset < open_paren_region.start.offset) {
+        // There's whitespace between the function and the paren
+        if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
+            try self.diagnostics.append(self.gpa, .{
+                .tag = .application_with_whitespace,
+                .region = makeRegion(func_region.end, open_paren_region.start),
+            });
+        }
+    }
+
     self.advance(); // consume (
 
     const scratch_marker = self.markScratchNodes();
@@ -5137,49 +5160,6 @@ fn parseApply(self: *Parser, func: Node.Idx) Error!Node.Idx {
     const nodes_idx = try self.ast.appendNodeSlice(self.gpa, nodes);
     const full_region = makeRegion(func_region.start, close_region.end);
     return try self.ast.appendNode(self.gpa, full_region, tag, .{ .nodes = nodes_idx });
-}
-
-fn parseExprStoppingAtElse(self: *Parser) Error!Node.Idx {
-    // Parse an expression but stop if we see 'else' keyword
-    // This is like parseExpr but with a custom termination condition
-
-    // Start with a primary expression
-    var expr = try self.parsePrimaryExpr();
-
-    // Keep parsing operators while we can
-    while (true) {
-        // Check for 'else' keyword - stop if we see it
-        if (self.peek() == .KwElse) {
-            break;
-        }
-
-        // Check for operators
-        const bp = getBindingPower(self.peek());
-        if (bp.left == 0) {
-            // No operator or not an operator token
-            break;
-        }
-
-        // We have an operator - parse it as a binary operation
-        const op_tag = self.peek();
-        const op_region = self.currentRegion();
-        self.advance();
-
-        // Parse the right-hand side with appropriate precedence
-        const rhs = if (self.peek() == .KwElse)
-            // If the next token is 'else', we have a missing RHS
-            try self.pushMalformed(.expr_unexpected_token, op_region.end)
-        else
-            try self.parseExprWithPrecedence(bp.right);
-
-        // Create the binary operation node
-        const binop_tag = tokenToBinOpTag(op_tag) orelse .binop_pipe;
-        const binop_idx = try self.ast.appendBinOp(self.gpa, expr, rhs);
-        const full_region = makeRegion(self.ast.start(expr), self.ast.getRegion(rhs).end);
-        expr = try self.ast.appendNode(self.gpa, full_region, binop_tag, .{ .binop = binop_idx });
-    }
-
-    return expr;
 }
 
 fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
@@ -5226,26 +5206,13 @@ fn parseIf(self: *Parser) Error!Node.Idx {
     defer self.restoreScratchNodes(scratch_marker);
 
     // Parse condition
-    // In Roc: if condition then_expr else else_expr
-    // Parse the condition as a full expression
-    // This will naturally stop at low-precedence boundaries
+    // Note: `if True (...)` will parse as `if True(...)` (function application)
+    // which is correct - the condition is the full application expression
     const cond = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, cond);
 
-    // Parse the then branch - parse until we hit 'else' or EOF
-    // We need to be careful here to not consume the else keyword
-    const then_start_pos = self.currentPosition();
-    var then_branch: Node.Idx = undefined;
-
-    // Check if next token is 'else' - if so, we have an empty then branch (error)
-    if (self.peek() == .KwElse) {
-        then_branch = try self.pushMalformed(.expr_unexpected_token, then_start_pos);
-    } else {
-        // Parse expression with custom stopping condition for 'else'
-        // We can't use precedence alone since 'else' has no precedence
-        // So we parse a primary expression, then check for operators
-        then_branch = try self.parseExprStoppingAtElse();
-    }
+    // Parse the then branch - just parse a normal expression
+    const then_branch = try self.parseExpr();
     try self.scratch_nodes.append(self.gpa, then_branch);
 
     // Check for else

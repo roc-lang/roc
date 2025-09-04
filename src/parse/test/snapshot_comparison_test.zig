@@ -118,7 +118,7 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     defer byte_slices.entries.deinit(allocator);
 
     // Parse using new Parser with TokenIterator
-    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {

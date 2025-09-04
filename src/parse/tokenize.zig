@@ -1203,9 +1203,17 @@ pub const Tokenizer = struct {
                                 try self.pushTokenNormalHere(gpa, .DoubleDot, start);
                             }
                         } else if (n >= '0' and n <= '9') {
+                            // Dot followed by digit can be:
+                            // 1. DotInt - space before dot, like "foo .0"
+                            // 2. NoSpaceDotInt - no space before dot, like "foo.0" or "1.2.3"
+                            // For now, treat it as field access (DotInt/NoSpaceDotInt)
+                            // The parser will handle actual float literals differently
+                            var tag: Token.Tag = if (sp) Token.Tag.DotInt else Token.Tag.NoSpaceDotInt;
                             self.cursor.pos += 1;
-                            self.cursor.chompInteger();
-                            try self.pushTokenNormalHere(gpa, if (sp) .DotInt else .NoSpaceDotInt, start);
+                            self.cursor.chompIntegerBase10() catch {
+                                tag = .MalformedNumberNoDigits;
+                            };
+                            try self.pushTokenNormalHere(gpa, tag, start);
                         } else if (n >= 'a' and n <= 'z') {
                             var tag: Token.Tag = if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent;
                             self.cursor.pos += 1;

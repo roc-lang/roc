@@ -43,7 +43,7 @@ test "parse simple string literal" {
     try testing.expect(found_string);
 
     // Now test parsing
-    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     const expr = try parser.parseExprFromSource(messages[0..]);
@@ -66,7 +66,7 @@ test "parse string with escapes" {
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices);
+    var parser = try Parser.init(&env, allocator, source, messages[0..], &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     const expr = try parser.parseExprFromSource(messages[0..]);

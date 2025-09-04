@@ -10,7 +10,6 @@ const types_mod = @import("types.zig");
 const Store = store_mod.Store;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
-// Unification would be handled by the check module when it calls this inference
 
 /// Type inference context for CIR2
 /// The CIR2 type is passed as anytype to avoid circular dependencies
@@ -552,17 +551,52 @@ pub fn InferContext(comptime CIR2: type) type {
             }
         }
 
+        /// Check if a variable occurs in a type (simple occurs check)
+        fn occursCheck(self: *const Self, var_to_check: Var, in_type: Var) bool {
+            // Simple occurs check to prevent infinite types
+            // Returns true if var_to_check occurs in in_type
+            if (var_to_check == in_type) return true;
+
+            const resolved = self.store.resolveVar(in_type);
+
+            // Check if the variable occurs in the structure
+            switch (resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .list => |elem| return self.occursCheck(var_to_check, elem),
+                    .func => |func| {
+                        // Check in all argument types and return type
+                        for (func.args) |arg| {
+                            if (self.occursCheck(var_to_check, arg)) return true;
+                        }
+                        return self.occursCheck(var_to_check, func.ret);
+                    },
+                    // Add more structural checks as needed
+                    else => return false,
+                },
+                else => return false,
+            }
+        }
+
         /// Unify two types, ensuring they are compatible
+        /// Now includes a simple occurs check to prevent infinite types
         fn unifyTypes(self: *Self, type1: Var, type2: Var) !void {
             const resolved1 = self.store.resolveVar(type1);
             const resolved2 = self.store.resolveVar(type2);
 
             // If either is a flex variable, bind it to the other
             if (resolved1.desc.content == .flex_var) {
+                // Perform occurs check before binding
+                if (self.occursCheck(type1, type2)) {
+                    return error.InfiniteType;
+                }
                 try self.store.setVarContent(type1, resolved2.desc.content);
                 return;
             }
             if (resolved2.desc.content == .flex_var) {
+                // Perform occurs check before binding
+                if (self.occursCheck(type2, type1)) {
+                    return error.InfiniteType;
+                }
                 try self.store.setVarContent(type2, resolved1.desc.content);
                 return;
             }

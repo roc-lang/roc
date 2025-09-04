@@ -115,7 +115,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var can = Can.init(&ast, &parse_env.types);
     defer can.deinit(allocator);
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents);
+    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
     // Collect all diagnostics
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
@@ -163,7 +163,7 @@ test "import validation - no module_envs provided" {
     var can = Can.init(&ast, &parse_env.types);
     defer can.deinit(allocator);
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents);
+    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
@@ -203,7 +203,7 @@ test "import interner - Import.Idx functionality" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Check that we have the correct number of unique imports (duplicates are deduplicated)
     // Expected: List, Dict, Json, Set (4 unique)
     try expectEqual(@as(usize, 4), result.parse_env.imports.count());
@@ -269,7 +269,7 @@ test "import interner - comprehensive usage example" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Check that we have the correct number of unique imports
     // Expected: List, Dict, Result (3 unique)
     try expectEqual(@as(usize, 3), result.parse_env.imports.count());
@@ -346,7 +346,7 @@ test "module scopes - imports work in module scope" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Verify that List and Dict imports were processed correctly
     try testing.expect(result.parse_env.imports.count() >= 2); // List and Dict
     var has_list = false;
@@ -387,7 +387,7 @@ test "module-qualified lookups with e_lookup_external" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Count e_lookup_external expressions
     var external_lookup_count: u32 = 0;
     var found_list_map = false;
@@ -474,7 +474,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Verify that e_lookup_external expressions have the correct target_node_idx values
     var found_add_with_idx_100 = false;
     var found_multiply_with_idx_200 = false;
@@ -527,7 +527,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(result2.parse_env);
     }
     const root_idx2: parse.AST.Node.Idx = @enumFromInt(result2.ast.root_node_idx);
-    _ = try result2.can.canonicalizeFileBlock(allocator, root_idx2, result2.parse_env.common.source, &result2.parse_env.common.idents);
+    _ = try result2.can.canonicalizeFileBlock(allocator, root_idx2, result2.parse_env.common.source, &result2.parse_env.common.idents, &result2.parse_env.common, &result2.parse_env.diagnostics);
     // Verify that undefined gets target_node_idx = 0 (not found)
     var found_undefined_with_idx_0 = false;
     // Verify EmptyModule was imported
