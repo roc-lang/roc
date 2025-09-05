@@ -26,6 +26,7 @@ const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
+const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
 const Can = can.Can;
@@ -58,6 +59,7 @@ const MessageType = enum {
     QUERY_AST,
     QUERY_CIR,
     QUERY_TYPES,
+    QUERY_FORMATTED,
     GET_HOVER_INFO,
     RESET,
     INIT_REPL,
@@ -71,6 +73,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_AST")) return .QUERY_AST;
         if (std.mem.eql(u8, str, "QUERY_CIR")) return .QUERY_CIR;
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
+        if (std.mem.eql(u8, str, "QUERY_FORMATTED")) return .QUERY_FORMATTED;
         if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         if (std.mem.eql(u8, str, "INIT_REPL")) return .INIT_REPL;
@@ -123,6 +126,7 @@ const CompilerStageData = struct {
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
     ast_html: ?[]const u8 = null,
+    formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
     tokenize_reports: std.ArrayList(reporting.Report),
@@ -149,6 +153,7 @@ const CompilerStageData = struct {
         // Free pre-generated HTML
         if (self.tokens_html) |html| allocator.free(html);
         if (self.ast_html) |html| allocator.free(html);
+        if (self.formatted_code) |code| allocator.free(code);
 
         // Deinit reports, which may reference data in the AST or ModuleEnv
         for (self.tokenize_reports.items) |*report| {
@@ -239,6 +244,20 @@ var last_error: ?[:0]const u8 = null;
 var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
+
+/// Reset all global state and allocator
+fn resetGlobalState() void {
+    // Make sure everything is null
+    compiler_data = null;
+    repl_instance = null;
+    host_message_buffer = null;
+    host_response_buffer = null;
+    repl_instance = null;
+    repl_roc_ops = null;
+
+    // Reset allocator to clear all allocations
+    fba.reset();
+}
 
 /// Writes a formatted string to the in-memory debug log.
 fn logDebug(comptime format: []const u8, args: anytype) void {
@@ -408,6 +427,7 @@ fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaq
 
 /// Initialize the WASM module in START state
 export fn init() void {
+    // For the very first initialization, we can reset the allocator
     fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
     allocator = fba.allocator();
 
@@ -419,19 +439,10 @@ export fn init() void {
     // Clean up REPL state
     cleanupReplState();
 
-    // Clean up any existing buffers
-    if (host_message_buffer) |buf| {
-        allocator.free(buf);
-        host_message_buffer = null;
-    }
-    if (host_response_buffer) |buf| {
-        allocator.free(buf);
-        host_response_buffer = null;
-    }
-    if (last_error) |err| {
-        allocator.free(err);
-        last_error = null;
-    }
+    // Initialize buffer pointers to null
+    host_message_buffer = null;
+    host_response_buffer = null;
+    last_error = null;
 }
 
 /// Allocate a buffer for incoming messages from the host.
@@ -558,7 +569,6 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             }
 
             // Compile the source through all stages
-            // Compile and return result
             const result = compileSource(source) catch |err| {
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
@@ -600,27 +610,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             try writeReplInitResponse(response_buffer);
         },
         .RESET => {
-            // A RESET message should clean up all compilation-related memory.
-            if (compiler_data) |*old_data| {
-                old_data.deinit();
-                compiler_data = null;
-            }
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
-
-            // Clean up REPL state
-            cleanupReplState();
-
-            // Now, fully reset the allocator to prevent fragmentation.
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
+            resetGlobalState();
 
             current_state = .READY;
 
@@ -653,28 +643,14 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         .QUERY_TYPES => {
             try writeTypesResponse(response_buffer, data);
         },
+        .QUERY_FORMATTED => {
+            try writeFormattedResponse(response_buffer, data);
+        },
         .GET_HOVER_INFO => {
             try writeHoverInfoResponse(response_buffer, data, message_json);
         },
         .RESET => {
-            // A RESET message should clean up all compilation-related memory.
-            if (compiler_data) |*old_data| {
-                old_data.deinit();
-                compiler_data = null;
-            }
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
-
-            // Now, fully reset the allocator to prevent fragmentation.
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
+            resetGlobalState();
 
             current_state = .READY;
 
@@ -737,22 +713,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             try writeReplClearResponse(response_buffer);
         },
         .RESET => {
-            // Clean up REPL state
-            cleanupReplState();
-
-            // Also free the host-managed buffers, as they are part of the old state.
-            if (host_message_buffer) |buf| {
-                allocator.free(buf);
-                host_message_buffer = null;
-            }
-            if (host_response_buffer) |buf| {
-                allocator.free(buf);
-                host_response_buffer = null;
-            }
-
-            // Now, fully reset the allocator to prevent fragmentation.
-            fba = std.heap.FixedBufferAllocator.init(&wasm_heap_memory);
-            allocator = fba.allocator();
+            resetGlobalState();
 
             current_state = .READY;
 
@@ -769,9 +730,9 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             // Write CIR response directly using the REPL's module env
             try writeReplCanCirResponse(response_buffer, module_env);
         },
-        .QUERY_TYPES, .GET_HOVER_INFO => {
-            // These queries need type information which isn't readily available in REPL mode
-            try writeErrorResponse(response_buffer, .ERROR, "Type queries not available in REPL mode");
+        .QUERY_TYPES, .QUERY_FORMATTED, .GET_HOVER_INFO => {
+            // These queries need parse/type information which isn't readily available in REPL mode
+            try writeErrorResponse(response_buffer, .ERROR, "Parse/type queries not available in REPL mode");
         },
         else => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "Invalid message type for REPL state");
@@ -830,7 +791,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Generate AST HTML
-    var ast_html_buffer = std.ArrayList(u8).init(allocator);
+    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
     const ast_writer = ast_html_buffer.writer().any();
     {
         const file = parse_ast.store.getFile();
@@ -842,9 +803,23 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
         try tree.toHtml(ast_writer);
     }
-    // the AST HTML is stored in our heap and will be cleaned up when the module is RESET
-    // no need to free it here, we will re-use whenever the AST is queried
-    result.ast_html = ast_html_buffer.items;
+
+    result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
+        return err;
+    };
+
+    // Generate formatted code
+    var formatted_code_buffer = std.ArrayList(u8).init(temp_alloc);
+    fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
+        logDebug("compileSource: formatAst failed: {}\n", .{err});
+        return err;
+    };
+
+    result.formatted_code = allocator.dupe(u8, formatted_code_buffer.items) catch |err| {
+        logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
+        return err;
+    };
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -1259,6 +1234,24 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
         try writeJsonString(w, html);
     } else {
         try writeJsonString(w, "Parse AST not available");
+    }
+
+    try w.writeAll("\"}");
+    try resp_writer.finalize();
+}
+
+/// Write formatted response with formatted Roc code
+fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+
+    if (data.formatted_code) |formatted| {
+        try writeJsonString(w, formatted);
+    } else {
+        try writeJsonString(w, "Formatted code not available");
     }
 
     try w.writeAll("\"}");

@@ -766,6 +766,16 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
             } else {
                 logDebug("  Step {}: QUERY_TYPES successful. Status: {s}. No type data returned.\n", .{ i + 1, response.status });
             }
+        } else if (std.mem.eql(u8, step.message.type, "QUERY_FORMATTED")) {
+            if (response.data) |data| {
+                if (data.len > 0) {
+                    logDebug("  Step {}: QUERY_FORMATTED successful. Status: {s}. Formatted code retrieved ({} chars).\n", .{ i + 1, response.status, data.len });
+                } else {
+                    logDebug("  Step {}: QUERY_FORMATTED successful. Status: {s}. Empty formatted code.\n", .{ i + 1, response.status });
+                }
+            } else {
+                logDebug("  Step {}: QUERY_FORMATTED successful. Status: {s}. No formatted data returned.\n", .{ i + 1, response.status });
+            }
         } else {
             logDebug("  Step {}: {s} successful. Status: {s}, Message: {?s}\n", .{ i + 1, step.message.type, response.status, response.message });
         }
@@ -919,7 +929,7 @@ pub fn main() !void {
     defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test
-    var happy_path_steps = try allocator.alloc(MessageStep, 7);
+    var happy_path_steps = try allocator.alloc(MessageStep, 8);
     // Check that INIT returns the compiler version (both test and WASM are built with same options)
     happy_path_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS", .expected_message_contains = build_options.compiler_version };
     const happy_path_code = try TestData.happyPathRocCode(allocator);
@@ -951,6 +961,11 @@ pub fn main() !void {
         .expected_data_contains = "inferred-types",
     };
     happy_path_steps[6] = .{
+        .message = .{ .type = "QUERY_FORMATTED" },
+        .expected_status = "SUCCESS",
+        .expected_data_contains = "foo",
+    };
+    happy_path_steps[7] = .{
         .message = .{ .type = "GET_HOVER_INFO", .identifier = "foo", .line = 3, .ch = 1 },
         .expected_status = "SUCCESS",
         .expected_hover_info_contains = "Str",
@@ -970,6 +985,26 @@ pub fn main() !void {
     // Empty Source Test
     const empty_source_code = try allocator.dupe(u8, "");
     try test_cases.append(try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
+
+    // Code Formatting Test
+    var formatted_test_steps = try allocator.alloc(MessageStep, 3);
+    formatted_test_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    const unformatted_code = try allocator.dupe(u8, "module [foo]\n\nfoo=42\nbar=\"hello world\"\n");
+    formatted_test_steps[1] = .{
+        .message = .{ .type = "LOAD_SOURCE", .source = unformatted_code },
+        .expected_status = "SUCCESS",
+        .expected_message_contains = "LOADED",
+        .owned_source = unformatted_code,
+    };
+    formatted_test_steps[2] = .{
+        .message = .{ .type = "QUERY_FORMATTED" },
+        .expected_status = "SUCCESS",
+        .expected_data_contains = "foo",
+    };
+    try test_cases.append(.{
+        .name = "QUERY_FORMATTED - Code Formatting",
+        .steps = formatted_test_steps,
+    });
 
     // Invalid Message Type Test
     var invalid_msg_type_steps = try allocator.alloc(MessageStep, 2);
