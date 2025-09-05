@@ -32,6 +32,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
     std.testing.refAllDecls(@import("test/cross_module_test.zig"));
+    std.testing.refAllDecls(@import("test/type_checking_integration.zig"));
     std.testing.refAllDecls(@import("test/let_polymorphism_integration_test.zig"));
     std.testing.refAllDecls(@import("test/let_polymorphism_test.zig"));
     std.testing.refAllDecls(@import("test/literal_size_test.zig"));
