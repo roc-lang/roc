@@ -42,7 +42,7 @@ pub const RenderTarget = enum {
 };
 
 /// Render a report to the specified target format.
-pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget) !void {
+pub fn renderReport(report: *const Report, writer: std.io.Writer, target: RenderTarget) !void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -61,7 +61,7 @@ pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget
 }
 
 /// Render a report to terminal with color support.
-pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
+pub fn renderReportToTerminal(report: *const Report, writer: std.io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
     // Render title with appropriate severity styling
     const title_color = switch (report.severity) {
         .info => palette.info,

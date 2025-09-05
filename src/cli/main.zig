@@ -368,27 +368,34 @@ pub fn main() !void {
     if (tracy.enable) {
         try tracy.waitForShutdown();
     }
-    return result;
+    result catch {
+        std.process.exit(1);
+    };
 }
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&stdout_buffer).interface;
+    defer stdout.flush();
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr = std.fs.File.stdout().writer(&stderr_buffer).interface;
+    defer stderr.flush();
 
     const parsed_args = try cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
 
     try switch (parsed_args) {
         .run => |run_args| rocRun(gpa, run_args),
-        .check => |check_args| rocCheck(gpa, check_args),
+        .check => |check_args| rocCheck(gpa, check_args, &stdout, &stderr),
         .build => |build_args| rocBuild(gpa, build_args),
-        .bundle => |bundle_args| rocBundle(gpa, bundle_args),
-        .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
-        .format => |format_args| rocFormat(gpa, arena, format_args),
-        .test_cmd => |test_args| rocTest(gpa, test_args),
+        .bundle => |bundle_args| rocBundle(gpa, bundle_args, &stdout, &stderr),
+        .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args, &stdout, &stderr),
+        .format => |format_args| rocFormat(gpa, arena, format_args, &stdout),
+        .test_cmd => |test_args| rocTest(gpa, test_args, &stdout, &stderr),
         .repl => rocRepl(gpa),
         .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
@@ -400,7 +407,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
                 .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
                 .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
             };
-            std.process.exit(1);
+            return error.CliParseError;
         },
     };
 }
@@ -1120,10 +1127,7 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
-pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-
+pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs, stdout: *std.io.Writer, stderr: *std.io.Writer) !void {
     // Use arena allocator for all bundle operations
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -1280,9 +1284,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs, stdout: *std.io.Writer, stderr: *std.io.Writer) !void {
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -1504,15 +1506,12 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c)
     }
 }
 
-fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
+fn rocTest(gpa: Allocator, args: cli_args.TestArgs, stdout: *std.io.Writer, stderr: *std.io.Writer) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Start timing
     const start_time = std.time.nanoTimestamp();
-
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
@@ -1714,14 +1713,12 @@ fn rocRepl(gpa: Allocator) !void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void {
+fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs, stdout: *std.io.Writer) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut();
     if (args.stdin) {
-        fmt.formatStdin(gpa) catch std.process.exit(1);
-        return;
+        return fmt.formatStdin(gpa);
     }
 
     var timer = try std.time.Timer.start();
@@ -1935,13 +1932,9 @@ fn checkFileWithBuildEnv(
     };
 }
 
-fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
+fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs, stdout: *std.io.Writer, stderr: *std.io.Writer) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-    const stderr_writer = stderr.any();
 
     var timer = try std.time.Timer.start();
 
@@ -1993,7 +1986,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                     stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}\n", .{report.title}) catch {};

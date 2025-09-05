@@ -196,7 +196,7 @@ const ReplResultType = enum {
     definition,
     @"error",
 
-    pub fn jsonStringify(self: ReplResultType, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplResultType, writer: *std.io.Writer) !void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -214,7 +214,7 @@ const ReplErrorStage = enum {
     runtime,
     unknown,
 
-    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplErrorStage, writer: *std.io.Writer) !void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -316,11 +316,6 @@ pub const WasmError = enum(u8) {
     invalid_state_for_message = 4,
     response_buffer_too_small = 5,
     internal_error = 6,
-};
-
-/// Errors that can occur during response writing
-const ResponseWriteError = error{
-    OutOfBufferSpace,
 };
 
 /// Clean up REPL state and free associated memory.
@@ -522,12 +517,12 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
     };
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
-        error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
+        error.WriteFailed => @intFromEnum(WasmError.response_buffer_too_small),
     };
 }
 
 /// Handle messages in START state
-fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
+fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffer: []u8) std.io.Writer.Error!void {
     switch (message_type) {
         .INIT => {
             current_state = .READY;
@@ -541,7 +536,7 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
 }
 
 /// Handle messages in READY state
-fn handleReadyState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
+fn handleReadyState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) std.io.Writer.Error!void {
     switch (message_type) {
         .LOAD_SOURCE => {
             const source_value = root.object.get("source") orelse {
@@ -634,7 +629,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 }
 
 /// Handle messages in LOADED state
-fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
+fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, response_buffer: []u8) std.io.Writer.Error!void {
     const data = compiler_data orelse {
         try writeErrorResponse(response_buffer, .ERROR, "Compiler data not loaded (internal error)");
         return;
@@ -692,7 +687,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// RESET, and compiler queries (QUERY_CIR, QUERY_TYPES, GET_HOVER_INFO).
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
-fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
+fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) std.io.Writer.Error!void {
     const repl_ptr = repl_instance orelse {
         try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
         return;
@@ -947,9 +942,9 @@ fn compileSource(source: []const u8) !CompilerStageData {
 }
 
 /// Helper to write a response with a u32 length prefix.
-fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) ResponseWriteError!void {
+fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) std.io.Writer.Error!void {
     if (response_buffer.len < @sizeOf(u32) + json_payload.len) {
-        return error.OutOfBufferSpace;
+        return error.WriteFailed;
     }
 
     // Write length prefix (little-endian)
@@ -962,8 +957,8 @@ fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) Resp
 /// Writer that tracks bytes written and fails if buffer is exceeded.
 const ResponseWriter = struct {
     writer: std.io.Writer,
-    pub fn init(buffer: []u8) Self {
-        var writer = std.io.Writer.fixed(&buffer);
+    pub fn init(buffer: []u8) std.io.Writer.Error!Self {
+        var writer = std.io.Writer.fixed(buffer);
         // reserve space for the data length at the beginning of the buffer which will be set in finalize
         try writer.writeInt(u32, 0, .little);
         return .{ .writer = writer };
@@ -974,29 +969,29 @@ const ResponseWriter = struct {
     /// Finalizes the response by writing the length prefix at the beginning.
     /// This assumes all data has been written *after* the length prefix space.
     fn finalize(self: *Self) std.io.Writer.Error!void {
-        const data_len = self.pos - @sizeOf(u32);
-        std.mem.writeInt(u32, self.buffer[0..@sizeOf(u32)], @intCast(data_len), .little);
+        const data_len = self.writer.end - @sizeOf(u32);
+        std.mem.writeInt(u32, self.writer.buffer[0..@sizeOf(u32)], @intCast(data_len), .little);
         try self.writer.flush();
     }
 };
 
 /// Write an error response.
-fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
     try w.print("{{\"status\":\"{s}\",\"message\":\"", .{status.toString()});
-    try writeJsonString(w, message);
+    try writeJsonString(&w, message);
     try w.writeAll("\"}");
 
     try resp_writer.finalize();
 }
 
 /// Write a success response
-fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"");
-    try writeJsonString(w, message);
+    try writeJsonString(&w, message);
     try w.writeAll("\"");
 
     if (data) |d| {
@@ -1010,8 +1005,8 @@ fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]con
 }
 
 /// Write response for LOADED state with diagnostics
-fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
@@ -1040,7 +1035,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     if (diagnostics.items.len > 0) {
         for (diagnostics.items, 0..) |diagnostic, i| {
             if (i > 0) try w.writeAll(",");
-            try writeDiagnosticJson(w, diagnostic);
+            try writeDiagnosticJson(&w, diagnostic);
         }
     }
     try w.writeAll("],");
@@ -1054,35 +1049,35 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(html_writer, report) catch return error.WriteFailed;
         }
     }
     if (data.parse_reports.items.len > 0) {
         for (data.parse_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(html_writer, report) catch return error.WriteFailed;
         }
     }
     if (data.can_reports.items.len > 0) {
         for (data.can_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(html_writer, report) catch return error.WriteFailed;
         }
     }
     if (data.type_reports.items.len > 0) {
         for (data.type_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(html_writer, report) catch return error.WriteFailed;
         }
     }
 
     const html_content = html_stream.getWritten();
-    try writeJsonString(w, html_content);
+    try writeJsonString(&w, html_content);
     try w.writeAll("\"}}");
 
     try resp_writer.finalize();
 }
 
 /// Write REPL initialization response
-fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeReplInitResponse(response_buffer: []u8) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
@@ -1162,30 +1157,30 @@ fn extractErrorDetails(message: []const u8) ?[]const u8 {
 }
 
 /// Write REPL step result as JSON
-fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"result\":{");
 
     // Output field
     try w.writeAll("\"output\":\"");
-    try writeJsonString(w, result.output);
+    try writeJsonString(&w, result.output);
     try w.writeAll("\"");
 
     // Type field (using enum's jsonStringify)
     try w.writeAll(",\"type\":");
-    try result.result_type.jsonStringify(w);
+    try result.result_type.jsonStringify(&w);
 
     // Error-specific fields
     if (result.error_stage) |stage| {
         try w.writeAll(",\"error_stage\":");
-        try stage.jsonStringify(w);
+        try stage.jsonStringify(&w);
     }
 
     if (result.error_details) |details| {
         try w.writeAll(",\"error_details\":\"");
-        try writeJsonString(w, details);
+        try writeJsonString(&w, details);
         try w.writeAll("\"");
     }
 
@@ -1197,8 +1192,8 @@ fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) Respon
 }
 
 /// Write REPL clear response
-fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeReplClearResponse(response_buffer: []u8) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
@@ -1210,16 +1205,16 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
 }
 
 /// Write tokens response with direct HTML generation
-fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     if (data.tokens_html) |html| {
-        try writeJsonString(w, html);
+        try writeJsonString(&w, html);
     } else {
-        try writeJsonString(w, "Tokens not available");
+        try writeJsonString(&w, "Tokens not available");
     }
 
     try w.writeAll("\"}");
@@ -1227,16 +1222,16 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 }
 
 /// Write parse AST response in S-expression format
-fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     if (data.ast_html) |html| {
-        try writeJsonString(w, html);
+        try writeJsonString(&w, html);
     } else {
-        try writeJsonString(w, "Parse AST not available");
+        try writeJsonString(&w, "Parse AST not available");
     }
 
     try w.writeAll("\"}");
@@ -1244,8 +1239,8 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 }
 
 /// Write canonicalized CIR response for REPL mode using ModuleEnv directly
-fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
@@ -1274,14 +1269,14 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
     tree.toHtml(sexpr_writer) catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(&w, sexpr_buffer.items);
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
 
 /// Write canonicalized CIR response in S-expression format
-fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
@@ -1311,7 +1306,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
     tree.toHtml(sexpr_writer) catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(&w, sexpr_buffer.items);
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
@@ -1331,8 +1326,8 @@ const HoverInfo = struct {
 };
 
 /// Write hover info response for a specific position
-fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     const line_val = message_json.object.get("line") orelse {
@@ -1400,9 +1395,9 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         defer hover_info.deinit(allocator);
 
         try w.writeAll("{\"name\":\"");
-        try writeJsonString(w, hover_info.name);
+        try writeJsonString(&w, hover_info.name);
         try w.writeAll("\",\"type_str\":\"");
-        try writeJsonString(w, hover_info.type_str);
+        try writeJsonString(&w, hover_info.type_str);
         try w.writeAll("\",\"definition_region\":{");
         try w.print("\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}", .{
             hover_info.definition_region.start_line,
@@ -1414,7 +1409,7 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         try w.writeAll(",\"docs\":");
         if (hover_info.docs) |docs| {
             try w.writeAll("\"");
-            try writeJsonString(w, docs);
+            try writeJsonString(&w, docs);
             try w.writeAll("\"");
         } else {
             try w.writeAll("null");
@@ -1482,8 +1477,8 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 }
 
 /// Write types response in S-expression format
-fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter.init(response_buffer);
+fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) std.io.Writer.Error!void {
+    var resp_writer = try ResponseWriter.init(response_buffer);
     var w = resp_writer.writer;
 
     if (data.solver == null) {
@@ -1513,7 +1508,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     tree.toHtml(sexpr_writer) catch {};
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(&w, sexpr_buffer.items);
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
@@ -1571,7 +1566,7 @@ fn extractDiagnosticsFromReports(
     }
 }
 
-fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
+fn writeDiagnosticJson(writer: *std.io.Writer, diagnostic: Diagnostic) !void {
     try writer.print("{{\"severity\":\"{s}\",\"message\":\"", .{@tagName(diagnostic.severity)});
     try writeJsonString(writer, diagnostic.message);
     try writer.print("\",\"region\":{{\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}}}}}", .{
@@ -1581,7 +1576,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping
-fn writeJsonString(writer: anytype, str: []const u8) !void {
+fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
     for (str) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
