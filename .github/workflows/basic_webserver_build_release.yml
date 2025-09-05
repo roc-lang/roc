@@ -13,7 +13,7 @@ permissions: {}
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  RELEASE_TAG: 0.12.0
+  RELEASE_TAG: 0.13.0
 
 jobs:
   fetch-releases:
@@ -67,9 +67,6 @@ jobs:
       - name: build basic-webserver
         env:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
-          CC_aarch64_unknown_linux_musl: clang-18
-          AR_aarch64_unknown_linux_musl: llvm-ar-18
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_webserver.sh linux_arm64
 
       - name: Save .a file
@@ -185,3 +182,94 @@ jobs:
           name: release-assets-docs
           path: |
             docs.tar.gz
+
+  test-release:
+    needs: [create-release-archive]
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v4
+
+      - name: Set OS-specific variables
+        id: vars
+        run: |
+          if [[ "${{ matrix.os }}" =~ ^ubuntu-.*-arm$ ]]; then
+            echo "os_pattern=linux_arm64" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+            echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-13" ]; then
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+          else
+            echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
+          fi
+
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "${{ steps.vars.outputs.os_pattern }}") ./roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzvf roc_nightly.tar.gz
+
+      - name: delete tar
+        run: rm roc_nightly.tar.gz
+
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
+
+      - if: contains(env.ARCHIVE_FORMAT, 'gz')
+        run: |
+          cd basic-webserver-platform && ls | grep "tar" | xargs tar -xzf
+
+      - if: contains(env.ARCHIVE_FORMAT, 'br')
+        run: |
+          cd basic-webserver-platform && ls | grep "tar" | xargs brotli -d
+          ls | grep "tar$" | xargs tar -xf
+
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          sudo apt install -y expect ncat ripgrep
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          brew install expect # for tests
+          brew install nmap  # includes ncat server for tcp tests
+          brew install ripgrep # for ci/check_all_exposed_funs_tested.roc
+
+      - name: prepare testing
+        run: |
+          mv roc_nightly basic-webserver-platform/.
+          cd basic-webserver-platform 
+          mkdir platform
+          # move all files to platform dir
+          find . -maxdepth 1 -type f -exec mv {} platform/ \;
+          # move all dirs (except roc_nightly) to platform dir
+          find . -maxdepth 1 -type d ! -name 'platform' ! -name 'roc_nightly' -exec mv {} platform/ \;
+
+          mkdir temp-basic-webserver
+          cd temp-basic-webserver
+          git clone https://github.com/roc-lang/basic-webserver.git
+          cd basic-webserver
+          git checkout ${{ env.RELEASE_TAG }}
+          cp -r examples ../..
+          cp -r tests ../..
+          cp -r ci ../..
+          # LICENSE is necessary for command test
+          cp -r LICENSE ../..
+
+      - name: Remove things that dont work on musl
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          rm basic-webserver-platform/ci/expect_scripts/file-accessed-modified-created-time.exp
+          rm basic-webserver-platform/examples/file-accessed-modified-created-time.roc
+          sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' basic-webserver-platform/platform/File.roc
+          rm basic-webserver-platform/platform/File.roc.bak
+
+      - name: run tests
+        run: |
+          # no need to build platform anymore
+          cd basic-webserver-platform
+          NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
