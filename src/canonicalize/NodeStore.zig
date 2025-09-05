@@ -332,7 +332,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
 
             // Suffix
-            const suffix_parts = store.extra_data.items.items[node.data_3 + 4 ..][0..2];
+            const suffix_parts = store.extra_data.items.items[node.data_3 + value_as_u32s.len ..];
             const has_suffix: bool = suffix_parts[0] != 0;
             var suffix: ?types.Num.Int.Precision = null;
             if (has_suffix) {
@@ -381,7 +381,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_call => {
             // Retrieve args span from extra_data
-            const extra_start = node.data_1;
+            const extra_start = node.data_2;
             const extra_data = store.extra_data.items.items[extra_start..];
 
             const args_start = extra_data[0];
@@ -389,16 +389,23 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_call = .{
+                    .func = @enumFromInt(node.data_1),
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .called_via = @enumFromInt(node.data_2),
+                    .called_via = @enumFromInt(node.data_3),
                 },
             };
         },
-        .expr_frac_f32 => return CIR.Expr{ .e_frac_f32 = .{ .value = @bitCast(node.data_1) } },
+        .expr_frac_f32 => return CIR.Expr{ .e_frac_f32 = .{
+            .value = @bitCast(node.data_1),
+            .has_suffix = node.data_2 != 0,
+        } },
         .expr_frac_f64 => {
             const raw: [2]u32 = .{ node.data_1, node.data_2 };
 
-            return CIR.Expr{ .e_frac_f64 = .{ .value = @bitCast(raw) } };
+            return CIR.Expr{ .e_frac_f64 = .{
+                .value = @bitCast(raw),
+                .has_suffix = node.data_3 != 0,
+            } };
         },
         .expr_frac_dec => {
             // Get value from extra_data
@@ -409,6 +416,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_frac_dec = .{
                     .value = RocDec{ .num = value_as_i128 },
+                    .has_suffix = node.data_2 != 0,
                 },
             };
         },
@@ -417,12 +425,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // data_1: numerator (i16) stored as u32
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
             const numerator = @as(i16, @intCast(@as(i32, @bitCast(node.data_1))));
-            const denominator_power_of_ten = @as(u8, @truncate(node.data_3));
+            const denominator_power_of_ten = @as(u8, @truncate(node.data_2));
 
             return CIR.Expr{
                 .e_dec_small = .{
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
+                    .has_suffix = node.data_3 != 0,
                 },
             };
         },
@@ -1371,12 +1380,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
         .e_frac_f32 => |e| {
             node.tag = Node.Tag.expr_frac_f32;
             node.data_1 = @bitCast(e.value);
+            node.data_2 = @intFromBool(e.has_suffix);
         },
         .e_frac_f64 => |e| {
             node.tag = .expr_frac_f64;
             const raw: [2]u32 = @bitCast(e.value);
             node.data_1 = raw[0];
             node.data_2 = raw[1];
+            node.data_3 = @intFromBool(e.has_suffix);
         },
         .e_frac_dec => |e| {
             node.tag = .expr_frac_dec;
@@ -1391,6 +1402,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
 
             // Store the extra_data index in data_1
             node.data_1 = @intCast(extra_data_start);
+            node.data_2 = @intFromBool(e.has_suffix);
         },
         .e_dec_small => |e| {
             node.tag = .expr_dec_small;
@@ -1399,7 +1411,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             // data_1: numerator (i16) - fits in lower 16 bits
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
             node.data_1 = @as(u32, @bitCast(@as(i32, e.numerator)));
-            node.data_3 = @as(u32, e.denominator_power_of_ten);
+            node.data_2 = @as(u32, e.denominator_power_of_ten);
+            node.data_3 = @intFromBool(e.has_suffix);
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
@@ -1497,8 +1510,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             // Store args span length
             _ = try store.extra_data.append(store.gpa, e.args.span.len);
 
-            node.data_1 = @intCast(extra_data_start);
-            node.data_2 = @intFromEnum(e.called_via);
+            node.data_1 = @intFromEnum(e.func);
+            node.data_2 = @intCast(extra_data_start);
+            node.data_3 = @intFromEnum(e.called_via);
         },
         .e_record => |e| {
             node.tag = .expr_record;

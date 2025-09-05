@@ -62,10 +62,12 @@ pub const Expr = union(enum) {
     e_num: struct {
         value: CIR.IntValue,
         requirements: types.Num.IntRequirements,
+        // TODO: We should probably capture frac requirements here too?
     },
     /// A 32-bit floating-point literal.
     e_frac_f32: struct {
         value: f32,
+        has_suffix: bool, // If the value had a `f32` suffix
     },
     /// A 64-bit floating-point literal.
     /// Used for approximate decimal representations when F64 type is explicitly required for increased performance.
@@ -76,6 +78,7 @@ pub const Expr = union(enum) {
     /// ```
     e_frac_f64: struct {
         value: f64,
+        has_suffix: bool, // If the value had a `f64` suffix
     },
     /// A high-precision decimal literal.
     /// Used for exact decimal arithmetic without floating-point precision issues.
@@ -87,6 +90,7 @@ pub const Expr = union(enum) {
     /// ```
     e_frac_dec: struct {
         value: RocDec,
+        has_suffix: bool, // If the value had a `dec` suffix
     },
     /// A small decimal literal stored as a rational number (numerator/10^denominator).
     /// Memory-efficient representation for common decimal values.
@@ -100,6 +104,18 @@ pub const Expr = union(enum) {
     e_dec_small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
+        has_suffix: bool, // If the value had a `dec` suffix
+
+        /// Convert a small dec to f64 (use for size comparisions)
+        pub fn toF64(self: @This()) f64 {
+            const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
+            var divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < self.denominator_power_of_ten) : (i += 1) {
+                divisor *= 10.0;
+            }
+            return numerator_f64 / divisor;
+        }
     },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
@@ -170,6 +186,7 @@ pub const Expr = union(enum) {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     e_call: struct {
+        func: Expr.Idx,
         args: Expr.Span,
         called_via: CalledVia,
     },

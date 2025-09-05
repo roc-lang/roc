@@ -136,11 +136,6 @@ fn copyFlatType(
         .record => |record| FlatType{ .record = try copyRecord(source_store, dest_store, record, var_mapping, source_idents, dest_idents, allocator) },
         .tag_union => |tag_union| FlatType{ .tag_union = try copyTagUnion(source_store, dest_store, tag_union, var_mapping, source_idents, dest_idents, allocator) },
         .record_unbound => |fields| FlatType{ .record_unbound = try copyRecordFields(source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
-        .record_poly => |poly| blk: {
-            const dest_record = try copyRecord(source_store, dest_store, poly.record, var_mapping, source_idents, dest_idents, allocator);
-            const dest_var = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator);
-            break :blk FlatType{ .record_poly = .{ .record = dest_record, .var_ = dest_var } };
-        },
         .empty_record => FlatType.empty_record,
         .empty_tag_union => FlatType.empty_tag_union,
     };
@@ -179,9 +174,13 @@ fn copyNum(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
-        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
-        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator), .requirements = poly.requirements } },
+        .num_poly => |poly| Num{ .num_poly = .{
+            .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator),
+            .int_requirements = poly.int_requirements,
+            .frac_requirements = poly.frac_requirements,
+        } },
+        .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
+        .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .num_unbound => |unbound| Num{ .num_unbound = unbound },
         .int_unbound => |unbound| Num{ .int_unbound = unbound },
         .frac_unbound => |unbound| Num{ .frac_unbound = unbound },

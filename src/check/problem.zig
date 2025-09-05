@@ -195,7 +195,8 @@ pub const ReportBuilder = struct {
     const Self = @This();
 
     gpa: Allocator,
-    buf: std.ArrayList(u8),
+    snapshot_writer: snapshot.SnapshotWriter,
+    bytes_buf: std.ArrayList(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -215,7 +216,8 @@ pub const ReportBuilder = struct {
     ) Self {
         return .{
             .gpa = gpa,
-            .buf = std.ArrayList(u8).init(gpa),
+            .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore()),
+            .bytes_buf = std.ArrayList(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -228,7 +230,8 @@ pub const ReportBuilder = struct {
     /// Deinit report builder
     /// Only owned field is `buf`
     pub fn deinit(self: *Self) void {
-        self.buf.deinit();
+        self.snapshot_writer.deinit();
+        self.bytes_buf.deinit();
     }
 
     /// Build a report for a problem
@@ -239,62 +242,53 @@ pub const ReportBuilder = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var snapshot_writer = snapshot.SnapshotWriter.initWithContext(
-            self.buf.writer(),
-            self.snapshots,
-            self.module_env.getIdentStore(),
-            self.can_ir.module_name,
-            self.can_ir,
-            self.other_modules,
-        );
-
         switch (problem) {
             .type_mismatch => |mismatch| {
                 if (mismatch.detail) |detail| {
                     switch (detail) {
                         .incompatible_list_elements => |data| {
-                            return self.buildIncompatibleListElementsReport(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleListElementsReport(mismatch.types, data);
                         },
                         .incompatible_if_cond => {
-                            return self.buildInvalidIfCondition(&snapshot_writer, mismatch.types);
+                            return self.buildInvalidIfCondition(mismatch.types);
                         },
                         .incompatible_if_branches => |data| {
-                            return self.buildIncompatibleIfBranches(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleIfBranches(mismatch.types, data);
                         },
                         .incompatible_match_patterns => |data| {
-                            return self.buildIncompatibleMatchPatterns(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleMatchPatterns(mismatch.types, data);
                         },
                         .incompatible_match_branches => |data| {
-                            return self.buildIncompatibleMatchBranches(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleMatchBranches(mismatch.types, data);
                         },
                         .invalid_bool_binop => |data| {
-                            return self.buildInvalidBoolBinop(&snapshot_writer, mismatch.types, data);
+                            return self.buildInvalidBoolBinop(mismatch.types, data);
                         },
                         .invalid_nominal_tag => {
-                            return self.buildInvalidNominalTag(&snapshot_writer, mismatch.types);
+                            return self.buildInvalidNominalTag(mismatch.types);
                         },
                         .cross_module_import => |data| {
-                            return self.buildCrossModuleImportError(&snapshot_writer, mismatch.types, data);
+                            return self.buildCrossModuleImportError(mismatch.types, data);
                         },
                         .incompatible_fn_call_arg => |data| {
-                            return self.buildIncompatibleFnCallArg(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleFnCallArg(mismatch.types, data);
                         },
                         .incompatible_fn_args_bound_var => |data| {
-                            return self.buildIncompatibleFnArgsBoundVar(&snapshot_writer, mismatch.types, data);
+                            return self.buildIncompatibleFnArgsBoundVar(mismatch.types, data);
                         },
                     }
                 } else {
-                    return self.buildGenericTypeMismatchReport(&snapshot_writer, mismatch.types);
+                    return self.buildGenericTypeMismatchReport(mismatch.types);
                 }
             },
             .type_apply_mismatch_arities => |data| {
-                return self.buildTypeApplyArityMismatchReport(&snapshot_writer, data);
+                return self.buildTypeApplyArityMismatchReport(data);
             },
             .number_does_not_fit => |data| {
-                return self.buildNumberDoesNotFitReport(&snapshot_writer, data);
+                return self.buildNumberDoesNotFitReport(data);
             },
             .negative_unsigned_int => |data| {
-                return self.buildNegativeUnsignedIntReport(&snapshot_writer, data);
+                return self.buildNegativeUnsignedIntReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport(),
             .anonymous_recursion => |_| return self.buildUnimplementedReport(),
@@ -310,19 +304,18 @@ pub const ReportBuilder = struct {
     /// Build a report for type mismatch diagnostic
     fn buildGenericTypeMismatchReport(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const owned_actual = try report.addOwnedString(self.buf.items[0..]);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const owned_actual = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
 
         // For annotation mismatches, we want to highlight the expression that doesn't match,
         // not the annotation itself. When from_annotation is true and we're showing
@@ -331,8 +324,6 @@ pub const ReportBuilder = struct {
 
         const region_var = if (types.constraint_origin_var) |origin_var|
             origin_var
-        else if (types.from_annotation)
-            types.expected_var // Use expected_var to highlight the expression causing the mismatch
         else
             types.actual_var;
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
@@ -349,7 +340,7 @@ pub const ReportBuilder = struct {
                 // In this case, show a specialized argument type mismatch error.
                 if (types.constraint_origin_var) |origin_var| {
                     report.deinit();
-                    return self.buildIncompatibleFnCallArg(snapshot_writer, types, .{
+                    return self.buildIncompatibleFnCallArg(types, .{
                         .fn_name = null,
                         .arg_var = origin_var,
                         .incompatible_arg_index = 0, // First argument
@@ -374,18 +365,18 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        if (types.from_annotation) {
-            try report.document.addText("The type annotation says it should have the type:");
-        } else {
-            try report.document.addText("It has the type:");
-        }
+        try report.document.addText("It has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_actual, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("But here it's being used as:");
+        if (types.from_annotation) {
+            try report.document.addText("But the type annotation says it should have the type:");
+        } else {
+            try report.document.addText("But I expected it to be:");
+        }
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
@@ -419,7 +410,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible list elements
     fn buildIncompatibleListElementsReport(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleListElements,
     ) !Report {
@@ -427,21 +417,21 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.incompatible_elem_index);
-        const expected_type_ordinal = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index);
+        const expected_type_ordinal = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.incompatible_elem_index + 1);
-        const actual_type_ordinal = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index + 1);
+        const actual_type_ordinal = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add description
         if (data.list_length == 2) {
@@ -555,16 +545,15 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible list elements
     fn buildInvalidIfCondition(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID IF CONDITION", .runtime_error);
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add description
         try report.document.addText("This ");
@@ -633,7 +622,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible list elements
     fn buildIncompatibleIfBranches(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleIfBranches,
     ) !Report {
@@ -648,17 +636,17 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.problem_branch_index + 1);
-        const branch_ordinal = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const branch_ordinal = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add title
         if (is_only_if_else) {
@@ -779,7 +767,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible match branches
     fn buildIncompatibleMatchPatterns(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleMatchPatterns,
     ) !Report {
@@ -787,25 +774,25 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.problem_branch_index + 1);
-        const branch_ord = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const branch_ord = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.problem_pattern_index + 1);
-        const pattern_ord = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_pattern_index + 1);
+        const pattern_ord = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add description
         if (data.num_patterns > 1) {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             try report.document.addText("The pattern ");
             try report.document.addText(pattern_ord);
             try report.document.addText(" pattern in this ");
@@ -814,7 +801,7 @@ pub const ReportBuilder = struct {
             try report.document.addText(" differs from previous ones:");
             try report.document.addLineBreak();
         } else {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             try report.document.addText("The pattern in the ");
             try report.document.addText(branch_ord);
             try report.document.addText(" branch of this ");
@@ -867,7 +854,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
-        self.buf.clearRetainingCapacity();
+        self.snapshot_writer.resetContext();
         try report.document.addText("The ");
         try report.document.addText(branch_ord);
         try report.document.addText(" pattern has this type:");
@@ -902,7 +889,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible match branches
     fn buildIncompatibleMatchBranches(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleMatchBranches,
     ) !Report {
@@ -913,26 +899,26 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.problem_branch_index + 1);
-        const branch_ord = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const branch_ord = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add description
         if (data.num_branches == 2) {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             try report.document.addText("The second branch's type in this ");
             try report.document.addAnnotated("match", .keyword);
             try report.document.addText(" is different from the first branch:");
         } else {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             try report.document.addText("The ");
             try report.document.addText(branch_ord);
             try report.document.addText(" branch's type in this ");
@@ -1028,7 +1014,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible match branches
     fn buildInvalidBoolBinop(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: InvalidBoolBinop,
     ) !Report {
@@ -1036,9 +1021,9 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add description
         try report.document.addText("I'm having trouble with this bool operation:");
@@ -1120,7 +1105,6 @@ pub const ReportBuilder = struct {
     /// Build a report for incompatible match branches
     fn buildInvalidNominalTag(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
     ) !Report {
         var report = Report.init(self.gpa, "INVALID NOMINAL TAG", .runtime_error);
@@ -1132,9 +1116,9 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.writeTag(actual_tag, types.actual_snapshot);
-        const actual_tag_str = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.writeTag(actual_tag, types.actual_snapshot);
+        const actual_tag_str = try report.addOwnedString(self.snapshot_writer.get());
 
         // Create expected tag str
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
@@ -1168,18 +1152,18 @@ pub const ReportBuilder = struct {
         // Show the expected tags
         if (expected_num_tags_str == 1) {
             const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
-            self.buf.clearRetainingCapacity();
-            try snapshot_writer.writeTag(expected_tag, types.expected_snapshot);
-            const expected_tag_str = try report.addOwnedString(self.buf.items);
+            self.snapshot_writer.resetContext();
+            try self.snapshot_writer.writeTag(expected_tag, types.expected_snapshot);
+            const expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
 
             try report.document.addText("But it should be:");
             try report.document.addLineBreak();
             try report.document.addText("    ");
             try report.document.addAnnotated(expected_tag_str, .type_variable);
         } else {
-            self.buf.clearRetainingCapacity();
-            try snapshot_writer.write(types.expected_snapshot);
-            const expected_type = try report.addOwnedString(self.buf.items);
+            self.snapshot_writer.resetContext();
+            try self.snapshot_writer.write(types.expected_snapshot);
+            const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
             try report.document.addText("But it should be one of:");
             try report.document.addLineBreak();
@@ -1195,11 +1179,9 @@ pub const ReportBuilder = struct {
                 const expected_tag_name_str = self.can_ir.getIdent(cur_expected_tag.name);
 
                 if (std.mem.eql(u8, actual_tag_name_str, expected_tag_name_str)) {
-                    snapshot_writer.resetContext();
-
-                    self.buf.clearRetainingCapacity();
-                    try snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
-                    const cur_expected_tag_str = try report.addOwnedString(self.buf.items);
+                    self.snapshot_writer.resetContext();
+                    try self.snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
+                    const cur_expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
 
                     try report.document.addLineBreak();
                     try report.document.addLineBreak();
@@ -1221,28 +1203,27 @@ pub const ReportBuilder = struct {
     /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleFnCallArg,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.incompatible_arg_index + 1);
-        const arg_index = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.incompatible_arg_index + 1);
+        const arg_index = try report.addOwnedString(self.snapshot_writer.get());
 
         // Extract only the argument types from the function snapshots
         const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
         const expected_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(actual_arg_type);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(actual_arg_type);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(expected_arg_type);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(expected_arg_type);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
@@ -1269,7 +1250,7 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("But ");
         if (data.fn_name) |fn_name_ident| {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
@@ -1287,30 +1268,29 @@ pub const ReportBuilder = struct {
 
     fn buildIncompatibleFnArgsBoundVar(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: IncompatibleFnArgsBoundVar,
     ) !Report {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.first_arg_index + 1);
-        const first_arg_index = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.first_arg_index + 1);
+        const first_arg_index = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try appendOrdinal(&self.buf, data.second_arg_index + 1);
-        const second_arg_index = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.second_arg_index + 1);
+        const second_arg_index = try report.addOwnedString(self.snapshot_writer.get());
 
         // The types from unification already have the correct snapshots
         // expected = first argument, actual = second argument
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const first_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const first_type = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const second_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const second_type = try report.addOwnedString(self.snapshot_writer.get());
 
         try report.document.addText("The ");
         try report.document.addText(first_arg_index);
@@ -1397,7 +1377,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         if (data.fn_name) |fn_name_ident| {
-            self.buf.clearRetainingCapacity();
+            self.snapshot_writer.resetContext();
             const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
@@ -1413,7 +1393,6 @@ pub const ReportBuilder = struct {
     /// Build a report for "number does not fit in type" diagnostic
     fn buildTypeApplyArityMismatchReport(
         self: *Self,
-        _: *snapshot.SnapshotWriter,
         data: TypeApplyArityMismatch,
     ) !Report {
         const title = blk: {
@@ -1430,13 +1409,13 @@ pub const ReportBuilder = struct {
 
         const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
 
-        self.buf.clearRetainingCapacity();
-        try self.buf.writer().print("{d}", .{data.num_expected_args});
-        const num_expected_args = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.num_expected_args});
+        const num_expected_args = try report.addOwnedString(self.snapshot_writer.get());
 
-        self.buf.clearRetainingCapacity();
-        try self.buf.writer().print("{d}", .{data.num_actual_args});
-        const num_actual_args = try report.addOwnedString(self.buf.items);
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.num_actual_args});
+        const num_actual_args = try report.addOwnedString(self.snapshot_writer.get());
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -1467,15 +1446,14 @@ pub const ReportBuilder = struct {
     /// Build a report for "number does not fit in type" diagnostic
     fn buildNumberDoesNotFitReport(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         data: NumberDoesNotFit,
     ) !Report {
         var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
         errdefer report.deinit();
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.expected_type);
-        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -1508,15 +1486,14 @@ pub const ReportBuilder = struct {
     /// Build a report for "negative unsigned integer" diagnostic
     fn buildNegativeUnsignedIntReport(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         data: NegativeUnsignedInt,
     ) !Report {
         var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
         errdefer report.deinit();
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.expected_type);
-        const owned_expected = try report.addOwnedString(self.buf.items[0..]);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -1555,7 +1532,6 @@ pub const ReportBuilder = struct {
     /// Build a report for cross-module import type mismatch
     fn buildCrossModuleImportError(
         self: *Self,
-        snapshot_writer: *snapshot.SnapshotWriter,
         types: TypePair,
         data: CrossModuleImport,
     ) !Report {
@@ -1615,9 +1591,9 @@ pub const ReportBuilder = struct {
         try report.document.addText("It has the type:");
         try report.document.addLineBreak();
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
         try report.document.addLineBreak();
@@ -1633,9 +1609,9 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        self.buf.clearRetainingCapacity();
-        try snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.buf.items);
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();

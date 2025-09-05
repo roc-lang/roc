@@ -3,11 +3,13 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types");
+const can = @import("can");
 
 const Check = @import("../Check.zig");
 const snapshot = @import("../snapshot.zig");
 
 const Ident = base.Ident;
+const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
@@ -38,19 +40,17 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 1: Origin shown when type is from different module
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
-        defer buf.deinit();
-
         var writer = snapshot.SnapshotWriter.init(
-            buf.writer(),
+            test_allocator,
             &snapshots,
             &idents,
         );
+        defer writer.deinit();
         writer.current_module_name = "CurrentModule";
 
         try writer.writeNominalType(nominal_type, nominal_type_backing_idx);
 
-        const result = buf.items;
+        const result = writer.get();
         // Should show "Person (from Data.Types)"
         try testing.expect(std.mem.indexOf(u8, result, "Person") != null);
         try testing.expect(std.mem.indexOf(u8, result, "(from Data.Types)") != null);
@@ -58,9 +58,6 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 2: Origin NOT shown when type is from same module
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
-        defer buf.deinit();
-
         // Create a nominal type from the current module
         const same_module_nominal = snapshot.SnapshotNominalType{
             .ident = types_mod.TypeIdent{ .ident_idx = type_name_ident },
@@ -69,15 +66,16 @@ test "nominal type origin - displays origin in snapshot writer" {
         };
 
         var writer = snapshot.SnapshotWriter.init(
-            buf.writer(),
+            test_allocator,
             &snapshots,
             &idents,
         );
+        defer writer.deinit();
         writer.current_module_name = "CurrentModule";
 
         try writer.writeNominalType(same_module_nominal, nominal_type_backing_idx);
 
-        const result = buf.items;
+        const result = writer.get();
         // Should show just "Person" without origin
         try testing.expect(std.mem.indexOf(u8, result, "Person") != null);
         try testing.expect(std.mem.indexOf(u8, result, "(from CurrentModule)") == null);
@@ -101,15 +99,16 @@ test "nominal type origin - displays origin in snapshot writer" {
         };
 
         var writer = snapshot.SnapshotWriter.init(
-            buf.writer(),
+            test_allocator,
             &snapshots,
             &idents,
         );
+        defer writer.deinit();
         writer.current_module_name = "CurrentModule";
 
         try writer.writeNominalType(generic_nominal, nominal_type_backing_idx);
 
-        const result = buf.items;
+        const result = writer.get();
         // Should show "Person(Str) (from Data.Types)"
         try testing.expect(std.mem.indexOf(u8, result, "Person(Str)") != null);
         try testing.expect(std.mem.indexOf(u8, result, "(from Data.Types)") != null);
@@ -137,19 +136,17 @@ test "nominal type origin - works with no context" {
         .origin_module = module_ident,
     };
 
-    var buf = std.ArrayList(u8).init(test_allocator);
-    defer buf.deinit();
-
     // Use the basic init without context
     var writer = snapshot.SnapshotWriter.init(
-        buf.writer(),
+        test_allocator,
         &snapshots,
         &idents,
     );
+    defer writer.deinit();
 
     try writer.writeNominalType(nominal_type, nominal_type_backing_idx);
 
-    const result = buf.items;
+    const result = writer.get();
     // Should show just "MyType" without origin info
     try testing.expect(std.mem.indexOf(u8, result, "MyType") != null);
     try testing.expect(std.mem.indexOf(u8, result, "(from") == null);

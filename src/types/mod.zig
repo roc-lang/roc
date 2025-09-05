@@ -10,6 +10,7 @@ const std = @import("std");
 pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
+pub const generalize = @import("generalize.zig");
 
 pub const TypeWriter = @import("TypeWriter.zig");
 
