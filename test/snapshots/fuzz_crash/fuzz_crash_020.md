@@ -186,6 +186,7 @@ UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
+EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **PARSE ERROR**
@@ -834,6 +835,16 @@ h == foo
 ```
      ^^^
 
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `main!` is exposed, but it is not defined anywhere in this module.
+
+**fuzz_crash_020.md:2:6:2:11:**
+```roc
+app [main!] { pf: platform "c" }
+```
+     ^^^^^
+You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:

@@ -32,6 +32,7 @@ zig-out
 *.rs.bk
 *.o
 *.a
+*.s
 *.so
 *.so.*
 *.obj

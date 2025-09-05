@@ -64,6 +64,7 @@ pub const OptLevel = enum {
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
     opt: OptLevel = .dev, // the optimization level
+    target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
 };
@@ -81,6 +82,7 @@ pub const CheckArgs = struct {
 pub const BuildArgs = struct {
     path: []const u8, // the path to the roc file to be built
     opt: OptLevel, // the optimization level
+    target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
@@ -165,6 +167,7 @@ const main_help =
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
     \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+    \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\
 ;
 
@@ -219,6 +222,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
@@ -235,11 +239,18 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
             \\      -h, --help                     Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--target")) {
+            if (getFlagValue(arg)) |value| {
+                target = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--target" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--output")) {
             if (getFlagValue(arg)) |value| {
                 output = value;
@@ -275,7 +286,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
 fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -599,6 +610,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
 fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
+    var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var app_args = std.ArrayList([]const u8).init(gpa);
     for (args) |arg| {
@@ -610,6 +622,12 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Erro
             // We need to free the paths here because we aren't returning the .format variant
             app_args.deinit();
             return CliArgs.version;
+        } else if (mem.startsWith(u8, arg, "--target")) {
+            if (getFlagValue(arg)) |value| {
+                target = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--target" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -630,7 +648,7 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Erro
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

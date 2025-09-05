@@ -65,6 +65,15 @@ pub const RocOps = extern struct {
         self.roc_crashed(&roc_crashed_args, self.env);
     }
 
+    /// Helper function to send debug output to the host.
+    pub fn dbg(self: *RocOps, msg: []const u8) void {
+        const roc_dbg_args = RocDbg{
+            .utf8_bytes = @constCast(msg.ptr),
+            .len = msg.len,
+        };
+        self.roc_dbg(&roc_dbg_args, self.env);
+    }
+
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
         var roc_alloc_args = RocAlloc{
             .alignment = alignment,

@@ -1,0 +1,140 @@
+on:
+  workflow_call:
+
+name: Cross Compilation Test
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  # Step 1: Cross-compile musl and glibc targets from different host platforms
+  cross-compile:
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [
+            ubuntu-22.04, # Linux x64 host
+            macos-13, # macOS x64 host
+            macos-15, # macOS ARM64 host
+            windows-2022, # Windows x64 host
+          ]
+        target: [
+            x64musl, # Linux x86_64 musl
+            arm64musl, # Linux ARM64 musl
+            x64glibc, # Linux x86_64 glibc
+            arm64glibc, # Linux ARM64 glibc
+          ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0
+        with:
+          version: 0.14.1
+          use-cache: false
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build roc compiler
+        id: build1
+        run: zig build
+        continue-on-error: true
+
+      - name: Build roc compiler (retry on EndOfStream)
+        if: failure() && contains(steps.build1.outputs.stderr, 'EndOfStream')
+        id: build2
+        run: zig build
+
+      - name: Cross-compile int platform (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
+          ./zig-out/bin/roc build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
+
+      - name: Cross-compile int platform (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
+          zig-out\bin\roc.exe build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
+
+      - name: Upload cross-compiled executables
+        uses: actions/upload-artifact@v4 # ratchet:actions/upload-artifact@v4
+        with:
+          name: cross-compiled-${{ matrix.host }}-${{ matrix.target }}
+          path: |
+            int_app_${{ matrix.target }}_*
+          retention-days: 1
+
+  # Step 2: Test cross-compiled executables on actual target platforms
+  test-cross-compiled:
+    needs: cross-compile
+    runs-on: ${{ matrix.target_os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Test x64musl executables on Linux x64
+          - target: x64musl
+            target_os: ubuntu-22.04
+            arch: x64
+          # Test arm64musl executables on Linux ARM64
+          - target: arm64musl
+            target_os: ubuntu-24.04-arm
+            arch: arm64
+          # Test x64glibc executables on Linux x64
+          - target: x64glibc
+            target_os: ubuntu-22.04
+            arch: x64
+          # Test arm64glibc executables on Linux ARM64
+          - target: arm64glibc
+            target_os: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Download all cross-compiled artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cross-compiled-*-${{ matrix.target }}
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: |
+          echo "Downloaded cross-compiled executables:"
+          ls -la *_${{ matrix.target }}* || echo "No files found"
+
+      - name: Test cross-compiled executables from all hosts
+        run: |
+          success_count=0
+          total_count=0
+
+          echo "Testing ${{ matrix.target }} executables on ${{ matrix.target_os }} (${{ matrix.arch }})"
+
+          # Test int apps from all host platforms
+          for int_app in int_app_${{ matrix.target }}_*; do
+            if [ -f "$int_app" ]; then
+              echo ""
+              echo "Testing $int_app:"
+              chmod +x "$int_app"
+              if ./"$int_app"; then
+                echo "✅ $int_app: SUCCESS"
+                success_count=$((success_count + 1))
+              else
+                echo "❌ $int_app: FAILED"
+              fi
+              total_count=$((total_count + 1))
+            fi
+          done
+
+          echo ""
+          echo "Summary: $success_count/$total_count executables passed"
+
+          if [ $success_count -eq $total_count ] && [ $total_count -gt 0 ]; then
+            echo "🎉 All cross-compiled executables work correctly!"
+          else
+            echo "💥 Some cross-compiled executables failed"
+            exit 1
+          fi

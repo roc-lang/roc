@@ -5,6 +5,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const libc_finder = @import("libc_finder.zig");
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -33,6 +34,33 @@ pub const TargetFormat = enum {
             else => .elf,
         };
     }
+
+    /// Detect target format from OS tag
+    pub fn detectFromOs(os: std.Target.Os.Tag) TargetFormat {
+        return switch (os) {
+            .windows => .coff,
+            .macos, .ios, .watchos, .tvos => .macho,
+            .wasi => .wasm,
+            else => .elf,
+        };
+    }
+};
+
+/// Target ABI for runtime-configurable linking
+pub const TargetAbi = enum {
+    musl,
+    gnu,
+
+    /// Convert from RocTarget to TargetAbi
+    pub fn fromRocTarget(roc_target: anytype) TargetAbi {
+        // Use string matching to avoid circular imports
+        const target_str = @tagName(roc_target);
+        if (std.mem.endsWith(u8, target_str, "musl")) {
+            return .musl;
+        } else {
+            return .gnu;
+        }
+    }
 };
 
 /// Configuration for linking operation
@@ -40,11 +68,26 @@ pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
 
+    /// Target ABI - determines static vs dynamic linking strategy
+    target_abi: ?TargetAbi = null, // null means detect from system
+
+    /// Target OS tag - for cross-compilation support
+    target_os: ?std.Target.Os.Tag = null, // null means detect from system
+
+    /// Target CPU architecture - for cross-compilation support
+    target_arch: ?std.Target.Cpu.Arch = null, // null means detect from system
+
     /// Output executable path
     output_path: []const u8,
 
     /// Input object files to link
     object_files: []const []const u8,
+
+    /// Platform-provided files to link before object files (e.g., Scrt1.o, crti.o, host.o)
+    platform_files_pre: []const []const u8 = &.{},
+
+    /// Platform-provided files to link after object files (e.g., crtn.o)
+    platform_files_post: []const []const u8 = &.{},
 
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
@@ -75,7 +118,11 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     defer args.deinit();
 
     // Add platform-specific linker name and arguments
-    switch (builtin.target.os.tag) {
+    // Use target OS if provided, otherwise fall back to host OS
+    const target_os = config.target_os orelse builtin.target.os.tag;
+    const target_arch = config.target_arch orelse builtin.target.cpu.arch;
+
+    switch (target_os) {
         .macos => {
             // Add linker name for macOS
             try args.append("ld64.lld");
@@ -89,7 +136,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 
             // Add architecture flag
             try args.append("-arch");
-            switch (builtin.target.cpu.arch) {
+            switch (target_arch) {
                 .aarch64 => try args.append("arm64"),
                 .x86_64 => try args.append("x86_64"),
                 else => try args.append("arm64"), // default to arm64
@@ -104,6 +151,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             // Add SDK path
             try args.append("-syslibroot");
             try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+
+            // Link against system libraries on macOS
+            try args.append("-lSystem");
         },
         .linux => {
             // Add linker name for Linux
@@ -113,11 +163,57 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("-o");
             try args.append(config.output_path);
 
-            // Suppress LLD warnings
+            // Prevent hidden linker behaviour -- only explicit platfor mdependencies
+            try args.append("-nostdlib");
+            // Remove unused sections to reduce binary size
+            try args.append("--gc-sections");
+            // TODO make the confirugable instead of using comments
+            // Suppress linker warnings
             try args.append("-w");
+            // Verbose linker for debugging (uncomment as needed)
+            // try args.append("--verbose");
+            // try args.append("--print-map");
+            // try args.append("--error-limit=0");
 
-            // Use static linking to avoid dynamic linker dependency issues
-            try args.append("-static");
+            // Determine target ABI
+            const target_abi = config.target_abi orelse if (builtin.target.abi == .musl) TargetAbi.musl else TargetAbi.gnu;
+
+            switch (target_abi) {
+                .musl => {
+                    // Static musl linking
+                    try args.append("-static");
+                },
+                .gnu => {
+                    // Dynamic GNU linking - dynamic linker path is handled by caller
+                    // for cross-compilation. Only detect locally for native builds
+                    if (config.extra_args.len == 0) {
+                        // Native build - try to detect dynamic linker
+                        if (libc_finder.findLibc(allocator)) |libc_info| {
+                            // We need to copy the path since args holds references
+                            const dynamic_linker = try allocator.dupe(u8, libc_info.dynamic_linker);
+
+                            // Clean up libc_info after copying what we need
+                            var info = libc_info;
+                            info.deinit();
+
+                            try args.append("-dynamic-linker");
+                            try args.append(dynamic_linker);
+                        } else |err| {
+                            // Fallback to hardcoded path based on architecture
+                            std.log.warn("Failed to detect libc: {}, using fallback", .{err});
+                            try args.append("-dynamic-linker");
+                            const fallback_ld = switch (builtin.target.cpu.arch) {
+                                .x86_64 => "/lib64/ld-linux-x86-64.so.2",
+                                .aarch64 => "/lib/ld-linux-aarch64.so.1",
+                                .x86 => "/lib/ld-linux.so.2",
+                                else => "/lib/ld-linux.so.2",
+                            };
+                            try args.append(fallback_ld);
+                        }
+                    }
+                    // Otherwise, dynamic linker is set via extra_args from caller
+                },
+            }
         },
         .windows => {
             // Add linker name for Windows COFF
@@ -131,7 +227,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("/subsystem:console");
 
             // Add machine type based on target architecture
-            switch (builtin.target.cpu.arch) {
+            switch (target_arch) {
                 .x86_64 => try args.append("/machine:x64"),
                 .x86 => try args.append("/machine:x86"),
                 .aarch64 => try args.append("/machine:arm64"),
@@ -160,14 +256,30 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
         },
     }
 
+    // Add platform-provided files that come before object files
+    for (config.platform_files_pre) |platform_file| {
+        try args.append(platform_file);
+    }
+
     // Add object files
     for (config.object_files) |obj_file| {
         try args.append(obj_file);
     }
 
+    // Add platform-provided files that come after object files
+    for (config.platform_files_post) |platform_file| {
+        try args.append(platform_file);
+    }
+
     // Add any extra arguments
     for (config.extra_args) |extra_arg| {
         try args.append(extra_arg);
+    }
+
+    // Debug: Print the linker command
+    std.log.debug("Linker command:", .{});
+    for (args.items) |arg| {
+        std.log.debug("  {s}", .{arg});
     }
 
     // Convert to null-terminated strings for C API
@@ -253,6 +365,8 @@ test "link config creation" {
     try std.testing.expect(config.target_format == TargetFormat.detectFromSystem());
     try std.testing.expectEqualStrings("test_output", config.output_path);
     try std.testing.expectEqual(@as(usize, 2), config.object_files.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_pre.len);
+    try std.testing.expectEqual(@as(usize, 0), config.platform_files_post.len);
 }
 
 test "target format detection" {

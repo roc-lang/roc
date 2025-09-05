@@ -570,9 +570,10 @@ pub fn canonicalizeFile(
         .package => |h| try self.createExposedScope(h.exposes),
         .platform => |h| try self.createExposedScope(h.exposes),
         .hosted => |h| try self.createExposedScope(h.exposes),
-        .app => {
+        .app => |h| {
             // App headers have 'provides' instead of 'exposes'
-            // TODO: Handle app provides differently
+            // but we need to track the provided functions for export
+            try self.createExposedScope(h.provides);
         },
         .malformed => {
             // Skip malformed headers
@@ -935,6 +936,9 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
+    // Create the span of exported defs by finding definitions that correspond to exposed items
+    try self.populateExports();
+
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 
@@ -1126,6 +1130,31 @@ fn createExposedScope(
             },
         }
     }
+}
+
+fn populateExports(self: *Self) std.mem.Allocator.Error!void {
+    // Start a new scratch space for exports
+    const scratch_exports_start = self.env.store.scratchDefTop();
+
+    // Use the already-created all_defs span
+    const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+
+    // Check each definition to see if it corresponds to an exposed item
+    for (defs_slice) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            // Check if this definition's identifier is in the exposed items
+            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(pattern.assign.ident))) {
+                // Add this definition to the exports scratch space
+                try self.env.store.addScratchDef(def_idx);
+            }
+        }
+    }
+
+    // Create the exports span from the scratch space
+    self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {

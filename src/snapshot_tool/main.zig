@@ -49,7 +49,7 @@ const rand = prng.random();
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
     if (verbose_log) {
-        std.log.info(fmt_str, args);
+        std.log.debug(fmt_str, args);
     }
 }
 
@@ -719,7 +719,7 @@ pub fn main() !void {
                 \\Arguments:
                 \\  snapshot_paths  Paths to snapshot files or directories
             ;
-            std.log.info(usage, .{});
+            std.log.debug(usage, .{});
             std.process.exit(0);
         } else {
             try snapshot_paths.append(arg);
@@ -796,7 +796,7 @@ pub fn main() !void {
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    std.log.info(
+    std.log.debug(
         "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
         .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
     );
