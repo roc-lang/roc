@@ -8,26 +8,18 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_number_doesnt_fit.md:1:7:1:7
+NUMBER DOES NOT FIT IN TYPE - can_list_number_doesnt_fit.md:1:12:1:15
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**can_list_number_doesnt_fit.md:1:7:**
+**NUMBER DOES NOT FIT IN TYPE**
+The number **300** does not fit in its inferred type:
+**can_list_number_doesnt_fit.md:1:12:1:15:**
 ```roc
 [1u8, 2u8, 300]
 ```
-      ^^^  ^^^
+           ^^^
 
-The second element has this type:
+Its inferred type is:
     _U8_
-
-However, the third element has this type:
-    _Num(_size)_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
