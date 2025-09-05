@@ -209,12 +209,6 @@ const CheckOccurs = struct {
                             const fields_slice = self.types_store.getRecordFieldsSlice(fields);
                             try self.occursSubVars(root, fields_slice.items(.var_), ctx.allowRecursion());
                         },
-                        .record_poly => |poly| {
-                            const fields = self.types_store.getRecordFieldsSlice(poly.record.fields);
-                            try self.occursSubVars(root, fields.items(.var_), ctx.allowRecursion());
-                            try self.occursSubVar(root, poly.record.ext, ctx);
-                            try self.occursSubVar(root, poly.var_, ctx);
-                        },
                         .tag_union => |tag_union| {
                             const tags = self.types_store.getTagsSlice(tag_union.tags);
                             for (tags.items(.args)) |tag_args| {

@@ -178,11 +178,6 @@ pub const Instantiate = struct {
             .fn_unbound => |func| FlatType{ .fn_unbound = try self.instantiateFunc(func, ctx) },
             .record => |record| FlatType{ .record = try self.instantiateRecord(record, ctx) },
             .record_unbound => |fields| FlatType{ .record_unbound = try self.instantiateRecordFields(fields, ctx) },
-            .record_poly => |poly| blk: {
-                const fresh_record = try self.instantiateRecord(poly.record, ctx);
-                const fresh_ext = try self.instantiateVar(poly.var_, ctx);
-                break :blk FlatType{ .record_poly = .{ .record = fresh_record, .var_ = fresh_ext } };
-            },
             .empty_record => FlatType.empty_record,
             .tag_union => |tag_union| FlatType{ .tag_union = try self.instantiateTagUnion(tag_union, ctx) },
             .empty_tag_union => FlatType.empty_tag_union,
@@ -227,9 +222,13 @@ pub const Instantiate = struct {
 
     fn instantiateNum(self: *Self, num: Num, ctx: *Ctx) std.mem.Allocator.Error!Num {
         return switch (num) {
-            .num_poly => |poly| Num{ .num_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
-            .int_poly => |poly| Num{ .int_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
-            .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
+            .num_poly => |poly| Num{ .num_poly = .{
+                .var_ = try self.instantiateVar(poly.var_, ctx),
+                .int_requirements = poly.int_requirements,
+                .frac_requirements = poly.frac_requirements,
+            } },
+            .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var, ctx) },
+            .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var, ctx) },
             // Concrete types remain unchanged
             .int_precision => |precision| Num{ .int_precision = precision },
             .frac_precision => |precision| Num{ .frac_precision = precision },

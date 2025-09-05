@@ -1359,6 +1359,11 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(shm_allocator, module_name);
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try env.insertIdent(base.Ident.for_text("test")),
+        .list = try env.insertIdent(base.Ident.for_text("List")),
+        .box = try env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create canonicalizer
     var canonicalizer = try Can.init(&env, &parse_ast, null);
@@ -1391,7 +1396,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     }
 
     // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
     try checker.checkDefs();
 
     // Copy the ModuleEnv to the allocated space

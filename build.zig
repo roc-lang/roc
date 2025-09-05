@@ -155,72 +155,94 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
+
+        // Create individual test step for this module
+        const test_exe_name = module_test.test_step.name;
+        const step_name = b.fmt("test-{s}", .{test_exe_name});
+        const individual_test_step = b.step(step_name, b.fmt("Run {s} tests only", .{test_exe_name}));
+
+        // Create run step that accepts command line args (including --test-filter)
+        const individual_run = b.addRunArtifact(module_test.test_step);
+        if (b.args) |args| {
+            individual_run.addArgs(args);
+        }
+        individual_test_step.dependOn(&individual_run.step);
+
         b.default_step.dependOn(&module_test.test_step.step);
         test_step.dependOn(&module_test.run_step.step);
     }
 
     // Add snapshot tool test
-    const snapshot_test = b.addTest(.{
-        .name = "snapshot_tool_test",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .filters = test_filters,
-    });
-    roc_modules.addAll(snapshot_test);
-    add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
+    const enable_snapshot_tests = b.option(bool, "snapshot-tests", "Enable snapshot tests") orelse true;
+    if (enable_snapshot_tests) {
+        const snapshot_test = b.addTest(.{
+            .name = "snapshot_tool_test",
+            .root_source_file = b.path("src/snapshot_tool/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .filters = test_filters,
+        });
+        roc_modules.addAll(snapshot_test);
+        add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
-    const run_snapshot_test = b.addRunArtifact(snapshot_test);
-    if (run_args.len != 0) {
-        run_snapshot_test.addArgs(run_args);
+        const run_snapshot_test = b.addRunArtifact(snapshot_test);
+        if (run_args.len != 0) {
+            run_snapshot_test.addArgs(run_args);
+        }
+        test_step.dependOn(&run_snapshot_test.step);
     }
-    test_step.dependOn(&run_snapshot_test.step);
 
     // Add CLI test
-    const cli_test = b.addTest(.{
-        .name = "cli_test",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .filters = test_filters,
-    });
-    roc_modules.addAll(cli_test);
-    cli_test.linkLibrary(zstd.artifact("zstd"));
-    add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+    const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;
+    if (enable_cli_tests) {
+        const cli_test = b.addTest(.{
+            .name = "cli_test",
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .filters = test_filters,
+        });
+        roc_modules.addAll(cli_test);
+        cli_test.linkLibrary(zstd.artifact("zstd"));
+        add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
 
-    const run_cli_test = b.addRunArtifact(cli_test);
-    if (run_args.len != 0) {
-        run_cli_test.addArgs(run_args);
+        const run_cli_test = b.addRunArtifact(cli_test);
+        if (run_args.len != 0) {
+            run_cli_test.addArgs(run_args);
+        }
+        test_step.dependOn(&run_cli_test.step);
     }
-    test_step.dependOn(&run_cli_test.step);
 
     // Add watch tests
-    const watch_test = b.addTest(.{
-        .name = "watch_test",
-        .root_source_file = b.path("src/watch/watch.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .filters = test_filters,
-    });
-    roc_modules.addAll(watch_test);
-    add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
+    const enable_watch_tests = b.option(bool, "watch-tests", "Enable watch tests") orelse true;
+    if (enable_watch_tests) {
+        const watch_test = b.addTest(.{
+            .name = "watch_test",
+            .root_source_file = b.path("src/watch/watch.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .filters = test_filters,
+        });
+        roc_modules.addAll(watch_test);
+        add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
-    // Link platform-specific libraries for file watching
-    if (target.result.os.tag == .macos) {
-        watch_test.linkFramework("CoreFoundation");
-        watch_test.linkFramework("CoreServices");
-    } else if (target.result.os.tag == .windows) {
-        watch_test.linkSystemLibrary("kernel32");
-    }
+        // Link platform-specific libraries for file watching
+        if (target.result.os.tag == .macos) {
+            watch_test.linkFramework("CoreFoundation");
+            watch_test.linkFramework("CoreServices");
+        } else if (target.result.os.tag == .windows) {
+            watch_test.linkSystemLibrary("kernel32");
+        }
 
-    const run_watch_test = b.addRunArtifact(watch_test);
-    if (run_args.len != 0) {
-        run_watch_test.addArgs(run_args);
+        const run_watch_test = b.addRunArtifact(watch_test);
+        if (run_args.len != 0) {
+            run_watch_test.addArgs(run_args);
+        }
+        test_step.dependOn(&run_watch_test.step);
     }
-    test_step.dependOn(&run_watch_test.step);
 
     b.default_step.dependOn(playground_step);
     {

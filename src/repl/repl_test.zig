@@ -2,6 +2,10 @@
 const std = @import("std");
 const can_mod = @import("can");
 const check_mod = @import("check");
+const eval = @import("eval");
+const base = @import("base");
+const can = @import("can");
+const check = @import("check");
 const parse = @import("parse");
 const ModuleEnv = can_mod.ModuleEnv;
 const Canon = can_mod.Can;
@@ -193,6 +197,11 @@ test "Repl - minimal interpreter integration" {
     // Step 3: Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try cir.insertIdent(base.Ident.for_text("test")),
+        .list = try cir.insertIdent(base.Ident.for_text("List")),
+        .box = try cir.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Step 4: Canonicalize
     var can = try Canon.init(cir, &parse_ast, null);
@@ -204,7 +213,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
+    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());

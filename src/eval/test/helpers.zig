@@ -291,6 +291,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create czer
     //
@@ -306,7 +311,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -320,7 +325,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create type checker
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
 
     // Type check the expression
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());

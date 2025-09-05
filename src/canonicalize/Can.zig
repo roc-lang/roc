@@ -1604,7 +1604,7 @@ fn canonicalizeSingleQuote(
                 .int_literal = .{
                     .value = value_content,
                 },
-            }, .{ .structure = .{ .num = .{ .num_unbound = requirements } } }, region);
+            }, .err, region);
             return pat_idx;
         } else {
             @compileError("Unsupported Idx type");
@@ -1698,16 +1698,14 @@ pub fn canonicalizeExpr(
             // Not a tag application, proceed with normal function call
             // Mark the start of scratch expressions
             const free_vars_start = self.scratch_free_vars.top();
-            const scratch_top = self.env.store.scratchExprTop();
 
             // Canonicalize the function being called and add as first element
             const can_fn_expr = try self.canonicalizeExpr(e.@"fn") orelse {
-                self.env.store.clearScratchExprsFrom(scratch_top);
                 return null;
             };
-            try self.env.store.addScratchExpr(can_fn_expr.idx);
 
             // Canonicalize and add all arguments
+            const scratch_top = self.env.store.scratchExprTop();
             const args_slice = self.parse_ir.store.exprSlice(e.args);
             for (args_slice) |arg| {
                 if (try self.canonicalizeExpr(arg)) |can_arg| {
@@ -1720,10 +1718,11 @@ pub fn canonicalizeExpr(
 
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
                 .e_call = .{
+                    .func = can_fn_expr.idx,
                     .args = args_span,
                     .called_via = CalledVia.apply,
                 },
-            }, Content{ .flex_var = null }, region);
+            }, .err, region);
 
             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
@@ -1784,20 +1783,21 @@ pub fn canonicalizeExpr(
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
-                    .found => |pattern_idx| {
+                    .found => |found_pattern_idx| {
                         // Mark this pattern as used for unused variable checking
-                        try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+                        try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
                         // We found the ident in scope, lookup to reference the pattern
-                        const expr_idx = try self.env.addExprAndTypeVarRedirect(CIR.Expr{ .e_lookup_local = .{
-                            .pattern_idx = pattern_idx,
-                        } }, ModuleEnv.varFrom(pattern_idx), region);
+                        // TODO(RANK)
+                        const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_local = .{
+                            .pattern_idx = found_pattern_idx,
+                        } }, .err, region);
 
                         const free_vars_start = self.scratch_free_vars.top();
-                        try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
+                        try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
                         const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                     },
@@ -1837,7 +1837,7 @@ pub fn canonicalizeExpr(
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
-                            } }, Content{ .flex_var = null }, region);
+                            } }, .err, region);
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                         }
 
@@ -2054,14 +2054,20 @@ pub fn canonicalizeExpr(
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     }
                     const expr_idx = try self.env.addExprAndTypeVar(
-                        .{ .e_frac_f32 = .{ .value = @floatCast(f64_val) } },
+                        .{ .e_frac_f32 = .{
+                            .value = @floatCast(f64_val),
+                            .has_suffix = true,
+                        } },
                         .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
                         region,
                     );
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                 } else if (std.mem.eql(u8, suffix, "f64")) {
                     const expr_idx = try self.env.addExprAndTypeVar(
-                        .{ .e_frac_f64 = .{ .value = f64_val } },
+                        .{ .e_frac_f64 = .{
+                            .value = f64_val,
+                            .has_suffix = true,
+                        } },
                         .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
                         region,
                     );
@@ -2076,7 +2082,10 @@ pub fn canonicalizeExpr(
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     };
                     const expr_idx = try self.env.addExprAndTypeVar(
-                        .{ .e_frac_dec = .{ .value = dec_val } },
+                        .{ .e_frac_dec = .{
+                            .value = dec_val,
+                            .has_suffix = true,
+                        } },
                         .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
                         region,
                     );
@@ -2097,37 +2106,39 @@ pub fn canonicalizeExpr(
             };
 
             // Parse the literal first to get requirements
-            const requirements = switch (parsed) {
-                .small => |small_info| small_info.requirements,
-                .dec => |dec_info| dec_info.requirements,
-                .f64 => |f64_info| f64_info.requirements,
-            };
-
-            const frac_requirements = types.Num.FracRequirements{
-                .fits_in_f32 = requirements.fits_in_f32,
-                .fits_in_dec = requirements.fits_in_dec,
-            };
+            // const requirements = switch (parsed) {
+            //     .small => |small_info| small_info.requirements,
+            //     .dec => |dec_info| dec_info.requirements,
+            //     .f64 => |f64_info| f64_info.requirements,
+            // };
+            // const frac_requirements = types.Num.FracRequirements{
+            //     .fits_in_f32 = requirements.fits_in_f32,
+            //     .fits_in_dec = requirements.fits_in_dec,
+            // };
 
             const cir_expr = switch (parsed) {
                 .small => |small_info| CIR.Expr{
                     .e_dec_small = .{
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .has_suffix = false,
                     },
                 },
                 .dec => |dec_info| CIR.Expr{
                     .e_frac_dec = .{
                         .value = dec_info.value,
+                        .has_suffix = false,
                     },
                 },
                 .f64 => |f64_info| CIR.Expr{
                     .e_frac_f64 = .{
                         .value = f64_info.value,
+                        .has_suffix = false,
                     },
                 },
             };
 
-            const expr_idx = try self.env.addExprAndTypeVar(cir_expr, Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } }, region);
+            const expr_idx = try self.env.addExprAndTypeVar(cir_expr, .err, region);
 
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
@@ -3061,13 +3072,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         };
 
         // Look up the target node index in the module's exposed_nodes
-        const target_node_idx, const type_content = blk: {
+        const target_node_idx = blk: {
             const envs_map = self.module_envs orelse {
-                break :blk .{ 0, Content.err };
+                break :blk 0;
             };
 
             const module_env = envs_map.get(module_name_text) orelse {
-                break :blk .{ 0, Content.err };
+                break :blk 0;
             };
 
             const target_ident = module_env.common.findIdent(type_tok_text) orelse {
@@ -3089,7 +3100,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
 
             // Successfully found the target node
-            break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+            break :blk other_module_node_id;
         };
 
         const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
@@ -3099,7 +3110,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 .backing_expr = tag_expr_idx,
                 .backing_type = .tag,
             },
-        }, type_content, region);
+        }, .err, region);
 
         const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
         return CanonicalizedExpr{
@@ -3205,7 +3216,7 @@ fn canonicalizePattern(
                 // Create a Pattern node for our identifier
                 const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{ .assign = .{
                     .ident = ident_idx,
-                } }, .{ .flex_var = null }, region);
+                } }, .err, region);
 
                 // Introduce the identifier into scope mapping to this pattern node
                 switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
@@ -3374,37 +3385,31 @@ fn canonicalizePattern(
                 }
             }
 
-            const is_negative_u1 = @as(u1, @intFromBool(is_negated));
-            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
-            const is_minimum_signed = is_negative_u1 & is_power_of_2;
-            const adjusted_val = u128_val - is_minimum_signed;
+            // const is_negative_u1 = @as(u1, @intFromBool(is_negated));
+            // const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            // const is_minimum_signed = is_negative_u1 & is_power_of_2;
+            // const adjusted_val = u128_val - is_minimum_signed;
 
-            const requirements = types.Num.Int.Requirements{
-                .sign_needed = is_negated,
-                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
-            };
+            // const requirements = types.Num.Int.Requirements{
+            //     .sign_needed = is_negated,
+            //     .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
+            // };
 
-            const int_requirements = types.Num.IntRequirements{
-                .sign_needed = requirements.sign_needed,
-                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
-            };
+            // const int_requirements = types.Num.IntRequirements{
+            //     .sign_needed = requirements.sign_needed,
+            //     .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
+            // };
 
             // For non-decimal integers (hex, binary, octal), use int_poly directly
             // For decimal integers, use num_poly so they can be either Int or Frac
-            const is_non_decimal = int_base != DEFAULT_BASE;
-
-            // Insert concrete type variable
-            const type_content = if (is_non_decimal)
-                Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } }
-            else
-                Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+            // const is_non_decimal = int_base != DEFAULT_BASE;
 
             const pattern_idx = try self.env.addPatternAndTypeVar(
                 Pattern{ .int_literal = .{ .value = CIR.IntValue{
                     .bytes = @bitCast(i128_val),
                     .kind = .i128,
                 } } },
-                type_content,
+                .err,
                 region,
             );
             return pattern_idx;
@@ -3468,16 +3473,16 @@ fn canonicalizePattern(
             };
 
             // Parse the literal first to get requirements
-            const requirements = switch (parsed) {
-                .small => |small_info| small_info.requirements,
-                .dec => |dec_info| dec_info.requirements,
-                .f64 => |f64_info| f64_info.requirements,
-            };
+            // const requirements = switch (parsed) {
+            //     .small => |small_info| small_info.requirements,
+            //     .dec => |dec_info| dec_info.requirements,
+            //     .f64 => |f64_info| f64_info.requirements,
+            // };
 
-            const frac_requirements = types.Num.FracRequirements{
-                .fits_in_f32 = requirements.fits_in_f32,
-                .fits_in_dec = requirements.fits_in_dec,
-            };
+            // const frac_requirements = types.Num.FracRequirements{
+            //     .fits_in_f32 = requirements.fits_in_f32,
+            //     .fits_in_dec = requirements.fits_in_dec,
+            // };
 
             // Check for f64 literals which are not allowed in patterns
             if (parsed == .f64) {
@@ -3502,9 +3507,7 @@ fn canonicalizePattern(
                 .f64 => unreachable, // Already handled above
             };
 
-            const pattern_idx = try self.env.addPatternAndTypeVar(cir_pattern, Content{
-                .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
-            }, region);
+            const pattern_idx = try self.env.addPatternAndTypeVar(cir_pattern, .err, region);
 
             return pattern_idx;
         },
@@ -4128,8 +4131,8 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: Patte
     return false;
 }
 
-// Check if the given f64 fits in f32 range (ignoring precision loss)
-fn fitsInF32(f64_val: f64) bool {
+/// Check if the given f64 fits in f32 range (ignoring precision loss)
+pub fn fitsInF32(f64_val: f64) bool {
     // Check if it's within the range that f32 can represent.
     // This includes normal, subnormal, and zero values.
     // (This is a magnitude check, so take the abs value to check
@@ -4138,8 +4141,8 @@ fn fitsInF32(f64_val: f64) bool {
     return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
 }
 
-// Check if a float value can be represented accurately in RocDec
-fn fitsInDec(value: f64) bool {
+/// Check if a float value can be represented accurately in RocDec
+pub fn fitsInDec(value: f64) bool {
     // RocDec uses i128 with 18 decimal places
     const max_dec_value = 170141183460469231731.0;
     const min_dec_value = -170141183460469231731.0;
@@ -6047,7 +6050,13 @@ pub fn scopePop(self: *Self) Scope.Error!Scope {
 /// Get the current scope
 fn currentScope(self: *Self) *Scope {
     std.debug.assert(self.scopes.items.len > 0);
-    return &self.scopes.items[self.scopes.items.len - 1];
+    return &self.scopes.items[self.currentScopeIdx()];
+}
+
+/// Get the current scope
+fn currentScopeIdx(self: *Self) usize {
+    std.debug.assert(self.scopes.items.len > 0);
+    return self.scopes.items.len - 1;
 }
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
@@ -6068,6 +6077,7 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx
         CIR.Expr{
             .e_frac_f64 = .{
                 .value = value,
+                .has_suffix = false,
             },
         },
         Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } },
@@ -6105,8 +6115,8 @@ pub fn scopeLookup(
     comptime item_kind: Scope.ItemKind,
     name: base.Ident.Idx,
 ) Scope.LookupResult {
-    if (self.scopeContains(item_kind, name)) |pattern| {
-        return Scope.LookupResult{ .found = pattern };
+    if (self.scopeContains(item_kind, name)) |found| {
+        return Scope.LookupResult{ .found = found };
     }
     return Scope.LookupResult{ .not_found = {} };
 }
@@ -6271,7 +6281,7 @@ pub fn scopeIntroduceInternal(
     }
 
     // Check for existing identifier in any scope level for shadowing detection
-    if (self.scopeContains(item_kind, ident_idx)) |existing_pattern| {
+    if (self.scopeContains(item_kind, ident_idx)) |existing| {
         // If it's a var reassignment (not declaration), check function boundaries
         if (is_var and !is_declaration) {
             // Find the scope where the var was declared and check for function boundaries
@@ -6311,7 +6321,7 @@ pub fn scopeIntroduceInternal(
 
                 if (found_function_boundary) {
                     // Different function, return error
-                    return Scope.IntroduceResult{ .var_across_function_boundary = existing_pattern };
+                    return Scope.IntroduceResult{ .var_across_function_boundary = existing };
                 } else {
                     // Same function, allow reassignment without warning
                     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
@@ -6327,7 +6337,7 @@ pub fn scopeIntroduceInternal(
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-        return Scope.IntroduceResult{ .shadowing_warning = existing_pattern };
+        return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
     // Check the current level for duplicates

@@ -1080,7 +1080,7 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    const comomn_idents: Check.CommonIdents = .{
+    const common_idents: Check.CommonIdents = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
@@ -1127,7 +1127,7 @@ fn processSnapshotContent(
         can_ir,
         empty_modules,
         &can_ir.store.regions,
-        comomn_idents,
+        common_idents,
     );
     defer solver.deinit();
 

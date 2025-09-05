@@ -57,6 +57,10 @@ buf: std.ArrayList(u8),
 seen: std.ArrayList(Var),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
+flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
+flex_var_names: std.ArrayList(u8),
+
+const FlexVarNameRange = struct { start: usize, end: usize };
 
 /// Initialize a TypeWriter with immutable types and idents references.
 pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
@@ -67,12 +71,16 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
         .next_name_index = 0,
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
+        .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
+        .flex_var_names = try std.ArrayList(u8).initCapacity(gpa, 32),
     };
 }
 
 pub fn deinit(self: *TypeWriter) void {
     self.buf.deinit();
     self.seen.deinit();
+    self.flex_var_names_map.deinit();
+    self.flex_var_names.deinit();
 }
 
 /// Returns the current contents of the type writer's buffer as a slice.
@@ -120,9 +128,9 @@ fn generateNextName(self: *TypeWriter) !void {
         const exists = self.idents.interner.contains(candidate_name);
 
         if (!exists) {
-            // This name is available, write it to the buffer
+            // This name is available, use it
             for (candidate_name) |c| {
-                try self.buf.append(c);
+                try self.buf.writer().writeByte(c);
             }
             break;
         }
@@ -231,92 +239,6 @@ fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
     return false;
 }
 
-/// Count how many times a variable appears in a type
-fn countVarOccurrences(self: *const TypeWriter, search_var: Var, root_var: Var) usize {
-    var count: usize = 0;
-    self.countVar(search_var, root_var, &count);
-    return count;
-}
-
-fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize) void {
-    if (current_var == search_var) {
-        count.* += 1;
-    }
-
-    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
-
-    const resolved = self.types.resolveVar(current_var);
-    switch (resolved.desc.content) {
-        .flex_var, .rigid_var, .err => {},
-        .alias => |alias| {
-            // For aliases, we only count occurrences in the type arguments
-            var args_iter = self.types.iterAliasArgs(alias);
-            while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count);
-            }
-        },
-        .structure => |flat_type| {
-            self.countVarInFlatType(search_var, flat_type, count);
-        },
-    }
-}
-
-fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) void {
-    switch (flat_type) {
-        .str, .empty_record, .empty_tag_union => {},
-        .box => |sub_var| self.countVar(search_var, sub_var, count),
-        .list => |sub_var| self.countVar(search_var, sub_var, count),
-        .list_unbound, .num => {},
-        .tuple => |tuple| {
-            const elems = self.types.sliceVars(tuple.elems);
-            for (elems) |elem| {
-                self.countVar(search_var, elem, count);
-            }
-        },
-        .nominal_type => |nominal_type| {
-            var args_iter = self.types.iterNominalArgs(nominal_type);
-            while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count);
-            }
-        },
-        .fn_pure, .fn_effectful, .fn_unbound => |func| {
-            const args = self.types.sliceVars(func.args);
-            for (args) |arg| {
-                self.countVar(search_var, arg, count);
-            }
-            self.countVar(search_var, func.ret, count);
-        },
-        .record => |record| {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            for (fields.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count);
-            }
-            self.countVar(search_var, record.ext, count);
-        },
-        .record_unbound => |fields| {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count);
-            }
-        },
-        .record_poly => |poly| {
-            self.countVarInFlatType(search_var, FlatType{ .record = poly.record }, count);
-            self.countVar(search_var, poly.var_, count);
-        },
-        .tag_union => |tag_union| {
-            var iter = tag_union.tags.iterIndices();
-            while (iter.next()) |tag_idx| {
-                const tag = self.types.tags.get(tag_idx);
-                const args = self.types.sliceVars(tag.args);
-                for (args) |arg_var| {
-                    self.countVar(search_var, arg_var, count);
-                }
-            }
-            self.countVar(search_var, tag_union.ext, count);
-        },
-    }
-}
-
 /// Convert a var to a type string
 fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
@@ -335,12 +257,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                     if (mb_ident_idx) |ident_idx| {
                         _ = try self.buf.writer().write(self.getIdent(ident_idx));
                     } else {
-                        // Check if this variable appears multiple times
-                        const occurrences = self.countVarOccurrences(var_, root_var);
-                        if (occurrences == 1) {
-                            _ = try self.buf.writer().write("_");
-                        }
-                        try self.generateContextualName(context);
+                        try self.writeFlexVarName(var_, context, root_var);
                     }
                 },
                 .rigid_var => |ident_idx| {
@@ -430,10 +347,6 @@ fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.
         },
         .record_unbound => |fields| {
             try self.writeRecordFields(fields, root_var);
-        },
-        .record_poly => |poly| {
-            try self.writeRecord(poly.record, root_var);
-            try self.writeVar(poly.var_, root_var);
         },
         .empty_record => {
             _ = try self.buf.writer().write("{}");
@@ -651,12 +564,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
             if (mb_ident_idx) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
             } else {
-                // Check if this variable appears multiple times
-                const occurrences = self.countVarOccurrences(tag_union.ext, root_var);
-                if (occurrences == 1) {
-                    _ = try self.buf.writer().write("_");
-                }
-                try self.generateContextualName(.TagUnionExtension);
+                try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
         },
         .structure => |flat_type| switch (flat_type) {
@@ -667,7 +575,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         },
         .rigid_var => |ident_idx| {
             _ = try self.buf.writer().write(self.getIdent(ident_idx));
-            _ = try self.buf.writer().write("[r]");
+            // _ = try self.buf.writer().write("[r]");
         },
         else => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
@@ -699,12 +607,12 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
         },
         .int_poly => |poly| {
             _ = try self.buf.writer().write("Int(");
-            try self.writeVarWithContext(poly.var_, .NumContent, root_var);
+            try self.writeVarWithContext(poly, .NumContent, root_var);
             _ = try self.buf.writer().write(")");
         },
         .frac_poly => |poly| {
             _ = try self.buf.writer().write("Frac(");
-            try self.writeVarWithContext(poly.var_, .NumContent, root_var);
+            try self.writeVarWithContext(poly, .NumContent, root_var);
             _ = try self.buf.writer().write(")");
         },
         .num_unbound => |_| {
@@ -723,45 +631,195 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             _ = try self.buf.writer().write(")");
         },
         .int_precision => |prec| {
-            try self.writeIntType(prec);
+            try self.writeIntType(prec, .precision);
         },
         .frac_precision => |prec| {
-            try self.writeFracType(prec);
+            try self.writeFracType(prec, .precision);
         },
         .num_compact => |compact| {
             switch (compact) {
                 .int => |prec| {
-                    try self.writeIntType(prec);
+                    try self.writeIntType(prec, .compacted);
                 },
                 .frac => |prec| {
-                    try self.writeFracType(prec);
+                    try self.writeFracType(prec, .compacted);
                 },
             }
         },
     }
 }
 
-fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision) std.mem.Allocator.Error!void {
-    _ = switch (prec) {
-        .u8 => try self.buf.writer().write("U8"),
-        .i8 => try self.buf.writer().write("I8"),
-        .u16 => try self.buf.writer().write("U16"),
-        .i16 => try self.buf.writer().write("I16"),
-        .u32 => try self.buf.writer().write("U32"),
-        .i32 => try self.buf.writer().write("I32"),
-        .u64 => try self.buf.writer().write("U64"),
-        .i64 => try self.buf.writer().write("I64"),
-        .u128 => try self.buf.writer().write("U128"),
-        .i128 => try self.buf.writer().write("I128"),
-    };
+const NumPrecType = enum { precision, compacted };
+
+fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
+    switch (num_type) {
+        .compacted => {
+            _ = switch (prec) {
+                .u8 => try self.buf.writer().write("U8"),
+                .i8 => try self.buf.writer().write("I8"),
+                .u16 => try self.buf.writer().write("U16"),
+                .i16 => try self.buf.writer().write("I16"),
+                .u32 => try self.buf.writer().write("U32"),
+                .i32 => try self.buf.writer().write("I32"),
+                .u64 => try self.buf.writer().write("U64"),
+                .i64 => try self.buf.writer().write("I64"),
+                .u128 => try self.buf.writer().write("U128"),
+                .i128 => try self.buf.writer().write("I128"),
+            };
+        },
+        .precision => {
+            _ = switch (prec) {
+                .u8 => try self.buf.writer().write("Unsigned8"),
+                .i8 => try self.buf.writer().write("Signed8"),
+                .u16 => try self.buf.writer().write("Unsigned16"),
+                .i16 => try self.buf.writer().write("Signed16"),
+                .u32 => try self.buf.writer().write("Unsigned32"),
+                .i32 => try self.buf.writer().write("Signed32"),
+                .u64 => try self.buf.writer().write("Unsigned64"),
+                .i64 => try self.buf.writer().write("Signed64"),
+                .u128 => try self.buf.writer().write("Unsigned128"),
+                .i128 => try self.buf.writer().write("Signed128"),
+            };
+        },
+    }
 }
 
-fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision) std.mem.Allocator.Error!void {
-    _ = switch (prec) {
-        .f32 => try self.buf.writer().write("F32"),
-        .f64 => try self.buf.writer().write("F64"),
-        .dec => try self.buf.writer().write("Dec"),
-    };
+fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
+    switch (num_type) {
+        .compacted => {
+            _ = switch (prec) {
+                .f32 => try self.buf.writer().write("F32"),
+                .f64 => try self.buf.writer().write("F64"),
+                .dec => try self.buf.writer().write("Dec"),
+            };
+        },
+        .precision => {
+            _ = switch (prec) {
+                .f32 => try self.buf.writer().write("Float32"),
+                .f64 => try self.buf.writer().write("Float64"),
+                .dec => try self.buf.writer().write("Decimal"),
+            };
+        },
+    }
+}
+
+/// Generate a name for a flex var that may appear mulitple times in the type
+pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
+    const resolved_var = self.types.resolveVar(var_).var_;
+
+    // Check if we've seen this flex var before.
+    if (self.flex_var_names_map.get(resolved_var)) |range| {
+        // If so, then use that name
+        _ = try self.buf.writer().write(
+            self.flex_var_names.items[range.start..range.end],
+        );
+    } else {
+        // Check if this variable appears multiple times
+        const occurrences = self.countVarOccurrences(resolved_var, root_var);
+        if (occurrences == 1) {
+            // If it appears once, then generate and write the name
+            _ = try self.buf.writer().write("_");
+            try self.generateContextualName(context);
+        } else {
+            // If it appears more than once, then we have to track the name we
+            // assign it so it appears consistently across the type str
+
+            // Generate a new general var name. We do not use the context here
+            // because that may be the current context the var appears in, but
+            // the var may later appear in a different context
+            const buf_start = self.buf.items.len;
+            try self.generateContextualName(.General);
+            const buf_end = self.buf.items.len;
+
+            // Then write down the name we generated for later
+            const flex_start = self.flex_var_names.items.len;
+            try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+            const flex_end = self.flex_var_names.items.len;
+            try self.flex_var_names_map.put(resolved_var, .{ .start = flex_start, .end = flex_end });
+        }
+    }
+}
+
+/// Count how many times a variable appears in a type
+fn countVarOccurrences(self: *const TypeWriter, search_var: Var, root_var: Var) usize {
+    var count: usize = 0;
+    self.countVar(search_var, root_var, &count);
+    return count;
+}
+
+fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize) void {
+    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
+
+    const resolved = self.types.resolveVar(current_var);
+    if (resolved.var_ == search_var) {
+        count.* += 1;
+    }
+
+    switch (resolved.desc.content) {
+        .flex_var, .rigid_var, .err => {},
+        .alias => |alias| {
+            // For aliases, we only count occurrences in the type arguments
+            var args_iter = self.types.iterAliasArgs(alias);
+            while (args_iter.next()) |arg_var| {
+                self.countVar(search_var, arg_var, count);
+            }
+        },
+        .structure => |flat_type| {
+            self.countVarInFlatType(search_var, flat_type, count);
+        },
+    }
+}
+
+fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) void {
+    switch (flat_type) {
+        .str, .empty_record, .empty_tag_union => {},
+        .box => |sub_var| self.countVar(search_var, sub_var, count),
+        .list => |sub_var| self.countVar(search_var, sub_var, count),
+        .list_unbound, .num => {},
+        .tuple => |tuple| {
+            const elems = self.types.sliceVars(tuple.elems);
+            for (elems) |elem| {
+                self.countVar(search_var, elem, count);
+            }
+        },
+        .nominal_type => |nominal_type| {
+            var args_iter = self.types.iterNominalArgs(nominal_type);
+            while (args_iter.next()) |arg_var| {
+                self.countVar(search_var, arg_var, count);
+            }
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const args = self.types.sliceVars(func.args);
+            for (args) |arg| {
+                self.countVar(search_var, arg, count);
+            }
+            self.countVar(search_var, func.ret, count);
+        },
+        .record => |record| {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            for (fields.items(.var_)) |field_var| {
+                self.countVar(search_var, field_var, count);
+            }
+            self.countVar(search_var, record.ext, count);
+        },
+        .record_unbound => |fields| {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                self.countVar(search_var, field_var, count);
+            }
+        },
+        .tag_union => |tag_union| {
+            var iter = tag_union.tags.iterIndices();
+            while (iter.next()) |tag_idx| {
+                const tag = self.types.tags.get(tag_idx);
+                const args = self.types.sliceVars(tag.args);
+                for (args) |arg_var| {
+                    self.countVar(search_var, arg_var, count);
+                }
+            }
+            self.countVar(search_var, tag_union.ext, count);
+        },
+    }
 }
 
 /// Retrieves the text representation of an identifier by its index.

@@ -698,6 +698,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
+        .list = try original_env.insertIdent(base.Ident.for_text("List")),
+        .box = try original_env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create canonicalizer
     var czer = try Can.init(&original_env, &parse_ast, null);
@@ -710,7 +715,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     };
 
     // Type check the expression
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions);
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExpr(canonicalized_expr_idx.get_idx());

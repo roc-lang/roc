@@ -1,0 +1,552 @@
+//! Integration tests for let-polymorphism that parse, canonicalize, and type-check
+//! actual code to ensure polymorphic values work correctly in practice.
+
+const std = @import("std");
+const base = @import("base");
+const parse = @import("parse");
+const can = @import("can");
+const types_mod = @import("types");
+const problem_mod = @import("../problem.zig");
+const Check = @import("../Check.zig");
+
+const Can = can.Can;
+const ModuleEnv = can.ModuleEnv;
+const CanonicalizedExpr = can.Can.CanonicalizedExpr;
+const testing = std.testing;
+const test_allocator = testing.allocator;
+
+// primitives - nums //
+
+test "check type - num - unbound" {
+    const source =
+        \\50
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
+test "check type - num - int suffix 1" {
+    const source =
+        \\10u8
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "U8");
+}
+
+test "check type - num - int suffix 2" {
+    const source =
+        \\10i128
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "I128");
+}
+
+// primitives - strs //
+
+test "check type - str" {
+    const source =
+        \\"hello"
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Str");
+}
+
+// primitives - lists //
+
+test "check type - list - same elems 1" {
+    const source =
+        \\["hello", "world"]
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "List(Str)");
+}
+
+test "check type - list - same elems 2" {
+    const source =
+        \\[100, 200]
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "List(Num(_size))");
+}
+
+test "check type - list - 1st elem more specific coreces 2nd elem" {
+    const source =
+        \\[100u64, 200]
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "List(U64)");
+}
+
+test "check type - list - 2nd elem more specific coreces 1st elem" {
+    const source =
+        \\[100, 200u32]
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "List(U32)");
+}
+
+test "check type - list  - diff elems 1" {
+    const source =
+        \\["hello", 10]
+    ;
+    try assertExprTypeCheckFail(test_allocator, source, "INCOMPATIBLE LIST ELEMENTS");
+}
+
+// records //
+
+test "check type - record" {
+    const source =
+        \\{
+        \\  hello: "Hello",
+        \\  world: 10,
+        \\}
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "{ hello: Str, world: Num(_size) }");
+}
+
+// tags //
+
+test "check type - tag" {
+    const source =
+        \\MyTag
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "[MyTag]_others");
+}
+
+test "check type - tag - args" {
+    const source =
+        \\MyTag("hello", 1)
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "[MyTag(Str, Num(_size))]_others");
+}
+
+// blocks //
+
+test "check type - block - return expr" {
+    const source =
+        \\{
+        \\    "Hello"
+        \\}
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - block - implicit empty record" {
+    const source =
+        \\{
+        \\    test = "hello"
+        \\}
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "{}");
+}
+
+test "check type - block - local value decl" {
+    const source =
+        \\{
+        \\    test = "hello"
+        \\
+        \\    test
+        \\}
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Str");
+}
+
+// function //
+
+test "check type - def - value" {
+    const source =
+        \\module []
+        \\
+        \\pairU64 = "hello"
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - def - func" {
+    const source =
+        \\module []
+        \\
+        \\id = |_| 20
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "_arg -> Num(_size)");
+}
+
+test "check type - def - id without annotation" {
+    const source =
+        \\module []
+        \\
+        \\id = |x| x
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+}
+
+test "check type - def - id with annotation" {
+    const source =
+        \\module []
+        \\
+        \\id : a -> a
+        \\id = |x| x
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+}
+
+test "check type - def - func with annotation 1" {
+    const source =
+        \\module []
+        \\
+        \\id : x -> Str
+        \\id = |_| "test"
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "x -> Str");
+}
+
+test "check type - def - func with annotation 2" {
+    const source =
+        \\module []
+        \\
+        \\id : x -> Num(_size)
+        \\id = |_| 15
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
+}
+
+// // calling functions
+
+test "check type - def - monomorphic id" {
+    const source =
+        \\module []
+        \\
+        \\idStr : Str -> Str
+        \\idStr = |x| x
+        \\
+        \\test = idStr("hello")
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - def - polymorphic id 1" {
+    const source =
+        \\module []
+        \\
+        \\id : x -> x
+        \\id = |x| x
+        \\
+        \\test = id(5)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
+test "check type - def - polymorphic id 2" {
+    const source =
+        \\module []
+        \\
+        \\id : x -> x
+        \\id = |x| x
+        \\
+        \\test = (id(5), id("hello"))
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "(Num(_size), Str)");
+}
+
+test "check type - def - polymorphic higher order 1" {
+    const source =
+        \\module []
+        \\
+        \\f = |g, v| g(v)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "a -> b, a -> b");
+}
+
+test "check type - top level polymorphic function is generalized" {
+    const source =
+        \\module []
+        \\
+        \\id = |x| x
+        \\
+        \\result = {
+        \\    a = id(42)
+        \\    b = id("hello")
+        \\    a
+        \\}
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
+test "check type - let-def polymorphic function is generalized" {
+    const source =
+        \\module []
+        \\
+        \\result = {
+        \\    id = |x| x
+        \\    a = id(42)
+        \\    b = id("hello")
+        \\    a
+        \\}
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
+test "check type - polymorphic function function param should be constrained" {
+    const source =
+        \\module []
+        \\
+        \\id = |x| x
+        \\
+        \\use_twice = |f| {
+        \\    a = f(42)
+        \\    b = f("hello")
+        \\    a
+        \\}
+        \\result = use_twice(id)
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+}
+
+// full polymorphic
+
+// type aliases //
+
+test "check type - basic alias" {
+    const source =
+        \\module []
+        \\
+        \\MyAlias : Str
+        \\
+        \\x : MyAlias
+        \\x = "hello"
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "MyAlias");
+}
+
+test "check type - alias with arg" {
+    const source =
+        \\module []
+        \\
+        \\MyListAlias(a) : List(a)
+        \\
+        \\x : MyListAlias(Str)
+        \\x = [15]
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+}
+
+// nominal types //
+
+test "check type - basic nominal" {
+    const source =
+        \\module []
+        \\
+        \\MyNominal := [MyNominal]
+        \\
+        \\x : MyNominal
+        \\x = MyNominal.MyNominal
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+}
+
+test "check type - nominal with tag arg" {
+    const source =
+        \\module []
+        \\
+        \\MyNominal := [MyNominal(Str)]
+        \\
+        \\x : MyNominal
+        \\x = MyNominal.MyNominal("hello")
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+}
+
+test "check type - nominal with type and tag arg" {
+    const source =
+        \\module []
+        \\
+        \\MyNominal(a) := [MyNominal(a)]
+        \\
+        \\x : MyNominal(U8)
+        \\x = MyNominal.MyNominal(10)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "MyNominal(U8)");
+}
+
+test "check type - nominal with with rigid vars" {
+    const source =
+        \\module []
+        \\
+        \\Pair(a) := [Pair(a, a)]
+        \\
+        \\pairU64 : Pair(U64)
+        \\pairU64 = Pair.Pair(1, 2)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Pair(U64)");
+}
+
+test "check type - nominal with with rigid vars mismatch" {
+    const source =
+        \\module []
+        \\
+        \\Pair(a) := [Pair(a, a)]
+        \\
+        \\pairU64 : Pair(U64)
+        \\pairU64 = Pair.Pair(1, "Str")
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+}
+
+test "check type - nominal recursive type" {
+    const source =
+        \\module []
+        \\
+        \\List(a) := [Nil, Cons(a, List(a))]
+        \\
+        \\x : List(Str)
+        \\x = List.Cons("hello", List.Nil)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "List(Str)");
+}
+
+// helpers - expr //
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+/// Asserts that type checking the expr passes
+fn assertExprTypeCheckPass(allocator: std.mem.Allocator, comptime source_expr: []const u8, expected_type: []const u8) !void {
+    const source_wrapper =
+        \\module []
+        \\ 
+        \\test =
+    ;
+
+    var source: [source_wrapper.len + source_expr.len]u8 = undefined;
+    std.mem.copyForwards(u8, source[0..], source_wrapper);
+    std.mem.copyForwards(u8, source[source_wrapper.len..], source_expr);
+
+    return assertFileTypeCheckPass(allocator, &source, expected_type);
+}
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+/// Asserts that type checking the expr fails with exactly one problem, and the title of the problem matches the provided one.
+fn assertExprTypeCheckFail(allocator: std.mem.Allocator, comptime source_expr: []const u8, expected_problem_title: []const u8) !void {
+    const source_wrapper =
+        \\module []
+        \\ 
+        \\test =
+    ;
+
+    var source: [source_wrapper.len + source_expr.len]u8 = undefined;
+    std.mem.copyForwards(u8, source[0..], source_wrapper);
+    std.mem.copyForwards(u8, source[source_wrapper.len..], source_expr);
+
+    return assertFileTypeCheckFail(allocator, &source, expected_problem_title);
+}
+
+// helpers - whole file //
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+/// Asserts that the type of the final definition in the source matches the one provided
+fn assertFileTypeCheckPass(allocator: std.mem.Allocator, source: []const u8, expected_type: []const u8) !void {
+    // Set up module environment
+    var module_env = try ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+
+    try module_env.initCIRFields(allocator, "test");
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
+    // Parse
+    var parse_ast = try parse.parse(&module_env.common, allocator);
+    defer parse_ast.deinit(allocator);
+    try testing.expectEqual(false, parse_ast.hasErrors());
+
+    // Canonicalize
+    var czer = try Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    try testing.expect(czer.env.all_defs.span.len > 0);
+    const defs_slice = czer.env.store.sliceDefs(czer.env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+
+    // Type check
+    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
+    defer checker.deinit();
+    try checker.checkDefs();
+
+    // Assert no problems
+    var report_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer report_buf.deinit();
+
+    var report_builder = problem_mod.ReportBuilder.init(
+        allocator,
+        &module_env,
+        &module_env,
+        &checker.snapshots,
+        "test",
+        &.{},
+    );
+    defer report_builder.deinit();
+
+    for (checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        report_buf.clearRetainingCapacity();
+        try report.render(report_buf.writer(), .markdown);
+
+        try testing.expectEqualStrings("EXPECT NO ERROR", report_buf.items);
+    }
+    try testing.expectEqual(0, checker.problems.problems.items.len);
+
+    // Assert the rendered type string matches what we expect
+    var type_writer = try module_env.initTypeWriter();
+    defer type_writer.deinit();
+    try type_writer.write(ModuleEnv.varFrom(last_def_idx));
+    try testing.expectEqualStrings(expected_type, type_writer.get());
+}
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+/// Asserts that the type of the final definition in the source matches the one provided
+fn assertFileTypeCheckFail(allocator: std.mem.Allocator, source: []const u8, expected_problem_title: []const u8) !void {
+    // Set up module environment
+    var module_env = try ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+
+    try module_env.initCIRFields(allocator, "test");
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
+    // Parse
+    var parse_ast = try parse.parse(&module_env.common, allocator);
+    defer parse_ast.deinit(allocator);
+    try testing.expectEqual(false, parse_ast.hasErrors());
+
+    // Canonicalize
+    var czer = try Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    try testing.expect(czer.env.all_defs.span.len > 0);
+    // const defs_slice = czer.env.store.sliceDefs(czer.env.all_defs);
+    // const last_def_idx = defs_slice[defs_slice.len - 1];
+
+    // Type check
+    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
+    defer checker.deinit();
+    try checker.checkDefs();
+
+    // Assert no problems
+    try testing.expectEqual(1, checker.problems.problems.items.len);
+    const problem = checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        allocator,
+        &module_env,
+        &module_env,
+        &checker.snapshots,
+        "test",
+        &.{},
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected_problem_title, report.title);
+}
