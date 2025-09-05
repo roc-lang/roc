@@ -1,5 +1,5 @@
 on:
-  pull_request:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -272,6 +272,4 @@ jobs:
         run: |
           # no need to build platform anymore
           cd basic-webserver-platform
-          # This one does not work on musl
-
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
