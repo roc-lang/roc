@@ -47,23 +47,23 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_big)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_small)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_big)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 25)
   )

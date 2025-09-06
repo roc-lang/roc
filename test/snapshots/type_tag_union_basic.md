@@ -154,7 +154,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (underscore)
   )
   (malformed)
-  (binop_pipe
+  (binop_dot
     (uc "Bool")
     (uc "False")
   )
@@ -344,8 +344,8 @@ Patterns can only appear in specific contexts like function parameters, destruct
   (Expr.tag_applied)
   (Expr.malformed)
   (Expr.module_access
-    (Expr.tag_no_args)
-    (Expr.tag_no_args)
+    (Expr.malformed)
+    (Expr.malformed)
   )
   (Expr.malformed)
   (Stmt.assign

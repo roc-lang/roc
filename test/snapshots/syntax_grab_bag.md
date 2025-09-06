@@ -234,7 +234,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pf")
         (uc "Stdout")
       )
@@ -246,7 +246,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pf")
         (uc "StdoutMultiline")
       )
@@ -258,7 +258,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pkg")
         (uc "Something")
       )
@@ -821,7 +821,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
     (lc "list")
     (block
       (apply_anon
-        (binop_pipe
+        (binop_dot
           (uc "Stdout")
           (not_lc "line")
         )
@@ -954,24 +954,24 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
     )
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (malformed)
       (dot_lc "static_dispatch_method")
     )
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (malformed)
       (dot_lc "next_static_dispatch_method")
     )
   )
-  (binop_pipe
+  (binop_dot
     (malformed)
     (dot_lc "record_field")
   )
   (malformed)
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Stdout")
       (not_lc "line")
     )
@@ -979,14 +979,14 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
   )
   (malformed)
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Stdout")
       (not_lc "line")
     )
     (malformed)
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Num")
       (dot_lc "toStr")
     )
@@ -1261,9 +1261,9 @@ multiline_tuple = (
 
 bin_op_result = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 static_dispatch_style = some_fn(arg1)
-? | .static_dispatch_method()
-? | .next_static_dispatch_method()
-? | .record_field
+?..static_dispatch_method()
+?..next_static_dispatch_method()
+?..record_field
 ?
 	
 Stdout.line!(interpolated)
@@ -1271,7 +1271,7 @@ Stdout.line!(interpolated)
 	
 Stdout.line!("How about ${ # Comment after string interpolation open
 			)
-Num.toStr(number)
+Num..toStr(number)
 # Comment after string interpolation expr
 } 
 as 
@@ -2014,39 +2014,6 @@ empty : {}
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:4:8:4:10:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-       ^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:7:2:7:4:**
-```roc
-	pf # Comment after qualifier
-```
-	^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **pkg** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**syntax_grab_bag.md:14:8:14:11:**
-```roc
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-```
-       ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **function** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -2559,19 +2526,19 @@ Is there an **import** or **exposing** missing up-top?
   (Stmt.assign
     (pattern (Patt.ident "record"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 123)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.lookup "tag")
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.tag_applied)
       )
@@ -2652,7 +2619,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Expr.fn_call)
   (Expr.fn_call)
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
   (Expr.fn_call)
   (Expr.malformed)
@@ -2684,7 +2651,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 635
+; Total type variables: 638
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -3211,11 +3178,11 @@ Is there an **import** or **exposing** missing up-top?
 (var #523 _)
 (var #524 _)
 (var #525 _)
-(var #526 -> #619)
+(var #526 -> #620)
 (var #527 _)
 (var #528 _)
 (var #529 _)
-(var #530 -> #620)
+(var #530 -> #622)
 (var #531 _)
 (var #532 _)
 (var #533 _)
@@ -3223,18 +3190,18 @@ Is there an **import** or **exposing** missing up-top?
 (var #535 _)
 (var #536 _)
 (var #537 _)
-(var #538 -> #622)
+(var #538 -> #625)
 (var #539 _)
 (var #540 _)
 (var #541 _)
 (var #542 _)
 (var #543 _)
-(var #544 -> #625)
+(var #544 -> #628)
 (var #545 _)
 (var #546 _)
 (var #547 _)
 (var #548 _)
-(var #549 -> #626)
+(var #549 -> #629)
 (var #550 _)
 (var #551 _)
 (var #552 _)
@@ -3248,8 +3215,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #560 _)
 (var #561 _)
 (var #562 _)
-(var #563 -> #633)
-(var #564 -> #633)
+(var #563 -> #636)
+(var #564 -> #636)
 (var #565 _)
 (var #566 _)
 (var #567 _)
@@ -3304,22 +3271,25 @@ Is there an **import** or **exposing** missing up-top?
 (var #616 tuple)
 (var #617 tuple)
 (var #618 fn_pure)
-(var #619 fn_pure)
+(var #619 _)
 (var #620 fn_pure)
 (var #621 _)
 (var #622 fn_pure)
 (var #623 _)
 (var #624 _)
 (var #625 fn_pure)
-(var #626 fn_pure)
+(var #626 _)
 (var #627 _)
-(var #628 _)
-(var #629 _)
+(var #628 fn_pure)
+(var #629 fn_pure)
 (var #630 _)
 (var #631 _)
 (var #632 _)
-(var #633 {})
+(var #633 _)
 (var #634 _)
+(var #635 _)
+(var #636 {})
+(var #637 _)
 ~~~
 # TYPES
 ~~~roc

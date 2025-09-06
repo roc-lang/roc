@@ -49,7 +49,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 (module-header)
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
@@ -57,7 +57,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   (import
     (binop_exposing
       (binop_as
-        (binop_pipe
+        (binop_dot
           (lc "http")
           (uc "Client")
         )
@@ -71,7 +71,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   )
   (import
     (binop_as
-      (binop_pipe
+      (binop_dot
         (lc "utils")
         (uc "String")
       )
@@ -83,35 +83,35 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
     (block
       (binop_equals
         (lc "client")
-        (binop_pipe
+        (binop_dot
           (uc "Http")
           (dot_lc "get")
         )
       )
       (binop_equals
         (lc "parser")
-        (binop_pipe
+        (binop_dot
           (uc "Json")
           (dot_lc "utf8")
         )
       )
       (binop_equals
         (lc "helper")
-        (binop_pipe
+        (binop_dot
           (uc "Str")
           (dot_lc "trim")
         )
       )
       (binop_equals
         (lc "result1")
-        (binop_pipe
+        (binop_dot
           (uc "Json")
           (dot_lc "parse")
         )
       )
       (binop_equals
         (lc "result2")
-        (binop_pipe
+        (binop_dot
           (uc "Http")
           (dot_lc "post")
         )
@@ -127,7 +127,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
       (binop_equals
         (lc "combined")
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Str")
             (dot_lc "concat")
           )
@@ -152,21 +152,21 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 module []
 
 import json.Json
-import http.Client as Http exposing [get, post]
+import (http.Client) as Http exposing [get, post]
 import utils.String as Str
 main = {
-	client = Http.get
-	parser = Json.utf8
-	helper = Str.trim
+	client = (Http..get)
+	parser = (Json..utf8)
+	helper = (Str..trim)
 	# Test direct module access
-	result1 = Json.parse
+	result1 = (Json..parse)
 	# Test aliased module access
-	result2 = Http.post
+	result2 = (Http..post)
 	# Test exposed items (should work without module prefix)
 	result3 = get
 	result4 = post
 	# Test multiple qualified access
-	combined = Str.concat(
+	combined = Str..concat(
 		(client, parser, helper, result1, result2, result3, result4, combined),
 	)
 
@@ -187,28 +187,6 @@ This is an unexpected parsing error. Please check your syntax.
 
     (
 ```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_comprehensive.md:3:8:3:12:**
-```roc
-import json.Json
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **http** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_comprehensive.md:4:8:4:12:**
-```roc
-import http.Client as Http exposing [get, post]
-```
-       ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -244,23 +222,23 @@ Is there an **import** or **exposing** missing up-top?
     (Expr.block
       (Stmt.assign
         (pattern (Patt.ident "client"))
-        (Expr.binop_pipe)
+        (Expr.record_access)
       )
       (Stmt.assign
         (pattern (Patt.ident "parser"))
-        (Expr.binop_pipe)
+        (Expr.record_access)
       )
       (Stmt.assign
         (pattern (Patt.ident "helper"))
-        (Expr.binop_pipe)
+        (Expr.record_access)
       )
       (Stmt.assign
         (pattern (Patt.ident "result1"))
-        (Expr.binop_pipe)
+        (Expr.record_access)
       )
       (Stmt.assign
         (pattern (Patt.ident "result2"))
-        (Expr.binop_pipe)
+        (Expr.record_access)
       )
       (Stmt.assign
         (pattern (Patt.ident "result3"))

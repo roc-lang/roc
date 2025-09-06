@@ -55,7 +55,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (lc "list")
             (dot_lc "map")
           )
@@ -95,7 +95,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 mapList : List a -> (a -> b) -> List b
-mapList = |list, fn| list.map(fn)
+mapList = |list, fn| list..map(fn)
 main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~
 # EXPECTED

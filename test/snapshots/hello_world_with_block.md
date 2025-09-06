@@ -38,7 +38,7 @@ LineComment BlankLine LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare
 ))
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "pf")
       (uc "Stdout")
     )
@@ -53,7 +53,7 @@ LineComment BlankLine LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare
             (str_literal_big "World")
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "Stdout")
               (not_lc "line")
             )
@@ -85,17 +85,6 @@ main! = |_| {
 MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**hello_world_with_block.md:6:8:6:10:**
-```roc
-import pf.Stdout
-```
-       ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?

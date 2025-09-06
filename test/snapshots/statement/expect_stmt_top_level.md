@@ -23,7 +23,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperId
 (block
   (binop_equals
     (lc "foo")
-    (binop_pipe
+    (binop_dot
       (uc "Bool")
       (uc "True")
     )
@@ -31,7 +31,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperId
   (expect
     (binop_not_equals
       (lc "foo")
-      (binop_pipe
+      (binop_dot
         (uc "Bool")
         (uc "False")
       )
@@ -43,8 +43,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperId
 ~~~roc
 module [foo]
 
-foo = Bool.True
-expect foo != Bool.False
+foo = (Bool.True)
+expect foo != (Bool.False)
 ~~~
 # EXPECTED
 NIL
@@ -56,8 +56,8 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "foo"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
   (Stmt.expr)

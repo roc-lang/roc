@@ -12,14 +12,14 @@ Json.utf8
 UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (uc "Json")
   (dot_lc "utf8")
 )
 ~~~
 # FORMATTED
 ~~~roc
-Json.utf8
+Json..utf8
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
@@ -27,7 +27,7 @@ UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

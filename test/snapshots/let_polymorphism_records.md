@@ -214,11 +214,11 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
       (body
         (block
           (binop_plus
-            (binop_pipe
+            (binop_dot
               (lc "int_container")
               (dot_lc "count")
             )
-            (binop_pipe
+            (binop_dot
               (lc "str_container")
               (dot_lc "count")
             )
@@ -269,7 +269,7 @@ str_record = identity_record("test")
 list_record = identity_record([1, 2, 3])
 main = |_| {
 	# Access polymorphic fields
-	int_container.count + str_container.count
+	(int_container..count) + (str_container..count)
 }
 ~~~
 # EXPECTED

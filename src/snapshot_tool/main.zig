@@ -1066,6 +1066,8 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
 
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
+    std.debug.print("DEBUG: Snapshot tool starting\n", .{});
+
     // Use GeneralPurposeAllocator for command-line parsing and general work
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -1073,6 +1075,8 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
+
+    std.debug.print("DEBUG: Got {} args\n", .{args.len});
 
     var snapshot_paths = std.ArrayList([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -1224,13 +1228,16 @@ pub fn main() !void {
         }
     } else {
         // process all files in snapshots_dir
+        std.debug.print("DEBUG: Collecting work items from {s}\n", .{snapshots_dir});
         try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
 
     const collect_duration_ms = timer.read() / std.time.ns_per_ms;
+    std.debug.print("DEBUG: Collected {} work items\n", .{work_list.items.len});
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
+    std.debug.print("DEBUG: Processing work items with {} threads\n", .{max_threads});
     const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, &config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
@@ -1480,6 +1487,7 @@ fn processSnapshotContent(
 ) !bool {
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
+    // No debug output needed here
 
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
@@ -1733,6 +1741,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
         .use_per_thread_arenas = !debug,
     };
 
+    std.debug.print("DEBUG: About to call parallel.process\n", .{});
     try parallel.process(
         ProcessContext,
         &context,

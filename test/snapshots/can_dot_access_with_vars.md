@@ -40,7 +40,7 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
     )
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (lc "list")
       (dot_lc "map")
     )
@@ -52,7 +52,7 @@ OpenCurly LowerIdent OpAssign OpenSquare Int Comma Int Comma Int CloseSquare Low
 ~~~roc
 list = [1, 2, 3]
 fn = |x| x + 1
-list.map(fn)
+list..map(fn)
 ~~~
 # EXPECTED
 NIL

@@ -100,11 +100,11 @@ Types must be type identifiers, type applications, or type expressions.
   (Stmt.assign
     (pattern (Patt.ident "person"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 30)
       )

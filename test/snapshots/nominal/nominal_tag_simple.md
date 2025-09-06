@@ -41,7 +41,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
   )
   (binop_equals
     (lc "blue")
-    (binop_pipe
+    (binop_dot
       (uc "Color")
       (uc "Blue")
     )
@@ -52,7 +52,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
   )
   (binop_equals
     (lc "yellow")
-    (binop_pipe
+    (binop_dot
       (uc "Color")
       (uc "Yellow")
     )
@@ -65,9 +65,9 @@ module [Color, blue]
 
 Color := [Red, Green, Blue]
 blue : Color
-blue = Color.Blue
+blue = (Color.Blue)
 yellow : Color
-yellow = Color.Yellow
+yellow = (Color.Yellow)
 ~~~
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22

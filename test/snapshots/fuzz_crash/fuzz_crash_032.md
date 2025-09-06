@@ -56,7 +56,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
       (body
         (block
           (import
-            (binop_pipe
+            (binop_dot
               (uc "Color")
               (uc "RGB")
             )
@@ -75,12 +75,12 @@ KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
             (uc "LocalStatus")
             (uc "Complete")
           )
-          (binop_pipe
+          (binop_dot
             (uc "B")
             (uc "Blue")
           )
           (malformed)
-          (binop_pipe
+          (binop_dot
             (uc "LocalStatus")
             (uc "Pending")
           )

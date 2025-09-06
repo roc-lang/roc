@@ -31,7 +31,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
           (lc "b")
         )
         (binop_colon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -53,7 +53,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [convert_me]
 
-convert_me : a -> b where module(a).convert : a -> b
+convert_me : a -> b where module(a)..convert : a -> b
 convert_me = ...
 ~~~
 # EXPECTED

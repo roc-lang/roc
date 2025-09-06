@@ -65,9 +65,9 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
         (apply_lc
           (lc "processDict")
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (apply_anon
-                (binop_pipe
+                (binop_dot
                   (uc "Dict")
                   (dot_lc "empty")
                 )
@@ -94,7 +94,7 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 processDict : Dict(Str, U64) -> List Str
 processDict = |_dict| []
-main! = |_| processDict(Dict.empty() | .insert(("one", 1)))
+main! = |_| processDict(Dict..empty()..insert(("one", 1)))
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
@@ -120,7 +120,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 47
+; Total type variables: 48
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -144,30 +144,31 @@ NIL
 (var #20 _)
 (var #21 -> #41)
 (var #22 _)
-(var #23 -> #46)
+(var #23 -> #47)
 (var #24 _)
-(var #25 -> #45)
+(var #25 -> #46)
 (var #26 _)
 (var #27 _)
-(var #28 _)
+(var #28 -> #43)
 (var #29 _)
 (var #30 _)
-(var #31 -> #44)
+(var #31 -> #45)
 (var #32 Str)
 (var #33 Num *)
-(var #34 -> #43)
+(var #34 -> #44)
 (var #35 _)
 (var #36 _)
-(var #37 -> #46)
+(var #37 -> #47)
 (var #38 _)
 (var #39 _)
 (var #40 _)
 (var #41 fn_pure)
 (var #42 _)
-(var #43 tuple)
-(var #44 fn_pure)
+(var #43 fn_pure)
+(var #44 tuple)
 (var #45 fn_pure)
 (var #46 fn_pure)
+(var #47 fn_pure)
 ~~~
 # TYPES
 ~~~roc

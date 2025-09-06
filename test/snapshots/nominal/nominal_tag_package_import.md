@@ -26,7 +26,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerI
 (block
   (import
     (binop_as
-      (binop_pipe
+      (binop_dot
         (lc "styles")
         (uc "Color")
       )
@@ -35,7 +35,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerI
   )
   (binop_colon
     (lc "blue")
-    (binop_pipe
+    (binop_dot
       (uc "CC")
       (uc "Color")
     )
@@ -43,8 +43,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerI
   (binop_equals
     (lc "blue")
     (apply_anon
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "CC")
           (uc "Color")
         )
@@ -67,22 +67,12 @@ module [blue]
 import styles.Color as CC
 # instantiating an RGB nominal tab union from the styles.Color module
 blue : CC.Color
-blue = CC.Color | RGB((0, 0, 255))
+blue = CC.Color.RGB((0, 0, 255))
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
 # PROBLEMS
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**nominal_tag_package_import.md:7:8:7:16:**
-```roc
-blue : CC.Color
-```
-       ^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

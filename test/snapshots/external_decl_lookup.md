@@ -36,13 +36,13 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ))
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "pf")
       (uc "Stdout")
     )
   )
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
@@ -55,7 +55,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
           (binop_equals
             (lc "result")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "Json")
                 (dot_lc "utf8")
               )
@@ -63,7 +63,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             )
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "Stdout")
               (not_lc "line")
             )
@@ -86,7 +86,7 @@ import pf.Stdout
 import json.Json
 main! = |_| {
 	# This should create an external declaration for json.Json.utf8
-	result = Json.utf8("Hello from external module!")
+	result = Json..utf8("Hello from external module!")
 	Stdout.line!(result)
 }
 ~~~
@@ -94,28 +94,6 @@ main! = |_| {
 MODULE NOT FOUND - external_decl_lookup.md:3:1:3:17
 MODULE NOT FOUND - external_decl_lookup.md:4:1:4:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**external_decl_lookup.md:3:8:3:10:**
-```roc
-import pf.Stdout
-```
-       ^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**external_decl_lookup.md:4:8:4:12:**
-```roc
-import json.Json
-```
-       ^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?

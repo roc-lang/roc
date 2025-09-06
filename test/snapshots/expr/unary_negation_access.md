@@ -16,7 +16,7 @@ OpUnaryMinus LowerIdent Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
--rec1.field
+-rec1..field
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6

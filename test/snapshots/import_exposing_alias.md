@@ -28,7 +28,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "json")
         (uc "Json")
       )
@@ -150,17 +150,6 @@ main = {
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**import_exposing_alias.md:3:8:3:12:**
-```roc
-import json.Json exposing [decode as fromJson, encode as toJson]
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **fromJson** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -232,11 +221,11 @@ Is there an **import** or **exposing** missing up-top?
       (Stmt.assign
         (pattern (Patt.ident "data"))
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.str_literal_small)
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.num_literal_i32 25)
           )

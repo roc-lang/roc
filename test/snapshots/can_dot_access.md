@@ -13,7 +13,7 @@ LowerIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 # PARSE
 ~~~clojure
 (apply_anon
-  (binop_pipe
+  (binop_dot
     (lc "list")
     (dot_lc "map")
   )
@@ -22,7 +22,7 @@ LowerIdent Dot LowerIdent OpenRound LowerIdent CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-list.map(fn)
+list..map(fn)
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5

@@ -43,7 +43,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
           (lc "a")
           (lc "b")
         )
-        (binop_pipe
+        (binop_dot
           (apply_module
             (lc "a")
           )
@@ -71,7 +71,7 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
           (lc "b")
         )
         (binop_colon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "c")
             )
@@ -90,10 +90,10 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 module [broken_fn1, broken_fn2, broken_fn3]
 
 # Missing colon in constraint
-broken_fn1 : a -> b where module(a).method -> b
+broken_fn1 : a -> b where module(a)..method -> b
 # Empty where clause
 broken_fn2 : a -> b where # Referencing undefined type variable
-broken_fn3 : a -> b where module(c).method : c -> d
+broken_fn3 : a -> b where module(c)..method : c -> d
 ~~~
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
@@ -109,22 +109,11 @@ EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43
 Invalid where clause constraint syntax.
 Where clauses should contain valid ability constraints.
 
-**where_clauses_error_cases.md:6:11:6:14:**
+**where_clauses_error_cases.md:6:11:6:21:**
 ```roc
     module(a).method -> b
 ```
-          ^^^
-
-
-**INVALID WHERE CONSTRAINT**
-Invalid where clause constraint syntax.
-Where clauses should contain valid ability constraints.
-
-**where_clauses_error_cases.md:6:14:6:21:**
-```roc
-    module(a).method -> b
-```
-             ^^^^^^^
+          ^^^^^^^^^^
 
 
 # CANONICALIZE

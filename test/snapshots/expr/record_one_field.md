@@ -30,7 +30,10 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.malformed)
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.str_literal_big)
+  )
 )
 ~~~
 # SOLVED

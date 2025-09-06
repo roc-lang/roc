@@ -51,7 +51,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lc "get_name")
     (lambda
       (body
-        (binop_pipe
+        (binop_dot
           (lc "person")
           (dot_lc "name")
         )
@@ -79,7 +79,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 get_name : {name: Str, age: U64} -> Str
-get_name = |person| person.name
+get_name = |person| person..name
 main! = |_| {}
 ~~~
 # EXPECTED

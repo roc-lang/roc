@@ -35,7 +35,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
   )
   (binop_equals
     (lc "value")
-    (binop_pipe
+    (binop_dot
       (uc "MyType")
       (uc "TagA")
     )
@@ -48,7 +48,7 @@ module [value]
 
 MyType := [TagA, TagB]
 value : MyType
-value = MyType.TagA
+value = (MyType.TagA)
 ~~~
 # EXPECTED
 NIL

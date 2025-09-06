@@ -186,7 +186,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pf")
         (uc "Stdout")
       )
@@ -204,7 +204,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pkg")
         (uc "S")
       )
@@ -802,18 +802,18 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
     )
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (malformed)
       (dot_lc "statod")
     )
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (malformed)
       (dot_lc "ned")
     )
   )
-  (binop_pipe
+  (binop_dot
     (malformed)
     (dot_lc "recd")
   )
@@ -821,7 +821,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
   (uc "Stdoline")
   (unary_not <unary_op>)
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Num")
       (dot_lc "toStr")
     )
@@ -1047,15 +1047,15 @@ m_tuple = (
 
 bsult = (Err(foo) ?? 12 > 5 * 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3 / 5
 stale = some_fn(arg1)
-? | .statod()
-? | .ned()
-? | .recd
+?..statod()
+?..ned()
+?..recd
 ?
 	
 Stdoline
 !"How about ${ #
 			
-Num.toStr(number)
+Num..toStr(number)
 # on expr
 } 
 as 
@@ -1692,28 +1692,6 @@ empty : {}
 
 
 **UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_027.md:4:8:4:10:**
-```roc
-import pf.Stdout exposing [line!, e!]
-```
-       ^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **pkg** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_027.md:10:8:10:11:**
-```roc
-import pkg.S exposing [func as fry, Custom.*]
-```
-       ^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **fry** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -2157,19 +2135,19 @@ Is there an **import** or **exposing** missing up-top?
   (Stmt.assign
     (pattern (Patt.ident "record"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 123)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.lookup "tag")
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.tag_applied)
       )
@@ -2250,7 +2228,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Expr.fn_call)
   (Expr.fn_call)
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
   (Expr.tag_no_args)
   (Expr.unary_not)
@@ -2279,7 +2257,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 536
+; Total type variables: 539
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -2725,11 +2703,11 @@ Is there an **import** or **exposing** missing up-top?
 (var #442 _)
 (var #443 _)
 (var #444 _)
-(var #445 -> #524)
+(var #445 -> #525)
 (var #446 _)
 (var #447 _)
 (var #448 _)
-(var #449 -> #525)
+(var #449 -> #527)
 (var #450 _)
 (var #451 _)
 (var #452 _)
@@ -2737,10 +2715,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #454 _)
 (var #455 _)
 (var #456 _)
-(var #457 -> #527)
+(var #457 -> #530)
 (var #458 _)
 (var #459 _)
-(var #460 -> #528)
+(var #460 -> #531)
 (var #461 _)
 (var #462 _)
 (var #463 _)
@@ -2752,8 +2730,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #469 _)
 (var #470 _)
 (var #471 _)
-(var #472 -> #534)
-(var #473 -> #534)
+(var #472 -> #537)
+(var #473 -> #537)
 (var #474 _)
 (var #475 _)
 (var #476 _)
@@ -2804,18 +2782,21 @@ Is there an **import** or **exposing** missing up-top?
 (var #521 tuple)
 (var #522 tuple)
 (var #523 fn_pure)
-(var #524 fn_pure)
+(var #524 _)
 (var #525 fn_pure)
 (var #526 _)
-(var #527 _)
-(var #528 fn_pure)
+(var #527 fn_pure)
+(var #528 _)
 (var #529 _)
 (var #530 _)
-(var #531 _)
+(var #531 fn_pure)
 (var #532 _)
 (var #533 _)
-(var #534 {})
+(var #534 _)
 (var #535 _)
+(var #536 _)
+(var #537 {})
+(var #538 _)
 ~~~
 # TYPES
 ~~~roc

@@ -35,7 +35,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ))
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "pf")
       (uc "Stdout")
     )
@@ -52,7 +52,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Stdout")
             (not_lc "line")
           )
@@ -86,17 +86,6 @@ main! = print_msg!("Hello, world!")
 # EXPECTED
 MODULE NOT FOUND - effectful_with_effectful_annotation.md:3:1:3:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**effectful_with_effectful_annotation.md:3:8:3:10:**
-```roc
-import pf.Stdout
-```
-       ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?

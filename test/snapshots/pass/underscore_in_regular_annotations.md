@@ -121,7 +121,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow 
     (lc "get_data")
     (lambda
       (body
-        (binop_pipe
+        (binop_dot
           (lc "record")
           (dot_lc "other")
         )
@@ -242,7 +242,7 @@ process : List _ -> Str
 process = |list| "processed"
 # Record with underscore
 get_data : {field: _, other: U32} -> U32
-get_data = |record| record.other
+get_data = |record| record..other
 # Pattern matching with underscore type annotation
 handle_result : Result(_, Str) -> Str
 handle_result = |result| match result

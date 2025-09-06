@@ -19,14 +19,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Bla
 (module-header)
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
   )
   (binop_equals
     (lc "main")
-    (binop_pipe
+    (binop_dot
       (uc "Json")
       (dot_lc "utf8")
     )
@@ -38,29 +38,19 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Bla
 module []
 
 import json.Json
-main = Json.utf8
+main = (Json..utf8)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_json.md:3:1:3:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_json.md:3:8:3:12:**
-```roc
-import json.Json
-```
-       ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
 )
 ~~~

@@ -15,7 +15,7 @@ KwModule OpenSquare CloseSquare OpenRound CloseRound Int Dot LowerIdent ~~~
 (module-header)
 (block
   (tuple_literal)
-  (binop_pipe
+  (binop_dot
     (num_literal_i32 0)
     (dot_lc "t")
   )
@@ -26,7 +26,7 @@ KwModule OpenSquare CloseSquare OpenRound CloseRound Int Dot LowerIdent ~~~
 module []
 
 ()
-0 | .t
+0..t
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_070.md:1:9:1:10
@@ -40,7 +40,7 @@ NIL
 (Expr.block
   (Expr.tuple_literal
   )
-  (Expr.binop_pipe)
+  (Expr.record_access)
 )
 ~~~
 # SOLVED

@@ -48,7 +48,7 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 42)
   )

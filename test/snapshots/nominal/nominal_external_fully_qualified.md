@@ -34,7 +34,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
     (lc "handleResult")
     (binop_arrow_call
       (apply_anon
-        (binop_pipe
+        (binop_dot
           (uc "MyResultModule")
           (uc "MyResultType")
         )
@@ -55,7 +55,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
             (scrutinee               (lc "result")
 ))
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "MyResultType")
               (uc "Ok")
             )
@@ -67,8 +67,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
             (lc "value")
           )
           (apply_anon
-            (binop_pipe
-              (binop_pipe
+            (binop_dot
+              (binop_dot
                 (uc "MyResultModule")
                 (uc "MyResultType")
               )
@@ -99,7 +99,7 @@ handleResult = |result| {
 	MyResultType.Ok(value)
 	=> 
 	value : value
-	MyResultModule.MyResultType | Err(code)
+	MyResultModule.MyResultType.Err(code)
 	=> 
 	"Error: $(code.toStr())"
 }

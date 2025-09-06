@@ -46,7 +46,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (lc "list")
             (dot_lc "len")
           )
@@ -81,7 +81,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 processList : List Str -> U64
-processList = |list| list.len()
+processList = |list| list..len()
 main! = |_| processList(["one", "two"])
 ~~~
 # EXPECTED

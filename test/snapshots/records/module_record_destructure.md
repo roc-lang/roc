@@ -52,7 +52,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
           )
           (binop_minus
             (binop_plus
-              (binop_pipe
+              (binop_dot
                 (block
                   (binop_colon
                     (lc "a")
@@ -63,7 +63,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
               )
               (lc "age")
             )
-            (binop_pipe
+            (binop_dot
               (block
                 (binop_colon
                   (lc "a")
@@ -95,9 +95,9 @@ extract_age = |person| {
 	} = person
 	(({
 		a : 0
-	} | .a) + age) - ({
+	}..a) + age) - ({
 		a : 0
-	} | .a)
+	}..a)
 }
 ~~~
 # EXPECTED
@@ -140,7 +140,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 38
+; Total type variables: 40
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -151,7 +151,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 -> #37)
+(var #10 -> #39)
 (var #11 _)
 (var #12 _)
 (var #13 _)
@@ -161,7 +161,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #17 _)
 (var #18 Num *)
 (var #19 _)
-(var #20 _)
+(var #20 -> #37)
 (var #21 _)
 (var #22 -> #23)
 (var #23 -> #24)
@@ -169,16 +169,18 @@ Is there an **import** or **exposing** missing up-top?
 (var #25 _)
 (var #26 Num *)
 (var #27 _)
-(var #28 _)
+(var #28 -> #38)
 (var #29 _)
 (var #30 -> #31)
 (var #31 _)
 (var #32 _)
-(var #33 -> #37)
+(var #33 -> #39)
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 fn_pure)
+(var #37 {})
+(var #38 {})
+(var #39 fn_pure)
 ~~~
 # TYPES
 ~~~roc

@@ -49,7 +49,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
   )
   (binop_equals
     (lc "empty")
-    (binop_pipe
+    (binop_dot
       (uc "ConsList")
       (uc "Nil")
     )
@@ -62,7 +62,7 @@ module [ConsList, empty]
 
 ConsList(a) := [Nil, Node(ConsList(a))]
 empty : ConsList _a
-empty = ConsList.Nil
+empty = (ConsList.Nil)
 ~~~
 # EXPECTED
 NIL

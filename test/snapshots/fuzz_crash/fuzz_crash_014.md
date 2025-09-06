@@ -15,7 +15,7 @@ MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIden
 # PARSE
 ~~~clojure
 (block
-  (binop_pipe
+  (binop_dot
     (malformed)
     (num_literal_i32 0)
   )
@@ -27,7 +27,7 @@ MalformedNumberNoDigits Dot Int MalformedNumberNoDigits LowerIdent Int LowerIden
 ~~~
 # FORMATTED
 ~~~roc
- | 0
+.0
 0b
 u22
 0
@@ -81,7 +81,7 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
   (Expr.lookup "u22")
   (Expr.num_literal_i32 0)
@@ -90,7 +90,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 10
+; Total type variables: 11
 (var #0 _)
 (var #1 _)
 (var #2 Num *)
@@ -101,6 +101,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #7 _)
 (var #8 _)
 (var #9 _)
+(var #10 _)
 ~~~
 # TYPES
 ~~~roc

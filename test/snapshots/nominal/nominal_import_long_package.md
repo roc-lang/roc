@@ -24,8 +24,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 (block
   (import
     (binop_exposing
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (lc "design")
           (uc "Styles")
         )
@@ -53,7 +53,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [red]
 
-import design.Styles | Color exposing [Encoder]
+import design.Styles.Color exposing [Encoder]
 as 
 CE
 ]
@@ -93,17 +93,6 @@ import design.Styles.Color exposing [Encoder as CE]
 
 red : CE
 ```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **design** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_import_long_package.md:3:8:3:14:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-       ^^^^^^
 
 
 # CANONICALIZE

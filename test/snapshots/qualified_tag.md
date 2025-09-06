@@ -30,7 +30,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
   )
   (binop_equals
     (lc "test")
-    (binop_pipe
+    (binop_dot
       (uc "Color")
       (uc "Red")
     )
@@ -42,7 +42,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 module [Color]
 
 Color := [Red, Blue]
-test = Color.Red
+test = (Color.Red)
 ~~~
 # EXPECTED
 NIL

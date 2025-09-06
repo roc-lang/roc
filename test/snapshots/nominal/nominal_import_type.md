@@ -27,15 +27,15 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
   )
   (binop_colon
     (lc "red")
-    (binop_pipe
+    (binop_dot
       (uc "Color")
       (uc "RGB")
     )
   )
   (binop_equals
     (lc "red")
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (uc "Color")
         (uc "RGB")
       )
@@ -50,22 +50,12 @@ module [red]
 
 import Color
 red : Color.RGB
-red = (Color.RGB | Red)
+red = (Color.RGB.Red)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
 # PROBLEMS
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**nominal_import_type.md:5:7:5:16:**
-```roc
-red : Color.RGB
-```
-      ^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -76,7 +66,7 @@ red : Color.RGB
   )
   (Stmt.assign
     (pattern (Patt.ident "red"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
 )
 ~~~

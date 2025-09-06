@@ -17,7 +17,7 @@ Int LowerIdent OpColon UpperIdent Dot UpperIdent ~~~
   (num_literal_i32 0)
   (binop_colon
     (lc "b")
-    (binop_pipe
+    (binop_dot
       (uc "S")
       (uc "R")
     )
@@ -34,17 +34,7 @@ MISSING HEADER - fuzz_crash_018.md:1:1:1:2
 PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 # PROBLEMS
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**fuzz_crash_018.md:1:5:2:3:**
-```roc
-0 b:S
-.R
-```
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

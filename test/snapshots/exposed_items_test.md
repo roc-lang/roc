@@ -23,7 +23,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pf")
         (uc "Stdout")
       )
@@ -49,17 +49,7 @@ main = 42
 # EXPECTED
 MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**exposed_items_test.md:3:8:3:10:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-       ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

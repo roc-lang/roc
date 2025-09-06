@@ -16,8 +16,8 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
 # PARSE
 ~~~clojure
 (record_literal
-  (binop_pipe
-    (binop_pipe
+  (binop_dot
+    (binop_dot
       (uc "Foo")
       (uc "Bar")
     )
@@ -37,7 +37,7 @@ OpenCurly UpperIdent Dot UpperIdent Dot LowerIdent OpBackArrow LowerIdent OpColo
 # FORMATTED
 ~~~roc
 {
-	Foo.Bar | .baz,
+	Foo.Bar..baz,
 	x: 5,
 	y: 0,
 }
@@ -70,13 +70,13 @@ Expressions can be identifiers, literals, function calls, or operators.
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 5)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 0)
   )

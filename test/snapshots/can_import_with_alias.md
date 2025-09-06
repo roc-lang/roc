@@ -20,7 +20,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 (block
   (import
     (binop_as
-      (binop_pipe
+      (binop_dot
         (lc "json")
         (uc "Json")
       )
@@ -29,7 +29,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
   )
   (binop_equals
     (lc "main")
-    (binop_pipe
+    (binop_dot
       (uc "MyJson")
       (dot_lc "decode")
     )
@@ -41,7 +41,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 module []
 
 import json.Json as MyJson
-main = MyJson.decode
+main = (MyJson..decode)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
@@ -53,7 +53,7 @@ NIL
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
 )
 ~~~

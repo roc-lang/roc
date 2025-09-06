@@ -738,8 +738,7 @@ pub const BuildEnv = struct {
         var ast = try parse.parse(&env.common, self.gpa);
         defer ast.deinit(self.gpa);
 
-        const file = ast.store.getFile();
-        const header = ast.store.getHeader(file.header);
+        const header = ast.header orelse return error.NoHeader;
 
         var info = HeaderInfo{ .kind = .package };
         errdefer info.deinit(self.gpa);

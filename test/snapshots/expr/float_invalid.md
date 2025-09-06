@@ -12,14 +12,14 @@ type=expr
 Float Dot Int ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (frac_literal_small 3.14)
   (num_literal_i32 15)
 )
 ~~~
 # FORMATTED
 ~~~roc
-3.14.15 | 15
+3.14.15.15
 ~~~
 # EXPECTED
 PARSE ERROR - float_invalid.md:1:5:1:8
@@ -27,7 +27,7 @@ PARSE ERROR - float_invalid.md:1:5:1:8
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

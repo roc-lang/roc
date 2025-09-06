@@ -121,7 +121,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lc "get_user_name")
     (lambda
       (body
-        (binop_pipe
+        (binop_dot
           (lc "user")
           (dot_lc "name")
         )
@@ -171,7 +171,7 @@ User : {id: UserId, name: UserName, age: UserAge}
 create_user : UserId -> UserName -> UserAge -> User
 create_user = |id, name, age| { id: id, name: name, age: age }
 get_user_name : User -> UserName
-get_user_name = |user| user.name
+get_user_name = |user| user..name
 main! = |_| {
 	user = create_user((123, "Alice", 25))
 	get_user_name(user)
@@ -212,7 +212,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 91
+; Total type variables: 92
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -250,7 +250,7 @@ NIL
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 -> #83)
+(var #37 -> #84)
 (var #38 _)
 (var #39 _)
 (var #40 _)
@@ -260,56 +260,57 @@ NIL
 (var #44 _)
 (var #45 _)
 (var #46 _)
-(var #47 -> #82)
-(var #48 -> #83)
+(var #47 -> #83)
+(var #48 -> #84)
 (var #49 _)
 (var #50 _)
 (var #51 _)
 (var #52 _)
 (var #53 _)
 (var #54 _)
-(var #55 -> #85)
+(var #55 -> #86)
 (var #56 _)
 (var #57 _)
 (var #58 _)
 (var #59 _)
-(var #60 -> #85)
+(var #60 -> #86)
 (var #61 _)
-(var #62 -> #90)
+(var #62 -> #91)
 (var #63 _)
 (var #64 -> #70)
-(var #65 -> #88)
+(var #65 -> #89)
 (var #66 Num *)
 (var #67 Str)
 (var #68 Num *)
-(var #69 -> #87)
+(var #69 -> #88)
 (var #70 _)
 (var #71 _)
-(var #72 -> #89)
+(var #72 -> #90)
 (var #73 _)
 (var #74 _)
 (var #75 _)
-(var #76 -> #90)
+(var #76 -> #91)
 (var #77 _)
 (var #78 _)
 (var #79 _)
 (var #80 _)
 (var #81 _)
 (var #82 {})
-(var #83 fn_pure)
-(var #84 _)
-(var #85 fn_pure)
-(var #86 _)
-(var #87 tuple)
-(var #88 fn_pure)
+(var #83 record)
+(var #84 fn_pure)
+(var #85 _)
+(var #86 fn_pure)
+(var #87 _)
+(var #88 tuple)
 (var #89 fn_pure)
 (var #90 fn_pure)
+(var #91 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 user : _a
 age : _a
-create_user : _arg, _arg2, _arg3 -> {}
+create_user : _arg, _arg2, _arg3 -> { id: _field, name: _field2, age: _field3 }
 main : _arg -> _ret
 get_user_name : _arg -> _ret
 id : _a

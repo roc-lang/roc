@@ -55,7 +55,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
   (import
     (binop_exposing
       (binop_as
-        (binop_pipe
+        (binop_dot
           (lc "http")
           (uc "Client")
         )
@@ -68,14 +68,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
     )
   )
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "utils")
         (uc "Result")
       )
@@ -95,7 +95,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
     (lc "processRequest")
     (lambda
       (body
-        (binop_pipe
+        (binop_dot
           (uc "Http")
           (dot_lc "defaultResponse")
         )
@@ -109,7 +109,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
     (lc "parseJson")
     (binop_arrow_call
       (uc "Str")
-      (binop_pipe
+      (binop_dot
         (uc "Json")
         (uc "Value")
       )
@@ -120,7 +120,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Json")
             (dot_lc "parse")
           )
@@ -135,18 +135,18 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
   (binop_colon
     (lc "handleApi")
     (binop_arrow_call
-      (binop_pipe
+      (binop_dot
         (uc "Http")
         (uc "Request")
       )
       (apply_uc
         (uc "Result")
         (tuple_literal
-          (binop_pipe
+          (binop_dot
             (uc "Http")
             (uc "Response")
           )
-          (binop_pipe
+          (binop_dot
             (uc "Json")
             (uc "Error")
           )
@@ -162,11 +162,11 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
           (binop_equals
             (lc "result")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "Json")
                 (dot_lc "decode")
               )
-              (binop_pipe
+              (binop_dot
                 (lc "request")
                 (dot_lc "body")
               )
@@ -206,14 +206,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
   (malformed)
   (binop_colon
     (lc "config")
-    (binop_pipe
+    (binop_dot
       (uc "Json")
       (uc "Config")
     )
   )
   (binop_equals
     (lc "config")
-    (binop_pipe
+    (binop_dot
       (uc "Json")
       (dot_lc "defaultConfig")
     )
@@ -221,8 +221,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
   (binop_colon
     (lc "advancedParser")
     (binop_arrow_call
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "Json")
           (uc "Parser")
         )
@@ -233,12 +233,12 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
         (apply_uc
           (uc "Result")
           (tuple_literal
-            (binop_pipe
+            (binop_dot
               (uc "Json")
               (uc "Value")
             )
-            (binop_pipe
-              (binop_pipe
+            (binop_dot
+              (binop_dot
                 (uc "Json")
                 (uc "Parser")
               )
@@ -254,8 +254,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
     (lambda
       (body
         (apply_anon
-          (binop_pipe
-            (binop_pipe
+          (binop_dot
+            (binop_dot
               (uc "Json")
               (uc "Parser")
             )
@@ -361,16 +361,16 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 ~~~roc
 module []
 
-import http.Client as Http exposing [Request, Response]
+import (http.Client) as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
 processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
+processRequest = |req| Http..defaultResponse
 parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
+parseJson = |input| Json..parse(input)
 handleApi : Http.Request -> Result(Http.Response, Json.Error)
 handleApi = |request| {
-	result = Json.decode(request.body)
+	result = Json..decode(request..body)
 	match result
 		Ok(data) => Ok
 (data)
@@ -383,10 +383,10 @@ handleApi = |request| {
 }
 
 config : Json.Config
-config = Json.defaultConfig
+config = (Json..defaultConfig)
 # Test nested type qualification
-advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
-advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
+advancedParser : Json.Parser.Config -> Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser = |parserConfig, input| Json.Parser..parseWith((parserConfig, input))
 # Test function with multiple type parameters
 combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
 combineResults = |result1, result2| match result1
@@ -545,83 +545,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **http** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_type_annotations.md:3:8:3:12:**
-```roc
-import http.Client as Http exposing [Request, Response]
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_type_annotations.md:4:8:4:12:**
-```roc
-import json.Json
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **utils** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_type_annotations.md:5:8:5:13:**
-```roc
-import utils.Result exposing [Result]
-```
-       ^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:10:20:10:30:**
-```roc
-parseJson : Str -> Json.Value
-```
-                   ^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:13:13:13:25:**
-```roc
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-```
-            ^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:13:36:13:49:**
-```roc
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-```
-                                   ^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:13:51:13:61:**
-```roc
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-```
-                                                  ^^^^^^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -664,50 +587,6 @@ Is there an **import** or **exposing** missing up-top?
         Err(err) => Err(err)
 ```
                         ^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:22:10:22:21:**
-```roc
-config : Json.Config
-```
-         ^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:26:18:26:36:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                 ^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:26:52:26:62:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                                   ^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_type_annotations.md:26:64:26:81:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                                               ^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -782,7 +661,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.assign
     (pattern (Patt.ident "config"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "advancedParser"))

@@ -20,7 +20,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
     (binop_where
       (lc "a")
       (binop_colon
-        (binop_pipe
+        (binop_dot
           (apply_module
             (lc "a")
           )
@@ -36,7 +36,7 @@ KwModule OpenSquare CloseSquare LowerIdent OpColon LowerIdent KwWhere KwModule O
 ~~~roc
 module []
 
-r : a where module(a).h : s
+r : a where module(a)..h : s
 ~~~
 # EXPECTED
 NIL

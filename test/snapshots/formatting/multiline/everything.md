@@ -160,7 +160,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (binop_where
               (lc "a")
               (binop_colon
-                (binop_pipe
+                (binop_dot
                   (apply_module
                     (lc "a")
                   )
@@ -174,7 +174,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
             (uc "Str")
           )
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -201,7 +201,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (binop_where
               (lc "b")
               (binop_colon
-                (binop_pipe
+                (binop_dot
                   (apply_module
                     (lc "b")
                   )
@@ -215,7 +215,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
             (uc "Str")
           )
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "b")
             )
@@ -287,14 +287,14 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
           (lc "e")
           (lc "e")
         )
-        (binop_pipe
+        (binop_dot
           (apply_module
             (lc "e")
           )
           (uc "A")
         )
       )
-      (binop_pipe
+      (binop_dot
         (apply_module
           (lc "e")
         )
@@ -444,8 +444,8 @@ Ias2
 ]
 
 # Where constraint
-A(a) : (a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str
-B(b) : (b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str
+A(a) : (a where module(a)..a1 : (a, a)) -> Str, module(a)..a2 : (a, a) -> Str
+B(b) : (b where module(b)..b1 : (b, b)) -> Str, module(b)..b2 : (b, b) -> Str
 C(
 	(a, b),
 ) : (a, b)
@@ -462,7 +462,7 @@ F : [
 	A,
 	B,
 ]
-g : e -> e where module(e) | A, module(e) | B
+g : (e -> e where module(e).A, module(e).B)
 h = |
 	x,
 	y,
@@ -710,33 +710,22 @@ B(b) : b
 Invalid where clause constraint syntax.
 Where clauses should contain valid ability constraints.
 
-**everything.md:58:24:58:27:**
+**everything.md:58:24:58:29:**
 ```roc
 g : e -> e where module(e).A, module(e).B
 ```
-                       ^^^
-
-
-**INVALID WHERE CONSTRAINT**
-Invalid where clause constraint syntax.
-Where clauses should contain valid ability constraints.
-
-**everything.md:58:27:58:29:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                          ^^
+                       ^^^^^
 
 
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**everything.md:58:37:58:42:**
+**everything.md:58:37:58:40:**
 ```roc
 g : e -> e where module(e).A, module(e).B
 ```
-                                    ^^^^^
+                                    ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -804,7 +793,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 232
+; Total type variables: 233
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -928,7 +917,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #120 _)
 (var #121 _)
 (var #122 _)
-(var #123 -> #230)
+(var #123 -> #231)
 (var #124 _)
 (var #125 _)
 (var #126 -> #216)
@@ -991,17 +980,17 @@ Is there an **import** or **exposing** missing up-top?
 (var #183 _)
 (var #184 _)
 (var #185 _)
-(var #186 -> #226)
+(var #186 -> #227)
 (var #187 _)
 (var #188 _)
 (var #189 _)
 (var #190 _)
-(var #191 -> #225)
+(var #191 -> #226)
 (var #192 _)
 (var #193 _)
 (var #194 _)
 (var #195 _)
-(var #196 -> #228)
+(var #196 -> #229)
 (var #197 _)
 (var #198 _)
 (var #199 _)
@@ -1010,7 +999,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #202 _)
 (var #203 _)
 (var #204 _)
-(var #205 -> #230)
+(var #205 -> #231)
 (var #206 _)
 (var #207 _)
 (var #208 _)
@@ -1031,12 +1020,13 @@ Is there an **import** or **exposing** missing up-top?
 (var #223 fn_pure)
 (var #224 _)
 (var #225 {})
-(var #226 fn_pure)
-(var #227 _)
-(var #228 fn_pure)
-(var #229 _)
-(var #230 fn_pure)
-(var #231 _)
+(var #226 record)
+(var #227 fn_pure)
+(var #228 _)
+(var #229 fn_pure)
+(var #230 _)
+(var #231 fn_pure)
+(var #232 _)
 ~~~
 # TYPES
 ~~~roc

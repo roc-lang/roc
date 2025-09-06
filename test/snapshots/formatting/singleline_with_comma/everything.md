@@ -90,7 +90,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
                               (binop_where
                                 (lc "a")
                                 (binop_colon
-                                  (binop_pipe
+                                  (binop_dot
                                     (apply_module
                                       (lc "a")
                                     )
@@ -104,7 +104,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
                               )
                               (uc "Str")
                             )
-                            (binop_pipe
+                            (binop_dot
                               (apply_module
                                 (lc "a")
                               )
@@ -126,7 +126,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
                     (lc "b")
                   )
                   (binop_colon
-                    (binop_pipe
+                    (binop_dot
                       (apply_module
                         (lc "b")
                       )
@@ -140,7 +140,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
                 )
                 (uc "Str")
               )
-              (binop_pipe
+              (binop_dot
                 (apply_module
                   (lc "b")
                 )
@@ -213,14 +213,14 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (lc "e")
             (lc "e")
           )
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "e")
             )
             (uc "A")
           )
         )
-        (binop_pipe
+        (binop_dot
           (apply_module
             (lc "e")
           )
@@ -367,7 +367,7 @@ Ias2
 ]
 
 # Where constraint
-A(a) : ((((a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str, B(b)) : b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str, C(
+A(a) : ((((a where module(a)..a1 : (a, a)) -> Str, module(a)..a2 : (a, a) -> Str, B(b)) : b where module(b)..b1 : (b, b)) -> Str, module(b)..b2 : (b, b) -> Str, C(
 	(a, b),
 )) : (a, b)
 D(
@@ -383,7 +383,7 @@ F : [
 	A,
 	B,
 ]
-g : e -> e where module(e) | A, module(e) | B, h = |
+g : (e -> e where module(e).A, module(e).B, h) = |
 	x,
 	y,
 | {

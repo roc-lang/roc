@@ -12,14 +12,14 @@ List.map
 UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (uc "List")
   (dot_lc "map")
 )
 ~~~
 # FORMATTED
 ~~~roc
-List.map
+List..map
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
@@ -27,7 +27,7 @@ UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

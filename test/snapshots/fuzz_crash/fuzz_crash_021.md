@@ -17,7 +17,7 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIden
 (block
   (binop_slash
     (uc "Fli")
-    (binop_pipe
+    (binop_dot
       (lc "main")
       (dot_lc "roc")
     )
@@ -39,7 +39,7 @@ UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIden
 ~~~
 # FORMATTED
 ~~~roc
-Fli / main.roc
+Fli / (main..roc)
 " }
 
 Pair((a, b + : ()))
@@ -142,7 +142,7 @@ Pair(a, b+ : (
 (Expr.block
   (Expr.binop_slash
     (Expr.tag_no_args)
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Expr.malformed)
   (Expr.tag_applied)

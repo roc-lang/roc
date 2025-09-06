@@ -46,17 +46,6 @@ match person {
       ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_destructure_simple.md:2:5:2:26:**
-```roc
-    { name, age } => name
-```
-    ^^^^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -75,4 +64,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+age : _a
+name : _a
 ~~~

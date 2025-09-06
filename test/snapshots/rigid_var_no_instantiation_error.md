@@ -107,7 +107,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             (apply_lc
               (lc "swap")
               (tuple_literal
-                (binop_pipe
+                (binop_dot
                   (uc "Bool")
                   (dot_lc "true")
                 )
@@ -155,7 +155,7 @@ main! = |_| {
 	result1 = swap((42, "hello"))
 	# Second use: swap (Bool, List Int)
 	# This would fail if 'a' and 'b' from the first call were reused
-	result2 = swap((Bool.true, [1, 2, 3]))
+	result2 = swap((Bool..true, [1, 2, 3]))
 	# Third use: swap (Str, Str) 
 	# This shows even when both types are the same, we still need fresh vars
 	result3 = swap(("foo", "bar"))

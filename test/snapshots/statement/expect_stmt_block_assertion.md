@@ -38,7 +38,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
           (expect
             (binop_double_equals
               (lc "a")
-              (binop_pipe
+              (binop_dot
                 (uc "Bool")
                 (uc "True")
               )
@@ -63,7 +63,7 @@ module [foo]
 
 foo : Bool -> Bool
 foo = |a| {
-	expect a == Bool.True
+	expect a == (Bool.True)
 	a : a
 }
 ~~~

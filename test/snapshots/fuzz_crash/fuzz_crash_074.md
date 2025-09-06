@@ -20,7 +20,7 @@ KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurl
       (block
         (binop_colon
           (lc "d")
-          (binop_pipe
+          (binop_dot
             (block
               (num_literal_i32 0)
             )
@@ -37,7 +37,7 @@ package [] packages {d, {
 	{
 		d : {
 			0
-		} | .c
+		}..c
 	}
 }}
 ~~~

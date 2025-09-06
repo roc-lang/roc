@@ -16,7 +16,7 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 # PARSE
 ~~~clojure
 (block
-  (binop_pipe
+  (binop_dot
     (num_literal_big big:<idx:4>)
     (num_literal_i32 0)
   )
@@ -24,7 +24,7 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
   (underscore)
   (num_literal_i32 0)
   (num_literal_i32 0)
-  (binop_pipe
+  (binop_dot
     (lc "u8")
     (num_literal_i32 0)
   )
@@ -34,12 +34,12 @@ Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 ~~~
 # FORMATTED
 ~~~roc
-0o0.0 | 0
+0o0.0.0
 0_0
 _
 0
 0
-u8 | 0
+u8.0
 0_
 _
 ~~~
@@ -88,12 +88,12 @@ Patterns can only appear in specific contexts like function parameters, destruct
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.num_literal_i32 0)
   (Expr.malformed)
   (Expr.num_literal_i32 0)
   (Expr.num_literal_i32 0)
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.num_literal_i32 0)
   (Expr.malformed)
 )

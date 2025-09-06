@@ -41,14 +41,14 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
 (module-header)
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
   )
   (import
     (binop_as
-      (binop_pipe
+      (binop_dot
         (lc "http")
         (uc "Client")
       )
@@ -57,8 +57,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   )
   (binop_equals
     (lc "main")
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (uc "Json")
         (uc "NonExistent")
       )
@@ -68,7 +68,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   (binop_colon
     (lc "parseData")
     (binop_arrow_call
-      (binop_pipe
+      (binop_dot
         (uc "Json")
         (uc "InvalidType")
       )
@@ -80,7 +80,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Json")
             (dot_lc "stringify")
           )
@@ -95,15 +95,15 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   (binop_colon
     (lc "processRequest")
     (binop_arrow_call
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "Http")
           (uc "Server")
         )
         (uc "Request")
       )
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "Http")
           (uc "Server")
         )
@@ -115,8 +115,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
     (lc "processRequest")
     (lambda
       (body
-        (binop_pipe
-          (binop_pipe
+        (binop_dot
+          (binop_dot
             (uc "Http")
             (uc "Server")
           )
@@ -131,7 +131,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   (binop_equals
     (lc "result")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Json")
         (dot_lc "prase")
       )
@@ -140,8 +140,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   )
   (binop_equals
     (lc "config")
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (uc "Unknown")
         (uc "Module")
       )
@@ -150,17 +150,17 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwI
   )
   (binop_equals
     (lc "client")
-    (binop_pipe
+    (binop_dot
       (uc "Http")
       (dot_lc "invalidMethod")
     )
   )
   (binop_equals
     (lc "parser")
-    (binop_pipe
-      (binop_pipe
-        (binop_pipe
-          (binop_pipe
+    (binop_dot
+      (binop_dot
+        (binop_dot
+          (binop_dot
             (uc "Json")
             (uc "Parser")
           )
@@ -180,21 +180,21 @@ module []
 import json.Json
 import http.Client as Http
 # Test unresolved qualified value
-main = (Json.NonExistent | .method)
+main = (Json.NonExistent..method)
 # Test unresolved qualified type in annotation
 parseData : Json.InvalidType -> Str
-parseData = |data| Json.stringify(data)
+parseData = |data| Json..stringify(data)
 # Test unresolved nested qualification
-processRequest : Http.Server | Request -> Http.Server | Response
-processRequest = |req| Http.Server | .defaultResponse
+processRequest : Http.Server.Request -> Http.Server.Response
+processRequest = |req| Http.Server..defaultResponse
 # Test typo in qualified name
-result = Json.prase("test")
+result = Json..prase("test")
 # Test unknown module qualification
-config = (Unknown.Module | .config)
+config = (Unknown.Module..config)
 # Test valid module but invalid member
-client = Http.invalidMethod
+client = (Http..invalidMethod)
 # Test deeply nested invalid qualification
-parser = (Json.Parser | Advanced | NonExistent | .create)
+parser = (Json.Parser.Advanced.NonExistent..create)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
@@ -203,50 +203,7 @@ MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_unresolved_qualified.md:3:8:3:12:**
-```roc
-import json.Json
-```
-       ^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_unresolved_qualified.md:10:13:10:29:**
-```roc
-parseData : Json.InvalidType -> Str
-```
-            ^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_unresolved_qualified.md:14:18:14:37:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                 ^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_unresolved_qualified.md:14:41:14:61:**
-```roc
-processRequest : Http.Server.Request -> Http.Server.Response
-```
-                                        ^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -254,7 +211,7 @@ processRequest : Http.Server.Request -> Http.Server.Response
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "parseData"))
@@ -278,15 +235,15 @@ processRequest : Http.Server.Request -> Http.Server.Response
   )
   (Stmt.assign
     (pattern (Patt.ident "config"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.assign
     (pattern (Patt.ident "client"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.assign
     (pattern (Patt.ident "parser"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
 )
 ~~~

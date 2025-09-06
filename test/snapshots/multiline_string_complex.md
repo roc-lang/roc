@@ -837,12 +837,12 @@ Types must be type identifiers, type applications, or type expressions.
   (Stmt.assign
     (pattern (Patt.ident "value5"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.tag_no_args)
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )

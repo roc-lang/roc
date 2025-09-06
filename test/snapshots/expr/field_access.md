@@ -12,14 +12,14 @@ person.name
 LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (lc "person")
   (dot_lc "name")
 )
 ~~~
 # FORMATTED
 ~~~roc
-person.name
+person..name
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - field_access.md:1:1:1:7
@@ -37,7 +37,7 @@ person.name
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

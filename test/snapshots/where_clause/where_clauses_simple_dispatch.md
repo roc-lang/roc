@@ -29,7 +29,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
           (uc "Str")
         )
         (binop_colon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -46,7 +46,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (lc "value")
             (dot_lc "to_str")
           )
@@ -63,8 +63,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIde
 ~~~roc
 module [stringify]
 
-stringify : a -> Str where module(a).to_str : a -> Str
-stringify = |value| value.to_str()
+stringify : a -> Str where module(a)..to_str : a -> Str
+stringify = |value| value..to_str()
 ~~~
 # EXPECTED
 NIL

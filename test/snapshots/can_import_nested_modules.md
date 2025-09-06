@@ -40,8 +40,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
 (module-header)
 (block
   (import
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (lc "json")
         (uc "Parser")
       )
@@ -50,8 +50,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
   )
   (import
     (binop_as
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (lc "http")
           (uc "Client")
         )
@@ -62,8 +62,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
   )
   (import
     (binop_exposing
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (lc "utils")
           (uc "String")
         )
@@ -77,7 +77,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
   (binop_colon
     (lc "parseConfig")
     (binop_arrow_call
-      (binop_pipe
+      (binop_dot
         (uc "Config")
         (uc "Settings")
       )
@@ -89,7 +89,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Config")
             (dot_lc "toString")
           )
@@ -107,7 +107,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
       (uc "Str")
       (binop_arrow_call
         (uc "Str")
-        (binop_pipe
+        (binop_dot
           (uc "HttpAuth")
           (uc "Token")
         )
@@ -119,7 +119,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "HttpAuth")
             (dot_lc "login")
           )
@@ -138,8 +138,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
   (binop_colon
     (lc "processData")
     (binop_arrow_call
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "Config")
           (uc "Parser")
         )
@@ -151,8 +151,8 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
           (uc "Result")
           (tuple_literal
             (uc "Str")
-            (binop_pipe
-              (binop_pipe
+            (binop_dot
+              (binop_dot
                 (uc "Config")
                 (uc "Parser")
               )
@@ -168,9 +168,9 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
     (lambda
       (body
         (apply_anon
-          (binop_pipe
-            (binop_pipe
-              (binop_pipe
+          (binop_dot
+            (binop_dot
+              (binop_dot
                 (uc "Config")
                 (uc "Parser")
               )
@@ -205,7 +205,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
           (lc "padLeft")
           (tuple_literal
             (lc "text")
-            (binop_pipe
+            (binop_dot
               (uc "Config")
               (dot_lc "defaultPadding")
             )
@@ -220,18 +220,18 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
   (binop_colon
     (lc "validateAuth")
     (binop_arrow_call
-      (binop_pipe
+      (binop_dot
         (uc "HttpAuth")
         (uc "Credentials")
       )
       (apply_uc
         (uc "Result")
         (tuple_literal
-          (binop_pipe
+          (binop_dot
             (uc "HttpAuth")
             (uc "Token")
           )
-          (binop_pipe
+          (binop_dot
             (uc "HttpAuth")
             (uc "Error")
           )
@@ -244,7 +244,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "HttpAuth")
             (dot_lc "validate")
           )
@@ -262,24 +262,24 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Dot
 ~~~roc
 module []
 
-import json.Parser | Config
-import http.Client | Auth as HttpAuth
-import utils.String | Format exposing [padLeft]
+import json.Parser.Config
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
+parseConfig = |settings| Config..toString(settings)
 # Test multi-level value qualification
 authenticate : Str -> Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login((user, pass))
+authenticate = |user, pass| HttpAuth..login((user, pass))
 # Test deeply nested qualification
-processData : Config.Parser | Advanced -> Str -> Result(Str, Config.Parser | Error)
-processData = |advancedConfig, input| Config.Parser | Advanced | .parseWith((advancedConfig, input))
+processData : Config.Parser.Advanced -> Str -> Result(Str, Config.Parser.Error)
+processData = |advancedConfig, input| Config.Parser.Advanced..parseWith((advancedConfig, input))
 # Test mixed qualification (exposed item + qualified)
 formatOutput : Str -> Str
-formatOutput = |text| padLeft((text, Config.defaultPadding))
+formatOutput = |text| padLeft((text, Config..defaultPadding))
 # Test qualified type in function signature
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-validateAuth = |creds| HttpAuth.validate(creds)
+validateAuth = |creds| HttpAuth..validate(creds)
 ~~~
 # EXPECTED
 PARSE ERROR - can_import_nested_modules.md:3:19:3:26
@@ -310,72 +310,6 @@ MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_nested_modules.md:3:8:3:12:**
-```roc
-import json.Parser.Config
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **utils** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_nested_modules.md:5:8:5:13:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-       ^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:8:15:8:30:**
-```roc
-parseConfig : Config.Settings -> Str
-```
-              ^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:12:28:12:42:**
-```roc
-authenticate : Str, Str -> HttpAuth.Token
-```
-                           ^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:16:15:16:37:**
-```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
-```
-              ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:16:58:16:77:**
-```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
-```
-                                                         ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named **padLeft** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -384,39 +318,6 @@ Is there an **import** or **exposing** missing up-top?
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
                       ^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:25:16:25:36:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-               ^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:25:47:25:61:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                              ^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_nested_modules.md:25:63:25:77:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                                              ^^^^^^^^^^^^^^
 
 
 # CANONICALIZE

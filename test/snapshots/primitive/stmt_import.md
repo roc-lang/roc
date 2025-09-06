@@ -17,7 +17,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Ope
 (module-header)
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "json")
       (uc "Json")
     )
@@ -42,17 +42,6 @@ PARSE ERROR - stmt_import.md:3:22:3:23
 PARSE ERROR - stmt_import.md:3:27:3:28
 MODULE NOT FOUND - stmt_import.md:3:1:3:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**stmt_import.md:3:8:3:12:**
-```roc
-import json.Json [foo, BAR]
-```
-       ^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **foo** in this scope.
 Is there an **import** or **exposing** missing up-top?

@@ -54,6 +54,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-first_name : _a
 rest : _a
 ~~~

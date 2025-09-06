@@ -39,7 +39,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
         (binop_where
           (lc "a")
           (binop_colon
-            (binop_pipe
+            (binop_dot
               (apply_module
                 (lc "a")
               )
@@ -50,7 +50,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
         )
         (lc "hasher")
       )
-      (binop_pipe
+      (binop_dot
         (apply_module
           (lc "hasher")
         )
@@ -67,7 +67,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
       (binop_where
         (lc "a")
         (binop_colon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -88,8 +88,8 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent
 ~~~roc
 module [Hash, Decode]
 
-Hash((a, hasher)) : (a where module(a).hash : hasher) -> hasher, module(hasher) | Hasher
-Decode(a) : a where module(a).decode : List U8 -> a
+Hash((a, hasher)) : (a where module(a)..hash : hasher) -> hasher, module(hasher).Hasher
+Decode(a) : a where module(a)..decode : List U8 -> a
 ~~~
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
@@ -99,11 +99,11 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**where_clauses_1.md:6:9:6:24:**
+**where_clauses_1.md:6:9:6:17:**
 ```roc
 		module(hasher).Hasher
 ```
-		      ^^^^^^^^^^^^^^^
+		      ^^^^^^^^
 
 
 # CANONICALIZE

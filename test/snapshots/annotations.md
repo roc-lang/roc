@@ -66,7 +66,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
   (binop_equals
     (lc "pairU64")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Pair")
         (uc "Pair")
       )
@@ -86,7 +86,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
   (binop_equals
     (lc "pairStr")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Pair")
         (uc "Pair")
       )
@@ -114,7 +114,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Pair")
             (uc "Pair")
           )
@@ -174,7 +174,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
   (binop_equals
     (lc "failPairDiffTypes2")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Pair")
         (uc "Pair")
       )
@@ -202,7 +202,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Pair")
             (uc "Pair")
           )
@@ -223,7 +223,7 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseR
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Pair")
             (uc "Pair")
           )

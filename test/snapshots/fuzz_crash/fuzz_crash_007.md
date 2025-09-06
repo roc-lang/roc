@@ -13,8 +13,8 @@ LowerIdent Dot Int Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
 (block
-  (binop_pipe
-    (binop_pipe
+  (binop_dot
+    (binop_dot
       (lc "ff8")
       (num_literal_i32 8)
     )
@@ -24,7 +24,7 @@ LowerIdent Dot Int Dot LowerIdent ~~~
 ~~~
 # FORMATTED
 ~~~roc
-ff8 | 8.d | .d
+ff8.8.d..d
 ~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_007.md:1:1:1:4
@@ -45,7 +45,7 @@ ff8.8.d
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.binop_pipe)
+  (Expr.record_access)
 )
 ~~~
 # SOLVED

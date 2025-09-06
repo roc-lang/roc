@@ -58,6 +58,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-age : _a
-name : _a
 ~~~

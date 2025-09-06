@@ -65,14 +65,14 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             (lc "elem")
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "List")
               (dot_lc "first")
             )
             (lc "list")
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (malformed)
               (dot_lc "withDefault")
             )
@@ -110,8 +110,8 @@ process = |list| {
 	elem = 42
 	# type variable 'elem' still refers to the function annotation's type parameter
 	result : elem
-	List.first(list)
-	Result | .withDefault(elem)
+	List..first(list)
+	Result..withDefault(elem)
 	result
 }
 
@@ -165,7 +165,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 51
+; Total type variables: 52
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -180,7 +180,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 (var #11 _)
 (var #12 _)
 (var #13 _)
-(var #14 -> #47)
+(var #14 -> #48)
 (var #15 _)
 (var #16 -> #17)
 (var #17 Num *)
@@ -197,26 +197,27 @@ Expressions can be identifiers, literals, function calls, or operators.
 (var #28 _)
 (var #29 _)
 (var #30 _)
-(var #31 -> #46)
+(var #31 -> #47)
 (var #32 _)
 (var #33 _)
 (var #34 _)
 (var #35 _)
-(var #36 -> #47)
+(var #36 -> #48)
 (var #37 _)
-(var #38 -> #50)
+(var #38 -> #51)
 (var #39 _)
-(var #40 -> #49)
-(var #41 -> #50)
+(var #40 -> #50)
+(var #41 -> #51)
 (var #42 _)
 (var #43 _)
 (var #44 _)
 (var #45 fn_pure)
-(var #46 fn_pure)
+(var #46 _)
 (var #47 fn_pure)
-(var #48 _)
-(var #49 {})
-(var #50 fn_pure)
+(var #48 fn_pure)
+(var #49 _)
+(var #50 {})
+(var #51 fn_pure)
 ~~~
 # TYPES
 ~~~roc

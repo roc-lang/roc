@@ -63,7 +63,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ))
 (block
   (malformed)
-  (binop_pipe
+  (binop_dot
     (uc "ModuleB")
     (uc "TypeC")
   )
@@ -74,7 +74,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (malformed)
   (malformed)
   (import
-    (binop_pipe
+    (binop_dot
       (uc "Basics")
       (uc "Result")
     )
@@ -84,7 +84,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (uc "ModuleA")
         (uc "ModuleB")
       )
@@ -101,7 +101,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (binop_colon
     (lc "simpleQualified")
-    (binop_pipe
+    (binop_dot
       (uc "Color")
       (uc "RGB")
     )
@@ -109,7 +109,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (binop_equals
     (lc "simpleQualified")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Color")
         (uc "RGB")
       )
@@ -131,15 +131,15 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (binop_colon
     (lc "aliasedQualified")
-    (binop_pipe
+    (binop_dot
       (uc "ExtMod")
       (uc "DataType")
     )
   )
   (binop_equals
     (lc "aliasedQualified")
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (uc "ExtMod")
         (uc "DataType")
       )
@@ -148,8 +148,8 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (binop_colon
     (lc "multiLevelQualified")
-    (binop_pipe
-      (binop_pipe
+    (binop_dot
+      (binop_dot
         (uc "ModuleA")
         (uc "ModuleB")
       )
@@ -158,7 +158,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (binop_equals
     (lc "multiLevelQualified")
-    (binop_pipe
+    (binop_dot
       (uc "TypeC")
       (dot_lc "new")
     )
@@ -166,7 +166,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (binop_colon
     (lc "resultType")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Result")
         (uc "Result")
       )
@@ -179,7 +179,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (binop_equals
     (lc "resultType")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Result")
         (uc "Ok")
       )
@@ -190,7 +190,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
     (lc "getColor")
     (binop_arrow_call
       (record_literal)
-      (binop_pipe
+      (binop_dot
         (uc "Color")
         (uc "RGB")
       )
@@ -201,7 +201,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Color")
             (uc "RGB")
           )
@@ -229,7 +229,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (binop_colon
     (lc "processColor")
     (binop_arrow_call
-      (binop_pipe
+      (binop_dot
         (uc "Color")
         (uc "RGB")
       )
@@ -251,23 +251,23 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
     (lc "transform")
     (binop_arrow_call
       (apply_anon
-        (binop_pipe
+        (binop_dot
           (uc "Result")
           (uc "Result")
         )
         (tuple_literal
-          (binop_pipe
+          (binop_dot
             (uc "Color")
             (uc "RGB")
           )
-          (binop_pipe
+          (binop_dot
             (uc "ExtMod")
             (uc "Error")
           )
         )
       )
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "ModuleA")
           (uc "ModuleB")
         )
@@ -294,21 +294,21 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   )
   (malformed)
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "TypeC")
       (dot_lc "fromColor")
     )
     (lc "rgb")
   )
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Result")
       (uc "Err")
     )
     (lc "err")
   )
   (malformed)
-  (binop_pipe
+  (binop_dot
     (uc "TypeC")
     (dot_lc "default")
   )
@@ -337,10 +337,10 @@ simpleQualified : Color.RGB
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 # Aliased qualified type
 aliasedQualified : ExtMod.DataType
-aliasedQualified = (ExtMod.DataType | Default)
+aliasedQualified = (ExtMod.DataType.Default)
 # Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB | TypeC
-multiLevelQualified = TypeC.new
+multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified = (TypeC..new)
 # Using qualified type with generics
 resultType : Result.Result((I32, Str))
 resultType = Result.Ok(42)
@@ -351,15 +351,15 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 processColor : Color.RGB -> Str
 processColor = |color| "Color processed"
 # Multiple qualified types in a function signature
-transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB | TypeC
+transform : Result.Result((Color.RGB, ExtMod.Error)) -> ModuleA.ModuleB.TypeC
 transform = |result| match result
 
 Ok(rgb)
 => 
-TypeC.fromColor(rgb)
+TypeC..fromColor(rgb)
 Result.Err(err)
 => 
-TypeC.default
+TypeC..default
 }
 ~~~
 # EXPECTED
@@ -505,39 +505,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**qualified_type_canonicalization.md:14:19:14:28:**
-```roc
-simpleQualified : Color.RGB
-```
-                  ^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**qualified_type_canonicalization.md:18:20:18:35:**
-```roc
-aliasedQualified : ExtMod.DataType
-```
-                   ^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**qualified_type_canonicalization.md:22:23:22:44:**
-```roc
-multiLevelQualified : ModuleA.ModuleB.TypeC
-```
-                      ^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
 **qualified_type_canonicalization.md:26:14:26:37:**
 ```roc
 resultType : Result.Result(I32, Str)
@@ -549,44 +516,11 @@ resultType : Result.Result(I32, Str)
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**qualified_type_canonicalization.md:30:18:30:27:**
-```roc
-getColor : {} -> Color.RGB
-```
-                 ^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**qualified_type_canonicalization.md:34:16:34:25:**
-```roc
-processColor : Color.RGB -> Str
-```
-               ^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
 **qualified_type_canonicalization.md:39:13:39:51:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**qualified_type_canonicalization.md:39:55:39:76:**
-```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-                                                      ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -654,7 +588,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.assign
     (pattern (Patt.ident "aliasedQualified"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "multiLevelQualified"))
@@ -662,7 +596,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.assign
     (pattern (Patt.ident "multiLevelQualified"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "resultType"))
@@ -701,7 +635,7 @@ Is there an **import** or **exposing** missing up-top?
   (Expr.fn_call)
   (Expr.fn_call)
   (Expr.malformed)
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
 )
 ~~~

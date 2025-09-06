@@ -18,7 +18,7 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 ))
 (block
   (num_literal_i32 0)
-  (binop_pipe
+  (binop_dot
     (malformed)
     (dot_lc "a")
   )
@@ -29,7 +29,7 @@ KwModule OpenSquare CloseCurly Int CloseCurly Dot LowerIdent ~~~
 module [}]
 
 0
-} | .a
+}..a
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_063.md:1:8:1:9
@@ -72,12 +72,12 @@ module[}0}.a
 ~~~clojure
 (Expr.block
   (Expr.num_literal_i32 0)
-  (Expr.binop_pipe)
+  (Expr.record_access)
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
 (var #1 _)
 (var #2 Num *)
@@ -85,6 +85,7 @@ module[}0}.a
 (var #4 _)
 (var #5 _)
 (var #6 _)
+(var #7 _)
 ~~~
 # TYPES
 ~~~roc

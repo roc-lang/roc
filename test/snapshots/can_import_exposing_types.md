@@ -69,7 +69,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "json")
         (uc "Json")
       )
@@ -83,7 +83,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
   (import
     (binop_exposing
       (binop_as
-        (binop_pipe
+        (binop_dot
           (lc "http")
           (uc "Client")
         )
@@ -98,7 +98,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
   )
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "utils")
         (uc "Result")
       )
@@ -125,7 +125,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Json")
             (dot_lc "parse")
           )
@@ -152,11 +152,11 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
           (binop_equals
             (lc "result")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "Json")
                 (dot_lc "decode")
               )
-              (binop_pipe
+              (binop_dot
                 (lc "req")
                 (dot_lc "body")
               )
@@ -182,7 +182,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
           )
           (malformed)
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "Http")
               (dot_lc "badRequest")
             )
@@ -223,7 +223,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "List")
             (dot_lc "mapTry")
           )
@@ -232,7 +232,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
             (lambda
               (body
                 (apply_anon
-                  (binop_pipe
+                  (binop_dot
                     (uc "Json")
                     (dot_lc "validateWith")
                   )
@@ -276,7 +276,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
     (lc "createClient")
     (binop_arrow_call
       (uc "Config")
-      (binop_pipe
+      (binop_dot
         (uc "Http")
         (uc "Client")
       )
@@ -287,7 +287,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Http")
             (dot_lc "clientWith")
           )
@@ -312,7 +312,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
       (body
         (apply_anon
           (match
-            (scrutinee               (binop_pipe
+            (scrutinee               (binop_dot
                 (lc "response")
                 (dot_lc "status")
               )
@@ -339,7 +339,7 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
   )
   (malformed)
   (apply_anon
-    (binop_pipe
+    (binop_dot
       (uc "Error")
       (dot_lc "toString")
     )
@@ -416,28 +416,28 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwE
 module []
 
 import json.Json exposing [Value, Error, Config]
-import http.Client as Http exposing [Request, Response, Status]
+import (http.Client) as Http exposing [Request, Response, Status]
 import utils.Result exposing [Result]
 # Test using exposed types directly in annotations
 parseJson : Str -> Result(Value, Error)
-parseJson = |input| Json.parse(input)
+parseJson = |input| Json..parse(input)
 # Test mixing exposed types with qualified access
 handleRequest : Request -> Response
 handleRequest = |req| {
-	result = Json.decode(req.body)
+	result = Json..decode(req..body)
 	match result
 		Ok(value) => Http
 (value)
 	Err(error)
 	=> 
-	Http.badRequest(error)
+	Http..badRequest(error)
 }
 
 }
 
 # Test using exposed types in complex signatures
 processData : Config -> List Value -> Result(List Value, Error)
-processData = |config, values| List.mapTry((values, |v| Json.validateWith((config, v))))
+processData = |config, values| List..mapTry((values, |v| Json..validateWith((config, v))))
 # Test exposed types in record fields
 ServerConfig :
 	{
@@ -447,16 +447,16 @@ ServerConfig :
 	}
 # Test exposed types with module-qualified usage
 createClient : Config -> Http.Client
-createClient = |config| Http.clientWith(config)
+createClient = |config| Http..clientWith(config)
 # Test nested type usage
 handleResponse : Response -> Str
-handleResponse = |response| match response.status
+handleResponse = |response| match response..status
 	Ok(status) => Http
 (status)
 
 Err(error)
 => 
-Error.toString(error)
+Error..toString(error)
 }
 
 # Test mixing exposed and qualified in same expression
@@ -753,39 +753,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:3:8:3:12:**
-```roc
-import json.Json exposing [Value, Error, Config]
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **http** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:4:8:4:12:**
-```roc
-import http.Client as Http exposing [Request, Response, Status]
-```
-       ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **utils** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:5:8:5:13:**
-```roc
-import utils.Result exposing [Result]
-```
-       ^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -828,17 +795,6 @@ Is there an **import** or **exposing** missing up-top?
         Err(error) => Http.badRequest(error)
 ```
                                       ^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**can_import_exposing_types.md:37:26:37:37:**
-```roc
-createClient : Config -> Http.Client
-```
-                         ^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**

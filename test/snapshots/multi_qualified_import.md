@@ -32,8 +32,8 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 (block
   (import
     (binop_exposing
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (lc "json")
           (uc "Core")
         )
@@ -50,9 +50,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
   )
   (binop_equals
     (lc "json_encoder")
-    (binop_pipe
-      (binop_pipe
-        (binop_pipe
+    (binop_dot
+      (binop_dot
+        (binop_dot
           (uc "Json")
           (uc "Core")
         )
@@ -64,9 +64,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
   (binop_colon
     (lc "process")
     (binop_arrow_call
-      (binop_pipe
-        (binop_pipe
-          (binop_pipe
+      (binop_dot
+        (binop_dot
+          (binop_dot
             (lc "json")
             (uc "Core")
           )
@@ -90,9 +90,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
   )
   (binop_colon
     (lc "data")
-    (binop_pipe
-      (binop_pipe
-        (binop_pipe
+    (binop_dot
+      (binop_dot
+        (binop_dot
           (lc "json")
           (uc "Core")
         )
@@ -104,9 +104,9 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
   (binop_equals
     (lc "data")
     (apply_anon
-      (binop_pipe
-        (binop_pipe
-          (binop_pipe
+      (binop_dot
+        (binop_dot
+          (binop_dot
             (lc "json")
             (uc "Core")
           )
@@ -123,15 +123,15 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 ~~~roc
 module [json_encoder]
 
-import json.Core | Utf8 exposing [Encoder]
+import json.Core.Utf8 exposing [Encoder]
 json_encoder : Encoder
-json_encoder = (Json.Core | Utf8 | .defaultEncoder)
+json_encoder = (Json.Core.Utf8..defaultEncoder)
 # Test with qualified type in annotation
-process : json.Core | Utf8 | Encoder -> Str
+process : json.Core.Utf8.Encoder -> Str
 process = |encoder| "processing"
 # Test with multiple qualifiers
-data : json.Core | Utf8 | EncodedData
-data = json.Core | Utf8 | .encode("hello")
+data : json.Core.Utf8.EncodedData
+data = json.Core.Utf8..encode("hello")
 ~~~
 # EXPECTED
 PARSE ERROR - multi_qualified_import.md:3:17:3:22
@@ -158,39 +158,6 @@ UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 Nothing is named **json** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
-**multi_qualified_import.md:3:8:3:12:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-       ^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**multi_qualified_import.md:9:11:9:33:**
-```roc
-process : json.Core.Utf8.Encoder -> Str
-```
-          ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**multi_qualified_import.md:13:8:13:34:**
-```roc
-data : json.Core.Utf8.EncodedData
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **json** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
 **multi_qualified_import.md:14:8:14:12:**
 ```roc
 data = json.Core.Utf8.encode("hello")
@@ -208,7 +175,7 @@ data = json.Core.Utf8.encode("hello")
   )
   (Stmt.assign
     (pattern (Patt.ident "json_encoder"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "process"))

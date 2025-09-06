@@ -72,12 +72,12 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
   (Expr.lookup "email")
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_big)
   )

@@ -12,14 +12,14 @@ I.5
 UpperIdent Dot Int ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (uc "I")
   (num_literal_i32 5)
 )
 ~~~
 # FORMATTED
 ~~~roc
-I | 5
+I.5
 ~~~
 # EXPECTED
 PARSE ERROR - module_dot_tuple.md:1:2:1:4
@@ -27,7 +27,7 @@ PARSE ERROR - module_dot_tuple.md:1:2:1:4
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

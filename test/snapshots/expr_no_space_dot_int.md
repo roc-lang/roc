@@ -18,7 +18,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int
 (block
   (binop_equals
     (lc "foo")
-    (binop_pipe
+    (binop_dot
       (lc "asd")
       (num_literal_i32 0)
     )
@@ -29,7 +29,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int
 ~~~roc
 module []
 
-foo = (asd | 0)
+foo = (asd.0)
 ~~~
 # EXPECTED
 PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
@@ -51,7 +51,7 @@ foo = asd.0
 (Expr.block
   (Stmt.assign
     (pattern (Patt.ident "foo"))
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
 )
 ~~~

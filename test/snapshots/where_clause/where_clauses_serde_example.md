@@ -41,7 +41,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
           )
         )
         (binop_colon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -81,7 +81,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
 ~~~roc
 module [deserialize]
 
-deserialize : List U8 -> Result(a, [DecodeErr]) where module(a).decode : List U8 -> Result(a, [DecodeErr])
+deserialize : List U8 -> Result(a, [DecodeErr]) where module(a)..decode : List U8 -> Result(a, [DecodeErr])
 deserialize = |_| ...
 ~~~
 # EXPECTED

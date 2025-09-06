@@ -13,7 +13,7 @@ OpenRound LowerIdent Dot LowerIdent CloseRound OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
 (apply_anon
-  (binop_pipe
+  (binop_dot
     (lc "person")
     (dot_lc "transform")
   )
@@ -22,7 +22,7 @@ OpenRound LowerIdent Dot LowerIdent CloseRound OpenRound Int CloseRound ~~~
 ~~~
 # FORMATTED
 ~~~roc
-person.transform(42)
+person..transform(42)
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8

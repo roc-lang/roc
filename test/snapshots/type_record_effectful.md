@@ -36,7 +36,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 ))
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "pf")
       (uc "Stdout")
     )
@@ -63,16 +63,16 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       (body
         (block
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (uc "Stdout")
               (not_lc "line")
             )
-            (binop_pipe
+            (binop_dot
               (lc "person")
               (dot_lc "name")
             )
           )
-          (binop_pipe
+          (binop_dot
             (lc "person")
             (dot_lc "name")
           )
@@ -103,8 +103,8 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 import pf.Stdout
 printName : { name: Str, age: U64 } => Str
 printName = |person| {
-	Stdout.line!(person.name)
-	person.name
+	Stdout.line!(person..name)
+	person..name
 }
 
 main! = |_| {}
@@ -112,17 +112,6 @@ main! = |_| {}
 # EXPECTED
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**type_record_effectful.md:3:8:3:10:**
-```roc
-import pf.Stdout
-```
-       ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?

@@ -15,11 +15,11 @@ OpenRound UpperIdent Comma UpperIdent Comma UpperIdent Dot UpperIdent Comma Uppe
 (tuple_literal
   (uc "True")
   (uc "False")
-  (binop_pipe
+  (binop_dot
     (uc "Bool")
     (uc "True")
   )
-  (binop_pipe
+  (binop_dot
     (uc "Bool")
     (uc "False")
   )
@@ -49,12 +49,12 @@ NIL
   (Expr.tag_no_args)
   (Expr.tag_no_args)
   (Expr.module_access
-    (Expr.tag_no_args)
-    (Expr.tag_no_args)
+    (Expr.malformed)
+    (Expr.malformed)
   )
   (Expr.module_access
-    (Expr.tag_no_args)
-    (Expr.tag_no_args)
+    (Expr.malformed)
+    (Expr.malformed)
   )
   (Expr.unary_not)
   (Expr.unary_not)

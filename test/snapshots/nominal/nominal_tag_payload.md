@@ -65,7 +65,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Maybe")
             (uc "Some")
           )
@@ -86,7 +86,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
   )
   (binop_equals
     (lc "none1")
-    (binop_pipe
+    (binop_dot
       (uc "Maybe")
       (uc "None")
     )
@@ -96,7 +96,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
     (lambda
       (body
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (uc "Maybe")
             (uc "Some")
           )
@@ -110,7 +110,7 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent Comma LowerIden
   )
   (binop_equals
     (lc "none2")
-    (binop_pipe
+    (binop_dot
       (uc "Maybe")
       (uc "None")
     )
@@ -125,9 +125,9 @@ Maybe(a) := [Some(a), None]
 some1 : a -> Maybe a
 some1 = |a| Maybe.Some(a)
 none1 : Maybe _a
-none1 = Maybe.None
+none1 = (Maybe.None)
 some2 = |a| Maybe.Some(a)
-none2 = Maybe.None
+none2 = (Maybe.None)
 ~~~
 # EXPECTED
 NIL

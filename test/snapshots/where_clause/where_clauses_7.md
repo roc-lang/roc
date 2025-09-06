@@ -45,7 +45,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
         (binop_where
           (lc "a")
           (binop_colon
-            (binop_pipe
+            (binop_dot
               (apply_module
                 (lc "a")
               )
@@ -56,7 +56,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
         )
         (lc "hasher")
       )
-      (binop_pipe
+      (binop_dot
         (apply_module
           (lc "hasher")
         )
@@ -73,7 +73,7 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerI
       (binop_where
         (lc "a")
         (apply_anon
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -98,11 +98,11 @@ module [Hash]
 Hash((a, hasher)) : # After colon
 	(a where # After var
 	# After where
-module(a).hash : hasher) -> # After method
+module(a)..hash : hasher) -> # After method
 	# After arrow
 hasher, # After first clause
-	module(hasher) | Hasher,
-Decode(a) : a where module(a).decode( # After method args open
+	module(hasher).Hasher,
+Decode(a) : a where module(a)..decode( # After method args open
 List(U8)) -> # After method arg
 a
 ~~~
@@ -114,11 +114,11 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**where_clauses_7.md:10:11:10:26:**
+**where_clauses_7.md:10:11:10:19:**
 ```roc
 				module(hasher).Hasher
 ```
-				      ^^^^^^^^^^^^^^^
+				      ^^^^^^^^
 
 
 **INVALID WHERE CONSTRAINT**

@@ -37,7 +37,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport String KwAs LowerI
   (binop_equals
     (lc "foo")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Json")
         (dot_lc "parse")
       )
@@ -52,7 +52,7 @@ module [foo]
 
 import "users.json" as data : Str
 import Json
-foo = Json.parse(data)
+foo = Json..parse(data)
 ~~~
 # EXPECTED
 PARSE ERROR - inline_ingested_file.md:3:8:3:9

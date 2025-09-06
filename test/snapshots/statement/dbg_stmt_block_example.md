@@ -32,7 +32,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar L
         (block
           (malformed)
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (lc "num")
               (dot_lc "to_str")
             )
@@ -57,7 +57,7 @@ module [foo]
 foo = |num| {
 	# statement - prints out the value of num convertert to a string
 	dbg 
-	num.to_str()
+	num..to_str()
 	# expression - prints out the value of num and then returns it
 	dbg(num)
 }

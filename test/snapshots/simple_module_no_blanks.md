@@ -23,7 +23,7 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 ))
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "pf")
       (uc "Stdout")
     )
@@ -31,7 +31,7 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
   (binop_equals
     (not_lc "hello")
     (apply_anon
-      (binop_pipe
+      (binop_dot
         (uc "Stdout")
         (not_lc "line")
       )
@@ -55,17 +55,6 @@ world = "World"
 # EXPECTED
 MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**simple_module_no_blanks.md:2:8:2:10:**
-```roc
-import pf.Stdout
-```
-       ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?

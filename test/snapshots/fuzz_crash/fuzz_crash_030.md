@@ -419,7 +419,7 @@ ar,
   (Expr.list_literal)
   (Expr.malformed)
   (Expr.record_literal
-    (Expr.binop_colon
+    (Expr.record_field
       (Expr.malformed)
       (Expr.num_literal_i32 77)
     )

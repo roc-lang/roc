@@ -51,7 +51,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lc "getField")
     (lambda
       (body
-        (binop_pipe
+        (binop_dot
           (lc "record")
           (dot_lc "field")
         )
@@ -79,7 +79,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 getField : {field: a, other: _b} -> a
-getField = |record| record.field
+getField = |record| record..field
 main! = |_| {}
 ~~~
 # EXPECTED

@@ -621,7 +621,7 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
       (body
         (block
           (binop_plus
-            (binop_pipe
+            (binop_dot
               (lc "container1")
               (dot_lc "value")
             )
@@ -719,7 +719,7 @@ mixed = { numbers: { value: num, list: [num, num], float: frac }, strings: { val
 
 main = |_| {
 	# Just type-check everything
-	container1.value + 10
+	(container1..value) + 10
 }
 ~~~
 # EXPECTED
@@ -777,11 +777,11 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "poly_record"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.lookup "empty_list")
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 0)
       )
@@ -790,11 +790,11 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "use_poly_record1"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 0)
       )
@@ -803,11 +803,11 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "use_poly_record2"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.num_literal_i32 0)
       )
@@ -816,22 +816,22 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "base_config"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.lookup "empty_list")
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "num")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "frac")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "str")
           )
@@ -842,28 +842,28 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "config1"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "num")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "frac")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "str")
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
@@ -872,28 +872,28 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "config2"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "num")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "frac")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "str")
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.str_literal_big)
       )
@@ -918,38 +918,38 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "deep"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.record_literal
-              (Expr.binop_colon
+              (Expr.record_field
                 (Expr.malformed)
                 (Expr.record_literal
-                  (Expr.binop_colon
+                  (Expr.record_field
                     (Expr.malformed)
                     (Expr.lookup "empty_list")
                   )
-                  (Expr.binop_colon
+                  (Expr.record_field
                     (Expr.malformed)
                     (Expr.lookup "num")
                   )
                 )
               )
-              (Expr.binop_colon
+              (Expr.record_field
                 (Expr.malformed)
                 (Expr.list_literal)
               )
             )
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "empty_list")
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
@@ -976,11 +976,11 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "compute4"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.lookup "num")
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.list_literal)
       )
@@ -989,51 +989,51 @@ NIL
   (Stmt.assign
     (pattern (Patt.ident "mixed"))
     (Expr.record_literal
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "num")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.list_literal)
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "frac")
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "str")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.list_literal)
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.lookup "empty_list")
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.list_literal)
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.record_literal
-              (Expr.binop_colon
+              (Expr.record_field
                 (Expr.malformed)
                 (Expr.lookup "empty_list")
               )
@@ -1041,24 +1041,24 @@ NIL
           )
         )
       )
-      (Expr.binop_colon
+      (Expr.record_field
         (Expr.malformed)
         (Expr.record_literal
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.binop_star
               (Expr.lookup "num")
               (Expr.num_literal_i32 100)
             )
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.binop_star
               (Expr.lookup "frac")
               (Expr.frac_literal_small 10)
             )
           )
-          (Expr.binop_colon
+          (Expr.record_field
             (Expr.malformed)
             (Expr.list_literal)
           )

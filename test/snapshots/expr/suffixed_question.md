@@ -13,7 +13,7 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
 # PARSE
 ~~~clojure
 (binop_double_question
-  (binop_pipe
+  (binop_dot
     (uc "Stdout")
     (dot_lc "line")
   )
@@ -22,7 +22,7 @@ UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
 ~~~
 # FORMATTED
 ~~~roc
-Stdout.line ?? ?
+(Stdout..line) ?? ?
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
@@ -42,7 +42,7 @@ Stdout.line???
 # CANONICALIZE
 ~~~clojure
 (Expr.binop_double_question
-  (Expr.binop_pipe)
+  (Expr.record_access)
   (Expr.malformed)
 )
 ~~~

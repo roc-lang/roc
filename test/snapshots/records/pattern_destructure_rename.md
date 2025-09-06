@@ -51,17 +51,6 @@ match person {
       ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_destructure_rename.md:2:5:2:92:**
-```roc
-    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -78,10 +67,12 @@ This might be a limitation in the current implementation that will be addressed 
 (var #6 _)
 (var #7 _)
 (var #8 _)
-(var #9 _)
+(var #9 Str)
 (var #10 _)
 (var #11 _)
 ~~~
 # TYPES
 ~~~roc
+userName : _a
+userAge : _a
 ~~~

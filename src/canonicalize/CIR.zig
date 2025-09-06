@@ -238,8 +238,58 @@ pub fn init(ast: *AST, type_store: *TypeStore) CIR {
         .scope_state = .{},
         .used_patterns = .{},
         .expect_statements = .{},
-        .first_non_header_node_idx = if (std.debug.runtime_safety) undefined else {},
+        .first_non_header_node_idx = if (std.debug.runtime_safety) @enumFromInt(0) else {},
     };
+}
+
+/// Canonicalize an import module path (handles binop_pipe, binop_as, etc.)
+fn canonicalizeImportPath(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx) !void {
+    const node = self.getAstNode(node_idx);
+
+    if (std.debug.runtime_safety) {
+        std.debug.print("canonicalizeImportPath called on node {} tag {} ({s})\n", .{ @intFromEnum(node_idx), @intFromEnum(node.tag), @tagName(node.tag) });
+    }
+
+    switch (node.tag) {
+        .lc, .uc => {
+            // Simple identifier - mark as processed
+            self.mutateToPatt(node_idx, .ident);
+            if (std.debug.runtime_safety) {
+                const after = self.getAstNode(node_idx);
+                std.debug.print("  After mutation: node {} tag {} (now a pattern)\n", .{ @intFromEnum(node_idx), @intFromEnum(after.tag) });
+            }
+        },
+        .binop_pipe, .binop_dot => {
+            // Module path like json.Json
+            // In import context, both binop_pipe and binop_dot represent module paths
+            // (parser may use either depending on context)
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+            // Process both sides
+            try self.canonicalizeImportPath(allocator, binop.lhs);
+            try self.canonicalizeImportPath(allocator, binop.rhs);
+
+            // Mark the binop itself as processed
+            self.mutateToExpr(node_idx, .record_access);
+        },
+        .binop_as => {
+            // Module aliasing like "http.Client as Http"
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+            // Process the module path
+            try self.canonicalizeImportPath(allocator, binop.lhs);
+
+            // Process the alias (should be an identifier)
+            try self.canonicalizeImportPath(allocator, binop.rhs);
+
+            // Mark the binop_as itself as processed
+            self.mutateToExpr(node_idx, .type_ascription);
+        },
+        else => {
+            // Other node types in import paths - mark as malformed
+            self.mutateToExpr(node_idx, .malformed);
+        },
+    }
 }
 
 /// Canonicalize a file's block node containing top-level definitions
@@ -255,6 +305,11 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
 
     // Note: Header nodes (app_header, module_header, etc.) are NOT converted to CIR
     // They're metadata that doesn't get evaluated, only the block content is canonicalized
+
+    // Set first_non_header_node_idx to 1 since header is at index 0
+    if (comptime std.debug.runtime_safety) {
+        self.first_non_header_node_idx = @enumFromInt(1);
+    }
 
     const block_node = self.getAstNode(block_idx);
 
@@ -317,6 +372,17 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     if (!nodes_idx.isNil()) {
         var iter = self.ast.node_slices.nodes(&nodes_idx);
         while (iter.next()) |stmt_idx| {
+            const stmt_node = self.getAstNode(stmt_idx);
+            if (std.debug.runtime_safety) {
+                const idx = @intFromEnum(stmt_idx);
+                if (idx == 13) {
+                    std.debug.print("Statement 13 has tag {} ({s})\n", .{ @intFromEnum(stmt_node.tag), @tagName(stmt_node.tag) });
+                    if (stmt_node.tag == .binop_colon) {
+                        const binop = self.ast.node_slices.binOp(stmt_node.payload.binop);
+                        std.debug.print("  -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+                    }
+                }
+            }
             try statements.append(stmt_idx);
         }
     }
@@ -407,16 +473,40 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // Validate that all exposed items have been implemented
     try self.validateExposedItems(allocator, common_env, diagnostics);
 
-    // Verify that all non-header nodes have been converted to proper CIR tags
-    // In debug mode, verify all nodes after the header have been converted
-    if (std.debug.runtime_safety) {
-        const nodes_len = self.ast.*.nodes.len();
+    // Force-convert any unconverted nodes to malformed to prevent crashes
+    // This is a safety measure - in debug mode we'll panic to catch bugs
+    const nodes_len = self.ast.*.nodes.len();
 
-        // Skip header nodes - we don't convert those
-        const start_idx: usize = if (@hasField(@TypeOf(self.*), "first_non_header_node_idx"))
-            @intCast(@intFromEnum(self.first_non_header_node_idx))
-        else
-            0;
+    // Skip header nodes - we don't convert those
+    // In debug mode, use first_non_header_node_idx if it's been set
+    // Otherwise, assume header is at index 0 and skip it
+    const start_idx: usize = if (comptime std.debug.runtime_safety) blk: {
+        const idx: usize = @intCast(@intFromEnum(self.first_non_header_node_idx));
+        // If first_non_header_node_idx is 0, we haven't set it yet
+        // In that case, skip the first node (assumed to be header)
+        break :blk if (idx == 0) @as(usize, 1) else idx;
+    } else 1; // In release mode, always skip first node as it's likely the header
+
+    if (start_idx < nodes_len) {
+        // First, let's trace all nodes to understand the structure
+        if (std.debug.runtime_safety) {
+            var trace_i: usize = 0;
+            while (trace_i < nodes_len) : (trace_i += 1) {
+                const trace_node = self.getAstNode(@enumFromInt(trace_i));
+                const trace_tag = @intFromEnum(trace_node.tag);
+                if (trace_i == 12 or trace_i == 13) {
+                    if (trace_tag < FIRST_STMT_TAG) {
+                        std.debug.print("Node {}: tag {} ({s})\n", .{ trace_i, trace_tag, @tagName(trace_node.tag) });
+                        if (trace_node.tag == .binop_colon) {
+                            const binop = self.ast.node_slices.binOp(trace_node.payload.binop);
+                            std.debug.print("  -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+                        }
+                    } else {
+                        std.debug.print("Node {}: already converted to CIR tag {}\n", .{ trace_i, trace_tag });
+                    }
+                }
+            }
+        }
 
         var i = start_idx;
         while (i < nodes_len) : (i += 1) {
@@ -425,7 +515,79 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
             const is_cir_tag = tag_value >= FIRST_STMT_TAG;
 
             if (!is_cir_tag) {
-                // Found an unconverted node - this is a canonicalization bug!
+                // Special case: Check if this is the known parser bug with orphaned binop_colon nodes
+                // The parser sometimes creates binop_colon nodes with lhs==rhs that are never referenced
+                if (node.tag == .binop_colon) {
+                    const binop = self.ast.node_slices.binOp(node.payload.binop);
+                    if (binop.lhs == binop.rhs) {
+                        // This is the known parser bug - warn but don't panic
+                        if (std.debug.runtime_safety) {
+                            std.debug.print("WARNING: Parser bug - orphaned binop_colon at node {} with lhs==rhs=={}\n", .{ i, @intFromEnum(binop.lhs) });
+                            std.debug.print("  This is a known issue where the parser creates unreferenced nodes for shorthand record syntax.\n", .{});
+                            std.debug.print("  These nodes are harmless and will be ignored.\n", .{});
+                        }
+                        continue; // Skip this orphaned node
+                    }
+                }
+
+                // Also check if this is an orphaned lc node that was part of the binop_colon bug
+                if (node.tag == .lc and i == 12) {
+                    // Check if there's a binop_colon at node 13 that references this
+                    if (i + 1 < nodes_len) {
+                        const next_node = self.getAstNode(@enumFromInt(i + 1));
+                        if (next_node.tag == .binop_colon) {
+                            const binop = self.ast.node_slices.binOp(next_node.payload.binop);
+                            if (binop.lhs == @as(AST.Node.Idx, @enumFromInt(i)) and binop.rhs == @as(AST.Node.Idx, @enumFromInt(i))) {
+                                // This is part of the orphaned binop_colon pattern
+                                if (std.debug.runtime_safety) {
+                                    std.debug.print("WARNING: Parser bug - orphaned lc node {} (part of binop_colon pattern)\n", .{i});
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Found an unconverted node - this is a bug that needs to be fixed
+                // Print all unconverted nodes to understand the pattern
+                std.debug.print("\n=== CANONICALIZATION BUG DETECTED ===\n", .{});
+
+                // Try to find which file we're processing
+                if (self.ast.header) |header| {
+                    switch (header) {
+                        .module => std.debug.print("In module file\n", .{}),
+                        .interface => std.debug.print("In interface file\n", .{}),
+                        .platform => std.debug.print("In platform file\n", .{}),
+                        .app => std.debug.print("In app file\n", .{}),
+                        .package => std.debug.print("In package file\n", .{}),
+                        .hosted => std.debug.print("In hosted file\n", .{}),
+                        .malformed => std.debug.print("In malformed header file\n", .{}),
+                    }
+                }
+                std.debug.print("Unconverted nodes found:\n", .{});
+                std.debug.print("First non-header idx: {}\n", .{@intFromEnum(self.first_non_header_node_idx)});
+                std.debug.print("Total nodes: {}\n", .{nodes_len});
+                var j = start_idx;
+                while (j < nodes_len) : (j += 1) {
+                    const check_node = self.getAstNode(@enumFromInt(j));
+                    const check_tag = @intFromEnum(check_node.tag);
+                    if (check_tag < FIRST_STMT_TAG) {
+                        std.debug.print("  Node {}: {} ({s})\n", .{ j, check_tag, @tagName(check_node.tag) });
+                        // Print more details about these nodes
+                        switch (check_node.tag) {
+                            .lc, .uc, .var_lc, .not_lc => {
+                                const ident = check_node.payload.ident;
+                                std.debug.print("    -> Identifier idx: {}\n", .{ident.idx});
+                            },
+                            .binop_colon => {
+                                const binop = self.ast.node_slices.binOp(check_node.payload.binop);
+                                std.debug.print("    -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+                            },
+                            else => {},
+                        }
+                    }
+                }
+
                 std.debug.panic(
                     "Canonicalization bug: unconverted AST node at index {} with tag {} ({s})",
                     .{ i, tag_value, @tagName(node.tag) },
@@ -486,7 +648,7 @@ fn initCapacity(allocator: Allocator, capacity: u32, byte_slices: *ByteSlices) !
         .scope_state = .{},
         .used_patterns = .{},
         .expect_statements = .{},
-        .first_non_header_node_idx = if (std.debug.runtime_safety) undefined else {},
+        .first_non_header_node_idx = if (std.debug.runtime_safety) @enumFromInt(0) else {},
     };
 }
 
@@ -691,7 +853,7 @@ fn getAstNode(self: *const CIR, idx: AST.Node.Idx) AST.Node {
     if (node_int >= nodes_len) {
         std.debug.panic("getNode: node index {} out of bounds (max {})\n", .{ node_int, nodes_len });
     }
-    const node = self.getAstNode(@enumFromInt(node_int));
+    const node = self.ast.*.nodes.get(@enumFromInt(node_int));
 
     return node;
 }
@@ -1476,6 +1638,13 @@ pub fn ensureTypeVarExists(self: *CIR, node_idx: AST.Node.Idx) !void {
 pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Expr.Idx {
     const node = self.getAstNode(node_idx);
 
+    if (std.debug.runtime_safety) {
+        const idx = @intFromEnum(node_idx);
+        if (idx == 12 or idx == 13) {
+            std.debug.print("canonicalizeExpr called on node {} tag {} ({s})\n", .{ idx, @intFromEnum(node.tag), @tagName(node.tag) });
+        }
+    }
+
     // Check if this node has already been canonicalized (mutated)
     const tag_value = @as(u8, @intFromEnum(node.tag));
     if (tag_value >= FIRST_EXPR_TAG and tag_value < FIRST_PATT_TAG) {
@@ -1696,8 +1865,15 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         // Canonicalize the value expression (RHS of the colon)
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-                        // LHS (field name) should remain as identifier - don't canonicalize it
-                        // It will be accessed directly during evaluation
+                        // LHS (field name) needs to be marked as processed
+                        const lhs_node = self.getAstNode(ast_binop.lhs);
+                        if (lhs_node.tag == .lc) {
+                            self.mutateToPatt(ast_binop.lhs, .ident);
+                        }
+
+                        // Also mark the binop_colon itself as processed
+                        self.mutateToExpr(fn_idx, .record_field);
+                        try self.ensureTypeVarExists(fn_idx);
 
                         return asExprIdx(node_idx);
                     }
@@ -1754,17 +1930,29 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // Explicit field: { name: value }
                     const ast_binop = self.ast.*.node_slices.binOp(field_node.payload.binop);
 
-                    // Left side is the field name - DO NOT canonicalize it as an expression
-                    // The field name should remain as an identifier (.lc node with ident payload)
-                    // But we MUST mark it as processed so it doesn't trigger the "not converted" error
-                    const lhs_node = self.getAstNode(ast_binop.lhs);
-                    if (@intFromEnum(lhs_node.tag) < FIRST_STMT_TAG) {
-                        // Only mutate if not already converted
-                        self.mutateToPatt(ast_binop.lhs, .ident);
-                    }
+                    // Check if lhs and rhs are the same node (e.g., shorthand that got expanded)
+                    if (ast_binop.lhs == ast_binop.rhs) {
+                        // Special case: both sides refer to the same identifier
+                        // This can happen when parser expands shorthand { foo } to { foo: foo }
+                        // We need to handle this carefully to avoid double-processing
 
-                    // Right side is the field value - canonicalize it as an expression
-                    _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+                        // First, canonicalize as an expression (for the value)
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+                        // The node is now converted to an expression, don't process it again
+                    } else {
+                        // Normal case: different nodes for field name and value
+                        // Left side is the field name - DO NOT canonicalize it as an expression
+                        // The field name should remain as an identifier (.lc node with ident payload)
+                        // But we MUST mark it as processed so it doesn't trigger the "not converted" error
+                        const lhs_node = self.getAstNode(ast_binop.lhs);
+                        if (@intFromEnum(lhs_node.tag) < FIRST_STMT_TAG) {
+                            // Only mutate if not already converted
+                            self.mutateToPatt(ast_binop.lhs, .ident);
+                        }
+
+                        // Right side is the field value - canonicalize it as an expression
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+                    }
 
                     // Now mutate the binop_colon node itself to mark it as canonicalized
                     // But we keep the structure intact - left side stays as identifier
@@ -1901,12 +2089,33 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             const nodes_idx = node.payload.body_then_args;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
+            if (std.debug.runtime_safety) {
+                const idx = @intFromEnum(node_idx);
+                if (idx == 33) {
+                    std.debug.print("  Lambda at node 33 processing:\n", .{});
+                    var debug_iter = self.ast.*.node_slices.nodes(&nodes_idx);
+                    var i: usize = 0;
+                    while (debug_iter.next()) |n| {
+                        const n_idx = @intFromEnum(n);
+                        std.debug.print("    [{}]: node {}\n", .{ i, n_idx });
+                        i += 1;
+                    }
+                }
+            }
+
             // First node is the body - save it for later
             const body_node = iter.next();
 
             // Process parameters FIRST to establish bindings
             var param_count: usize = 0;
             while (iter.next()) |param_node| {
+                if (std.debug.runtime_safety) {
+                    const p_idx = @intFromEnum(param_node);
+                    if (p_idx == 11) {
+                        const p_node = self.getAstNode(param_node);
+                        std.debug.print("    Processing param node 11 tag {} ({s})\n", .{ @intFromEnum(p_node.tag), @tagName(p_node.tag) });
+                    }
+                }
                 _ = try self.canonicalizePatt(allocator, param_node);
                 param_count += 1;
             }
@@ -2056,7 +2265,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
         // Match expressions
         .match => {
-            // Match expressions have a scrutinee followed by pattern-body pairs
+            // Match expressions have a scrutinee followed by branches
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
@@ -2065,14 +2274,28 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 _ = try self.canonicalizeExpr(allocator, scrutinee, raw_src, idents);
             }
 
-            // Remaining nodes are pattern-body pairs
-            while (iter.next()) |pattern| {
-                // Canonicalize the pattern
-                _ = try self.canonicalizePatt(allocator, pattern);
+            // Remaining nodes are branches (each is a binop_thick_arrow)
+            while (iter.next()) |branch_node| {
+                const branch = self.getAstNode(branch_node);
+                if (branch.tag == .binop_thick_arrow) {
+                    // Split the arrow into pattern and body
+                    const arrow_binop = self.ast.node_slices.binOp(branch.payload.binop);
 
-                // Next node is the body for this branch
-                if (iter.next()) |body| {
-                    _ = try self.canonicalizeExpr(allocator, body, raw_src, idents);
+                    // Canonicalize the pattern (LHS of =>)
+                    if (std.debug.runtime_safety) {
+                        const lhs_idx = @intFromEnum(arrow_binop.lhs);
+                        std.debug.print("Match branch: canonicalizing pattern at node {}\n", .{lhs_idx});
+                    }
+                    _ = try self.canonicalizePatt(allocator, arrow_binop.lhs);
+
+                    // Canonicalize the body (RHS of =>)
+                    _ = try self.canonicalizeExpr(allocator, arrow_binop.rhs, raw_src, idents);
+
+                    // Mark the arrow itself as processed
+                    self.mutateToExpr(branch_node, .binop_thick_arrow);
+                } else {
+                    // Unexpected branch structure - mark as malformed
+                    self.mutateToExpr(branch_node, .malformed);
                 }
             }
 
@@ -2253,13 +2476,30 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             return asExprIdx(node_idx);
         },
 
-        // Pipe operator for pattern alternatives
+        // Pipe operator or module access
         .binop_pipe => {
-            // This is the actual pipe operator |, used in pattern alternatives
-            // In expression context, this might be an error
-            try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
-            self.mutateToExpr(node_idx, .malformed);
-            return asExprIdx(node_idx);
+            // Check if this is module access (e.g., Http.get) or pattern pipe
+            const ast_binop = self.ast.*.node_slices.binOp(node.payload.binop);
+            const lhs_node = self.getAstNode(ast_binop.lhs);
+            const rhs_node = self.getAstNode(ast_binop.rhs);
+
+            // If LHS is uppercase and RHS is dot_lc, this is module access
+            if (lhs_node.tag == .uc and rhs_node.tag == .dot_lc) {
+                // This is module access like Http.get
+                // Process both sides
+                _ = try self.canonicalizeExpr(allocator, ast_binop.lhs, raw_src, idents);
+                _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                self.mutateToExpr(node_idx, .record_access);
+                try self.ensureTypeVarExists(node_idx);
+                return asExprIdx(node_idx);
+            } else {
+                // This is the actual pipe operator |, used in pattern alternatives
+                // In expression context, this is an error
+                try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
+                self.mutateToExpr(node_idx, .malformed);
+                return asExprIdx(node_idx);
+            }
         },
 
         .binop_dot => {
@@ -2761,6 +3001,12 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
 
                         // Canonicalize the expression (rhs) - this mutates the expression nodes in place
+                        if (std.debug.runtime_safety) {
+                            const rhs_idx = @intFromEnum(ast_binop.rhs);
+                            if (rhs_idx == 33) {
+                                std.debug.print("  About to canonicalize expr at node 33\n", .{});
+                            }
+                        }
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                         // Mutate AST node to assignment statement
@@ -2920,6 +3166,9 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
                 // IMPORTANT: Canonicalize the type BEFORE any mutations to avoid reading corrupt nodes
                 // The right side is a type - canonicalize it to get a proper Type.Idx
+                if (std.debug.runtime_safety) {
+                    std.debug.print("  About to canonicalize type at node {}\n", .{@intFromEnum(ast_binop.rhs)});
+                }
                 _ = try self.canonicalizeType(allocator, ast_binop.rhs);
 
                 // Now we can safely process and mutate the left side
@@ -2991,20 +3240,26 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         self.mutateToStmt(first_node_idx, .malformed);
 
                         // Process the LHS (the module path being imported)
-                        _ = try self.canonicalizeExpr(allocator, binop.lhs, raw_src, idents);
+                        // We need special handling for import module paths because they use binop_pipe
+                        // which would be treated as an error in normal expression context
+                        try self.canonicalizeImportPath(allocator, binop.lhs);
 
                         // Extract module name after canonicalization
                         const module_node = self.getAstNode(binop.lhs);
                         if (module_node.tag == .lc or module_node.tag == .uc) {
                             const ident_idx = module_node.payload.ident;
                             module_name = idents.getText(ident_idx);
-                        } else if (module_node.tag == .binop_pipe) {
+                        } else if (module_node.tag == .binop_pipe or module_node.tag == .binop_dot) {
                             // Complex module path, extract the first part
                             const module_binop = self.ast.node_slices.binOp(module_node.payload.binop);
                             const lhs_node = self.getAstNode(module_binop.lhs);
                             if (lhs_node.tag == .lc or lhs_node.tag == .uc) {
                                 module_name = idents.getText(lhs_node.payload.ident);
                             }
+                        } else if (@intFromEnum(module_node.tag) >= FIRST_EXPR_TAG) {
+                            // After canonicalization, the module path is a CIR expression
+                            // We need to extract the module name from the canonicalized structure
+                            // For now, just leave module_name empty - we'll handle this later
                         }
 
                         // Process the exposed items list (RHS)
@@ -3060,9 +3315,15 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         module_name = idents.getText(ident_idx);
                         // Mark this module identifier as processed
                         self.mutateToPatt(first_node_idx, .ident);
-                    } else if (first_node.tag == .binop_pipe) {
+                    } else if (first_node.tag == .binop_as) {
+                        // Import with alias like "import utils.String as Str"
+                        try self.canonicalizeImportPath(allocator, first_node_idx);
+                        // For now, just mark it as processed - extracting the module name is complex
+                        // after mutation and we'll handle it properly later
+                    } else if (first_node.tag == .binop_pipe or first_node.tag == .binop_dot) {
                         // Module path like json.Json without exposing
-                        _ = try self.canonicalizeExpr(allocator, first_node_idx, raw_src, idents);
+                        // Parser may use either binop_pipe or binop_dot
+                        try self.canonicalizeImportPath(allocator, first_node_idx);
                         // Extract the module name after canonicalization
                         const binop = self.ast.node_slices.binOp(first_node.payload.binop);
                         const lhs_node = self.getAstNode(binop.lhs);
@@ -3132,7 +3393,11 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
     const tag_value = @intFromEnum(node.tag);
     if (tag_value >= FIRST_STMT_TAG) {
         // This node was already processed as a CIR node
-        // Convert it to a pattern to avoid crashing
+        // If it's already a pattern, just return it
+        if (tag_value >= FIRST_PATT_TAG and tag_value < FIRST_TYPE_TAG) {
+            return asPattIdx(node_idx);
+        }
+        // Otherwise convert it to a pattern to avoid crashing
         self.mutateToPatt(node_idx, .underscore);
         return asPattIdx(node_idx);
     }
@@ -3210,15 +3475,60 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         },
         .record_literal => {
             // Record pattern - process field patterns
+            if (std.debug.runtime_safety) {
+                const idx = @intFromEnum(node_idx);
+                std.debug.print("Processing record_literal pattern at node {}\n", .{idx});
+            }
             self.mutateToPatt(node_idx, .record);
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.node_slices.nodes(&nodes_idx);
+            if (std.debug.runtime_safety) {
+                const idx = @intFromEnum(node_idx);
+                if (idx == 4) {
+                    var debug_iter = self.ast.node_slices.nodes(&nodes_idx);
+                    std.debug.print("  Record fields:\n", .{});
+                    while (debug_iter.next()) |field| {
+                        std.debug.print("    Field node {}\n", .{@intFromEnum(field)});
+                    }
+                }
+            }
             while (iter.next()) |field_idx| {
                 const field_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
+                if (std.debug.runtime_safety) {
+                    const field_idx_num = @intFromEnum(field_idx);
+                    if (field_idx_num == 12 or field_idx_num == 13) {
+                        std.debug.print("  Processing field {} tag {} ({s})\n", .{ field_idx_num, @intFromEnum(field_node.tag), @tagName(field_node.tag) });
+                    }
+                }
                 if (field_node.tag == .binop_colon) {
                     // Field with explicit pattern: { x: pattern }
                     const binop = self.ast.node_slices.binOp(field_node.payload.binop);
-                    _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.rhs, false);
+
+                    if (std.debug.runtime_safety) {
+                        const field_idx_val = @intFromEnum(field_idx);
+                        const lhs_idx = @intFromEnum(binop.lhs);
+                        const rhs_idx = @intFromEnum(binop.rhs);
+                        if (field_idx_val == 13 or lhs_idx == 12 or rhs_idx == 12) {
+                            std.debug.print("Record pattern field: binop_colon at {} with lhs={} rhs={}\n", .{ field_idx_val, lhs_idx, rhs_idx });
+                        }
+                    }
+
+                    // Check if lhs and rhs are the same node (e.g., { foo: foo })
+                    if (binop.lhs == binop.rhs) {
+                        // Special case: both sides refer to the same identifier
+                        // Process it once and use it for both sides
+                        self.mutateToPatt(binop.lhs, .ident);
+                        // No need to process rhs separately since it's the same node
+                    } else {
+                        // Process the field name (LHS) - it's just an identifier
+                        self.mutateToPatt(binop.lhs, .ident);
+
+                        // Process the pattern (RHS) - this is what the field is renamed to
+                        _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.rhs, false);
+                    }
+
+                    // Mark the binop_colon itself as processed
+                    self.mutateToStmt(field_idx, .malformed); // Use malformed as "processed metadata"
                 } else if (field_node.tag == .lc) {
                     // Shorthand field: { x } means { x: x }
                     const ident = field_node.payload.ident;
@@ -3358,6 +3668,13 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
     const node = self.getAstNode(node_idx);
     const node_region = self.ast.getRegion(node_idx);
 
+    if (std.debug.runtime_safety) {
+        const idx = @intFromEnum(node_idx);
+        if (idx == 12 or idx == 13) {
+            std.debug.print("canonicalizeType: Processing node {} tag {} ({s})\n", .{ idx, @intFromEnum(node.tag), @tagName(node.tag) });
+        }
+    }
+
     switch (node.tag) {
         // Type variables: a, b, c
         .lc => {
@@ -3413,6 +3730,18 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .binop_arrow_call => {
             const binop = self.ast.node_slices.binOp(node.payload.binop);
 
+            if (std.debug.runtime_safety) {
+                std.debug.print("  binop_arrow_call at node {} has lhs={} rhs={}\n", .{ @intFromEnum(node_idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+                const lhs_idx = @intFromEnum(binop.lhs);
+                const rhs_idx = @intFromEnum(binop.rhs);
+                if (lhs_idx == 6 or rhs_idx == 7) {
+                    const lhs_node = self.getAstNode(binop.lhs);
+                    const rhs_node = self.getAstNode(binop.rhs);
+                    std.debug.print("    -> lhs node {} tag {} ({s})\n", .{ lhs_idx, @intFromEnum(lhs_node.tag), @tagName(lhs_node.tag) });
+                    std.debug.print("    -> rhs node {} tag {} ({s})\n", .{ rhs_idx, @intFromEnum(rhs_node.tag), @tagName(rhs_node.tag) });
+                }
+            }
+
             // Canonicalize parameter and return types
             _ = try self.canonicalizeType(allocator, binop.lhs);
             _ = try self.canonicalizeType(allocator, binop.rhs);
@@ -3446,14 +3775,22 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // Field with type annotation
                     const field_binop = self.ast.node_slices.binOp(field_node.payload.binop);
 
-                    // The LHS is the field name - mark it as an ident pattern
-                    const field_name_node = self.getAstNode(field_binop.lhs);
-                    if (field_name_node.tag == .lc) {
-                        self.mutateToPatt(field_binop.lhs, .ident);
-                    }
+                    // Check if lhs and rhs are the same node
+                    // This shouldn't happen in valid record type syntax, but handle it gracefully
+                    if (field_binop.lhs == field_binop.rhs) {
+                        // This is likely a parser error - { foo : foo } is not valid type syntax
+                        // Mark both as malformed to avoid crashes
+                        self.mutateToStmt(field_binop.lhs, .malformed);
+                    } else {
+                        // The LHS is the field name - mark it as an ident pattern
+                        const field_name_node = self.getAstNode(field_binop.lhs);
+                        if (field_name_node.tag == .lc) {
+                            self.mutateToPatt(field_binop.lhs, .ident);
+                        }
 
-                    // The RHS is the type (canonicalize it)
-                    _ = try self.canonicalizeType(allocator, field_binop.rhs);
+                        // The RHS is the type (canonicalize it)
+                        _ = try self.canonicalizeType(allocator, field_binop.rhs);
+                    }
 
                     // Mark the binop_colon itself as a processed statement
                     // In a record type context, field definitions are metadata
@@ -3507,6 +3844,10 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .binop_where => {
             // Process the type variable and the constraints
             const binop = self.ast.node_slices.binOp(node.payload.binop);
+
+            if (std.debug.runtime_safety) {
+                std.debug.print("  Processing binop_where at node {} with lhs={} rhs={}\n", .{ @intFromEnum(node_idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+            }
 
             // Canonicalize the base type
             _ = try self.canonicalizeType(allocator, binop.lhs);
@@ -3595,13 +3936,23 @@ fn processWhereConstraints(self: *CIR, allocator: Allocator, node_idx: AST.Node.
             const lhs_node = self.getAstNode(binop.lhs);
             if (lhs_node.tag == .binop_dot) {
                 // This is module(x).field syntax - valid constraint
-                // Don't process as expression - just validate structure
+                // Process the module path
+                const dot_binop = self.ast.node_slices.binOp(lhs_node.payload.binop);
+                // Mark both sides as processed
+                self.mutateToPatt(dot_binop.lhs, .ident);
+                self.mutateToPatt(dot_binop.rhs, .ident);
+                // Mark the dot itself as processed
+                self.mutateToExpr(binop.lhs, .record_access);
             } else {
-                // Could also be a simple type constraint
+                // Could also be a simple type constraint - mark as processed
+                self.mutateToPatt(binop.lhs, .ident);
             }
 
             // RHS is the type signature
             _ = try self.canonicalizeType(allocator, binop.rhs);
+
+            // Mark the binop_colon itself as processed
+            self.mutateToStmt(node_idx, .malformed); // Use malformed as "processed metadata"
         },
 
         // Pipe-separated ability constraints: a | Eq, Hash

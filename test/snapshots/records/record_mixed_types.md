@@ -23,7 +23,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
   )
   (binop_colon
     (lc "active")
-    (binop_pipe
+    (binop_dot
       (uc "Bool")
       (dot_lc "true")
     )
@@ -44,7 +44,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
 ~~~
 # FORMATTED
 ~~~roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+{ name: "Alice", age: 30, active: Bool..true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
@@ -53,23 +53,23 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_big)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
-    (Expr.binop_pipe)
+    (Expr.record_access)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.list_literal)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.frac_literal_big big:<idx:20>)
   )

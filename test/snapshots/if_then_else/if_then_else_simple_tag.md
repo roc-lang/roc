@@ -13,7 +13,7 @@ KwIf UpperIdent Dot UpperIdent UpperIdent OpenRound Int CloseRound KwElse UpperI
 # PARSE
 ~~~clojure
 (if_else
-  (condition     (binop_pipe
+  (condition     (binop_dot
       (uc "Bool")
       (uc "True")
     )

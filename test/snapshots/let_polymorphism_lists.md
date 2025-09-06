@@ -138,7 +138,7 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
           (binop_equals
             (lc "len1")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "List")
                 (dot_lc "len")
               )
@@ -148,7 +148,7 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
           (binop_equals
             (lc "len2")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "List")
                 (dot_lc "len")
               )
@@ -158,7 +158,7 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
           (binop_equals
             (lc "len3")
             (apply_anon
-              (binop_pipe
+              (binop_dot
                 (uc "List")
                 (dot_lc "len")
               )
@@ -205,9 +205,9 @@ empty_int_list = get_empty(42)
 empty_str_list = get_empty("test")
 main = |_| {
 	# Type inference should work correctly
-	len1 = List.len(all_int_list)
-	len2 = List.len(all_str_list)
-	len3 = List.len(all_float_list)
+	len1 = List..len(all_int_list)
+	len2 = List..len(all_str_list)
+	len3 = List..len(all_float_list)
 	(len1 + len2) + len3
 }
 ~~~

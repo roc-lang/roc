@@ -54,7 +54,10 @@ NIL
 ~~~clojure
 (Expr.block
   (Expr.record_literal
-    (Expr.malformed)
+    (Expr.record_field
+      (Expr.malformed)
+      (Expr.num_literal_i32 0)
+    )
   )
   (Expr.num_literal_i32 0)
 )

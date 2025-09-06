@@ -159,7 +159,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (binop_where
               (lc "a")
               (binop_colon
-                (binop_pipe
+                (binop_dot
                   (apply_module
                     (lc "a")
                   )
@@ -173,7 +173,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
             (uc "Str")
           )
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "a")
             )
@@ -200,7 +200,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (binop_where
               (lc "b")
               (binop_colon
-                (binop_pipe
+                (binop_dot
                   (apply_module
                     (lc "b")
                   )
@@ -214,7 +214,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
             (uc "Str")
           )
-          (binop_pipe
+          (binop_dot
             (apply_module
               (lc "b")
             )
@@ -286,14 +286,14 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
           (lc "e")
           (lc "e")
         )
-        (binop_pipe
+        (binop_dot
           (apply_module
             (lc "e")
           )
           (uc "A")
         )
       )
-      (binop_pipe
+      (binop_dot
         (apply_module
           (lc "e")
         )
@@ -438,13 +438,13 @@ Ias2
 ]
 
 # Where constraint
-A(a) : (a where module(a).a1 : (a, a)) -> Str, module(a).a2 : (a, a) -> Str
-B(b) : (b where module(b).b1 : (b, b)) -> Str, module(b).b2 : (b, b) -> Str
+A(a) : (a where module(a)..a1 : (a, a)) -> Str, module(a)..a2 : (a, a) -> Str
+B(b) : (b where module(b)..b1 : (b, b)) -> Str, module(b)..b2 : (b, b) -> Str
 C((a, b)) : (a, b)
 D((a, b)) : C(a, b)
 E : {a: Str, b: Str}
 F : [A, B]
-g : e -> e where module(e) | A, module(e) | B
+g : (e -> e where module(e).A, module(e).B)
 h = |x, y| {
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 	h2 = h((x, y))
@@ -563,33 +563,22 @@ B(b) : b
 Invalid where clause constraint syntax.
 Where clauses should contain valid ability constraints.
 
-**everything.md:58:24:58:27:**
+**everything.md:58:24:58:29:**
 ```roc
 g : e -> e where module(e).A, module(e).B
 ```
-                       ^^^
-
-
-**INVALID WHERE CONSTRAINT**
-Invalid where clause constraint syntax.
-Where clauses should contain valid ability constraints.
-
-**everything.md:58:27:58:29:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-                          ^^
+                       ^^^^^
 
 
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**everything.md:58:37:58:42:**
+**everything.md:58:37:58:40:**
 ```roc
 g : e -> e where module(e).A, module(e).B
 ```
-                                    ^^^^^
+                                    ^^^
 
 
 **UNSUPPORTED NODE**

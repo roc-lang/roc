@@ -12,7 +12,7 @@ type=expr
 OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (block
     (binop_colon
       (lc "foo")
@@ -26,7 +26,7 @@ OpenCurly LowerIdent OpColon String CloseCurly Dot LowerIdent ~~~
 ~~~roc
 {
 	foo : "Hello"
-} | .foo
+}..foo
 ~~~
 # EXPECTED
 NIL
@@ -34,18 +34,19 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
 (var #1 _)
 (var #2 Str)
 (var #3 _)
-(var #4 _)
+(var #4 -> #7)
 (var #5 _)
 (var #6 _)
+(var #7 {})
 ~~~
 # TYPES
 ~~~roc

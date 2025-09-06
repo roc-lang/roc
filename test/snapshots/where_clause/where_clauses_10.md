@@ -49,7 +49,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent KwExpos
           (lc "a")
         )
       )
-      (binop_pipe
+      (binop_dot
         (apply_module
           (lc "a")
         )
@@ -68,7 +68,7 @@ import Decode exposing [Decode]
 decodeThings : # After colon
 List List U8 -> List a where # After anno
 # after where
-module(a) | Decode
+module(a).Decode
 ~~~
 # EXPECTED
 MODULE NOT FOUND - where_clauses_10.md:3:1:3:32
@@ -78,22 +78,11 @@ EXPOSED BUT NOT DEFINED - where_clauses_10.md:1:9:1:15
 Invalid where clause constraint syntax.
 Where clauses should contain valid ability constraints.
 
-**where_clauses_10.md:9:11:9:14:**
+**where_clauses_10.md:9:11:9:21:**
 ```roc
 				module(a).Decode
 ```
-				      ^^^
-
-
-**INVALID WHERE CONSTRAINT**
-Invalid where clause constraint syntax.
-Where clauses should contain valid ability constraints.
-
-**where_clauses_10.md:9:14:9:21:**
-```roc
-				module(a).Decode
-```
-				         ^^^^^^^
+				      ^^^^^^^^^^
 
 
 # CANONICALIZE

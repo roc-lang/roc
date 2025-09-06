@@ -12,14 +12,14 @@ record.field
 LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_pipe
+(binop_dot
   (lc "record")
   (dot_lc "field")
 )
 ~~~
 # FORMATTED
 ~~~roc
-record.field
+record..field
 ~~~
 # EXPECTED
 NIL
@@ -37,7 +37,7 @@ record.field
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_pipe)
+(Expr.record_access)
 ~~~
 # SOLVED
 ~~~clojure

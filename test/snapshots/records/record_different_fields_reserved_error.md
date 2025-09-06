@@ -48,14 +48,14 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
               )
               (malformed)
             )
-            (binop_pipe
+            (binop_dot
               (uc "Bool")
               (dot_lc "true")
             )
           )
           (malformed)
         )
-        (binop_pipe
+        (binop_dot
           (uc "Bool")
           (dot_lc "false")
         )
@@ -65,7 +65,7 @@ OpenCurly KwIf OpColon String Comma LowerIdent OpColon String Comma KwExpect OpC
 ~~~
 # FORMATTED
 ~~~roc
-if : ((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool.true) : Bool.false
+if : ((((("conditional", when) : "pattern match") : "test assertion") : "module load") : Bool..true) : Bool..false
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:8
@@ -157,21 +157,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     or: Bool.false,
 ```
     ^^
-
-
-**STATEMENT IN EXPRESSION CONTEXT**
-Found a statement where an expression was expected.
-Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
-
-**record_different_fields_reserved_error.md:2:9:7:19:**
-```roc
-    if: "conditional",
-    when: "pattern match",
-    expect: "test assertion",
-    import: "module load",
-    and: Bool.true,
-    or: Bool.false,
-```
 
 
 # CANONICALIZE

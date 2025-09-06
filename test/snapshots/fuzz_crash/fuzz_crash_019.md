@@ -148,7 +148,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
 (block
   (import
     (binop_exposing
-      (binop_pipe
+      (binop_dot
         (lc "pf")
         (uc "Stdout")
       )
@@ -556,18 +556,18 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
             (lc "arg1")
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (malformed)
               (dot_lc "od")
             )
           )
           (apply_anon
-            (binop_pipe
+            (binop_dot
               (malformed)
               (dot_lc "ned")
             )
           )
-          (binop_pipe
+          (binop_dot
             (malformed)
             (dot_lc "recd")
           )
@@ -767,9 +767,9 @@ tag
 	))
 	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
 	e_fn(arg1)
-	? | .od()
-	? | .ned()
-	? | .recd
+	?..od()
+	?..ned()
+	?..recd
 	?
 	
 	Stdo
@@ -1110,17 +1110,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 y : {}
 ```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **pf** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_019.md:4:8:4:10:**
-```roc
-import pf.Stdout exposing [line!]
-```
-       ^^
 
 
 **UNDEFINED VARIABLE**
@@ -1507,7 +1496,7 @@ h == foo
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 381
+; Total type variables: 385
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -1685,7 +1674,7 @@ h == foo
 (var #174 _)
 (var #175 _)
 (var #176 _)
-(var #177 -> #375)
+(var #177 -> #379)
 (var #178 _)
 (var #179 _)
 (var #180 _)
@@ -1727,7 +1716,7 @@ h == foo
 (var #216 _)
 (var #217 _)
 (var #218 {})
-(var #219 -> #363)
+(var #219 -> #364)
 (var #220 _)
 (var #221 Num *)
 (var #222 _)
@@ -1744,35 +1733,35 @@ h == foo
 (var #233 _)
 (var #234 _)
 (var #235 _)
-(var #236 -> #363)
+(var #236 -> #364)
 (var #237 _)
-(var #238 -> #365)
+(var #238 -> #366)
 (var #239 Num *)
 (var #240 Str)
 (var #241 _)
 (var #242 _)
 (var #243 _)
 (var #244 _)
-(var #245 -> #364)
+(var #245 -> #365)
 (var #246 Num *)
 (var #247 Num *)
 (var #248 Num *)
 (var #249 _)
-(var #250 -> #365)
+(var #250 -> #366)
 (var #251 _)
-(var #252 -> #368)
+(var #252 -> #369)
 (var #253 Num *)
 (var #254 Str)
 (var #255 _)
 (var #256 _)
 (var #257 _)
 (var #258 _)
-(var #259 -> #366)
+(var #259 -> #367)
 (var #260 Num *)
 (var #261 Num *)
 (var #262 Num *)
 (var #263 _)
-(var #264 -> #367)
+(var #264 -> #368)
 (var #265 _)
 (var #266 _)
 (var #267 Num *)
@@ -1795,16 +1784,16 @@ h == foo
 (var #284 -> #285)
 (var #285 -> #286)
 (var #286 Num *)
-(var #287 -> #369)
+(var #287 -> #370)
 (var #288 _)
 (var #289 _)
 (var #290 _)
 (var #291 _)
-(var #292 -> #370)
+(var #292 -> #372)
 (var #293 _)
 (var #294 _)
 (var #295 _)
-(var #296 -> #371)
+(var #296 -> #374)
 (var #297 _)
 (var #298 _)
 (var #299 _)
@@ -1812,12 +1801,12 @@ h == foo
 (var #301 _)
 (var #302 _)
 (var #303 _)
-(var #304 -> #373)
-(var #305 -> #374)
+(var #304 -> #377)
+(var #305 -> #378)
 (var #306 _)
 (var #307 _)
 (var #308 _)
-(var #309 -> #375)
+(var #309 -> #379)
 (var #310 _)
 (var #311 _)
 (var #312 _)
@@ -1825,8 +1814,8 @@ h == foo
 (var #314 _)
 (var #315 _)
 (var #316 _)
-(var #317 -> #379)
-(var #318 -> #379)
+(var #317 -> #383)
+(var #318 -> #383)
 (var #319 _)
 (var #320 _)
 (var #321 _)
@@ -1872,30 +1861,34 @@ h == foo
 (var #361 _)
 (var #362 fn_pure)
 (var #363 {})
-(var #364 tuple)
+(var #364 record)
 (var #365 tuple)
 (var #366 tuple)
 (var #367 tuple)
-(var #368 fn_pure)
+(var #368 tuple)
 (var #369 fn_pure)
 (var #370 fn_pure)
-(var #371 fn_pure)
-(var #372 _)
+(var #371 _)
+(var #372 fn_pure)
 (var #373 _)
 (var #374 fn_pure)
-(var #375 fn_pure)
+(var #375 _)
 (var #376 _)
 (var #377 _)
-(var #378 _)
-(var #379 {})
+(var #378 fn_pure)
+(var #379 fn_pure)
 (var #380 _)
+(var #381 _)
+(var #382 _)
+(var #383 {})
+(var #384 _)
 ~~~
 # TYPES
 ~~~roc
 s : _d
 ma : _arg -> _ret
 n : _d
-rd : {}
+rd : { ned: _field }
 er : _d
 t : _d
 line : _d

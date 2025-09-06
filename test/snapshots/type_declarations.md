@@ -132,7 +132,7 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Comma UpperIdent Comma UpperIden
   )
   (binop_colon
     (uc "MyType2")
-    (binop_pipe
+    (binop_dot
       (uc "Module")
       (uc "Thingy")
     )
@@ -160,17 +160,7 @@ MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**type_declarations.md:15:11:15:24:**
-```roc
-MyType2 : Module.Thingy
-```
-          ^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block

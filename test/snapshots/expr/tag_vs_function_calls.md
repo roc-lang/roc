@@ -114,39 +114,27 @@ OpenCurly LowerIdent OpColon UpperIdent OpenRound Int CloseRound Comma LowerIden
 # EXPECTED
 UNDEFINED VARIABLE - tag_vs_function_calls.md:7:13:7:19
 # PROBLEMS
-**STATEMENT IN EXPRESSION CONTEXT**
-Found a statement where an expression was expected.
-Statements like **return**, **dbg**, or **expect** cannot be used in expression contexts.
-
-**tag_vs_function_calls.md:6:17:9:47:**
-```roc
-    addOne: |x| x + 1,
-    result: addOne(5),
-    nested: Some(Ok(Just(42))),
-    tagList: [Some(1), Some(2), None, Some(3)],
-```
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.record_literal
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.tag_applied)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.tag_no_args)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.tag_applied)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.tag_applied)
   )
-  (Expr.binop_colon
+  (Expr.record_field
     (Expr.malformed)
     (Expr.lambda (canonicalized))
   )
@@ -198,14 +186,14 @@ Statements like **return**, **dbg**, or **expect** cannot be used in expression 
 (var #40 _)
 (var #41 _)
 (var #42 _)
-(var #43 _)
+(var #43 Num *)
 (var #44 _)
 (var #45 _)
-(var #46 _)
+(var #46 Num *)
 (var #47 _)
 (var #48 _)
 (var #49 _)
-(var #50 _)
+(var #50 Num *)
 (var #51 _)
 (var #52 _)
 (var #53 _)

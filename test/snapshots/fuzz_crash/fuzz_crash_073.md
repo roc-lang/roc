@@ -15,7 +15,7 @@ KwModule OpenSquare CloseSquare OpBang Int MalformedUnknownToken Dot LowerIdent 
 (module-header)
 (block
   (unary_not <unary_op>)
-  (binop_pipe
+  (binop_dot
     (malformed)
     (dot_lc "t")
   )
@@ -26,7 +26,7 @@ KwModule OpenSquare CloseSquare OpBang Int MalformedUnknownToken Dot LowerIdent 
 module []
 
 !0
- | .t
+..t
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
@@ -49,12 +49,12 @@ module[]!0.t
 ~~~clojure
 (Expr.block
   (Expr.unary_not)
-  (Expr.binop_pipe)
+  (Expr.record_access)
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
 (var #1 Num *)
 (var #2 -> #1)
@@ -62,6 +62,7 @@ module[]!0.t
 (var #4 _)
 (var #5 _)
 (var #6 _)
+(var #7 _)
 ~~~
 # TYPES
 ~~~roc

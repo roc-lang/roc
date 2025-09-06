@@ -15,7 +15,7 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
 (module-header)
 (block
   (import
-    (binop_pipe
+    (binop_dot
       (lc "u")
       (uc "R")
     )
@@ -25,8 +25,8 @@ KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly Lo
     (lc "g")
     (binop_arrow_call
       (lc "r")
-      (binop_pipe
-        (binop_pipe
+      (binop_dot
+        (binop_dot
           (uc "R")
           (dot_lc "a")
         )
@@ -42,7 +42,7 @@ module []
 
 import u.R
 }
-g : r -> R.a | E
+g : r -> R..a.E
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:19:1:20
@@ -60,26 +60,15 @@ module[]import u.R}g:r->R.a.E
                   ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **u** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**fuzz_crash_042.md:1:16:1:17:**
-```roc
-module[]import u.R}g:r->R.a.E
-```
-               ^
-
-
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
 
-**fuzz_crash_042.md:1:25:1:30:**
+**fuzz_crash_042.md:1:26:1:28:**
 ```roc
 module[]import u.R}g:r->R.a.E
 ```
-                        ^^^^^
+                         ^^
 
 
 # CANONICALIZE
