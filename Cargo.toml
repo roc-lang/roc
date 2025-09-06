@@ -156,7 +156,7 @@ target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 walkdir = "2.3.2"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"
