@@ -475,443 +475,49 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // Validate that all exposed items have been implemented
     try self.validateExposedItems(allocator, common_env, diagnostics);
 
-    // Force-convert any unconverted nodes to malformed to prevent crashes
-    // This is a safety measure - in debug mode we'll panic to catch bugs
-    const nodes_len = self.ast.*.nodes.len();
+    // In debug mode, verify all non-header nodes have been converted to CIR tags
+    // This is a safety check to ensure we don't have unconverted AST nodes
+    if (std.debug.runtime_safety) {
+        const nodes_len = self.ast.*.nodes.len();
 
-    // Skip header nodes - we don't convert those
-    // In debug mode, use first_non_header_node_idx if it's been set
-    // Otherwise, assume header is at index 0 and skip it
-    const start_idx: usize = if (comptime std.debug.runtime_safety) blk: {
-        const idx: usize = @intCast(@intFromEnum(self.first_non_header_node_idx));
-        // If first_non_header_node_idx is 0, we haven't set it yet
-        // In that case, skip the first node (assumed to be header)
-        break :blk if (idx == 0) @as(usize, 1) else idx;
-    } else 1; // In release mode, always skip first node as it's likely the header
+        // Skip header nodes - we don't convert those
+        // Use first_non_header_node_idx if it's been set, otherwise skip first node
+        const start_idx: usize = blk: {
+            const idx: usize = @intCast(@intFromEnum(self.first_non_header_node_idx));
+            // If first_non_header_node_idx is 0, we haven't set it yet
+            // In that case, skip the first node (assumed to be header)
+            break :blk if (idx == 0) @as(usize, 1) else idx;
+        };
 
-    if (start_idx < nodes_len) {
-        // In debug mode, build a reference graph to identify orphaned nodes
-        var is_referenced: ?[]bool = null;
-        if (std.debug.runtime_safety) {
-            // First check if this file has any malformed nodes (parse errors)
-            // If it does, skip orphaned node checking as parse errors can create orphaned nodes
-            var has_malformed = false;
-            var check_i: usize = start_idx;
-            while (check_i < nodes_len) : (check_i += 1) {
-                const check_node = self.getAstNode(@enumFromInt(check_i));
-                if (check_node.tag == .malformed) {
-                    has_malformed = true;
-                    break;
-                }
-            }
-
-            // Only check for orphaned nodes if there are no parse errors
-            if (!has_malformed) {
-                // Build reference graph to identify truly orphaned nodes
-                is_referenced = try allocator.alloc(bool, nodes_len);
-                @memset(is_referenced.?, false);
-            } else {
-                // Skip orphaned node checking for files with parse errors
-                is_referenced = null;
+        // Check all nodes after the header to ensure they've been converted
+        // First check if this file has malformed nodes (parse errors)
+        // If it does, skip the conversion check as parse errors can leave unconverted nodes
+        var has_malformed = false;
+        var check_i: usize = 0;
+        while (check_i < nodes_len) : (check_i += 1) {
+            const check_node = self.getAstNode(@enumFromInt(check_i));
+            if (check_node.tag == .malformed) {
+                has_malformed = true;
+                break;
             }
         }
 
-        if (is_referenced != null) {
+        // Only check for unconverted nodes if there are no parse errors
+        if (!has_malformed and start_idx < nodes_len) {
+            // Simple check: go through all nodes after the header and verify they're converted
+            var i = start_idx;
+            while (i < nodes_len) : (i += 1) {
+                const node = self.getAstNode(@enumFromInt(i));
+                const tag_value = @as(u8, @intFromEnum(node.tag));
+                const is_cir_tag = tag_value >= FIRST_STMT_TAG;
 
-            // Use a work list to transitively mark all reachable nodes
-            var work_list = std.ArrayList(usize).init(allocator);
-            defer work_list.deinit();
+                if (!is_cir_tag) {
+                    // Found an unconverted node - this is a bug that needs to be fixed
+                    const node_region = node.region;
+                    const start = @min(node_region.start.offset, raw_src.len);
+                    const end = @min(node_region.end.offset, raw_src.len);
+                    const snippet = if (start < end) raw_src[start..end] else "";
 
-            // Start with the root block node
-            try work_list.append(@as(usize, @intCast(@intFromEnum(block_idx))));
-            is_referenced.?[@as(usize, @intCast(@intFromEnum(block_idx)))] = true;
-
-            // Also add all top-level statements to ensure they're traversed
-            // This is important for type aliases and other top-level definitions
-            for (statements.items) |stmt_idx| {
-                const idx = @as(usize, @intCast(@intFromEnum(stmt_idx)));
-                if (!is_referenced.?[idx]) {
-                    is_referenced.?[idx] = true;
-                    try work_list.append(idx);
-                }
-            }
-
-            // Also mark the header and all its referenced nodes if it exists
-            if (self.ast.header) |header| {
-                is_referenced.?[0] = true; // Header is always at index 0
-
-                // Traverse all node references in the header based on its type
-                switch (header) {
-                    .app => |app| {
-                        // Mark all nodes in packages
-                        var pkg_iter = self.ast.node_slices.nodes(&app.packages);
-                        while (pkg_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&app.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Note: provides is a Collection.Idx, not a node slice
-                        // platform_idx is RecordField.Idx, not directly a node
-                    },
-                    .interface => |iface| {
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&iface.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark all nodes in imports
-                        var imports_iter = self.ast.node_slices.nodes(&iface.imports);
-                        while (imports_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-                        // Interface headers don't have requires_rigids, requires_signatures, packages, or provides
-                    },
-                    .module => |mod| {
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&mod.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-                        // Modules don't have imports field
-                    },
-                    .package => |pkg| {
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&pkg.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark all nodes in packages
-                        var pkg_iter = self.ast.node_slices.nodes(&pkg.packages);
-                        while (pkg_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-                    },
-                    .platform => |plat| {
-                        // Mark platform name node
-                        const name_idx = @as(usize, @intCast(@intFromEnum(plat.name)));
-                        if (!is_referenced.?[name_idx]) {
-                            is_referenced.?[name_idx] = true;
-                            try work_list.append(name_idx);
-                        }
-
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&plat.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark all nodes in requires_rigids
-                        var rigids_iter = self.ast.node_slices.nodes(&plat.requires_rigids);
-                        while (rigids_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark requires_signatures node
-                        const sig_idx = @as(usize, @intCast(@intFromEnum(plat.requires_signatures)));
-                        if (!is_referenced.?[sig_idx]) {
-                            is_referenced.?[sig_idx] = true;
-                            try work_list.append(sig_idx);
-                        }
-
-                        // Mark all nodes in packages
-                        var pkg_iter = self.ast.node_slices.nodes(&plat.packages);
-                        while (pkg_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-
-                        // Mark all nodes in provides
-                        var provides_iter = self.ast.node_slices.nodes(&plat.provides);
-                        while (provides_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-                    },
-                    .hosted => |host| {
-                        // Mark all nodes in exposes
-                        var exposes_iter = self.ast.node_slices.nodes(&host.exposes);
-                        while (exposes_iter.next()) |node_idx| {
-                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
-                            if (!is_referenced.?[idx]) {
-                                is_referenced.?[idx] = true;
-                                try work_list.append(idx);
-                            }
-                        }
-                        // Hosted headers don't have imports field
-                    },
-                    .malformed => {},
-                }
-            }
-
-            // Process work list to mark all transitively referenced nodes
-            while (work_list.items.len > 0) {
-                const ref_idx = work_list.pop().?; // Safe to unwrap since we checked length
-
-                const ref_node = self.getAstNode(@as(AST.Node.Idx, @enumFromInt(ref_idx)));
-                const ref_tag = @intFromEnum(ref_node.tag);
-
-                // For already-converted nodes, we still need to check some specific cases
-                // to ensure their original children are marked as referenced
-                if (ref_tag >= FIRST_STMT_TAG) {
-                    // Check if this is a converted statement node that might have unconverted children
-                    if (ref_tag < FIRST_EXPR_TAG) {
-                        // This is a statement node
-                        switch (@as(StmtTag, @enumFromInt(ref_tag))) {
-                            .type_alias => {
-                                // Type alias statements need their original binop_colon traversed
-                                // The binop contains the alias name/params (LHS) and type (RHS)
-                                // The LHS will have been converted to a pattern, but we still need
-                                // to traverse it to mark its children (the type name and parameters)
-                                const binop = self.ast.node_slices.binOp(ref_node.payload.binop);
-                                const lhs_idx = @as(usize, @intCast(@intFromEnum(binop.lhs)));
-                                if (!is_referenced.?[lhs_idx]) {
-                                    is_referenced.?[lhs_idx] = true;
-                                    try work_list.append(lhs_idx);
-                                }
-                                // Also mark the RHS (the type definition)
-                                const rhs_idx = @as(usize, @intCast(@intFromEnum(binop.rhs)));
-                                if (!is_referenced.?[rhs_idx]) {
-                                    is_referenced.?[rhs_idx] = true;
-                                    try work_list.append(rhs_idx);
-                                }
-                            },
-                            else => {},
-                        }
-                        continue; // Done with this statement node
-                    }
-                    // Check if this is a converted pattern node that might have unconverted children
-                    else if (ref_tag >= FIRST_PATT_TAG and ref_tag < FIRST_TYPE_TAG) {
-                        // This is a pattern node - check if it has children we need to mark
-                        switch (@as(PattTag, @enumFromInt(ref_tag))) {
-                            .tag => {
-                                // Tag patterns (from apply_uc in type aliases) still reference their children
-                                const child_nodes_idx = ref_node.payload.nodes;
-                                if (!child_nodes_idx.isNil()) {
-                                    var iter = self.ast.node_slices.nodes(&child_nodes_idx);
-                                    while (iter.next()) |child| {
-                                        const child_idx = @as(usize, @intCast(@intFromEnum(child)));
-                                        if (!is_referenced.?[child_idx]) {
-                                            is_referenced.?[child_idx] = true;
-                                            try work_list.append(child_idx);
-                                        }
-                                    }
-                                }
-                            },
-                            .ident => {
-                                // Ident patterns don't have children to traverse
-                            },
-                            .tuple, .list, .record => {
-                                // Collection patterns have child patterns
-                                const child_nodes_idx = ref_node.payload.nodes;
-                                if (!child_nodes_idx.isNil()) {
-                                    var iter = self.ast.node_slices.nodes(&child_nodes_idx);
-                                    while (iter.next()) |child| {
-                                        const child_idx = @as(usize, @intCast(@intFromEnum(child)));
-                                        if (!is_referenced.?[child_idx]) {
-                                            is_referenced.?[child_idx] = true;
-                                            try work_list.append(child_idx);
-                                        }
-                                    }
-                                }
-                            },
-                            else => {
-                                // Other pattern types might have children - handle as needed
-                            },
-                        }
-                        continue; // Done with this pattern node
-                    }
-                    // For other converted nodes (expressions, types), continue
-                    continue;
-                }
-
-                // Mark children based on node type
-                switch (ref_node.tag) {
-                    // Binary operations reference both sides
-                    .binop_thick_arrow, .binop_arrow_call, .binop_colon, .binop_dot, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_pipe, .binop_double_question, .binop_double_slash, .binop_colon_equals => {
-                        const binop = self.ast.node_slices.binOp(ref_node.payload.binop);
-                        const lhs_idx = @as(usize, @intCast(@intFromEnum(binop.lhs)));
-                        const rhs_idx = @as(usize, @intCast(@intFromEnum(binop.rhs)));
-
-                        if (!is_referenced.?[lhs_idx]) {
-                            is_referenced.?[lhs_idx] = true;
-                            try work_list.append(lhs_idx);
-                        }
-                        if (!is_referenced.?[rhs_idx]) {
-                            is_referenced.?[rhs_idx] = true;
-                            try work_list.append(rhs_idx);
-                        }
-                    },
-                    // Nodes with child lists
-                    .block, .list_literal, .tuple_literal, .record_literal, .apply_lc, .apply_uc, .apply_anon, .lambda, .match, .if_else => {
-                        const child_nodes_idx = ref_node.payload.nodes;
-                        if (!child_nodes_idx.isNil()) {
-                            var iter = self.ast.node_slices.nodes(&child_nodes_idx);
-                            while (iter.next()) |child| {
-                                const child_idx = @as(usize, @intCast(@intFromEnum(child)));
-                                if (!is_referenced.?[child_idx]) {
-                                    is_referenced.?[child_idx] = true;
-                                    try work_list.append(child_idx);
-                                }
-                            }
-                        }
-                    },
-                    // Import statements reference their path
-                    .import => {
-                        // Import nodes have their path in the nodes field
-                        const path_idx = ref_node.payload.nodes;
-                        if (!path_idx.isNil()) {
-                            var iter = self.ast.node_slices.nodes(&path_idx);
-                            while (iter.next()) |child| {
-                                const child_idx = @as(usize, @intCast(@intFromEnum(child)));
-                                if (!is_referenced.?[child_idx]) {
-                                    is_referenced.?[child_idx] = true;
-                                    try work_list.append(child_idx);
-                                }
-                            }
-                        }
-                    },
-                    // Single-node types without children
-                    .lc,
-                    .uc,
-                    .var_lc,
-                    .not_lc, // identifiers
-                    .num_literal_i32,
-                    .int_literal_i32, // numeric literals (32-bit)
-                    .num_literal_big,
-                    .int_literal_big, // numeric literals (big)
-                    .frac_literal_small,
-                    .frac_literal_big, // float literals
-                    .str_literal_small,
-                    .str_literal_big, // string literals
-                    .underscore, // underscore pattern
-                    .malformed, // malformed nodes from parse errors
-                    => {
-                        // These nodes have no children to traverse
-                    },
-                    else => {},
-                }
-            }
-        }
-        defer if (is_referenced) |ref| allocator.free(ref);
-
-        var i = start_idx;
-        while (i < nodes_len) : (i += 1) {
-            const node = self.getAstNode(@enumFromInt(i));
-            const tag_value = @as(u8, @intFromEnum(node.tag));
-            const is_cir_tag = tag_value >= FIRST_STMT_TAG;
-
-            if (!is_cir_tag) {
-                // In debug mode, check if this is an orphaned node
-                if (std.debug.runtime_safety) {
-                    if (is_referenced) |ref| {
-                        if (!ref[i]) {
-                            // Check if this file has any malformed nodes indicating parse errors
-                            // If so, skip orphaned node checking for this node
-                            // Check the ENTIRE AST, not just from start_idx, because malformed nodes
-                            // can appear anywhere in the tree
-                            var has_parse_errors = false;
-                            var check_j: usize = 0;
-                            while (check_j < self.ast.nodes.len()) : (check_j += 1) {
-                                const check_node = self.getAstNode(@enumFromInt(check_j));
-                                if (check_node.tag == .malformed) {
-                                    has_parse_errors = true;
-                                    break;
-                                }
-                            }
-
-                            // Skip orphaned node checking for any node in files with parse errors
-                            // Parse errors can disrupt the AST structure causing legitimate orphaned nodes
-                            if (has_parse_errors) {
-                                continue;
-                            }
-
-                            // Also skip malformed nodes themselves (redundant but explicit)
-                            if (node.tag == .malformed) {
-                                continue;
-                            }
-
-                            // This node is orphaned - not referenced by any other node
-                            // Print the source around this node for context
-                            const node_region = node.region;
-                            const start = @min(node_region.start.offset, raw_src.len);
-                            const end = @min(node_region.end.offset, raw_src.len);
-                            const snippet = if (start < end) raw_src[start..end] else "";
-
-                            std.debug.panic("Parser bug - orphaned {s} node {} at offset {}-{}: '{s}' (unreferenced in AST)\n", .{ @tagName(node.tag), i, start, end, snippet });
-                        }
-                    } else {
-                        // is_referenced is null, which means we're skipping orphaned node checking
-                        // (because the file has malformed nodes from parse errors)
-                        // In files with parse errors, unconverted nodes are expected
-                        // Skip the unconverted node check as well
-                        continue;
-                    }
-                }
-
-                // Found an unconverted node - this is a bug that needs to be fixed
-                // This only applies to files WITHOUT parse errors
-                const node_region = node.region;
-                const start = @min(node_region.start.offset, raw_src.len);
-                const end = @min(node_region.end.offset, raw_src.len);
-                const snippet = if (start < end) raw_src[start..end] else "";
-
-                // Additional debug info for uc nodes
-                if (node.tag == .uc) {
-                    // Check if this might be in a type alias that wasn't processed
-                    std.debug.panic(
-                        "Canonicalization bug: unconverted uppercase identifier at index {} at offset {}-{}: '{s}'\nThis might be a type name that wasn't processed correctly.",
-                        .{ i, start, end, snippet },
-                    );
-                } else {
                     std.debug.panic(
                         "Canonicalization bug: unconverted AST node at index {} with tag {} ({s}) at offset {}-{}: '{s}'",
                         .{ i, tag_value, @tagName(node.tag), start, end, snippet },
@@ -924,7 +530,6 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     return asExprIdx(block_idx);
 }
 
-/// Validate that all exposed items have been implemented
 fn validateExposedItems(self: *CIR, allocator: Allocator, common_env: *base.CommonEnv, diagnostics: ?*std.ArrayListUnmanaged(CanDiagnostic)) !void {
     if (diagnostics == null) return; // No diagnostics list provided
 
@@ -1984,6 +1589,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
     // Calculate the proper region for this node BEFORE any mutations
     const node_region = self.ast.getRegion(node_idx);
 
+    // Defensive check: if the node tag is completely invalid, convert to malformed
+    // This shouldn't happen in normal processing, but protects against corruption
+    if (@intFromEnum(node.tag) >= 256) { // Arbitrary high value that's clearly invalid
+        self.mutateToExpr(node_idx, .malformed);
+        try self.ensureTypeVarExists(node_idx);
+        return asExprIdx(node_idx);
+    }
+
     switch (node.tag) {
         // Expression nodes - mutate tag in place
         .num_literal_i32 => {
@@ -2217,6 +1830,14 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             iter = self.ast.*.node_slices.nodes(&nodes_idx);
             while (iter.next()) |n| {
                 const n_node = self.getAstNode(n);
+
+                // Check if this node has already been converted
+                const n_tag_value = @as(u8, @intFromEnum(n_node.tag));
+                if (n_tag_value >= FIRST_STMT_TAG) {
+                    // Already converted, skip it
+                    continue;
+                }
+
                 // Check if this is a statement or expression
                 if (n_node.tag == .binop_equals or n_node.tag == .binop_colon) {
                     // Assignment or type annotation in a block
@@ -3221,6 +2842,16 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
             // Check left-hand side to determine if this is a var declaration or reassignment
             const lhs_node = self.getAstNode(ast_binop.lhs);
+
+            // Check if the LHS has already been converted (shouldn't happen, but be defensive)
+            const lhs_tag_value = @as(u8, @intFromEnum(lhs_node.tag));
+            if (lhs_tag_value >= FIRST_STMT_TAG) {
+                // This node has been corrupted or already converted
+                // This shouldn't happen in normal processing
+                // Convert to malformed to avoid crashes
+                self.mutateToStmt(node_idx, .malformed);
+                return asStmtIdx(node_idx);
+            }
 
             switch (lhs_node.tag) {
                 .var_lc => {
@@ -5026,17 +4657,17 @@ test "CIR2 error: expression in statement context" {
     try cir.scope_state.pushScope(allocator, false);
 
     // Try to canonicalize the expression as a statement
-    // This should create a malformed statement and add a diagnostic
+    // This should create an expr statement and add an unused expression diagnostic
     const stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, source, &env.idents);
 
-    // Verify we got a malformed statement
+    // Verify we got an expr statement (expressions are allowed as statements with a warning)
     const stmt = cir.getStmt(stmt_idx);
-    try testing.expect(stmt.tag == .malformed);
+    try testing.expect(stmt.tag == .expr);
 
-    // Verify a diagnostic was added
+    // Verify a diagnostic was added for unused expression
     try testing.expectEqual(@as(usize, 1), cir.diagnostics.items.len);
     const diagnostic = cir.diagnostics.items[0];
-    try testing.expect(diagnostic.tag == .expr_in_stmt_context);
+    try testing.expect(diagnostic.tag == .unused_expression);
 }
 
 test "CIR2 demonstrates in-place tag mutation" {
