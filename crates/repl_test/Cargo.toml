@@ -44,4 +44,4 @@ target-all = [
 ]
 
 [package.metadata.cargo-udeps.ignore]
-development = ["roc_wasm_interp"]
+development = ["roc_wasm_interp", "regex"]
