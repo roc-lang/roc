@@ -41,10 +41,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
             (lc "x_")
             (num_literal_i32 15)
           )
-          (binop_colon
-            (lc "x_")
-            (lc "x_")
-          )
+          (lc "x_")
         )
       )
       (args
@@ -72,7 +69,7 @@ redeclareTest = |_| {
 	# Redeclare var - should warn but proceed
 	x_ = 15
 	# Reassign - should work without warning
-	x_ : x_
+	x_
 }
 
 result = redeclareTest({})
@@ -96,9 +93,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 27
+; Total type variables: 26
 (var #0 _)
-(var #1 -> #24)
+(var #1 -> #23)
 (var #2 _)
 (var #3 _)
 (var #4 Num *)
@@ -111,19 +108,18 @@ NIL
 (var #11 _)
 (var #12 _)
 (var #13 _)
-(var #14 _)
-(var #15 -> #24)
-(var #16 _)
-(var #17 -> #20)
-(var #18 -> #26)
-(var #19 -> #25)
+(var #14 -> #23)
+(var #15 _)
+(var #16 -> #19)
+(var #17 -> #25)
+(var #18 -> #24)
+(var #19 _)
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 _)
-(var #24 fn_pure)
-(var #25 {})
-(var #26 fn_pure)
+(var #23 fn_pure)
+(var #24 {})
+(var #25 fn_pure)
 ~~~
 # TYPES
 ~~~roc

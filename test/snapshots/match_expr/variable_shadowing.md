@@ -90,11 +90,11 @@ match (value, other) {
               ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**EXPRESSION IN PATTERN CONTEXT**
+Found an expression where a pattern was expected.
+This location requires a pattern for matching or destructuring, not a computed value.
 
-**variable_shadowing.md:2:5:3:23:**
+**variable_shadowing.md:2:21:3:14:**
 ```roc
     (Some(x), y) => x + y
     (None, x) => x * 2
@@ -125,7 +125,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
+(var #17 Num *)
 (var #18 _)
 (var #19 _)
 (var #20 _)
@@ -133,4 +133,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+x : _a
+y : _a
 ~~~

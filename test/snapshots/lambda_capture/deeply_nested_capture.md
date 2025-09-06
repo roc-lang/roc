@@ -28,10 +28,7 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
             (lambda
               (body
                 (block
-                  (binop_colon
-                    (lc "b")
-                    (lc "b")
-                  )
+                  (lc "b")
                   (lambda
                     (body
                       (binop_plus
@@ -67,7 +64,7 @@ OpenRound OpenRound OpenRound OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssi
 (|a| {
 	2
 	|b| {
-		b : b
+		b
 		|c| b_loc + c
 	}
 })(100)(20)(3)
@@ -125,7 +122,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 34
+; Total type variables: 33
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -136,30 +133,29 @@ Is there an **import** or **exposing** missing up-top?
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 _)
+(var #10 -> #11)
 (var #11 -> #12)
-(var #12 -> #13)
-(var #13 _)
-(var #14 -> #28)
-(var #15 _)
-(var #16 -> #29)
-(var #17 -> #20)
-(var #18 -> #30)
-(var #19 Num *)
-(var #20 -> #32)
-(var #21 Num *)
-(var #22 -> #33)
-(var #23 Num *)
-(var #24 _)
-(var #25 -> #19)
+(var #12 _)
+(var #13 -> #27)
+(var #14 _)
+(var #15 -> #28)
+(var #16 -> #19)
+(var #17 -> #29)
+(var #18 Num *)
+(var #19 -> #31)
+(var #20 Num *)
+(var #21 -> #32)
+(var #22 Num *)
+(var #23 _)
+(var #24 -> #18)
+(var #25 _)
 (var #26 _)
-(var #27 _)
+(var #27 fn_pure)
 (var #28 fn_pure)
-(var #29 fn_pure)
-(var #30 -> #31)
+(var #29 -> #30)
+(var #30 fn_pure)
 (var #31 fn_pure)
 (var #32 fn_pure)
-(var #33 fn_pure)
 ~~~
 # TYPES
 ~~~roc

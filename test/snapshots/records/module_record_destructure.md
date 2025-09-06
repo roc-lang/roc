@@ -43,10 +43,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
         (block
           (binop_equals
             (block
-              (binop_colon
-                (lc "age")
-                (lc "age")
-              )
+              (lc "age")
             )
             (lc "person")
           )
@@ -91,7 +88,7 @@ extract_age : {
 } -> U64
 extract_age = |person| {
 	{
-		age : age
+		age
 	} = person
 	(({
 		a : 0
@@ -103,28 +100,7 @@ extract_age = |person| {
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**module_record_destructure.md:5:5:5:12:**
-```roc
-    { age } = person
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**module_record_destructure.md:7:15:7:18:**
-```roc
-	{ a: 0 }.a + age - { a: 0 }.a
-```
-	             ^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -140,7 +116,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 40
+; Total type variables: 39
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -151,39 +127,39 @@ Is there an **import** or **exposing** missing up-top?
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 -> #39)
+(var #10 -> #38)
 (var #11 _)
 (var #12 _)
-(var #13 _)
-(var #14 -> #15)
+(var #13 -> #14)
+(var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
-(var #18 Num *)
-(var #19 _)
-(var #20 -> #37)
-(var #21 _)
+(var #17 Num *)
+(var #18 _)
+(var #19 -> #36)
+(var #20 _)
+(var #21 -> #22)
 (var #22 -> #23)
-(var #23 -> #24)
-(var #24 -> #30)
-(var #25 _)
-(var #26 Num *)
-(var #27 _)
-(var #28 -> #38)
-(var #29 _)
-(var #30 -> #31)
+(var #23 -> #29)
+(var #24 _)
+(var #25 Num *)
+(var #26 _)
+(var #27 -> #37)
+(var #28 _)
+(var #29 -> #30)
+(var #30 _)
 (var #31 _)
-(var #32 _)
-(var #33 -> #39)
+(var #32 -> #38)
+(var #33 _)
 (var #34 _)
 (var #35 _)
-(var #36 _)
+(var #36 {})
 (var #37 {})
-(var #38 {})
-(var #39 fn_pure)
+(var #38 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 extract_age : _arg -> _ret
+age : _b
 person : _b
 ~~~

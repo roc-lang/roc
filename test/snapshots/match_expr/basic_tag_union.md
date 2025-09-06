@@ -57,28 +57,6 @@ match color {
       ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**basic_tag_union.md:2:2:2:10:**
-```roc
-	Red => 1
-```
-	^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**basic_tag_union.md:4:2:4:14:**
-```roc
-	Green => "3"
-```
-	^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -89,13 +67,13 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Num *)
 (var #4 _)
 (var #5 _)
 (var #6 Num *)
 (var #7 _)
 (var #8 _)
-(var #9 _)
+(var #9 Str)
 (var #10 _)
 (var #11 _)
 ~~~

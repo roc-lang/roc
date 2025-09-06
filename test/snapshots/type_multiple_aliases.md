@@ -89,10 +89,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
     (lambda
       (body
         (record_literal
-          (binop_colon
-            (lc "id")
-            (lc "id")
-          )
+          (lc "id")
           (binop_colon
             (lc "name")
             (lc "name")
@@ -169,7 +166,7 @@ UserName : Str
 UserAge : U8
 User : {id: UserId, name: UserName, age: UserAge}
 create_user : UserId -> UserName -> UserAge -> User
-create_user = |id, name, age| { id: id, name: name, age: age }
+create_user = |id, name, age| { id, name: name, age: age }
 get_user_name : User -> UserName
 get_user_name = |user| user..name
 main! = |_| {
@@ -198,7 +195,7 @@ NIL
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "get_user_name"))
-    (type type_53)
+    (type type_52)
   )
   (Stmt.assign
     (pattern (Patt.ident "get_user_name"))
@@ -212,7 +209,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 92
+; Total type variables: 91
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -250,7 +247,7 @@ NIL
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 -> #84)
+(var #37 -> #83)
 (var #38 _)
 (var #39 _)
 (var #40 _)
@@ -259,52 +256,51 @@ NIL
 (var #43 _)
 (var #44 _)
 (var #45 _)
-(var #46 _)
+(var #46 -> #82)
 (var #47 -> #83)
-(var #48 -> #84)
+(var #48 _)
 (var #49 _)
 (var #50 _)
 (var #51 _)
 (var #52 _)
 (var #53 _)
-(var #54 _)
-(var #55 -> #86)
+(var #54 -> #85)
+(var #55 _)
 (var #56 _)
 (var #57 _)
 (var #58 _)
-(var #59 _)
-(var #60 -> #86)
-(var #61 _)
-(var #62 -> #91)
-(var #63 _)
-(var #64 -> #70)
-(var #65 -> #89)
-(var #66 Num *)
-(var #67 Str)
-(var #68 Num *)
-(var #69 -> #88)
+(var #59 -> #85)
+(var #60 _)
+(var #61 -> #90)
+(var #62 _)
+(var #63 -> #69)
+(var #64 -> #88)
+(var #65 Num *)
+(var #66 Str)
+(var #67 Num *)
+(var #68 -> #87)
+(var #69 _)
 (var #70 _)
-(var #71 _)
-(var #72 -> #90)
+(var #71 -> #89)
+(var #72 _)
 (var #73 _)
 (var #74 _)
-(var #75 _)
-(var #76 -> #91)
+(var #75 -> #90)
+(var #76 _)
 (var #77 _)
 (var #78 _)
 (var #79 _)
 (var #80 _)
-(var #81 _)
-(var #82 {})
-(var #83 record)
-(var #84 fn_pure)
-(var #85 _)
-(var #86 fn_pure)
-(var #87 _)
-(var #88 tuple)
+(var #81 {})
+(var #82 record)
+(var #83 fn_pure)
+(var #84 _)
+(var #85 fn_pure)
+(var #86 _)
+(var #87 tuple)
+(var #88 fn_pure)
 (var #89 fn_pure)
 (var #90 fn_pure)
-(var #91 fn_pure)
 ~~~
 # TYPES
 ~~~roc

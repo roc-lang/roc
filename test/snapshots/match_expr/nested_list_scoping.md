@@ -83,18 +83,6 @@ match nestedList {
       ^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nested_list_scoping.md:2:5:4:22:**
-```roc
-    [[x], [y]] => x + y
-    [[x, y]] => x - y  
-    [x, [y]] => x * y
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -134,4 +122,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+y : _a
+x : _a
 ~~~

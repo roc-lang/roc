@@ -21,8 +21,14 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpF
 )
   (branch1     (binop_thick_arrow
       (record_literal
-        (lc "name")
-        (lc "age")
+        (binop_colon
+          (lc "name")
+          (lc "name")
+        )
+        (binop_colon
+          (lc "age")
+          (lc "age")
+        )
       )
       (block
         (str_literal_big "${name} is ${age.to_str()} years old")
@@ -49,7 +55,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpF
 # FORMATTED
 ~~~roc
 match ...
-	{name, age} => 
+	{name: name, age: age} => 
 		"${name} is ${age.to_str()} years old"
 		{ name, address: {
 			city
@@ -63,12 +69,11 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**record_destructure.md:2:5:4:18:**
+**record_destructure.md:3:22:3:30:**
 ```roc
-    { name, age } => "${name} is ${age.to_str()} years old"
     { name, address: { city } } => "${city} is the city of ${name}"
-    {} => "empty"
 ```
+                     ^^^^^^^^
 
 
 # CANONICALIZE
@@ -77,7 +82,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 20
+; Total type variables: 22
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -85,20 +90,23 @@ This might be a limitation in the current implementation that will be addressed 
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 _)
+(var #7 Str)
 (var #8 _)
 (var #9 _)
 (var #10 _)
 (var #11 _)
 (var #12 _)
 (var #13 _)
-(var #14 _)
+(var #14 Str)
 (var #15 _)
 (var #16 _)
-(var #17 _)
+(var #17 Str)
 (var #18 _)
 (var #19 _)
+(var #20 _)
+(var #21 _)
 ~~~
 # TYPES
 ~~~roc
+name : _a
 ~~~

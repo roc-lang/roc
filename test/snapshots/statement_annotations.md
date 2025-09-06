@@ -45,10 +45,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent O
               (num_literal_i32 1)
             )
           )
-          (binop_colon
-            (lc "y")
-            (lc "y")
-          )
+          (lc "y")
         )
       )
       (args
@@ -76,10 +73,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent O
             (lc "y")
             (lc "x")
           )
-          (binop_colon
-            (lc "y")
-            (lc "y")
-          )
+          (lc "y")
         )
       )
       (args
@@ -96,14 +90,14 @@ module []
 addOneU64 = |x| {
 	y : U64
 	y = x + 1
-	y : y
+	y
 }
 
 func : val -> val
 func = |x| {
 	y : val
 	y = x
-	y : y
+	y
 }
 ~~~
 # EXPECTED
@@ -119,7 +113,7 @@ NIL
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "func"))
-    (type type_19)
+    (type type_18)
   )
   (Stmt.assign
     (pattern (Patt.ident "func"))
@@ -129,9 +123,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 39
+; Total type variables: 37
 (var #0 _)
-(var #1 -> #36)
+(var #1 -> #34)
 (var #2 _)
 (var #3 _)
 (var #4 _)
@@ -143,32 +137,30 @@ NIL
 (var #10 _)
 (var #11 _)
 (var #12 _)
-(var #13 _)
-(var #14 -> #36)
+(var #13 -> #34)
+(var #14 _)
 (var #15 _)
 (var #16 _)
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 _)
-(var #21 -> #38)
+(var #20 -> #36)
+(var #21 _)
 (var #22 _)
 (var #23 _)
 (var #24 _)
-(var #25 _)
-(var #26 -> #27)
+(var #25 -> #26)
+(var #26 _)
 (var #27 _)
 (var #28 _)
 (var #29 _)
-(var #30 _)
+(var #30 -> #36)
 (var #31 _)
-(var #32 -> #38)
+(var #32 _)
 (var #33 _)
-(var #34 _)
+(var #34 fn_pure)
 (var #35 _)
 (var #36 fn_pure)
-(var #37 _)
-(var #38 fn_pure)
 ~~~
 # TYPES
 ~~~roc

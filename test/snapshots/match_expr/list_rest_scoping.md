@@ -86,12 +86,22 @@ match items {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_rest_scoping.md:2:5:4:28:**
+**list_rest_scoping.md:3:6:3:8:**
 ```roc
-    [first, ..rest] => first + 1
     [..rest, last] => last + 2
+```
+     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_rest_scoping.md:4:9:4:11:**
+```roc
     [x, ..rest, y] => x + y
 ```
+        ^^
 
 
 # CANONICALIZE
@@ -107,14 +117,14 @@ This might be a limitation in the current implementation that will be addressed 
 (var #3 _)
 (var #4 _)
 (var #5 _)
-(var #6 _)
+(var #6 Num *)
 (var #7 _)
 (var #8 _)
 (var #9 _)
 (var #10 _)
 (var #11 _)
 (var #12 _)
-(var #13 _)
+(var #13 Num *)
 (var #14 _)
 (var #15 _)
 (var #16 _)
@@ -132,4 +142,9 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+y : _a
+x : _a
+rest : _a
+last : _a
+first : _a
 ~~~

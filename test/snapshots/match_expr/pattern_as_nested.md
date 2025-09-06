@@ -21,12 +21,18 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
   (branch1     (binop_thick_arrow
       (binop_as
         (record_literal
-          (lc "name")
+          (binop_colon
+            (lc "name")
+            (lc "name")
+          )
           (binop_colon
             (lc "address")
             (binop_as
               (record_literal
-                (lc "city")
+                (binop_colon
+                  (lc "city")
+                  (lc "city")
+                )
               )
               (lc "addr")
             )
@@ -60,7 +66,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 # FORMATTED
 ~~~roc
 match person
-	{name, address: {city} as addr} as fullPerson => 
+	{name: name, address: {city: city} as addr} as fullPerson => 
 		(fullPerson, addr, city)
 		{
 			name
@@ -81,15 +87,37 @@ match person {
       ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **city** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**pattern_as_nested.md:2:77:2:81:**
+```roc
+    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
+```
+                                                                            ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**pattern_as_nested.md:2:5:3:63:**
+**pattern_as_nested.md:3:5:3:13:**
 ```roc
-    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
     { name } as simplePerson => (simplePerson, name, "unknown")
 ```
+    ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**pattern_as_nested.md:3:48:3:52:**
+```roc
+    { name } as simplePerson => (simplePerson, name, "unknown")
+```
+                                               ^^^^
 
 
 # CANONICALIZE
@@ -98,7 +126,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 28
+; Total type variables: 30
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -123,11 +151,16 @@ This might be a limitation in the current implementation that will be addressed 
 (var #21 _)
 (var #22 _)
 (var #23 _)
-(var #24 _)
+(var #24 Str)
 (var #25 _)
 (var #26 _)
 (var #27 _)
+(var #28 _)
+(var #29 _)
 ~~~
 # TYPES
 ~~~roc
+fullPerson : _a
+simplePerson : _a
+addr : _a
 ~~~

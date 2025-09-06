@@ -19,8 +19,14 @@ KwModule OpenSquare CloseSquare BlankLine OpenCurly LowerIdent Comma LowerIdent 
   (binop_equals
     (record_literal
       (lc "name")
-      (lc "age")
-      (lc "email")
+      (binop_colon
+        (lc "age")
+        (lc "age")
+      )
+      (binop_colon
+        (lc "email")
+        (lc "email")
+      )
     )
     (lc "person")
   )
@@ -30,7 +36,7 @@ KwModule OpenSquare CloseSquare BlankLine OpenCurly LowerIdent Comma LowerIdent 
 ~~~roc
 module []
 
-{ name, age, email } = person
+{ name, age: age, email: email } = person
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
@@ -57,19 +63,19 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 8
+; Total type variables: 10
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 -> #5)
+(var #4 _)
 (var #5 _)
-(var #6 _)
+(var #6 -> #7)
 (var #7 _)
+(var #8 _)
+(var #9 _)
 ~~~
 # TYPES
 ~~~roc
-age : _a
 name : _a
-email : _a
 ~~~

@@ -41,17 +41,7 @@ match (1, 2)
 UNUSED VARIABLE - pattern_as_basic.md:2:6:2:7
 UNUSED VARIABLE - pattern_as_basic.md:2:9:2:10
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_as_basic.md:2:5:2:29:**
-```roc
-    (x, y) as point => point
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -74,4 +64,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+x : _a
+y : _a
+point : _a
 ~~~

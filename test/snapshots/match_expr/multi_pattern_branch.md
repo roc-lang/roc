@@ -66,22 +66,11 @@ match color {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**multi_pattern_branch.md:2:5:2:28:**
+**multi_pattern_branch.md:2:5:2:23:**
 ```roc
     Blue | Green | Red => 1
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**multi_pattern_branch.md:4:5:4:15:**
-```roc
-    White => 3
-```
-    ^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -98,13 +87,13 @@ This might be a limitation in the current implementation that will be addressed 
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 _)
+(var #7 Num *)
 (var #8 _)
 (var #9 _)
 (var #10 Num *)
 (var #11 _)
 (var #12 _)
-(var #13 _)
+(var #13 Num *)
 (var #14 _)
 (var #15 _)
 ~~~

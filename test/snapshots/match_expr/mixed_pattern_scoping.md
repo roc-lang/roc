@@ -92,28 +92,6 @@ match data {
       ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**mixed_pattern_scoping.md:2:5:2:24:**
-```roc
-    Ok([x, y]) => x + y
-```
-    ^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**mixed_pattern_scoping.md:4:5:4:21:**
-```roc
-    Ok([x]) => x * 2
-```
-    ^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -144,7 +122,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 _)
+(var #23 Num *)
 (var #24 _)
 (var #25 _)
 (var #26 _)

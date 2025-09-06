@@ -281,28 +281,6 @@ main! = |_| {}
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_tag_union_basic.md:8:5:9:5:**
-```roc
-    Ok(_) => True
-    Err(_) => False
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_tag_union_basic.md:14:5:14:18:**
-```roc
-    Ok(_) => Bool.True
-```
-    ^^^^^^^^^^^^^
-
-
 **PATTERN IN EXPRESSION CONTEXT**
 Found a pattern where an expression was expected.
 Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.

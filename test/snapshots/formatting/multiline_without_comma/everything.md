@@ -393,8 +393,14 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
                 (apply_uc
                   (uc "Z3")
                   (record_literal
-                    (lc "a")
-                    (lc "b")
+                    (binop_colon
+                      (lc "a")
+                      (lc "a")
+                    )
+                    (binop_colon
+                      (lc "b")
+                      (lc "b")
+                    )
                   )
                 )
                 (lc "a")
@@ -454,7 +460,7 @@ h = |x, y| {
 	match x
 		Z1(a, b) => a
 		Z2(a, b) => a
-		Z3({a, b}) => a
+		Z3({a: a, b: b}) => a
 		Z4([a, b]) => a
 }
 ~~~
@@ -581,36 +587,6 @@ g : e -> e where module(e).A, module(e).B
                                     ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**everything.md:87:3:92:9:**
-```roc
-		Z1(
-			(
-				a,
-				b
-			)
-		) => a
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**everything.md:97:3:102:9:**
-```roc
-		Z3(
-			{
-				a,
-				b
-			}
-		) => a
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -641,7 +617,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 213
+; Total type variables: 215
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -764,10 +740,10 @@ This might be a limitation in the current implementation that will be addressed 
 (var #119 _)
 (var #120 _)
 (var #121 _)
-(var #122 -> #212)
+(var #122 -> #214)
 (var #123 _)
 (var #124 _)
-(var #125 -> #206)
+(var #125 -> #208)
 (var #126 _)
 (var #127 _)
 (var #128 _)
@@ -783,20 +759,20 @@ This might be a limitation in the current implementation that will be addressed 
 (var #138 _)
 (var #139 _)
 (var #140 _)
-(var #141 -> #206)
+(var #141 -> #208)
 (var #142 _)
 (var #143 -> #148)
-(var #144 -> #208)
+(var #144 -> #210)
 (var #145 _)
 (var #146 _)
-(var #147 -> #207)
+(var #147 -> #209)
 (var #148 _)
 (var #149 _)
 (var #150 -> #155)
-(var #151 -> #210)
+(var #151 -> #212)
 (var #152 _)
 (var #153 _)
-(var #154 -> #209)
+(var #154 -> #211)
 (var #155 _)
 (var #156 _)
 (var #157 -> #160)
@@ -804,10 +780,10 @@ This might be a limitation in the current implementation that will be addressed 
 (var #159 _)
 (var #160 _)
 (var #161 _)
-(var #162 -> #211)
+(var #162 -> #213)
 (var #163 _)
 (var #164 _)
-(var #165 -> #211)
+(var #165 -> #213)
 (var #166 _)
 (var #167 _)
 (var #168 _)
@@ -839,22 +815,24 @@ This might be a limitation in the current implementation that will be addressed 
 (var #194 _)
 (var #195 _)
 (var #196 _)
-(var #197 -> #212)
+(var #197 _)
 (var #198 _)
-(var #199 _)
+(var #199 -> #214)
 (var #200 _)
 (var #201 _)
 (var #202 _)
 (var #203 _)
 (var #204 _)
 (var #205 _)
-(var #206 {})
-(var #207 tuple)
-(var #208 fn_pure)
+(var #206 _)
+(var #207 _)
+(var #208 {})
 (var #209 tuple)
 (var #210 fn_pure)
 (var #211 tuple)
 (var #212 fn_pure)
+(var #213 tuple)
+(var #214 fn_pure)
 ~~~
 # TYPES
 ~~~roc

@@ -19,10 +19,7 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
     )
     (args
       (block
-        (binop_colon
-          (lc "x")
-          (lc "x")
-        )
+        (lc "x")
       )
     )
   )
@@ -37,7 +34,7 @@ OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound Open
 # FORMATTED
 ~~~roc
 (|{
-	x : x
+	x
 }| x)({
 	x : -10
 })
@@ -84,23 +81,22 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 16
+; Total type variables: 15
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
-(var #4 -> #11)
-(var #5 -> #13)
-(var #6 _)
-(var #7 Num *)
+(var #3 -> #10)
+(var #4 -> #12)
+(var #5 _)
+(var #6 Num *)
+(var #7 _)
 (var #8 _)
-(var #9 _)
-(var #10 -> #14)
-(var #11 _)
+(var #9 -> #13)
+(var #10 _)
+(var #11 -> #13)
 (var #12 -> #14)
-(var #13 -> #15)
-(var #14 {})
-(var #15 fn_pure)
+(var #13 {})
+(var #14 fn_pure)
 ~~~
 # TYPES
 ~~~roc

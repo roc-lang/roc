@@ -48,7 +48,10 @@ KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineC
       (lc "pkg")
       (str_literal_small "..l")
     )
-    (lc "mmen")
+    (binop_colon
+      (lc "mmen")
+      (lc "mmen")
+    )
   )
   (malformed)
   (list_literal
@@ -90,7 +93,7 @@ vides
 # Cd
 { # pen
 	pkg: "..l",
-	mmen,
+	mmen: mmen,
 }
 # Cose
 provides # Cd
@@ -553,7 +556,10 @@ ar,
       (Expr.malformed)
       (Expr.str_literal_small)
     )
-    (Expr.lookup "mmen")
+    (Expr.record_field
+      (Expr.lookup "mmen")
+      (Expr.lookup "mmen")
+    )
   )
   (Expr.malformed)
   (Expr.list_literal)
@@ -564,7 +570,7 @@ ar,
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 45
+; Total type variables: 46
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -576,7 +582,7 @@ ar,
 (var #8 _)
 (var #9 _)
 (var #10 _)
-(var #11 -> #35)
+(var #11 -> #36)
 (var #12 _)
 (var #13 _)
 (var #14 _)
@@ -587,8 +593,8 @@ ar,
 (var #19 Str)
 (var #20 _)
 (var #21 _)
-(var #22 -> #41)
-(var #23 _)
+(var #22 _)
+(var #23 -> #42)
 (var #24 _)
 (var #25 _)
 (var #26 _)
@@ -600,16 +606,17 @@ ar,
 (var #32 _)
 (var #33 _)
 (var #34 _)
-(var #35 {})
-(var #36 _)
+(var #35 _)
+(var #36 {})
 (var #37 _)
 (var #38 _)
 (var #39 _)
-(var #40 {})
-(var #41 record)
-(var #42 _)
+(var #40 _)
+(var #41 {})
+(var #42 record)
 (var #43 _)
 (var #44 _)
+(var #45 _)
 ~~~
 # TYPES
 ~~~roc

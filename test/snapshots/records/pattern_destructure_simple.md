@@ -19,8 +19,14 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly Op
 )
   (branch1     (binop_thick_arrow
       (record_literal
-        (lc "name")
-        (lc "age")
+        (binop_colon
+          (lc "name")
+          (lc "name")
+        )
+        (binop_colon
+          (lc "age")
+          (lc "age")
+        )
       )
       (lc "name")
     )
@@ -29,7 +35,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly Op
 # FORMATTED
 ~~~roc
 match person
-	{name, age} => name
+	{name: name, age: age} => name
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
@@ -46,13 +52,24 @@ match person {
       ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**pattern_destructure_simple.md:2:22:2:26:**
+```roc
+    { name, age } => name
+```
+                     ^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 8
+; Total type variables: 10
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -61,9 +78,9 @@ match person {
 (var #5 _)
 (var #6 _)
 (var #7 _)
+(var #8 _)
+(var #9 _)
 ~~~
 # TYPES
 ~~~roc
-age : _a
-name : _a
 ~~~

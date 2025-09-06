@@ -20,7 +20,10 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
 )
   (branch1     (binop_thick_arrow
       (record_literal
-        (lc "name")
+        (binop_colon
+          (lc "name")
+          (lc "name")
+        )
       )
       (block
         (lc "name")
@@ -37,7 +40,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
 # FORMATTED
 ~~~roc
 match person
-	{name} => 
+	{name: name} => 
 		name
 		{
 			age
@@ -57,15 +60,37 @@ match person {
       ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**simple_record.md:2:17:2:21:**
+```roc
+    { name } => name
+```
+                ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**simple_record.md:2:5:3:19:**
+**simple_record.md:3:5:3:12:**
 ```roc
-    { name } => name
     { age } => age
 ```
+    ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**simple_record.md:3:16:3:19:**
+```roc
+    { age } => age
+```
+               ^^^
 
 
 # CANONICALIZE
@@ -74,7 +99,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 12
+; Total type variables: 13
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -87,6 +112,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #9 _)
 (var #10 _)
 (var #11 _)
+(var #12 _)
 ~~~
 # TYPES
 ~~~roc

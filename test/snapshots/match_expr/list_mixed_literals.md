@@ -82,20 +82,6 @@ match sequence {
       ^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_mixed_literals.md:2:5:6:12:**
-```roc
-    [0, count] => count
-    [1, x, 3] => x
-    [42, value] => value
-    [first, 99] => first
-    [] => 0
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -126,7 +112,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 _)
+(var #23 Num *)
 (var #24 _)
 (var #25 _)
 (var #26 _)
@@ -134,4 +120,8 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+first : _a
+count : _a
+value : _a
+x : _a
 ~~~

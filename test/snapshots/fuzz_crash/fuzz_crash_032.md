@@ -221,17 +221,6 @@ olor = |color| { import Color.RGB
                  ^^^^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_032.md:8:19:8:37:**
-```roc
-    match color { RGB => LocalStatus.Pending
-```
-                  ^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

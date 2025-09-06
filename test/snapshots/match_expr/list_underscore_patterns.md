@@ -159,19 +159,48 @@ match items {
       ^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **last** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_underscore_patterns.md:3:10:3:14:**
+```roc
+    [.., last] => last # pattern match on the last item in the list
+```
+         ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_underscore_patterns.md:2:5:7:12:**
+**list_underscore_patterns.md:3:14:3:16:**
 ```roc
-    [_] => 1 # pattern match on a list with a single (ignored) element
     [.., last] => last # pattern match on the last item in the list
-    [first, ..] => first # pattern match on the first item in the list
-    [_, _, third] => third # pattern match on the third item in the list
-    [x, _, _, y] => x + y # first + fourth item in the list
-    [] => 0 # match an empty list
 ```
+             ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **last** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_underscore_patterns.md:3:19:3:23:**
+```roc
+    [.., last] => last # pattern match on the last item in the list
+```
+                  ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_underscore_patterns.md:4:13:4:15:**
+```roc
+    [first, ..] => first # pattern match on the first item in the list
+```
+            ^^
 
 
 # CANONICALIZE
@@ -185,7 +214,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
+(var #4 Num *)
 (var #5 _)
 (var #6 _)
 (var #7 _)
@@ -215,7 +244,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #31 _)
 (var #32 _)
 (var #33 _)
-(var #34 _)
+(var #34 Num *)
 (var #35 _)
 (var #36 _)
 (var #37 _)
@@ -223,4 +252,8 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+y : _a
+x : _a
+third : _a
+first : _a
 ~~~

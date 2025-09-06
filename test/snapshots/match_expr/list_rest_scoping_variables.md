@@ -90,13 +90,33 @@ match data {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_rest_scoping_variables.md:2:5:5:43:**
+**list_rest_scoping_variables.md:3:13:3:15:**
 ```roc
-    [..items] => 1
     [first, ..items] => first
+```
+            ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_rest_scoping_variables.md:4:6:4:8:**
+```roc
     [..items, last] => last
+```
+     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_rest_scoping_variables.md:5:13:5:15:**
+```roc
     [first, ..items, last] => first + last
 ```
+            ^^
 
 
 # CANONICALIZE
@@ -110,7 +130,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
+(var #4 Num *)
 (var #5 _)
 (var #6 _)
 (var #7 _)
@@ -138,4 +158,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+items : _a
+last : _a
+first : _a
 ~~~

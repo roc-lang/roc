@@ -67,11 +67,11 @@ Patterns can contain identifiers, literals, lists, records, or tags.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**s_quote_pattern.md:2:2:3:19:**
+**s_quote_pattern.md:2:3:2:6:**
 ```roc
 	['#'] => ...
-	['a', 'b'] => ...
 ```
+	 ^^^
 
 
 # CANONICALIZE

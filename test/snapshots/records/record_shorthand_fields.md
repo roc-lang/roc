@@ -14,14 +14,23 @@ OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseCur
 ~~~clojure
 (record_literal
   (lc "name")
-  (lc "age")
-  (lc "email")
-  (lc "active")
+  (binop_colon
+    (lc "age")
+    (lc "age")
+  )
+  (binop_colon
+    (lc "email")
+    (lc "email")
+  )
+  (binop_colon
+    (lc "active")
+    (lc "active")
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-{ name, age, email, active }
+{ name, age: age, email: email, active: active }
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_shorthand_fields.md:1:3:1:7
@@ -77,22 +86,34 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.lookup "name")
-  (Expr.lookup "age")
-  (Expr.lookup "email")
-  (Expr.lookup "active")
+  (Expr.record_field
+    (Expr.lookup "age")
+    (Expr.lookup "age")
+  )
+  (Expr.record_field
+    (Expr.lookup "email")
+    (Expr.lookup "email")
+  )
+  (Expr.record_field
+    (Expr.lookup "active")
+    (Expr.lookup "active")
+  )
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 8
+; Total type variables: 11
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
 (var #4 _)
-(var #5 -> #7)
-(var #6 {})
-(var #7 record)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 -> #10)
+(var #9 {})
+(var #10 record)
 ~~~
 # TYPES
 ~~~roc

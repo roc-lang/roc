@@ -101,12 +101,33 @@ match value {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**guards_1.md:2:5:4:17:**
+**guards_1.md:2:5:2:15:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
-    x if x < 0 => "negative: ${Num.toStr x}"
-    _ => "other"
 ```
+    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**guards_1.md:3:5:3:6:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+    ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**guards_1.md:3:10:3:15:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+         ^^^^^
 
 
 # CANONICALIZE
@@ -123,15 +144,15 @@ This might be a limitation in the current implementation that will be addressed 
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 _)
+(var #7 Str)
 (var #8 _)
 (var #9 _)
 (var #10 _)
 (var #11 _)
-(var #12 _)
+(var #12 Str)
 (var #13 _)
 (var #14 _)
-(var #15 _)
+(var #15 Str)
 (var #16 _)
 (var #17 _)
 (var #18 _)

@@ -243,18 +243,136 @@ match events {
       ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **key** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:4:15:4:18:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
+```
+              ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **rest** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:4:27:4:31:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
+```
+                          ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**complex_list_tags.md:2:5:6:130:**
+**complex_list_tags.md:4:31:4:33:**
 ```roc
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr(x)}, ${Num.toStr(y)})"
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
+```
+                              ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **dx** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:5:11:5:13:**
+```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+          ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **dy** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:5:15:5:17:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+              ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **dx2** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:5:25:5:28:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+                        ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **dy2** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:5:30:5:33:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+                             ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **others** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:5:42:5:48:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+                                         ^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**complex_list_tags.md:5:48:5:50:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
+```
+                                               ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **amount** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:6:13:6:19:**
+```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
 ```
+            ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **remaining** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**complex_list_tags.md:6:41:6:50:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
+```
+                                        ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**complex_list_tags.md:6:50:6:52:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
+```
+                                                 ^^
 
 
 # CANONICALIZE
@@ -267,14 +385,14 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Str)
 (var #4 _)
 (var #5 _)
 (var #6 _)
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 _)
+(var #10 Str)
 (var #11 _)
 (var #12 _)
 (var #13 _)
@@ -284,7 +402,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 _)
+(var #20 Str)
 (var #21 _)
 (var #22 _)
 (var #23 _)
@@ -301,7 +419,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 _)
+(var #37 Str)
 (var #38 _)
 (var #39 _)
 (var #40 _)
@@ -316,7 +434,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #49 _)
 (var #50 _)
 (var #51 _)
-(var #52 _)
+(var #52 Str)
 (var #53 _)
 (var #54 _)
 (var #55 _)
@@ -327,4 +445,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+x : _a
+y : _a
 ~~~

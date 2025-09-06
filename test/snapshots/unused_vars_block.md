@@ -74,10 +74,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
               (num_literal_i32 10)
             )
           )
-          (binop_colon
-            (lc "result")
-            (lc "result")
-          )
+          (lc "result")
         )
       )
       (args
@@ -105,7 +102,7 @@ main! = |_| {
 	# Comment 3
 	# Use only the used_var
 	result = used_var + 10
-	result : result
+	result
 }
 ~~~
 # EXPECTED
@@ -124,7 +121,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 34
+; Total type variables: 33
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -132,7 +129,7 @@ NIL
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 -> #33)
+(var #7 -> #32)
 (var #8 _)
 (var #9 -> #10)
 (var #10 Num *)
@@ -153,12 +150,11 @@ NIL
 (var #25 _)
 (var #26 _)
 (var #27 _)
-(var #28 _)
-(var #29 -> #33)
+(var #28 -> #32)
+(var #29 _)
 (var #30 _)
 (var #31 _)
-(var #32 _)
-(var #33 fn_pure)
+(var #32 fn_pure)
 ~~~
 # TYPES
 ~~~roc

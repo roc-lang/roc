@@ -59,17 +59,6 @@ match value {
       ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**wildcard_patterns.md:2:5:2:27:**
-```roc
-    Answer => "the answer"
-```
-    ^^^^^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -80,7 +69,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Str)
 (var #4 _)
 (var #5 _)
 (var #6 Str)

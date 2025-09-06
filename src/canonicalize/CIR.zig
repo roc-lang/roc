@@ -246,18 +246,10 @@ pub fn init(ast: *AST, type_store: *TypeStore) CIR {
 fn canonicalizeImportPath(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx) !void {
     const node = self.getAstNode(node_idx);
 
-    if (std.debug.runtime_safety) {
-        std.debug.print("canonicalizeImportPath called on node {} tag {} ({s})\n", .{ @intFromEnum(node_idx), @intFromEnum(node.tag), @tagName(node.tag) });
-    }
-
     switch (node.tag) {
         .lc, .uc => {
             // Simple identifier - mark as processed
             self.mutateToPatt(node_idx, .ident);
-            if (std.debug.runtime_safety) {
-                const after = self.getAstNode(node_idx);
-                std.debug.print("  After mutation: node {} tag {} (now a pattern)\n", .{ @intFromEnum(node_idx), @intFromEnum(after.tag) });
-            }
         },
         .binop_pipe, .binop_dot => {
             // Module path like json.Json
@@ -294,6 +286,7 @@ fn canonicalizeImportPath(self: *CIR, allocator: Allocator, node_idx: AST.Node.I
 
 /// Canonicalize a file's block node containing top-level definitions
 pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.Node.Idx, raw_src: []const u8, idents: *const Ident.Store, common_env: *base.CommonEnv, diagnostics: ?*std.ArrayListUnmanaged(CanDiagnostic)) !Expr.Idx {
+
     // Initialize root scope if not already done
     if (self.scope_state.scopes.items.len == 0) {
         try self.scope_state.scopes.append(allocator, Scope.init(false));
@@ -351,6 +344,25 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
                 .block,
                 .if_else,
                 .match, // complex expressions
+                .binop_dot, // record/module access
+                .binop_plus,
+                .binop_minus,
+                .binop_star,
+                .binop_slash,
+                .binop_double_equals,
+                .binop_not_equals,
+                .binop_gt,
+                .binop_gte,
+                .binop_lt,
+                .binop_lte,
+                .binop_and,
+                .binop_or,
+                .binop_pipe,
+                .binop_double_question,
+                .binop_double_slash, // binary operations
+                .record_literal,
+                .list_literal,
+                .tuple_literal, // literals
                 => try top_level_stmts.append(node_idx),
                 else => {},
             }
@@ -372,17 +384,6 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     if (!nodes_idx.isNil()) {
         var iter = self.ast.node_slices.nodes(&nodes_idx);
         while (iter.next()) |stmt_idx| {
-            const stmt_node = self.getAstNode(stmt_idx);
-            if (std.debug.runtime_safety) {
-                const idx = @intFromEnum(stmt_idx);
-                if (idx == 13) {
-                    std.debug.print("Statement 13 has tag {} ({s})\n", .{ @intFromEnum(stmt_node.tag), @tagName(stmt_node.tag) });
-                    if (stmt_node.tag == .binop_colon) {
-                        const binop = self.ast.node_slices.binOp(stmt_node.payload.binop);
-                        std.debug.print("  -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
-                    }
-                }
-            }
             try statements.append(stmt_idx);
         }
     }
@@ -488,25 +489,358 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     } else 1; // In release mode, always skip first node as it's likely the header
 
     if (start_idx < nodes_len) {
-        // First, let's trace all nodes to understand the structure
+        // In debug mode, build a reference graph to identify orphaned nodes
+        var is_referenced: ?[]bool = null;
         if (std.debug.runtime_safety) {
-            var trace_i: usize = 0;
-            while (trace_i < nodes_len) : (trace_i += 1) {
-                const trace_node = self.getAstNode(@enumFromInt(trace_i));
-                const trace_tag = @intFromEnum(trace_node.tag);
-                if (trace_i == 12 or trace_i == 13) {
-                    if (trace_tag < FIRST_STMT_TAG) {
-                        std.debug.print("Node {}: tag {} ({s})\n", .{ trace_i, trace_tag, @tagName(trace_node.tag) });
-                        if (trace_node.tag == .binop_colon) {
-                            const binop = self.ast.node_slices.binOp(trace_node.payload.binop);
-                            std.debug.print("  -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
+            // First check if this file has any malformed nodes (parse errors)
+            // If it does, skip orphaned node checking as parse errors can create orphaned nodes
+            var has_malformed = false;
+            var check_i: usize = start_idx;
+            while (check_i < nodes_len) : (check_i += 1) {
+                const check_node = self.getAstNode(@enumFromInt(check_i));
+                if (check_node.tag == .malformed) {
+                    has_malformed = true;
+                    break;
+                }
+            }
+
+            // Only check for orphaned nodes if there are no parse errors
+            if (!has_malformed) {
+                // Build reference graph to identify truly orphaned nodes
+                is_referenced = try allocator.alloc(bool, nodes_len);
+                @memset(is_referenced.?, false);
+            } else {
+                // Skip orphaned node checking for files with parse errors
+                is_referenced = null;
+            }
+        }
+
+        if (is_referenced != null) {
+
+            // Use a work list to transitively mark all reachable nodes
+            var work_list = std.ArrayList(usize).init(allocator);
+            defer work_list.deinit();
+
+            // Start with the root block node
+            try work_list.append(@as(usize, @intCast(@intFromEnum(block_idx))));
+            is_referenced.?[@as(usize, @intCast(@intFromEnum(block_idx)))] = true;
+
+            // Also add all top-level statements to ensure they're traversed
+            // This is important for type aliases and other top-level definitions
+            for (statements.items) |stmt_idx| {
+                const idx = @as(usize, @intCast(@intFromEnum(stmt_idx)));
+                if (!is_referenced.?[idx]) {
+                    is_referenced.?[idx] = true;
+                    try work_list.append(idx);
+                }
+            }
+
+            // Also mark the header and all its referenced nodes if it exists
+            if (self.ast.header) |header| {
+                is_referenced.?[0] = true; // Header is always at index 0
+
+                // Traverse all node references in the header based on its type
+                switch (header) {
+                    .app => |app| {
+                        // Mark all nodes in packages
+                        var pkg_iter = self.ast.node_slices.nodes(&app.packages);
+                        while (pkg_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
                         }
-                    } else {
-                        std.debug.print("Node {}: already converted to CIR tag {}\n", .{ trace_i, trace_tag });
+
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&app.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Note: provides is a Collection.Idx, not a node slice
+                        // platform_idx is RecordField.Idx, not directly a node
+                    },
+                    .interface => |iface| {
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&iface.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Mark all nodes in imports
+                        var imports_iter = self.ast.node_slices.nodes(&iface.imports);
+                        while (imports_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+                        // Interface headers don't have requires_rigids, requires_signatures, packages, or provides
+                    },
+                    .module => |mod| {
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&mod.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+                        // Modules don't have imports field
+                    },
+                    .package => |pkg| {
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&pkg.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Mark all nodes in packages
+                        var pkg_iter = self.ast.node_slices.nodes(&pkg.packages);
+                        while (pkg_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+                    },
+                    .platform => |plat| {
+                        // Mark platform name node
+                        const name_idx = @as(usize, @intCast(@intFromEnum(plat.name)));
+                        if (!is_referenced.?[name_idx]) {
+                            is_referenced.?[name_idx] = true;
+                            try work_list.append(name_idx);
+                        }
+
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&plat.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Mark all nodes in requires_rigids
+                        var rigids_iter = self.ast.node_slices.nodes(&plat.requires_rigids);
+                        while (rigids_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Mark requires_signatures node
+                        const sig_idx = @as(usize, @intCast(@intFromEnum(plat.requires_signatures)));
+                        if (!is_referenced.?[sig_idx]) {
+                            is_referenced.?[sig_idx] = true;
+                            try work_list.append(sig_idx);
+                        }
+
+                        // Mark all nodes in packages
+                        var pkg_iter = self.ast.node_slices.nodes(&plat.packages);
+                        while (pkg_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+
+                        // Mark all nodes in provides
+                        var provides_iter = self.ast.node_slices.nodes(&plat.provides);
+                        while (provides_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+                    },
+                    .hosted => |host| {
+                        // Mark all nodes in exposes
+                        var exposes_iter = self.ast.node_slices.nodes(&host.exposes);
+                        while (exposes_iter.next()) |node_idx| {
+                            const idx = @as(usize, @intCast(@intFromEnum(node_idx)));
+                            if (!is_referenced.?[idx]) {
+                                is_referenced.?[idx] = true;
+                                try work_list.append(idx);
+                            }
+                        }
+                        // Hosted headers don't have imports field
+                    },
+                    .malformed => {},
+                }
+            }
+
+            // Process work list to mark all transitively referenced nodes
+            while (work_list.items.len > 0) {
+                const ref_idx = work_list.pop().?; // Safe to unwrap since we checked length
+
+                const ref_node = self.getAstNode(@as(AST.Node.Idx, @enumFromInt(ref_idx)));
+                const ref_tag = @intFromEnum(ref_node.tag);
+
+                // For already-converted nodes, we still need to check some specific cases
+                // to ensure their original children are marked as referenced
+                if (ref_tag >= FIRST_STMT_TAG) {
+                    // Check if this is a converted statement node that might have unconverted children
+                    if (ref_tag < FIRST_EXPR_TAG) {
+                        // This is a statement node
+                        switch (@as(StmtTag, @enumFromInt(ref_tag))) {
+                            .type_alias => {
+                                // Type alias statements need their original binop_colon traversed
+                                // The binop contains the alias name/params (LHS) and type (RHS)
+                                // The LHS will have been converted to a pattern, but we still need
+                                // to traverse it to mark its children (the type name and parameters)
+                                const binop = self.ast.node_slices.binOp(ref_node.payload.binop);
+                                const lhs_idx = @as(usize, @intCast(@intFromEnum(binop.lhs)));
+                                if (!is_referenced.?[lhs_idx]) {
+                                    is_referenced.?[lhs_idx] = true;
+                                    try work_list.append(lhs_idx);
+                                }
+                                // Also mark the RHS (the type definition)
+                                const rhs_idx = @as(usize, @intCast(@intFromEnum(binop.rhs)));
+                                if (!is_referenced.?[rhs_idx]) {
+                                    is_referenced.?[rhs_idx] = true;
+                                    try work_list.append(rhs_idx);
+                                }
+                            },
+                            else => {},
+                        }
+                        continue; // Done with this statement node
                     }
+                    // Check if this is a converted pattern node that might have unconverted children
+                    else if (ref_tag >= FIRST_PATT_TAG and ref_tag < FIRST_TYPE_TAG) {
+                        // This is a pattern node - check if it has children we need to mark
+                        switch (@as(PattTag, @enumFromInt(ref_tag))) {
+                            .tag => {
+                                // Tag patterns (from apply_uc in type aliases) still reference their children
+                                const child_nodes_idx = ref_node.payload.nodes;
+                                if (!child_nodes_idx.isNil()) {
+                                    var iter = self.ast.node_slices.nodes(&child_nodes_idx);
+                                    while (iter.next()) |child| {
+                                        const child_idx = @as(usize, @intCast(@intFromEnum(child)));
+                                        if (!is_referenced.?[child_idx]) {
+                                            is_referenced.?[child_idx] = true;
+                                            try work_list.append(child_idx);
+                                        }
+                                    }
+                                }
+                            },
+                            .ident => {
+                                // Ident patterns don't have children to traverse
+                            },
+                            .tuple, .list, .record => {
+                                // Collection patterns have child patterns
+                                const child_nodes_idx = ref_node.payload.nodes;
+                                if (!child_nodes_idx.isNil()) {
+                                    var iter = self.ast.node_slices.nodes(&child_nodes_idx);
+                                    while (iter.next()) |child| {
+                                        const child_idx = @as(usize, @intCast(@intFromEnum(child)));
+                                        if (!is_referenced.?[child_idx]) {
+                                            is_referenced.?[child_idx] = true;
+                                            try work_list.append(child_idx);
+                                        }
+                                    }
+                                }
+                            },
+                            else => {
+                                // Other pattern types might have children - handle as needed
+                            },
+                        }
+                        continue; // Done with this pattern node
+                    }
+                    // For other converted nodes (expressions, types), continue
+                    continue;
+                }
+
+                // Mark children based on node type
+                switch (ref_node.tag) {
+                    // Binary operations reference both sides
+                    .binop_thick_arrow, .binop_arrow_call, .binop_colon, .binop_dot, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_pipe, .binop_double_question, .binop_double_slash, .binop_colon_equals => {
+                        const binop = self.ast.node_slices.binOp(ref_node.payload.binop);
+                        const lhs_idx = @as(usize, @intCast(@intFromEnum(binop.lhs)));
+                        const rhs_idx = @as(usize, @intCast(@intFromEnum(binop.rhs)));
+
+                        if (!is_referenced.?[lhs_idx]) {
+                            is_referenced.?[lhs_idx] = true;
+                            try work_list.append(lhs_idx);
+                        }
+                        if (!is_referenced.?[rhs_idx]) {
+                            is_referenced.?[rhs_idx] = true;
+                            try work_list.append(rhs_idx);
+                        }
+                    },
+                    // Nodes with child lists
+                    .block, .list_literal, .tuple_literal, .record_literal, .apply_lc, .apply_uc, .apply_anon, .lambda, .match, .if_else => {
+                        const child_nodes_idx = ref_node.payload.nodes;
+                        if (!child_nodes_idx.isNil()) {
+                            var iter = self.ast.node_slices.nodes(&child_nodes_idx);
+                            while (iter.next()) |child| {
+                                const child_idx = @as(usize, @intCast(@intFromEnum(child)));
+                                if (!is_referenced.?[child_idx]) {
+                                    is_referenced.?[child_idx] = true;
+                                    try work_list.append(child_idx);
+                                }
+                            }
+                        }
+                    },
+                    // Import statements reference their path
+                    .import => {
+                        // Import nodes have their path in the nodes field
+                        const path_idx = ref_node.payload.nodes;
+                        if (!path_idx.isNil()) {
+                            var iter = self.ast.node_slices.nodes(&path_idx);
+                            while (iter.next()) |child| {
+                                const child_idx = @as(usize, @intCast(@intFromEnum(child)));
+                                if (!is_referenced.?[child_idx]) {
+                                    is_referenced.?[child_idx] = true;
+                                    try work_list.append(child_idx);
+                                }
+                            }
+                        }
+                    },
+                    // Single-node types without children
+                    .lc,
+                    .uc,
+                    .var_lc,
+                    .not_lc, // identifiers
+                    .num_literal_i32,
+                    .int_literal_i32, // numeric literals (32-bit)
+                    .num_literal_big,
+                    .int_literal_big, // numeric literals (big)
+                    .frac_literal_small,
+                    .frac_literal_big, // float literals
+                    .str_literal_small,
+                    .str_literal_big, // string literals
+                    .underscore, // underscore pattern
+                    .malformed, // malformed nodes from parse errors
+                    => {
+                        // These nodes have no children to traverse
+                    },
+                    else => {},
                 }
             }
         }
+        defer if (is_referenced) |ref| allocator.free(ref);
 
         var i = start_idx;
         while (i < nodes_len) : (i += 1) {
@@ -515,79 +849,29 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
             const is_cir_tag = tag_value >= FIRST_STMT_TAG;
 
             if (!is_cir_tag) {
-                // Special case: Check if this is the known parser bug with orphaned binop_colon nodes
-                // The parser sometimes creates binop_colon nodes with lhs==rhs that are never referenced
-                if (node.tag == .binop_colon) {
-                    const binop = self.ast.node_slices.binOp(node.payload.binop);
-                    if (binop.lhs == binop.rhs) {
-                        // This is the known parser bug - warn but don't panic
-                        if (std.debug.runtime_safety) {
-                            std.debug.print("WARNING: Parser bug - orphaned binop_colon at node {} with lhs==rhs=={}\n", .{ i, @intFromEnum(binop.lhs) });
-                            std.debug.print("  This is a known issue where the parser creates unreferenced nodes for shorthand record syntax.\n", .{});
-                            std.debug.print("  These nodes are harmless and will be ignored.\n", .{});
-                        }
-                        continue; // Skip this orphaned node
-                    }
-                }
-
-                // Also check if this is an orphaned lc node that was part of the binop_colon bug
-                if (node.tag == .lc and i == 12) {
-                    // Check if there's a binop_colon at node 13 that references this
-                    if (i + 1 < nodes_len) {
-                        const next_node = self.getAstNode(@enumFromInt(i + 1));
-                        if (next_node.tag == .binop_colon) {
-                            const binop = self.ast.node_slices.binOp(next_node.payload.binop);
-                            if (binop.lhs == @as(AST.Node.Idx, @enumFromInt(i)) and binop.rhs == @as(AST.Node.Idx, @enumFromInt(i))) {
-                                // This is part of the orphaned binop_colon pattern
-                                if (std.debug.runtime_safety) {
-                                    std.debug.print("WARNING: Parser bug - orphaned lc node {} (part of binop_colon pattern)\n", .{i});
-                                }
+                // In debug mode, check if this is an orphaned node
+                if (std.debug.runtime_safety) {
+                    if (is_referenced) |ref| {
+                        if (!ref[i]) {
+                            // Skip malformed nodes - these are expected from parse errors
+                            // and may not be properly linked into the AST
+                            if (node.tag == .malformed) {
                                 continue;
                             }
+
+                            // This node is orphaned - not referenced by any other node
+                            // Print the source around this node for context
+                            const node_region = node.region;
+                            const start = @min(node_region.start.offset, raw_src.len);
+                            const end = @min(node_region.end.offset, raw_src.len);
+                            const snippet = if (start < end) raw_src[start..end] else "";
+
+                            std.debug.panic("Parser bug - orphaned {s} node {} at offset {}-{}: '{s}' (unreferenced in AST)\n", .{ @tagName(node.tag), i, start, end, snippet });
                         }
                     }
                 }
 
                 // Found an unconverted node - this is a bug that needs to be fixed
-                // Print all unconverted nodes to understand the pattern
-                std.debug.print("\n=== CANONICALIZATION BUG DETECTED ===\n", .{});
-
-                // Try to find which file we're processing
-                if (self.ast.header) |header| {
-                    switch (header) {
-                        .module => std.debug.print("In module file\n", .{}),
-                        .interface => std.debug.print("In interface file\n", .{}),
-                        .platform => std.debug.print("In platform file\n", .{}),
-                        .app => std.debug.print("In app file\n", .{}),
-                        .package => std.debug.print("In package file\n", .{}),
-                        .hosted => std.debug.print("In hosted file\n", .{}),
-                        .malformed => std.debug.print("In malformed header file\n", .{}),
-                    }
-                }
-                std.debug.print("Unconverted nodes found:\n", .{});
-                std.debug.print("First non-header idx: {}\n", .{@intFromEnum(self.first_non_header_node_idx)});
-                std.debug.print("Total nodes: {}\n", .{nodes_len});
-                var j = start_idx;
-                while (j < nodes_len) : (j += 1) {
-                    const check_node = self.getAstNode(@enumFromInt(j));
-                    const check_tag = @intFromEnum(check_node.tag);
-                    if (check_tag < FIRST_STMT_TAG) {
-                        std.debug.print("  Node {}: {} ({s})\n", .{ j, check_tag, @tagName(check_node.tag) });
-                        // Print more details about these nodes
-                        switch (check_node.tag) {
-                            .lc, .uc, .var_lc, .not_lc => {
-                                const ident = check_node.payload.ident;
-                                std.debug.print("    -> Identifier idx: {}\n", .{ident.idx});
-                            },
-                            .binop_colon => {
-                                const binop = self.ast.node_slices.binOp(check_node.payload.binop);
-                                std.debug.print("    -> binop_colon lhs={} rhs={}\n", .{ @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
-                            },
-                            else => {},
-                        }
-                    }
-                }
-
                 std.debug.panic(
                     "Canonicalization bug: unconverted AST node at index {} with tag {} ({s})",
                     .{ i, tag_value, @tagName(node.tag) },
@@ -1638,13 +1922,6 @@ pub fn ensureTypeVarExists(self: *CIR, node_idx: AST.Node.Idx) !void {
 pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Expr.Idx {
     const node = self.getAstNode(node_idx);
 
-    if (std.debug.runtime_safety) {
-        const idx = @intFromEnum(node_idx);
-        if (idx == 12 or idx == 13) {
-            std.debug.print("canonicalizeExpr called on node {} tag {} ({s})\n", .{ idx, @intFromEnum(node.tag), @tagName(node.tag) });
-        }
-    }
-
     // Check if this node has already been canonicalized (mutated)
     const tag_value = @as(u8, @intFromEnum(node.tag));
     if (tag_value >= FIRST_EXPR_TAG and tag_value < FIRST_PATT_TAG) {
@@ -2089,33 +2366,12 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             const nodes_idx = node.payload.body_then_args;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
-            if (std.debug.runtime_safety) {
-                const idx = @intFromEnum(node_idx);
-                if (idx == 33) {
-                    std.debug.print("  Lambda at node 33 processing:\n", .{});
-                    var debug_iter = self.ast.*.node_slices.nodes(&nodes_idx);
-                    var i: usize = 0;
-                    while (debug_iter.next()) |n| {
-                        const n_idx = @intFromEnum(n);
-                        std.debug.print("    [{}]: node {}\n", .{ i, n_idx });
-                        i += 1;
-                    }
-                }
-            }
-
             // First node is the body - save it for later
             const body_node = iter.next();
 
             // Process parameters FIRST to establish bindings
             var param_count: usize = 0;
             while (iter.next()) |param_node| {
-                if (std.debug.runtime_safety) {
-                    const p_idx = @intFromEnum(param_node);
-                    if (p_idx == 11) {
-                        const p_node = self.getAstNode(param_node);
-                        std.debug.print("    Processing param node 11 tag {} ({s})\n", .{ @intFromEnum(p_node.tag), @tagName(p_node.tag) });
-                    }
-                }
                 _ = try self.canonicalizePatt(allocator, param_node);
                 param_count += 1;
             }
@@ -2282,10 +2538,6 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     const arrow_binop = self.ast.node_slices.binOp(branch.payload.binop);
 
                     // Canonicalize the pattern (LHS of =>)
-                    if (std.debug.runtime_safety) {
-                        const lhs_idx = @intFromEnum(arrow_binop.lhs);
-                        std.debug.print("Match branch: canonicalizing pattern at node {}\n", .{lhs_idx});
-                    }
                     _ = try self.canonicalizePatt(allocator, arrow_binop.lhs);
 
                     // Canonicalize the body (RHS of =>)
@@ -3001,12 +3253,6 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
 
                         // Canonicalize the expression (rhs) - this mutates the expression nodes in place
-                        if (std.debug.runtime_safety) {
-                            const rhs_idx = @intFromEnum(ast_binop.rhs);
-                            if (rhs_idx == 33) {
-                                std.debug.print("  About to canonicalize expr at node 33\n", .{});
-                            }
-                        }
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
                         // Mutate AST node to assignment statement
@@ -3122,11 +3368,15 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
                         // Process all nodes in the application
                         // This includes both the constructor name and parameters
+                        // NOTE: In debug mode, we'll mark these as referenced since they're
+                        // part of the type alias structure
                         while (iter.next()) |child_idx| {
                             const child_node = self.getAstNode(child_idx);
                             if (child_node.tag == .uc) {
                                 // Uppercase identifier (the type name itself)
                                 self.mutateToPatt(child_idx, .ident);
+                                // This node is referenced as part of the type alias
+                                // We don't need to track it as orphaned
                             } else if (child_node.tag == .lc) {
                                 // Lowercase identifier (type parameter)
                                 self.mutateToPatt(child_idx, .var_ident);
@@ -3166,9 +3416,6 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
                 // IMPORTANT: Canonicalize the type BEFORE any mutations to avoid reading corrupt nodes
                 // The right side is a type - canonicalize it to get a proper Type.Idx
-                if (std.debug.runtime_safety) {
-                    std.debug.print("  About to canonicalize type at node {}\n", .{@intFromEnum(ast_binop.rhs)});
-                }
                 _ = try self.canonicalizeType(allocator, ast_binop.rhs);
 
                 // Now we can safely process and mutate the left side
@@ -3277,6 +3524,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
                             // Allocate array for exposed item names
                             const exposed_array = try allocator.alloc([]const u8, exposed_count);
+                            defer allocator.free(exposed_array); // Free after use
 
                             // Extract the exposed item names
                             var index: usize = 0;
@@ -3475,43 +3723,14 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         },
         .record_literal => {
             // Record pattern - process field patterns
-            if (std.debug.runtime_safety) {
-                const idx = @intFromEnum(node_idx);
-                std.debug.print("Processing record_literal pattern at node {}\n", .{idx});
-            }
             self.mutateToPatt(node_idx, .record);
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.node_slices.nodes(&nodes_idx);
-            if (std.debug.runtime_safety) {
-                const idx = @intFromEnum(node_idx);
-                if (idx == 4) {
-                    var debug_iter = self.ast.node_slices.nodes(&nodes_idx);
-                    std.debug.print("  Record fields:\n", .{});
-                    while (debug_iter.next()) |field| {
-                        std.debug.print("    Field node {}\n", .{@intFromEnum(field)});
-                    }
-                }
-            }
             while (iter.next()) |field_idx| {
                 const field_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
-                if (std.debug.runtime_safety) {
-                    const field_idx_num = @intFromEnum(field_idx);
-                    if (field_idx_num == 12 or field_idx_num == 13) {
-                        std.debug.print("  Processing field {} tag {} ({s})\n", .{ field_idx_num, @intFromEnum(field_node.tag), @tagName(field_node.tag) });
-                    }
-                }
                 if (field_node.tag == .binop_colon) {
                     // Field with explicit pattern: { x: pattern }
                     const binop = self.ast.node_slices.binOp(field_node.payload.binop);
-
-                    if (std.debug.runtime_safety) {
-                        const field_idx_val = @intFromEnum(field_idx);
-                        const lhs_idx = @intFromEnum(binop.lhs);
-                        const rhs_idx = @intFromEnum(binop.rhs);
-                        if (field_idx_val == 13 or lhs_idx == 12 or rhs_idx == 12) {
-                            std.debug.print("Record pattern field: binop_colon at {} with lhs={} rhs={}\n", .{ field_idx_val, lhs_idx, rhs_idx });
-                        }
-                    }
 
                     // Check if lhs and rhs are the same node (e.g., { foo: foo })
                     if (binop.lhs == binop.rhs) {
@@ -3552,8 +3771,14 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
             self.mutateToPatt(node_idx, .tag);
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.node_slices.nodes(&nodes_idx);
-            // Skip the tag itself (first element)
-            _ = iter.next();
+            // Process the tag itself (first element) - convert it to an ident pattern
+            if (iter.next()) |tag_idx| {
+                const tag_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(tag_idx)));
+                if (tag_node.tag == .uc) {
+                    // Convert the tag name to an ident pattern (it's part of the pattern structure)
+                    self.mutateToPatt(tag_idx, .ident);
+                }
+            }
             // Process payload patterns
             while (iter.next()) |payload_idx| {
                 _ = try self.canonicalizePattWithMutability(allocator, ast_param, payload_idx, false);
@@ -3642,6 +3867,44 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
             self.mutateToPatt(node_idx, .str_literal_big);
             return Patt.Idx.withMutability(node_idx, false);
         },
+        .block => {
+            // Block in pattern position should be treated as a record pattern
+            // This handles cases like `{ age } = person`
+            self.mutateToPatt(node_idx, .record);
+
+            // Process each field in the block
+            const nodes_idx = node.payload.nodes;
+            var iter = self.ast.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |field_idx| {
+                const field_node = ast_param.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
+
+                // Each field might be:
+                // - Just an identifier (shorthand): `{ age }` -> treat as `{ age: age }`
+                // - A binop_colon with pattern: `{ age: pattern }`
+                if (field_node.tag == .binop_colon) {
+                    // Field with explicit pattern: { x: pattern }
+                    const binop = self.ast.node_slices.binOp(field_node.payload.binop);
+
+                    // The left side should be the field name (not canonicalized)
+                    // The right side is the pattern to bind to
+                    _ = try self.canonicalizePattWithMutability(allocator, ast_param, binop.rhs, false);
+
+                    // Mark the binop_colon itself as processed
+                    // We don't convert it to a pattern, it stays as metadata within the record
+                } else if (field_node.tag == .lc or field_node.tag == .var_lc) {
+                    // Shorthand field: just an identifier like `{ age }`
+                    // This should be treated as `{ age: age }`
+                    // Canonicalize the identifier as a pattern
+                    _ = try self.canonicalizePattWithMutability(allocator, ast_param, field_idx, false);
+                } else {
+                    // Other field types are not valid in record patterns
+                    try self.pushDiagnostic(allocator, .unsupported_node, ast_param.getRegion(field_idx));
+                    self.mutateToPatt(field_idx, .malformed);
+                }
+            }
+
+            return Patt.Idx.withMutability(node_idx, false);
+        },
 
         // Expression nodes - error in pattern context
         .binop_plus, .binop_minus, .binop_star, .binop_slash => {
@@ -3667,13 +3930,6 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
 pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx) error{OutOfMemory}!Type.Idx {
     const node = self.getAstNode(node_idx);
     const node_region = self.ast.getRegion(node_idx);
-
-    if (std.debug.runtime_safety) {
-        const idx = @intFromEnum(node_idx);
-        if (idx == 12 or idx == 13) {
-            std.debug.print("canonicalizeType: Processing node {} tag {} ({s})\n", .{ idx, @intFromEnum(node.tag), @tagName(node.tag) });
-        }
-    }
 
     switch (node.tag) {
         // Type variables: a, b, c
@@ -3729,18 +3985,6 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         // Function types: a -> b
         .binop_arrow_call => {
             const binop = self.ast.node_slices.binOp(node.payload.binop);
-
-            if (std.debug.runtime_safety) {
-                std.debug.print("  binop_arrow_call at node {} has lhs={} rhs={}\n", .{ @intFromEnum(node_idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
-                const lhs_idx = @intFromEnum(binop.lhs);
-                const rhs_idx = @intFromEnum(binop.rhs);
-                if (lhs_idx == 6 or rhs_idx == 7) {
-                    const lhs_node = self.getAstNode(binop.lhs);
-                    const rhs_node = self.getAstNode(binop.rhs);
-                    std.debug.print("    -> lhs node {} tag {} ({s})\n", .{ lhs_idx, @intFromEnum(lhs_node.tag), @tagName(lhs_node.tag) });
-                    std.debug.print("    -> rhs node {} tag {} ({s})\n", .{ rhs_idx, @intFromEnum(rhs_node.tag), @tagName(rhs_node.tag) });
-                }
-            }
 
             // Canonicalize parameter and return types
             _ = try self.canonicalizeType(allocator, binop.lhs);
@@ -3845,10 +4089,6 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             // Process the type variable and the constraints
             const binop = self.ast.node_slices.binOp(node.payload.binop);
 
-            if (std.debug.runtime_safety) {
-                std.debug.print("  Processing binop_where at node {} with lhs={} rhs={}\n", .{ @intFromEnum(node_idx), @intFromEnum(binop.lhs), @intFromEnum(binop.rhs) });
-            }
-
             // Canonicalize the base type
             _ = try self.canonicalizeType(allocator, binop.lhs);
 
@@ -3883,6 +4123,10 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // The LHS is the field name - mark it as an ident pattern
                     const field_name_node = self.getAstNode(field_binop.lhs);
                     if (field_name_node.tag == .lc) {
+                        self.mutateToPatt(field_binop.lhs, .ident);
+                    } else if (field_name_node.tag == .uc) {
+                        // Uppercase field names are also allowed in record types
+                        // e.g., { Result : [Success, Failure] }
                         self.mutateToPatt(field_binop.lhs, .ident);
                     }
 

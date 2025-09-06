@@ -78,7 +78,6 @@ diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic), // Reference to caller's d
 needs_token: bool = false, // Set to true when advance() needs a new token
 token_iterator: ?*tokenize_iter.TokenIterator = null, // Optional token iterator for parseExprFromSource
 // Lambda parsing context
-is_in_lambda_args: bool = false, // Track when we're parsing lambda parameters for record shorthand
 
 // State machine fields for stack-safe parsing
 state_stack: std.ArrayListUnmanaged(ParseState),
@@ -4195,7 +4194,32 @@ fn parseExposedItem(self: *Parser) Error!Node.Idx {
             self.advance();
 
             if (ident) |id| {
-                return try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+                var result = try self.ast.appendNode(self.gpa, region, .uc, .{ .ident = id });
+
+                // Check for qualified names like ModuleA.ModuleB.TypeC
+                while (self.peek() == .Dot) {
+                    const dot_region = self.currentRegion();
+                    self.advance(); // consume the dot
+
+                    if (self.peek() == .UpperIdent) {
+                        const next_ident = self.currentIdent();
+                        const next_region = self.currentRegion();
+                        self.advance();
+
+                        if (next_ident) |next_id| {
+                            const right = try self.ast.appendNode(self.gpa, next_region, .uc, .{ .ident = next_id });
+                            const binop_idx = try self.ast.appendBinOp(self.gpa, result, right);
+                            const combined_region = makeRegion(self.ast.start(result), next_region.end);
+                            result = try self.ast.appendNode(self.gpa, combined_region, .binop_dot, .{ .binop = binop_idx });
+                        } else {
+                            return self.pushMalformed(.exposed_item_unexpected_token, dot_region.start);
+                        }
+                    } else {
+                        return self.pushMalformed(.exposed_item_unexpected_token, dot_region.end);
+                    }
+                }
+
+                return result;
             } else {
                 return self.pushMalformed(.exposed_item_unexpected_token, start_position);
             }
@@ -4968,8 +4992,17 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
                     const colon_region = makeRegion(self.ast.start(lhs), self.ast.getRegion(rhs).end);
                     break :blk try self.ast.appendNode(self.gpa, colon_region, .binop_colon, .{ .binop = binop_idx });
                 } else {
-                    // No colon, just a bare identifier or expression
-                    break :blk lhs;
+                    // No colon, shorthand syntax - create binop_colon with same node on both sides
+                    // This makes { foo } equivalent to { foo: foo }
+                    if (self.ast.tag(lhs) == .lc) {
+                        // Only do shorthand for identifiers, not arbitrary expressions
+                        const binop_idx = try self.ast.appendBinOp(self.gpa, lhs, lhs);
+                        const lhs_region = self.ast.getRegion(lhs);
+                        break :blk try self.ast.appendNode(self.gpa, lhs_region, .binop_colon, .{ .binop = binop_idx });
+                    } else {
+                        // For non-identifiers, keep as-is (might be a block element)
+                        break :blk lhs;
+                    }
                 }
             } else blk: {
                 // Parse as statement but be careful with colons in case this is a record
@@ -4988,16 +5021,9 @@ fn parseBlockOrRecord(self: *Parser) Error!Node.Idx {
             };
 
             if (elem_opt) |elem| {
-                // In lambda args, { a, b } is shorthand for { a: a, b: b }
-                // If we're in lambda args and have a bare identifier, convert it
-                const final_elem = if (self.is_in_lambda_args and self.ast.tag(elem) == .lc) blk: {
-                    // Convert bare identifier to field: identifier
-                    const elem_region = self.ast.getRegion(elem);
-                    const binop_idx = try self.ast.appendBinOp(self.gpa, elem, elem);
-                    break :blk try self.ast.appendNode(self.gpa, elem_region, .binop_colon, .{ .binop = binop_idx });
-                } else elem;
-
-                try self.scratch_nodes.append(self.gpa, final_elem);
+                // The shorthand conversion is now handled in the parsing logic above
+                // No need for special lambda args handling
+                try self.scratch_nodes.append(self.gpa, elem);
 
                 // Check for comma (records) or continue parsing (blocks)
                 if (self.peek() == .Comma) {
@@ -5612,8 +5638,11 @@ fn parseRecordPattern(self: *Parser) Error!Node.Idx {
                     const field_pattern = try self.ast.appendNode(self.gpa, field_region, .binop_colon, .{ .binop = binop_idx });
                     try self.scratch_nodes.append(self.gpa, field_pattern);
                 } else {
-                    // Just field name (shorthand)
-                    try self.scratch_nodes.append(self.gpa, field_node);
+                    // Just field name (shorthand) - create binop_colon with same node on both sides
+                    // This ensures consistency with how we handle shorthand in other contexts
+                    const binop_idx = try self.ast.appendBinOp(self.gpa, field_node, field_node);
+                    const field_pattern = try self.ast.appendNode(self.gpa, ident_region, .binop_colon, .{ .binop = binop_idx });
+                    try self.scratch_nodes.append(self.gpa, field_pattern);
                 }
             }
         } else {
@@ -5801,10 +5830,7 @@ fn parseLambda(self: *Parser) Error!Node.Idx {
     const scratch_marker = self.markScratchNodes();
     defer self.restoreScratchNodes(scratch_marker);
 
-    // Set flag to enable record shorthand in lambda parameters
-    // In lambda args, { a, b } is shorthand for { a: a, b: b }
-    self.is_in_lambda_args = true;
-    defer self.is_in_lambda_args = false;
+    // Record shorthand is now handled directly in parseBlockOrRecord and parseRecordPattern
 
     // Parse parameters (as expressions since we don't distinguish patterns)
     while (self.peek() != .OpBar and self.peek() != .EndOfFile) {

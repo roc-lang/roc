@@ -55,28 +55,7 @@ match Answer
 INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
 INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**literal_patterns.md:2:5:2:16:**
-```roc
-    Answer => 1
-```
-    ^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**literal_patterns.md:4:5:5:12:**
-```roc
-    Greeting => 3
-    10 => 4
-```
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -87,15 +66,15 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Num *)
 (var #4 _)
 (var #5 _)
 (var #6 Str)
 (var #7 _)
 (var #8 _)
-(var #9 _)
+(var #9 Num *)
 (var #10 _)
-(var #11 _)
+(var #11 Num *)
 (var #12 _)
 (var #13 _)
 (var #14 _)

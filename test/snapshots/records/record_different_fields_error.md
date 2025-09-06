@@ -103,7 +103,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 19
+; Total type variables: 20
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -123,6 +123,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 (var #16 _)
 (var #17 _)
 (var #18 _)
+(var #19 _)
 ~~~
 # TYPES
 ~~~roc

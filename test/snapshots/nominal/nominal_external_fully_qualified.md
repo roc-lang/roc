@@ -62,10 +62,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
             (lc "value")
           )
           (malformed)
-          (binop_colon
-            (lc "value")
-            (lc "value")
-          )
+          (lc "value")
           (apply_anon
             (binop_dot
               (binop_dot
@@ -98,7 +95,7 @@ handleResult = |result| {
 	match result
 	MyResultType.Ok(value)
 	=> 
-	value : value
+	value
 	MyResultModule.MyResultType.Err(code)
 	=> 
 	"Error: $(code.toStr())"
@@ -177,6 +174,17 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named **value** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**nominal_external_fully_qualified.md:8:50:8:55:**
+```roc
+        MyResultModule.MyResultType.Ok(value) => value
+```
+                                                 ^^^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named **code** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -204,7 +212,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 50
+; Total type variables: 49
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -220,7 +228,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #12 _)
 (var #13 _)
 (var #14 _)
-(var #15 -> #48)
+(var #15 -> #47)
 (var #16 _)
 (var #17 _)
 (var #18 _)
@@ -228,7 +236,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 -> #44)
+(var #23 -> #43)
 (var #24 _)
 (var #25 _)
 (var #26 _)
@@ -237,28 +245,26 @@ Is there an **import** or **exposing** missing up-top?
 (var #29 _)
 (var #30 _)
 (var #31 _)
-(var #32 _)
-(var #33 -> #46)
+(var #32 -> #45)
+(var #33 _)
 (var #34 _)
 (var #35 _)
-(var #36 _)
-(var #37 Str)
-(var #38 _)
-(var #39 -> #48)
+(var #36 Str)
+(var #37 _)
+(var #38 -> #47)
+(var #39 _)
 (var #40 _)
 (var #41 _)
 (var #42 _)
-(var #43 _)
-(var #44 fn_pure)
-(var #45 _)
-(var #46 fn_pure)
-(var #47 _)
-(var #48 fn_pure)
-(var #49 _)
+(var #43 fn_pure)
+(var #44 _)
+(var #45 fn_pure)
+(var #46 _)
+(var #47 fn_pure)
+(var #48 _)
 ~~~
 # TYPES
 ~~~roc
-value : _a
 handleResult : _arg -> _ret
 result : _a
 ~~~

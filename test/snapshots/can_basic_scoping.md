@@ -62,10 +62,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign Int Lo
               )
             )
           )
-          (binop_colon
-            (lc "innerResult")
-            (lc "innerResult")
-          )
+          (lc "innerResult")
         )
       )
       (args
@@ -93,7 +90,7 @@ outerFunc = |_| {
 		z + 1
 	}
 
-	innerResult : innerResult
+	innerResult
 }
 ~~~
 # EXPECTED
@@ -119,7 +116,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 31
+; Total type variables: 30
 (var #0 _)
 (var #1 -> #2)
 (var #2 Num *)
@@ -127,7 +124,7 @@ NIL
 (var #4 -> #5)
 (var #5 Num *)
 (var #6 _)
-(var #7 -> #30)
+(var #7 -> #29)
 (var #8 _)
 (var #9 -> #10)
 (var #10 Num *)
@@ -145,12 +142,11 @@ NIL
 (var #22 _)
 (var #23 _)
 (var #24 _)
-(var #25 _)
-(var #26 -> #30)
+(var #25 -> #29)
+(var #26 _)
 (var #27 _)
 (var #28 _)
-(var #29 _)
-(var #30 fn_pure)
+(var #29 fn_pure)
 ~~~
 # TYPES
 ~~~roc

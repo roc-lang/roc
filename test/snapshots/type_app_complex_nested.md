@@ -229,17 +229,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_app_complex_nested.md:7:9:7:28:**
-```roc
-        Ok(maybeList) => []
-```
-        ^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -384,6 +374,7 @@ This might be a limitation in the current implementation that will be addressed 
 # TYPES
 ~~~roc
 deepNested : _arg -> _ret
+maybeList : _c
 processComplex : _arg -> _ret
 main : _arg -> _ret
 result : _c

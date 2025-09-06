@@ -378,17 +378,11 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
           )
           (malformed)
-          (binop_colon
-            (lc "a")
-            (lc "a")
-          )
+          (lc "a")
           (apply_uc
             (uc "Z3")
             (record_literal
-              (binop_colon
-                (lc "a")
-                (lc "a")
-              )
+              (lc "a")
               (binop_colon
                 (lc "b")
                 (lc "b")
@@ -396,10 +390,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
           )
           (malformed)
-          (binop_colon
-            (lc "a")
-            (lc "a")
-          )
+          (lc "a")
           (apply_uc
             (uc "Z4")
             (list_literal
@@ -408,10 +399,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             )
           )
           (malformed)
-          (binop_colon
-            (lc "a")
-            (lc "a")
-          )
+          (lc "a")
         )
       )
       (args
@@ -495,15 +483,15 @@ h = |
 		(a, b),
 	)
 	=> 
-	a : a
+	a
 	Z3(
 		{
-			a: a,
+			a,
 			b: b,
 		},
 	)
 	=> 
-	a : a
+	a
 	Z4(
 		[
 			a,
@@ -511,7 +499,7 @@ h = |
 		],
 	)
 	=> 
-	a : a
+	a
 }
 
 }
@@ -751,6 +739,61 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:96:8:96:9:**
+```roc
+		) => a
+```
+		     ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:99:5:99:6:**
+```roc
+				a,
+```
+				^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:100:5:100:6:**
+```roc
+				b,
+```
+				^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:102:8:102:9:**
+```roc
+		) => a
+```
+		     ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:105:5:105:6:**
+```roc
+				a,
+```
+				^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named **b** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -759,6 +802,17 @@ Is there an **import** or **exposing** missing up-top?
 				b,
 ```
 				^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**everything.md:108:8:108:9:**
+```roc
+		) => a
+```
+		     ^
 
 
 # CANONICALIZE
@@ -793,7 +847,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 233
+; Total type variables: 229
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -917,10 +971,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #120 _)
 (var #121 _)
 (var #122 _)
-(var #123 -> #231)
+(var #123 -> #227)
 (var #124 _)
 (var #125 _)
-(var #126 -> #216)
+(var #126 -> #212)
 (var #127 _)
 (var #128 _)
 (var #129 _)
@@ -936,20 +990,20 @@ Is there an **import** or **exposing** missing up-top?
 (var #139 _)
 (var #140 _)
 (var #141 _)
-(var #142 -> #216)
+(var #142 -> #212)
 (var #143 _)
 (var #144 -> #149)
-(var #145 -> #218)
+(var #145 -> #214)
 (var #146 _)
 (var #147 _)
-(var #148 -> #217)
+(var #148 -> #213)
 (var #149 _)
 (var #150 _)
 (var #151 -> #156)
-(var #152 -> #220)
+(var #152 -> #216)
 (var #153 _)
 (var #154 _)
-(var #155 -> #219)
+(var #155 -> #215)
 (var #156 _)
 (var #157 _)
 (var #158 -> #161)
@@ -957,10 +1011,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #160 _)
 (var #161 _)
 (var #162 _)
-(var #163 -> #221)
+(var #163 -> #217)
 (var #164 _)
 (var #165 _)
-(var #166 -> #221)
+(var #166 -> #217)
 (var #167 _)
 (var #168 _)
 (var #169 _)
@@ -972,61 +1026,57 @@ Is there an **import** or **exposing** missing up-top?
 (var #175 _)
 (var #176 _)
 (var #177 _)
-(var #178 -> #223)
+(var #178 -> #219)
 (var #179 _)
 (var #180 _)
-(var #181 -> #222)
+(var #181 -> #218)
 (var #182 _)
 (var #183 _)
 (var #184 _)
-(var #185 _)
-(var #186 -> #227)
+(var #185 -> #223)
+(var #186 _)
 (var #187 _)
 (var #188 _)
-(var #189 _)
+(var #189 -> #222)
 (var #190 _)
-(var #191 -> #226)
+(var #191 _)
 (var #192 _)
-(var #193 _)
+(var #193 -> #225)
 (var #194 _)
 (var #195 _)
-(var #196 -> #229)
+(var #196 _)
 (var #197 _)
 (var #198 _)
 (var #199 _)
 (var #200 _)
-(var #201 _)
+(var #201 -> #227)
 (var #202 _)
 (var #203 _)
 (var #204 _)
-(var #205 -> #231)
+(var #205 _)
 (var #206 _)
 (var #207 _)
 (var #208 _)
 (var #209 _)
 (var #210 _)
 (var #211 _)
-(var #212 _)
-(var #213 _)
-(var #214 _)
-(var #215 _)
-(var #216 {})
+(var #212 {})
+(var #213 tuple)
+(var #214 fn_pure)
+(var #215 tuple)
+(var #216 fn_pure)
 (var #217 tuple)
-(var #218 fn_pure)
-(var #219 tuple)
-(var #220 fn_pure)
-(var #221 tuple)
-(var #222 tuple)
+(var #218 tuple)
+(var #219 fn_pure)
+(var #220 _)
+(var #221 {})
+(var #222 record)
 (var #223 fn_pure)
 (var #224 _)
-(var #225 {})
-(var #226 record)
+(var #225 fn_pure)
+(var #226 _)
 (var #227 fn_pure)
 (var #228 _)
-(var #229 fn_pure)
-(var #230 _)
-(var #231 fn_pure)
-(var #232 _)
 ~~~
 # TYPES
 ~~~roc
@@ -1039,5 +1089,4 @@ y : _c
 h4 : _c
 g : _c
 h : _arg, _arg2 -> _ret
-a : _c
 ~~~

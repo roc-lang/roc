@@ -84,12 +84,22 @@ match items {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_rest_invalid.md:2:5:4:24:**
+**list_rest_invalid.md:3:6:3:8:**
 ```roc
-    [first, ..rest] => 0 # invalid rest pattern should error
     [..rest, last] => 1 # invalid rest pattern should error
+```
+     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_rest_invalid.md:4:9:4:11:**
+```roc
     [x, ..rest, y] => 2 # invalid rest pattern should error
 ```
+        ^^
 
 
 # CANONICALIZE
@@ -104,19 +114,19 @@ This might be a limitation in the current implementation that will be addressed 
 (var #2 _)
 (var #3 _)
 (var #4 _)
-(var #5 _)
+(var #5 Num *)
 (var #6 _)
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 _)
+(var #10 Num *)
 (var #11 _)
 (var #12 _)
 (var #13 _)
 (var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
+(var #17 Num *)
 (var #18 _)
 (var #19 _)
 (var #20 _)
@@ -124,4 +134,9 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+y : _a
+x : _a
+rest : _a
+last : _a
+first : _a
 ~~~

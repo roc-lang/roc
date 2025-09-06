@@ -308,10 +308,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
             (apply_uc
               (uc "Z3")
               (record_literal
-                (binop_colon
-                  (lc "a")
-                  (lc "a")
-                )
+                (lc "a")
                 (binop_colon
                   (lc "b")
                   (lc "b")
@@ -319,10 +316,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
               )
             )
             (malformed)
-            (binop_colon
-              (lc "a")
-              (lc "a")
-            )
+            (lc "a")
             (apply_uc
               (uc "Z4")
               (list_literal
@@ -331,10 +325,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwImport UpperIdent KwExpo
               )
             )
             (malformed)
-            (binop_colon
-              (lc "a")
-              (lc "a")
-            )
+            (lc "a")
           )
         )
         (args
@@ -414,12 +405,12 @@ g : (e -> e where module(e).A, module(e).B, h) = |
 		Z1(a, b) => a
 	Z3(
 		{
-			a: a,
+			a,
 			b: b,
 		},
 	)
 	=> 
-	a : a
+	a
 	Z4(
 		[
 			a,
@@ -427,7 +418,7 @@ g : (e -> e where module(e).A, module(e).B, h) = |
 		],
 	)
 	=> 
-	a : a
+	a
 }
 
 }
@@ -629,14 +620,14 @@ h = |x, y,| {
   (Stmt.type_alias)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "g"))
-    (type type_205)
+    (type type_202)
   )
   (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 215
+; Total type variables: 212
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -849,9 +840,6 @@ h = |x, y,| {
 (var #209 _)
 (var #210 _)
 (var #211 _)
-(var #212 _)
-(var #213 _)
-(var #214 _)
 ~~~
 # TYPES
 ~~~roc

@@ -59,20 +59,19 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
   (exposes
     (uc "Color")
 
-    (uc "ModuleA")
+    (binop_dot
+      (binop_dot
+        (uc "ModuleA")
+        (uc "ModuleB")
+      )
+      (uc "TypeC")
+    )
+
+    (uc "Result")
+
+    (uc "ExternalModule")
 ))
 (block
-  (malformed)
-  (binop_dot
-    (uc "ModuleB")
-    (uc "TypeC")
-  )
-  (malformed)
-  (uc "Result")
-  (malformed)
-  (uc "ExternalModule")
-  (malformed)
-  (malformed)
   (import
     (binop_dot
       (uc "Basics")
@@ -317,15 +316,11 @@ KwModule OpenSquare UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent Co
 ~~~
 # FORMATTED
 ~~~roc
-module [Color, ModuleA]
-
-.
-ModuleB.TypeC
-,
-Result
-,
-ExternalModule
-,
+module [
+	Color,
+	ModuleA.ModuleB.TypeC,
+	Result,
+	ExternalModule,
 ]
 
 import Basics.Result
@@ -384,79 +379,6 @@ UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: **header_expected_close_square**
-This is an unexpected parsing error. Please check your syntax.
-
-**qualified_type_canonicalization.md:1:1:3:12:**
-```roc
-module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**qualified_type_canonicalization.md:3:12:3:13:**
-```roc
-    ModuleA.ModuleB.TypeC,
-```
-           ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    ** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**qualified_type_canonicalization.md:3:26:4:5:**
-```roc
-    ModuleA.ModuleB.TypeC,
-    Result,
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-    ** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**qualified_type_canonicalization.md:4:11:5:5:**
-```roc
-    Result,
-    ExternalModule,
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **,
-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**qualified_type_canonicalization.md:5:19:6:1:**
-```roc
-    ExternalModule,
-]
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **]
-
-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**qualified_type_canonicalization.md:6:1:8:1:**
-```roc
-]
-
-import Basics.Result
-```
-
-
 **PARSE ERROR**
 A parsing error occurred: **expected_arrow_after_pattern**
 This is an unexpected parsing error. Please check your syntax.
@@ -559,24 +481,13 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Expr.malformed)
-  (Expr.module_access
-    (Expr.tag_no_args)
-    (Expr.tag_no_args)
-  )
-  (Expr.malformed)
-  (Expr.tag_no_args)
-  (Expr.malformed)
-  (Expr.tag_no_args)
-  (Expr.malformed)
-  (Expr.malformed)
   (Stmt.import)
   (Stmt.import)
   (Stmt.import)
   (Stmt.import)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "simpleQualified"))
-    (type type_33)
+    (type type_29)
   )
   (Stmt.assign
     (pattern (Patt.ident "simpleQualified"))
@@ -584,7 +495,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "aliasedQualified"))
-    (type type_54)
+    (type type_50)
   )
   (Stmt.assign
     (pattern (Patt.ident "aliasedQualified"))
@@ -592,7 +503,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "multiLevelQualified"))
-    (type type_68)
+    (type type_64)
   )
   (Stmt.assign
     (pattern (Patt.ident "multiLevelQualified"))
@@ -600,7 +511,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "resultType"))
-    (type type_82)
+    (type type_78)
   )
   (Stmt.assign
     (pattern (Patt.ident "resultType"))
@@ -608,7 +519,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "getColor"))
-    (type type_96)
+    (type type_92)
   )
   (Stmt.assign
     (pattern (Patt.ident "getColor"))
@@ -616,7 +527,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "processColor"))
-    (type type_121)
+    (type type_117)
   )
   (Stmt.assign
     (pattern (Patt.ident "processColor"))
@@ -624,7 +535,7 @@ Is there an **import** or **exposing** missing up-top?
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "transform"))
-    (type type_145)
+    (type type_141)
   )
   (Stmt.assign
     (pattern (Patt.ident "transform"))
@@ -641,7 +552,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 197
+; Total type variables: 188
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -673,32 +584,32 @@ Is there an **import** or **exposing** missing up-top?
 (var #28 _)
 (var #29 _)
 (var #30 _)
-(var #31 _)
+(var #31 -> #45)
 (var #32 _)
 (var #33 _)
-(var #34 _)
-(var #35 -> #49)
-(var #36 _)
+(var #34 -> #172)
+(var #35 _)
+(var #36 Num *)
 (var #37 _)
-(var #38 -> #181)
-(var #39 _)
-(var #40 Num *)
+(var #38 _)
+(var #39 Num *)
+(var #40 _)
 (var #41 _)
-(var #42 _)
-(var #43 Num *)
-(var #44 _)
+(var #42 Num *)
+(var #43 _)
+(var #44 -> #171)
 (var #45 _)
-(var #46 Num *)
+(var #46 _)
 (var #47 _)
-(var #48 -> #180)
+(var #48 _)
 (var #49 _)
 (var #50 _)
 (var #51 _)
-(var #52 _)
+(var #52 -> #57)
 (var #53 _)
 (var #54 _)
 (var #55 _)
-(var #56 -> #61)
+(var #56 _)
 (var #57 _)
 (var #58 _)
 (var #59 _)
@@ -708,11 +619,11 @@ Is there an **import** or **exposing** missing up-top?
 (var #63 _)
 (var #64 _)
 (var #65 _)
-(var #66 _)
+(var #66 -> #69)
 (var #67 _)
 (var #68 _)
 (var #69 _)
-(var #70 -> #73)
+(var #70 _)
 (var #71 _)
 (var #72 _)
 (var #73 _)
@@ -722,53 +633,53 @@ Is there an **import** or **exposing** missing up-top?
 (var #77 _)
 (var #78 _)
 (var #79 _)
-(var #80 _)
+(var #80 -> #85)
 (var #81 _)
 (var #82 _)
-(var #83 _)
-(var #84 -> #89)
+(var #83 -> #173)
+(var #84 Num *)
 (var #85 _)
 (var #86 _)
-(var #87 -> #182)
-(var #88 Num *)
+(var #87 _)
+(var #88 _)
 (var #89 _)
 (var #90 _)
 (var #91 _)
 (var #92 _)
 (var #93 _)
-(var #94 _)
+(var #94 -> #177)
 (var #95 _)
 (var #96 _)
 (var #97 _)
-(var #98 -> #186)
+(var #98 -> #176)
 (var #99 _)
-(var #100 _)
+(var #100 Num *)
 (var #101 _)
-(var #102 -> #185)
-(var #103 _)
-(var #104 Num *)
+(var #102 _)
+(var #103 Num *)
+(var #104 _)
 (var #105 _)
-(var #106 _)
-(var #107 Num *)
-(var #108 _)
+(var #106 Num *)
+(var #107 _)
+(var #108 -> #175)
 (var #109 _)
-(var #110 Num *)
+(var #110 -> #177)
 (var #111 _)
-(var #112 -> #184)
+(var #112 _)
 (var #113 _)
-(var #114 -> #186)
+(var #114 _)
 (var #115 _)
 (var #116 _)
 (var #117 _)
 (var #118 _)
-(var #119 _)
+(var #119 -> #179)
 (var #120 _)
-(var #121 _)
-(var #122 _)
-(var #123 -> #188)
+(var #121 Str)
+(var #122 -> #179)
+(var #123 _)
 (var #124 _)
-(var #125 Str)
-(var #126 -> #188)
+(var #125 _)
+(var #126 _)
 (var #127 _)
 (var #128 _)
 (var #129 _)
@@ -785,60 +696,51 @@ Is there an **import** or **exposing** missing up-top?
 (var #140 _)
 (var #141 _)
 (var #142 _)
-(var #143 _)
+(var #143 -> #181)
 (var #144 _)
 (var #145 _)
 (var #146 _)
-(var #147 -> #190)
+(var #147 _)
 (var #148 _)
-(var #149 _)
+(var #149 -> #181)
 (var #150 _)
-(var #151 _)
+(var #151 -> #182)
 (var #152 _)
-(var #153 -> #190)
+(var #153 _)
 (var #154 _)
-(var #155 -> #191)
+(var #155 _)
 (var #156 _)
-(var #157 _)
+(var #157 -> #184)
 (var #158 _)
 (var #159 _)
 (var #160 _)
-(var #161 -> #193)
-(var #162 _)
+(var #161 _)
+(var #162 -> #185)
 (var #163 _)
 (var #164 _)
 (var #165 _)
-(var #166 -> #194)
+(var #166 _)
 (var #167 _)
 (var #168 _)
 (var #169 _)
 (var #170 _)
-(var #171 _)
-(var #172 _)
-(var #173 _)
+(var #171 {})
+(var #172 fn_pure)
+(var #173 fn_pure)
 (var #174 _)
-(var #175 _)
-(var #176 _)
-(var #177 _)
+(var #175 {})
+(var #176 fn_pure)
+(var #177 fn_pure)
 (var #178 _)
-(var #179 _)
-(var #180 {})
+(var #179 fn_pure)
+(var #180 _)
 (var #181 fn_pure)
 (var #182 fn_pure)
 (var #183 _)
-(var #184 {})
+(var #184 fn_pure)
 (var #185 fn_pure)
-(var #186 fn_pure)
+(var #186 _)
 (var #187 _)
-(var #188 fn_pure)
-(var #189 _)
-(var #190 fn_pure)
-(var #191 fn_pure)
-(var #192 _)
-(var #193 fn_pure)
-(var #194 fn_pure)
-(var #195 _)
-(var #196 _)
 ~~~
 # TYPES
 ~~~roc

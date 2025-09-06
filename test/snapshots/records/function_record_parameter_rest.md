@@ -18,10 +18,7 @@ OpBar OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpBar String ~~
   )
   (args
     (record_literal
-      (binop_colon
-        (lc "first_name")
-        (lc "first_name")
-      )
+      (lc "first_name")
       (double_dot_lc "rest")
     )
   )
@@ -29,7 +26,7 @@ OpBar OpenCurly LowerIdent Comma DoubleDot LowerIdent CloseCurly OpBar String ~~
 ~~~
 # FORMATTED
 ~~~roc
-|{ first_name: first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
+|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
 # EXPECTED
 NIL
@@ -41,18 +38,18 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 9
+; Total type variables: 8
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
-(var #5 Str)
-(var #6 -> #8)
-(var #7 _)
-(var #8 fn_pure)
+(var #4 Str)
+(var #5 -> #7)
+(var #6 _)
+(var #7 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+first_name : _a
 rest : _a
 ~~~

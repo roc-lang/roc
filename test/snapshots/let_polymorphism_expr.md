@@ -52,17 +52,7 @@ match []
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**let_polymorphism_expr.md:2:5:2:70:**
-```roc
-    empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -74,15 +64,15 @@ This might be a limitation in the current implementation that will be addressed 
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
-(var #5 _)
-(var #6 _)
+(var #4 Num *)
+(var #5 Num *)
+(var #6 Num *)
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 _)
-(var #11 _)
-(var #12 _)
+(var #10 Str)
+(var #11 Str)
+(var #12 Str)
 (var #13 _)
 (var #14 _)
 (var #15 _)
@@ -94,4 +84,5 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+empty : _a
 ~~~

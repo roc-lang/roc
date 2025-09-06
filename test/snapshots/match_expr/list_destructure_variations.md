@@ -215,19 +215,136 @@ match list {
       ^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **head** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:5:6:5:10:**
+```roc
+    [head, .. as tail] => head
+```
+     ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **tail** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:5:18:5:22:**
+```roc
+    [head, .. as tail] => head
+```
+                 ^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_destructure_variations.md:2:5:7:39:**
+**list_destructure_variations.md:5:22:5:24:**
 ```roc
-    [] => 0
-    [x] => x
-    [first, second] => first + second
     [head, .. as tail] => head
+```
+                     ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **head** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:5:27:5:31:**
+```roc
+    [head, .. as tail] => head
+```
+                          ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **rest** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:6:22:6:26:**
+```roc
     [One, Two, .. as rest] => 3
+```
+                     ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_destructure_variations.md:6:26:6:28:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+                         ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:7:9:7:10:**
+```roc
     [x, y, z, .. as more] => x + y + z
 ```
+        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **z** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:7:12:7:13:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+           ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **more** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:7:21:7:25:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                    ^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_destructure_variations.md:7:25:7:27:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                        ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:7:34:7:35:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                                 ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **z** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_destructure_variations.md:7:38:7:39:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                                     ^
 
 
 # CANONICALIZE
@@ -240,7 +357,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Num *)
 (var #4 _)
 (var #5 _)
 (var #6 _)
@@ -267,7 +384,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #27 _)
 (var #28 _)
 (var #29 _)
-(var #30 _)
+(var #30 Num *)
 (var #31 _)
 (var #32 _)
 (var #33 _)
@@ -289,4 +406,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+x : _a
+second : _a
+first : _a
 ~~~

@@ -82,28 +82,6 @@ match shape {
       ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**tag_with_payload.md:2:5:2:45:**
-```roc
-    Circle(radius) => 3.14 * radius * radius
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**tag_with_payload.md:4:5:4:50:**
-```roc
-    Triangle(base, height) => 0.5 * base * height
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -116,7 +94,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #2 _)
 (var #3 _)
 (var #4 _)
-(var #5 _)
+(var #5 F64)
 (var #6 _)
 (var #7 _)
 (var #8 _)
@@ -134,7 +112,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 _)
+(var #23 F64)
 (var #24 _)
 (var #25 _)
 (var #26 _)
@@ -146,4 +124,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~roc
 height : _a
 width : _a
+radius : _a
+base : _a
 ~~~

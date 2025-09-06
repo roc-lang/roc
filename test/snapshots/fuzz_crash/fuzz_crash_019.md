@@ -289,23 +289,14 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
 )
             (then               (block
                 (malformed)
-                (binop_colon
-                  (lc "s")
-                  (lc "s")
-                )
-                (binop_colon
-                  (lc "exp0")
-                  (lc "exp0")
-                )
+                (lc "s")
+                (lc "exp0")
               )
 )
             (else               (block
                 (malformed)
                 (num_literal_i32 123)
-                (binop_colon
-                  (lc "r")
-                  (lc "r")
-                )
+                (lc "r")
               )
 ))
         )
@@ -400,10 +391,7 @@ LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
     (lambda
       (body
         (block
-          (binop_colon
-            (lc "e")
-            (lc "e")
-          )
+          (lc "e")
           (binop_equals
             (lc "w")
             (str_literal_small "d")
@@ -666,13 +654,13 @@ add = |num| {
 		{
 			dbg # bug
 			
-			s : s
-			exp0 : exp0
+			s
+			exp0
 		}
 	else {
 		dbg 
 		123
-		r : r
+		r
 	}
 }
 
@@ -726,7 +714,7 @@ main! : Listlt({}, _)
 ma = |
 	_,
 | {
-	e : e
+	e
 	w = "d"
 	var er = 123
 	expect blaue
@@ -1113,6 +1101,39 @@ y : {}
 
 
 **UNDEFINED VARIABLE**
+Nothing is named **s** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:42:4:42:5:**
+```roc
+			s exp0
+```
+			^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **exp0** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:42:6:42:10:**
+```roc
+			s exp0
+```
+			  ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:45:3:45:4:**
+```roc
+		r
+```
+		^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named **x** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -1256,6 +1277,17 @@ Is there an **import** or **exposing** missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named **ned** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:96:54:96:57:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+	                                                    ^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named **tag** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
@@ -1352,6 +1384,17 @@ Is there an **import** or **exposing** missing up-top?
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
 	                                                          ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **r** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:108:4:108:5:**
+```roc
+			r(nu) # xpr
+```
+			^
 
 
 **UNDEFINED VARIABLE**
@@ -1469,7 +1512,7 @@ h == foo
   (Stmt.expr)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "main"))
-    (type type_175)
+    (type type_172)
   )
   (Stmt.assign
     (pattern (Patt.ident "ma"))
@@ -1480,7 +1523,7 @@ h == foo
   (Expr.malformed)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "y"))
-    (type type_315)
+    (type type_311)
   )
   (Stmt.assign
     (pattern (Patt.ident "e"))
@@ -1489,14 +1532,14 @@ h == foo
   )
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "t"))
-    (type type_325)
+    (type type_321)
   )
   (Stmt.expr)
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 385
+; Total type variables: 381
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -1579,18 +1622,18 @@ h == foo
 (var #79 _)
 (var #80 _)
 (var #81 _)
-(var #82 -> #337)
+(var #82 -> #333)
 (var #83 _)
 (var #84 _)
 (var #85 Num *)
 (var #86 Num *)
 (var #87 _)
-(var #88 -> #337)
+(var #88 -> #333)
 (var #89 _)
 (var #90 _)
 (var #91 _)
 (var #92 _)
-(var #93 -> #339)
+(var #93 -> #335)
 (var #94 _)
 (var #95 Num *)
 (var #96 _)
@@ -1599,71 +1642,71 @@ h == foo
 (var #99 _)
 (var #100 _)
 (var #101 _)
-(var #102 _)
+(var #102 Num *)
 (var #103 _)
-(var #104 Num *)
+(var #104 _)
 (var #105 _)
 (var #106 _)
-(var #107 _)
+(var #107 -> #335)
 (var #108 _)
-(var #109 _)
-(var #110 -> #339)
+(var #109 -> #338)
+(var #110 _)
 (var #111 _)
-(var #112 -> #342)
+(var #112 _)
 (var #113 _)
 (var #114 _)
 (var #115 _)
-(var #116 _)
+(var #116 -> #338)
 (var #117 _)
 (var #118 _)
-(var #119 -> #342)
+(var #119 _)
 (var #120 _)
 (var #121 _)
 (var #122 _)
 (var #123 _)
 (var #124 _)
-(var #125 _)
-(var #126 _)
+(var #125 Num *)
+(var #126 Str)
 (var #127 _)
 (var #128 Num *)
-(var #129 Str)
+(var #129 Num *)
 (var #130 _)
-(var #131 Num *)
+(var #131 _)
 (var #132 Num *)
-(var #133 _)
-(var #134 _)
-(var #135 Num *)
-(var #136 Num *)
+(var #133 Num *)
+(var #134 Num *)
+(var #135 _)
+(var #136 _)
 (var #137 Num *)
 (var #138 _)
-(var #139 _)
-(var #140 Num *)
-(var #141 _)
-(var #142 Num *)
-(var #143 F64)
-(var #144 Num *)
-(var #145 F64)
-(var #146 _)
+(var #139 Num *)
+(var #140 F64)
+(var #141 Num *)
+(var #142 F64)
+(var #143 _)
+(var #144 _)
+(var #145 -> #343)
+(var #146 Num *)
 (var #147 _)
-(var #148 -> #347)
-(var #149 Num *)
-(var #150 _)
-(var #151 _)
-(var #152 -> #350)
-(var #153 Num *)
-(var #154 Num *)
+(var #148 _)
+(var #149 -> #346)
+(var #150 Num *)
+(var #151 Num *)
+(var #152 Num *)
+(var #153 -> #345)
+(var #154 _)
 (var #155 Num *)
-(var #156 -> #349)
+(var #156 -> #347)
 (var #157 _)
 (var #158 Num *)
-(var #159 -> #351)
-(var #160 _)
-(var #161 Num *)
-(var #162 -> #353)
+(var #159 -> #349)
+(var #160 Num *)
+(var #161 _)
+(var #162 _)
 (var #163 Num *)
 (var #164 _)
 (var #165 _)
-(var #166 Num *)
+(var #166 _)
 (var #167 _)
 (var #168 _)
 (var #169 _)
@@ -1671,57 +1714,57 @@ h == foo
 (var #171 _)
 (var #172 _)
 (var #173 _)
-(var #174 _)
+(var #174 -> #375)
 (var #175 _)
 (var #176 _)
-(var #177 -> #379)
-(var #178 _)
+(var #177 -> #178)
+(var #178 Str)
 (var #179 _)
 (var #180 _)
-(var #181 -> #182)
-(var #182 Str)
+(var #181 Num *)
+(var #182 _)
 (var #183 _)
 (var #184 _)
-(var #185 Num *)
+(var #185 _)
 (var #186 _)
 (var #187 _)
-(var #188 _)
+(var #188 -> #358)
 (var #189 _)
 (var #190 _)
 (var #191 _)
-(var #192 -> #362)
-(var #193 _)
-(var #194 _)
-(var #195 _)
+(var #192 _)
+(var #193 Str)
+(var #194 -> #195)
+(var #195 Str)
 (var #196 _)
-(var #197 Str)
-(var #198 -> #199)
-(var #199 Str)
+(var #197 -> #203)
+(var #198 _)
+(var #199 _)
 (var #200 _)
-(var #201 -> #207)
-(var #202 _)
+(var #201 Num *)
+(var #202 Num *)
 (var #203 _)
 (var #204 _)
-(var #205 Num *)
-(var #206 Num *)
+(var #205 _)
+(var #206 _)
 (var #207 _)
-(var #208 _)
+(var #208 Str)
 (var #209 _)
 (var #210 _)
 (var #211 _)
-(var #212 Str)
+(var #212 _)
 (var #213 _)
-(var #214 _)
-(var #215 _)
+(var #214 {})
+(var #215 -> #360)
 (var #216 _)
-(var #217 _)
-(var #218 {})
-(var #219 -> #364)
-(var #220 _)
-(var #221 Num *)
+(var #217 Num *)
+(var #218 _)
+(var #219 _)
+(var #220 Str)
+(var #221 _)
 (var #222 _)
 (var #223 _)
-(var #224 Str)
+(var #224 _)
 (var #225 _)
 (var #226 _)
 (var #227 _)
@@ -1729,174 +1772,168 @@ h == foo
 (var #229 _)
 (var #230 _)
 (var #231 _)
-(var #232 _)
+(var #232 -> #360)
 (var #233 _)
-(var #234 _)
-(var #235 _)
-(var #236 -> #364)
+(var #234 -> #362)
+(var #235 Num *)
+(var #236 Str)
 (var #237 _)
-(var #238 -> #366)
-(var #239 Num *)
-(var #240 Str)
-(var #241 _)
-(var #242 _)
-(var #243 _)
-(var #244 _)
-(var #245 -> #365)
-(var #246 Num *)
-(var #247 Num *)
-(var #248 Num *)
-(var #249 _)
-(var #250 -> #366)
+(var #238 _)
+(var #239 _)
+(var #240 _)
+(var #241 -> #361)
+(var #242 Num *)
+(var #243 Num *)
+(var #244 Num *)
+(var #245 _)
+(var #246 -> #362)
+(var #247 _)
+(var #248 -> #365)
+(var #249 Num *)
+(var #250 Str)
 (var #251 _)
-(var #252 -> #369)
-(var #253 Num *)
-(var #254 Str)
-(var #255 _)
-(var #256 _)
-(var #257 _)
-(var #258 _)
-(var #259 -> #367)
-(var #260 Num *)
-(var #261 Num *)
-(var #262 Num *)
-(var #263 _)
-(var #264 -> #368)
-(var #265 _)
-(var #266 _)
-(var #267 Num *)
+(var #252 _)
+(var #253 _)
+(var #254 _)
+(var #255 -> #363)
+(var #256 Num *)
+(var #257 Num *)
+(var #258 Num *)
+(var #259 _)
+(var #260 -> #364)
+(var #261 _)
+(var #262 _)
+(var #263 Num *)
+(var #264 -> #265)
+(var #265 -> #266)
+(var #266 -> #277)
+(var #267 -> #268)
 (var #268 -> #269)
 (var #269 -> #270)
-(var #270 -> #281)
-(var #271 -> #272)
+(var #270 -> #271)
+(var #271 -> #276)
 (var #272 -> #273)
 (var #273 -> #274)
 (var #274 -> #275)
-(var #275 -> #280)
+(var #275 -> #276)
 (var #276 -> #277)
 (var #277 -> #278)
-(var #278 -> #279)
+(var #278 -> #281)
 (var #279 -> #280)
 (var #280 -> #281)
 (var #281 -> #282)
-(var #282 -> #285)
-(var #283 -> #284)
-(var #284 -> #285)
-(var #285 -> #286)
-(var #286 Num *)
-(var #287 -> #370)
-(var #288 _)
+(var #282 Num *)
+(var #283 -> #366)
+(var #284 _)
+(var #285 _)
+(var #286 _)
+(var #287 _)
+(var #288 -> #368)
 (var #289 _)
 (var #290 _)
 (var #291 _)
-(var #292 -> #372)
+(var #292 -> #370)
 (var #293 _)
 (var #294 _)
 (var #295 _)
-(var #296 -> #374)
+(var #296 _)
 (var #297 _)
 (var #298 _)
 (var #299 _)
-(var #300 _)
-(var #301 _)
+(var #300 -> #373)
+(var #301 -> #374)
 (var #302 _)
 (var #303 _)
-(var #304 -> #377)
-(var #305 -> #378)
+(var #304 _)
+(var #305 -> #375)
 (var #306 _)
 (var #307 _)
 (var #308 _)
-(var #309 -> #379)
+(var #309 _)
 (var #310 _)
 (var #311 _)
 (var #312 _)
-(var #313 _)
-(var #314 _)
+(var #313 -> #379)
+(var #314 -> #379)
 (var #315 _)
 (var #316 _)
-(var #317 -> #383)
-(var #318 -> #383)
+(var #317 _)
+(var #318 _)
 (var #319 _)
 (var #320 _)
 (var #321 _)
 (var #322 _)
 (var #323 _)
-(var #324 _)
+(var #324 Num *)
 (var #325 _)
 (var #326 _)
 (var #327 _)
-(var #328 Num *)
+(var #328 _)
 (var #329 _)
 (var #330 _)
 (var #331 _)
 (var #332 _)
-(var #333 _)
+(var #333 fn_pure)
 (var #334 _)
-(var #335 _)
+(var #335 fn_pure)
 (var #336 _)
-(var #337 fn_pure)
-(var #338 _)
-(var #339 fn_pure)
+(var #337 _)
+(var #338 fn_pure)
+(var #339 _)
 (var #340 _)
 (var #341 _)
-(var #342 fn_pure)
-(var #343 _)
+(var #342 _)
+(var #343 <error>)
 (var #344 _)
-(var #345 _)
-(var #346 _)
-(var #347 <error>)
+(var #345 tuple)
+(var #346 <error>)
+(var #347 {})
 (var #348 _)
-(var #349 tuple)
-(var #350 <error>)
-(var #351 {})
+(var #349 fn_pure)
+(var #350 _)
+(var #351 _)
 (var #352 _)
-(var #353 fn_pure)
+(var #353 _)
 (var #354 _)
 (var #355 _)
 (var #356 _)
 (var #357 _)
-(var #358 _)
-(var #359 _)
-(var #360 _)
-(var #361 _)
-(var #362 fn_pure)
-(var #363 {})
-(var #364 record)
-(var #365 tuple)
-(var #366 tuple)
-(var #367 tuple)
-(var #368 tuple)
-(var #369 fn_pure)
+(var #358 fn_pure)
+(var #359 {})
+(var #360 record)
+(var #361 tuple)
+(var #362 tuple)
+(var #363 tuple)
+(var #364 tuple)
+(var #365 fn_pure)
+(var #366 fn_pure)
+(var #367 _)
+(var #368 fn_pure)
+(var #369 _)
 (var #370 fn_pure)
 (var #371 _)
-(var #372 fn_pure)
+(var #372 _)
 (var #373 _)
 (var #374 fn_pure)
-(var #375 _)
+(var #375 fn_pure)
 (var #376 _)
 (var #377 _)
-(var #378 fn_pure)
-(var #379 fn_pure)
+(var #378 _)
+(var #379 {})
 (var #380 _)
-(var #381 _)
-(var #382 _)
-(var #383 {})
-(var #384 _)
 ~~~
 # TYPES
 ~~~roc
-s : _d
 ma : _arg -> _ret
 n : _d
 rd : { ned: _field }
 er : _d
 t : _d
+a : _d
 line : _d
 y : _d
-a : _d
 ane : _arg -> _ret
 i : Str
-exp0 : _d
 add : _arg -> _ret
 w : Str
 e : {}
@@ -1904,5 +1941,4 @@ one : _d
 main : _d
 num : _d
 me : _arg, _arg2 -> _ret
-r : _d
 ~~~

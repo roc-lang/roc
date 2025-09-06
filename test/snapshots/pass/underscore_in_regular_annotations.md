@@ -262,17 +262,7 @@ PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_regular_annotations.md:21:9:22:20:**
-```roc
-        Ok(_) => "success",
-        Err(msg) => msg,
-```
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -470,6 +460,7 @@ get_data : _arg -> _ret
 process : _arg -> Str
 handle_result : _arg -> _ret
 record : _c
+msg : _c
 identity : _arg -> _ret
 list : _c
 b : _c

@@ -87,28 +87,6 @@ match result {
       ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**branch_scoping.md:2:5:2:27:**
-```roc
-    Ok(value) => value + 1
-```
-    ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**branch_scoping.md:4:5:4:35:**
-```roc
-    Ok(different) => different * 2
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -122,7 +100,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #3 _)
 (var #4 _)
 (var #5 _)
-(var #6 _)
+(var #6 Num *)
 (var #7 _)
 (var #8 _)
 (var #9 _)
@@ -136,7 +114,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 _)
+(var #20 Num *)
 (var #21 _)
 (var #22 _)
 (var #23 _)

@@ -113,13 +113,24 @@ match coord {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**tuple_patterns.md:2:5:5:16:**
+**tuple_patterns.md:2:21:5:11:**
 ```roc
     (Zero, Zero) => "origin"
     (x, Zero) => x
     (Zero, y) => y
     (x, y) => x
 ```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**tuple_patterns.md:5:15:5:16:**
+```roc
+    (x, y) => x
+```
+              ^
 
 
 # CANONICALIZE

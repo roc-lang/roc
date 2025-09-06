@@ -59,15 +59,26 @@ match numbers {
       ^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named **acc** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**list_patterns.md:2:11:2:14:**
+```roc
+    [] => acc
+```
+          ^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_patterns.md:2:5:3:25:**
+**list_patterns.md:3:13:3:15:**
 ```roc
-    [] => acc
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
+            ^^
 
 
 # CANONICALIZE
@@ -85,7 +96,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #5 _)
 (var #6 _)
 (var #7 _)
-(var #8 _)
+(var #8 Num *)
 (var #9 _)
 (var #10 _)
 (var #11 _)
@@ -93,4 +104,5 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+first : _a
 ~~~

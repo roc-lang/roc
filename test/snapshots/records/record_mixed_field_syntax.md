@@ -18,17 +18,23 @@ OpenCurly LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent Comma LowerId
     (lc "age")
     (num_literal_i32 30)
   )
-  (lc "email")
+  (binop_colon
+    (lc "email")
+    (lc "email")
+  )
   (binop_colon
     (lc "status")
     (str_literal_big "active")
   )
-  (lc "balance")
+  (binop_colon
+    (lc "balance")
+    (lc "balance")
+  )
 )
 ~~~
 # FORMATTED
 ~~~roc
-{ name, age: 30, email, status: "active", balance }
+{ name, age: 30, email: email, status: "active", balance: balance }
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:7
@@ -76,17 +82,23 @@ Is there an **import** or **exposing** missing up-top?
     (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
-  (Expr.lookup "email")
+  (Expr.record_field
+    (Expr.lookup "email")
+    (Expr.lookup "email")
+  )
   (Expr.record_field
     (Expr.malformed)
     (Expr.str_literal_big)
   )
-  (Expr.lookup "balance")
+  (Expr.record_field
+    (Expr.lookup "balance")
+    (Expr.lookup "balance")
+  )
 )
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 13
+; Total type variables: 15
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -94,12 +106,14 @@ Is there an **import** or **exposing** missing up-top?
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 Str)
-(var #8 _)
+(var #7 _)
+(var #8 Str)
 (var #9 _)
-(var #10 -> #12)
-(var #11 {})
-(var #12 record)
+(var #10 _)
+(var #11 _)
+(var #12 -> #14)
+(var #13 {})
+(var #14 record)
 ~~~
 # TYPES
 ~~~roc

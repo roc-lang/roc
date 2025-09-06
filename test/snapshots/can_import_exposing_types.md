@@ -753,28 +753,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:16:9:16:26:**
-```roc
-        Ok(value) => Http.ok(value)
-```
-        ^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **value** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:16:30:16:35:**
-```roc
-        Ok(value) => Http.ok(value)
-```
-                             ^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **error** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -797,17 +775,6 @@ Is there an **import** or **exposing** missing up-top?
                                       ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:44:9:44:27:**
-```roc
-        Ok(status) => Http.statusToString(status)
-```
-        ^^^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **error** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -828,28 +795,6 @@ Is there an **import** or **exposing** missing up-top?
         Err(error) => Error.toString(error)
 ```
                                      ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_exposing_types.md:52:9:52:24:**
-```roc
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
-```
-        ^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **value** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_exposing_types.md:52:45:52:50:**
-```roc
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
-```
-                                            ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1234,6 +1179,7 @@ result : _a
 httpStatus : _a
 handleRequest : _arg -> _ret
 config : _a
+value : _a
 input : _a
 createClient : _arg -> _ret
 combineResults : _arg, _arg2 -> _ret

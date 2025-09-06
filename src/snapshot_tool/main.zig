@@ -1598,6 +1598,9 @@ fn processSnapshotContent(
         // For file content, check if it's a block and use the file canonicalizer
         if (content.meta.node_type == .file and node.tag == .block) {
             // Canonicalize as a file with top-level definitions
+            if (std.debug.runtime_safety) {
+                std.debug.print("DEBUG: Processing snapshot file: {s}\n", .{output_path});
+            }
             maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents, &env, null);
         } else if (isExpressionNode(node.tag)) {
             maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);

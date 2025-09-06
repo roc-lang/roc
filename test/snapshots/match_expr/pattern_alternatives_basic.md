@@ -97,11 +97,11 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**pattern_alternatives_basic.md:7:5:7:36:**
+**pattern_alternatives_basic.md:7:5:7:23:**
 ```roc
     Red | Green | Blue => "primary"
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -156,7 +156,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #21 _)
 (var #22 _)
 (var #23 _)
-(var #24 _)
+(var #24 Str)
 (var #25 _)
 (var #26 _)
 (var #27 _)

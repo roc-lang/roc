@@ -44,10 +44,7 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
               )
             )
           )
-          (binop_colon
-            (lc "a")
-            (lc "a")
-          )
+          (lc "a")
         )
       )
       (args
@@ -64,7 +61,7 @@ module [foo]
 foo : Bool -> Bool
 foo = |a| {
 	expect a == (Bool.True)
-	a : a
+	a
 }
 ~~~
 # EXPECTED
@@ -86,7 +83,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 24
+; Total type variables: 23
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -94,7 +91,7 @@ NIL
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 -> #23)
+(var #7 -> #22)
 (var #8 _)
 (var #9 _)
 (var #10 _)
@@ -104,13 +101,12 @@ NIL
 (var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
-(var #18 -> #23)
+(var #17 -> #22)
+(var #18 _)
 (var #19 _)
 (var #20 _)
 (var #21 _)
-(var #22 _)
-(var #23 fn_pure)
+(var #22 fn_pure)
 ~~~
 # TYPES
 ~~~roc

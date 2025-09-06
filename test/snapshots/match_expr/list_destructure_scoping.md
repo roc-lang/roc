@@ -59,17 +59,6 @@ match list {
       ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_destructure_scoping.md:2:5:3:38:**
-```roc
-    [first] => first
-    [first, second] => first + second
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -95,4 +84,6 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+first : _a
+second : _a
 ~~~

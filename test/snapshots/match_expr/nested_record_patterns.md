@@ -23,12 +23,21 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 )
   (branch1     (binop_thick_arrow
       (record_literal
-        (lc "name")
+        (binop_colon
+          (lc "name")
+          (lc "name")
+        )
         (binop_colon
           (lc "address")
           (record_literal
-            (lc "city")
-            (lc "country")
+            (binop_colon
+              (lc "city")
+              (lc "city")
+            )
+            (binop_colon
+              (lc "country")
+              (lc "country")
+            )
           )
         )
       )
@@ -40,7 +49,10 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
               (lc "person")
               (record_literal
                 (lc "name")
-                (lc "age")
+                (binop_colon
+                  (lc "age")
+                  (lc "age")
+                )
               )
             )
             (binop_colon
@@ -85,9 +97,9 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 # FORMATTED
 ~~~roc
 match ...
-	{name, address: {city, country}} => 
+	{name: name, address: {city: city, country: country}} => 
 		"${name} lives in ${city}, ${country}"
-		{ person: { name, age }, location: {
+		{ person: { name, age: age }, location: {
 			city
 		} } => "${name} (${age.to_str()}) from ${city}"
 		{
@@ -109,14 +121,33 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nested_record_patterns.md:2:5:6:18:**
+**nested_record_patterns.md:3:40:3:48:**
 ```roc
-    { name, address: { city, country } } => "${name} lives in ${city}, ${country}"
     { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-    { data: { info: { value } } } => "Deep nested: ${value}"
-    { simple } => "Simple: ${simple}"
-    {} => "empty"
 ```
+                                       ^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nested_record_patterns.md:4:5:4:34:**
+```roc
+    { data: { info: { value } } } => "Deep nested: ${value}"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**nested_record_patterns.md:5:5:5:15:**
+```roc
+    { simple } => "Simple: ${simple}"
+```
+    ^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -125,7 +156,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 42
+; Total type variables: 46
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -138,7 +169,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #9 _)
 (var #10 _)
 (var #11 _)
-(var #12 _)
+(var #12 Str)
 (var #13 _)
 (var #14 _)
 (var #15 _)
@@ -150,7 +181,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #21 _)
 (var #22 _)
 (var #23 _)
-(var #24 _)
+(var #24 Str)
 (var #25 _)
 (var #26 _)
 (var #27 _)
@@ -160,15 +191,20 @@ This might be a limitation in the current implementation that will be addressed 
 (var #31 _)
 (var #32 _)
 (var #33 _)
-(var #34 _)
+(var #34 Str)
 (var #35 _)
 (var #36 _)
 (var #37 _)
-(var #38 _)
+(var #38 Str)
 (var #39 _)
 (var #40 _)
-(var #41 _)
+(var #41 Str)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 _)
 ~~~
 # TYPES
 ~~~roc
+name : _a
 ~~~

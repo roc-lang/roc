@@ -34,10 +34,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
               (lc "x")
               (num_literal_i32 10)
             )
-            (binop_colon
-              (lc "x")
-              (lc "x")
-            )
+            (lc "x")
           )
         )
         (args
@@ -55,7 +52,7 @@ OpenCurly LowerIdent OpAssign Int LowerIdent OpAssign OpenRound OpBar Underscore
 x = 5
 y = (|_| {
 	x = 10
-	x : x
+	x
 })({})
 
 # Inner `x` should be used; outer `x` is not captured (it should be a shadowing warning)
@@ -92,29 +89,28 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 22
+; Total type variables: 21
 (var #0 _)
 (var #1 -> #2)
 (var #2 Num *)
 (var #3 _)
-(var #4 -> #14)
+(var #4 -> #13)
 (var #5 _)
 (var #6 -> #7)
 (var #7 Num *)
 (var #8 _)
 (var #9 _)
-(var #10 _)
-(var #11 -> #14)
+(var #10 -> #13)
+(var #11 -> #18)
 (var #12 -> #19)
-(var #13 -> #20)
+(var #13 _)
 (var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
+(var #17 -> #19)
 (var #18 -> #20)
-(var #19 -> #21)
-(var #20 {})
-(var #21 fn_pure)
+(var #19 {})
+(var #20 fn_pure)
 ~~~
 # TYPES
 ~~~roc

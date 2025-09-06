@@ -53,11 +53,22 @@ match numbers {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**list_patterns_err_multiple_rest.md:2:5:2:28:**
+**list_patterns_err_multiple_rest.md:2:6:2:8:**
 ```roc
     [.., middle, ..] => ... # error, multiple rest patterns not allowed
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^
+     ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**list_patterns_err_multiple_rest.md:2:18:2:20:**
+```roc
+    [.., middle, ..] => ... # error, multiple rest patterns not allowed
+```
+                 ^^
 
 
 # CANONICALIZE
@@ -79,4 +90,5 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+middle : _a
 ~~~

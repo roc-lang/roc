@@ -139,11 +139,11 @@ Expressions can be identifiers, literals, function calls, or operators.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**pattern_alternatives_mixed.md:2:2:3:34:**
+**pattern_alternatives_mixed.md:2:2:2:11:**
 ```roc
 	1 | 2 | 3 => "small numbers"
-	"hello" | "world" => "greetings"
 ```
+	^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -168,17 +168,6 @@ Patterns can only appear in specific contexts like function parameters, destruct
 	    ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_alternatives_mixed.md:7:2:7:14:**
-```roc
-	_ => "other"
-```
-	^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -193,11 +182,11 @@ This might be a limitation in the current implementation that will be addressed 
 (var #4 _)
 (var #5 _)
 (var #6 _)
-(var #7 _)
-(var #8 _)
+(var #7 Str)
+(var #8 Str)
 (var #9 _)
 (var #10 _)
-(var #11 _)
+(var #11 Str)
 (var #12 _)
 (var #13 _)
 (var #14 _)
@@ -225,7 +214,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #36 _)
 (var #37 _)
 (var #38 _)
-(var #39 _)
+(var #39 Str)
 (var #40 _)
 (var #41 _)
 ~~~

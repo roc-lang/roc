@@ -49,7 +49,10 @@ KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineCo
       (num_literal_i32 77)
     )
     (str_literal_small "..c")
-    (lc "mm")
+    (binop_colon
+      (lc "mm")
+      (lc "mm")
+    )
   )
   (malformed)
   (list_literal
@@ -82,7 +85,7 @@ packages # Cd
 { # pen
 	pkg: 77,
 	"..c",
-	mm,
+	mm: mm,
 }
 #
 provides # Cd
@@ -424,7 +427,10 @@ ar,
       (Expr.num_literal_i32 77)
     )
     (Expr.str_literal_small)
-    (Expr.lookup "mm")
+    (Expr.record_field
+      (Expr.lookup "mm")
+      (Expr.lookup "mm")
+    )
   )
   (Expr.malformed)
   (Expr.list_literal)
@@ -432,7 +438,7 @@ ar,
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 37
+; Total type variables: 38
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -443,7 +449,7 @@ ar,
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 -> #29)
+(var #10 -> #30)
 (var #11 _)
 (var #12 _)
 (var #13 _)
@@ -455,21 +461,22 @@ ar,
 (var #19 _)
 (var #20 Str)
 (var #21 _)
-(var #22 -> #35)
-(var #23 _)
+(var #22 _)
+(var #23 -> #36)
 (var #24 _)
 (var #25 _)
 (var #26 _)
 (var #27 _)
 (var #28 _)
-(var #29 {})
-(var #30 _)
+(var #29 _)
+(var #30 {})
 (var #31 _)
 (var #32 _)
 (var #33 _)
-(var #34 {})
-(var #35 record)
-(var #36 _)
+(var #34 _)
+(var #35 {})
+(var #36 record)
+(var #37 _)
 ~~~
 # TYPES
 ~~~roc

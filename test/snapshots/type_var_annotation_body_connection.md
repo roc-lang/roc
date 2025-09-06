@@ -55,10 +55,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             (lc "thing")
             (lc "x")
           )
-          (binop_colon
-            (lc "thing")
-            (lc "thing")
-          )
+          (lc "thing")
         )
       )
       (args
@@ -89,7 +86,7 @@ identity = |x| {
 	# refers to the type var introduced in function type annotation
 	thing = x
 	# refers to the value from the function parameter
-	thing : thing
+	thing
 }
 
 main! = |_| {}
@@ -117,7 +114,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 36
+; Total type variables: 35
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -130,7 +127,7 @@ NIL
 (var #9 _)
 (var #10 _)
 (var #11 _)
-(var #12 -> #32)
+(var #12 -> #31)
 (var #13 _)
 (var #14 _)
 (var #15 _)
@@ -140,20 +137,19 @@ NIL
 (var #19 _)
 (var #20 _)
 (var #21 _)
-(var #22 _)
-(var #23 -> #32)
-(var #24 _)
-(var #25 -> #35)
-(var #26 _)
+(var #22 -> #31)
+(var #23 _)
+(var #24 -> #34)
+(var #25 _)
+(var #26 -> #33)
 (var #27 -> #34)
-(var #28 -> #35)
+(var #28 _)
 (var #29 _)
 (var #30 _)
-(var #31 _)
-(var #32 fn_pure)
-(var #33 _)
-(var #34 {})
-(var #35 fn_pure)
+(var #31 fn_pure)
+(var #32 _)
+(var #33 {})
+(var #34 fn_pure)
 ~~~
 # TYPES
 ~~~roc

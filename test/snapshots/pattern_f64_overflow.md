@@ -73,20 +73,6 @@ match x {
       ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_f64_overflow.md:2:5:6:21:**
-```roc
-    1e100 => "very large number"
-    1e-40 => "very small number"
-    1.7976931348623157e308 => "near f64 max"
-    0.0 => "zero"
-    value => "other"
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -97,18 +83,18 @@ This might be a limitation in the current implementation that will be addressed 
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 _)
+(var #3 Str)
 (var #4 _)
-(var #5 _)
+(var #5 Str)
 (var #6 _)
 (var #7 _)
-(var #8 _)
+(var #8 Str)
 (var #9 _)
 (var #10 _)
-(var #11 _)
+(var #11 Str)
 (var #12 _)
 (var #13 _)
-(var #14 _)
+(var #14 Str)
 (var #15 _)
 (var #16 _)
 (var #17 _)
@@ -116,4 +102,5 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+value : _a
 ~~~

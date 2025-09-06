@@ -18,10 +18,7 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
   )
   (args
     (record_literal
-      (binop_colon
-        (lc "name")
-        (lc "name")
-      )
+      (lc "name")
       (binop_colon
         (lc "age")
         (lc "age")
@@ -32,7 +29,7 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 ~~~
 # FORMATTED
 ~~~roc
-|{ name: name, age: age }| "Hello ${name}, you are ${age.to_str()} years old"
+|{ name, age: age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # EXPECTED
 NIL
@@ -44,18 +41,18 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 10
+; Total type variables: 9
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
 (var #4 _)
-(var #5 _)
-(var #6 Str)
-(var #7 -> #9)
-(var #8 _)
-(var #9 fn_pure)
+(var #5 Str)
+(var #6 -> #8)
+(var #7 _)
+(var #8 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+name : _a
 ~~~

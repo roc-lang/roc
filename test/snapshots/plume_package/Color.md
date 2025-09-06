@@ -277,20 +277,11 @@ Color := [
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**Color.md:33:9:43:10:**
+**Color.md:33:10:33:13:**
 ```roc
         ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
 ```
+         ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -591,7 +582,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #182 _)
 (var #183 _)
 (var #184 _)
-(var #185 _)
+(var #185 Str)
 (var #186 _)
 (var #187 _)
 (var #188 _)
@@ -797,14 +788,19 @@ str : _h
 named : _arg -> _ret
 r : _h
 bytes : _h
+d : _h
+f : _h
 g : _h
 is_char_in_hex_range : _arg -> Str
 rgb : _arg, _arg2, _arg3 -> _ret
 b : _h
 color : _h
+is_valid : _h
 rounded : F64
 is_named_color : _arg -> _ret
+c : _h
 rgba : _arg, _arg2, _arg3, _arg4 -> _ret
 to_str : _arg -> _ret
 a : _h
+e : _h
 ~~~

@@ -131,13 +131,121 @@ match items {
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**middle_rest.md:2:5:5:12:**
+**middle_rest.md:2:13:2:15:**
 ```roc
     [first, .., last] => first + last
-    [a, b, .. as middle, x, y] => a + b + x + y  
-    [single] => single
-    [] => 0
 ```
+            ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:6:3:7:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+     ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:9:3:10:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **middle** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:18:3:24:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                 ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:26:3:27:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                         ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:29:3:30:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                            ^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**middle_rest.md:3:30:3:32:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                             ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:35:3:36:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                                  ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:39:3:40:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                                      ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:43:3:44:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                                          ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**middle_rest.md:3:47:3:48:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                                              ^
 
 
 # CANONICALIZE
@@ -179,7 +287,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #29 _)
 (var #30 _)
 (var #31 _)
-(var #32 _)
+(var #32 Num *)
 (var #33 _)
 (var #34 _)
 (var #35 _)
@@ -187,4 +295,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+last : _c
+single : _c
+first : _c
 ~~~

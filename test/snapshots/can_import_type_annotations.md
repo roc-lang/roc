@@ -545,28 +545,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**can_import_type_annotations.md:17:9:17:23:**
-```roc
-        Ok(data) => Ok(Http.success(data))
-```
-        ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **data** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_type_annotations.md:17:37:17:41:**
-```roc
-        Ok(data) => Ok(Http.success(data))
-```
-                                    ^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **err** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -593,13 +571,23 @@ Is there an **import** or **exposing** missing up-top?
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**can_import_type_annotations.md:33:9:36:37:**
+**can_import_type_annotations.md:34:13:36:25:**
 ```roc
-        Ok(value1) =>
             match(result2) {
                 Ok(value2) => Ok((value1, value2))
                 Err(err) => Err(err)
 ```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:36:33:36:36:**
+```roc
+                Err(err) => Err(err)
+```
+                                ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -931,6 +919,8 @@ result2 : _c
 result1 : _c
 handleApi : _arg -> _ret
 advancedParser : _arg, _arg2 -> _ret
+value1 : _c
+data : _c
 request : _c
 input : _c
 ~~~

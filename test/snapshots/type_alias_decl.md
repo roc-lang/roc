@@ -208,10 +208,7 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
             (lc "color")
             (uc "Red")
           )
-          (binop_colon
-            (lc "userId")
-            (lc "userId")
-          )
+          (lc "userId")
         )
       )
       (args
@@ -247,7 +244,7 @@ main! = |_| {
 	person = { name: "Alice", age: 30 }
 	color : Color
 	color = Red
-	userId : userId
+	userId
 }
 ~~~
 # EXPECTED
@@ -274,7 +271,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 116
+; Total type variables: 115
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -356,7 +353,7 @@ NIL
 (var #78 _)
 (var #79 _)
 (var #80 _)
-(var #81 -> #115)
+(var #81 -> #114)
 (var #82 _)
 (var #83 _)
 (var #84 _)
@@ -367,14 +364,14 @@ NIL
 (var #89 _)
 (var #90 _)
 (var #91 _)
-(var #92 -> #114)
+(var #92 -> #113)
 (var #93 _)
 (var #94 Str)
 (var #95 _)
 (var #96 _)
 (var #97 Num *)
 (var #98 _)
-(var #99 -> #114)
+(var #99 -> #113)
 (var #100 _)
 (var #101 _)
 (var #102 _)
@@ -384,13 +381,12 @@ NIL
 (var #106 _)
 (var #107 _)
 (var #108 _)
-(var #109 _)
-(var #110 -> #115)
+(var #109 -> #114)
+(var #110 _)
 (var #111 _)
 (var #112 _)
-(var #113 _)
-(var #114 {})
-(var #115 fn_pure)
+(var #113 {})
+(var #114 fn_pure)
 ~~~
 # TYPES
 ~~~roc

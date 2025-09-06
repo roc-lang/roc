@@ -31,7 +31,10 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
             (binop_colon
               (lc "b")
               (record_literal
-                (lc "c")
+                (binop_colon
+                  (lc "c")
+                  (lc "c")
+                )
               )
             )
           )
@@ -57,7 +60,10 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
                 (lc "inner")
               )
             )
-            (lc "simple")
+            (binop_colon
+              (lc "simple")
+              (lc "simple")
+            )
           )
           (str_literal_big "mixed: ${inner} and ${simple}")
         )
@@ -116,12 +122,12 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent OpColon OpenCurly LowerIdent Op
 # FORMATTED
 ~~~roc
 match ...
-	{a: {b: {c}}} => 
+	{a: {b: {c: c}}} => 
 		"deeply nested: ${c}"
 		{ x, y: {} } => "mixed with empty: ${x}"
 		{ outer: {
 			inner
-		}, simple } => "mixed: ${inner} and ${simple}"
+		}, simple: simple } => "mixed: ${inner} and ${simple}"
 		{ a: {
 			b
 		}, c: {
@@ -142,16 +148,55 @@ NIL
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**record_pattern_edge_cases.md:2:5:8:25:**
+**record_pattern_edge_cases.md:4:14:4:23:**
 ```roc
-    { a: { b: { c } } } => "deeply nested: ${c}"
-    { x, y: {} } => "mixed with empty: ${x}"
     { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
-    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
-    { name: x } => "renamed: ${x}"
-    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
-    {} => "empty record"
 ```
+             ^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_pattern_edge_cases.md:5:10:5:15:**
+```roc
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+```
+         ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_pattern_edge_cases.md:5:20:5:25:**
+```roc
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+```
+                   ^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_pattern_edge_cases.md:6:5:6:16:**
+```roc
+    { name: x } => "renamed: ${x}"
+```
+    ^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_pattern_edge_cases.md:7:5:7:50:**
+```roc
+    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -160,7 +205,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 61
+; Total type variables: 63
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -172,13 +217,13 @@ This might be a limitation in the current implementation that will be addressed 
 (var #8 _)
 (var #9 _)
 (var #10 _)
-(var #11 _)
+(var #11 Str)
 (var #12 _)
 (var #13 _)
 (var #14 _)
 (var #15 _)
 (var #16 _)
-(var #17 _)
+(var #17 Str)
 (var #18 _)
 (var #19 _)
 (var #20 _)
@@ -187,7 +232,7 @@ This might be a limitation in the current implementation that will be addressed 
 (var #23 _)
 (var #24 _)
 (var #25 _)
-(var #26 _)
+(var #26 Str)
 (var #27 _)
 (var #28 _)
 (var #29 _)
@@ -198,13 +243,13 @@ This might be a limitation in the current implementation that will be addressed 
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 _)
+(var #37 Str)
 (var #38 _)
 (var #39 _)
 (var #40 _)
 (var #41 _)
 (var #42 _)
-(var #43 _)
+(var #43 Str)
 (var #44 _)
 (var #45 _)
 (var #46 _)
@@ -216,13 +261,16 @@ This might be a limitation in the current implementation that will be addressed 
 (var #52 _)
 (var #53 _)
 (var #54 _)
-(var #55 _)
+(var #55 Str)
 (var #56 _)
 (var #57 _)
-(var #58 _)
+(var #58 Str)
 (var #59 _)
 (var #60 _)
+(var #61 _)
+(var #62 _)
 ~~~
 # TYPES
 ~~~roc
+x : _e
 ~~~

@@ -45,17 +45,6 @@ match value {
       ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**single_branch.md:2:5:2:15:**
-```roc
-    x => x + 1
-```
-    ^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -67,11 +56,12 @@ This might be a limitation in the current implementation that will be addressed 
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
+(var #4 Num *)
 (var #5 _)
 (var #6 _)
 (var #7 _)
 ~~~
 # TYPES
 ~~~roc
+x : _a
 ~~~

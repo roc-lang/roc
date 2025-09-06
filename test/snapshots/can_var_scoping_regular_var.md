@@ -80,10 +80,7 @@ KwModule OpenSquare CloseSquare BlankLine LineComment LowerIdent OpAssign OpBar 
                       (num_literal_i32 2)
                     )
                   )
-                  (binop_colon
-                    (lc "count_")
-                    (lc "count_")
-                  )
+                  (lc "count_")
                 )
               )
               (args
@@ -128,7 +125,7 @@ processItems = |items| {
 		# Should cause error - different function
 		total_ = total_ * 2
 		# Should cause error - different function
-		count_ : count_
+		count_
 	}
 
 	result = nestedFunc({})
@@ -152,9 +149,9 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 54
+; Total type variables: 53
 (var #0 _)
-(var #1 -> #53)
+(var #1 -> #52)
 (var #2 _)
 (var #3 _)
 (var #4 Num *)
@@ -172,7 +169,7 @@ NIL
 (var #16 Num *)
 (var #17 _)
 (var #18 _)
-(var #19 -> #50)
+(var #19 -> #49)
 (var #20 _)
 (var #21 _)
 (var #22 _)
@@ -186,27 +183,26 @@ NIL
 (var #30 _)
 (var #31 _)
 (var #32 _)
-(var #33 _)
-(var #34 -> #50)
-(var #35 _)
-(var #36 -> #39)
-(var #37 -> #52)
-(var #38 -> #51)
+(var #33 -> #49)
+(var #34 _)
+(var #35 -> #38)
+(var #36 -> #51)
+(var #37 -> #50)
+(var #38 _)
 (var #39 _)
-(var #40 _)
+(var #40 -> #41)
 (var #41 -> #42)
-(var #42 -> #43)
+(var #42 _)
 (var #43 _)
-(var #44 _)
-(var #45 -> #53)
+(var #44 -> #52)
+(var #45 _)
 (var #46 _)
 (var #47 _)
 (var #48 _)
-(var #49 _)
-(var #50 fn_pure)
-(var #51 {})
+(var #49 fn_pure)
+(var #50 {})
+(var #51 fn_pure)
 (var #52 fn_pure)
-(var #53 fn_pure)
 ~~~
 # TYPES
 ~~~roc
