@@ -26,7 +26,6 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;
-const Annotation = CIR.Annotation;
 
 /// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
@@ -38,7 +37,7 @@ pub const Statement = union(enum) {
     s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
-        anno: ?Annotation.Idx,
+        anno: ?CIR.TypeAnno.Idx,
     },
     /// A rebindable declaration using the "var" keyword.
     ///

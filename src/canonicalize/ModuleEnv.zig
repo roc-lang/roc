@@ -338,6 +338,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.CanDiagnostic, allocator:
         .ident_not_in_scope => "UNDEFINED VARIABLE",
         .ident_already_defined => "DUPLICATE DEFINITION",
         .unused_variable => "UNUSED VARIABLE",
+        .unused_expression => "UNUSED EXPRESSION",
         .type_not_in_scope => "UNDEFINED TYPE",
         .invalid_type_var_in_constraint => "INVALID TYPE CONSTRAINT",
         .invalid_ability_in_constraint => "INVALID ABILITY CONSTRAINT",
@@ -350,7 +351,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.CanDiagnostic, allocator:
     };
 
     const severity: reporting.Severity = switch (diagnostic.tag) {
-        .unused_variable, .redundant_exposed, .shadowing_warning => .warning,
+        .unused_variable, .unused_expression, .redundant_exposed, .shadowing_warning => .warning,
         else => .runtime_error,
     };
 
@@ -384,6 +385,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.CanDiagnostic, allocator:
         },
         .unused_variable => {
             try report.document.addReflowingText("This variable is defined but never used.");
+        },
+        .unused_expression => {
+            try report.document.addReflowingText("This expression result is not used. Consider assigning it to a variable or calling a function that has side effects.");
         },
         .type_not_in_scope => {
             try report.document.addReflowingText("This type is not defined in this scope.");

@@ -867,7 +867,7 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                 if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
                     // It's a function type - build curried arrows
                     const is_effectful = self.peek() == .OpFatArrow;
-                    const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_region = self.currentRegion();
                     self.advance();
 
@@ -4308,7 +4308,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
                         try self.parseExpr();
 
                     // Create arrow node for function type
-                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
                     const arrow_region = makeRegion(self.ast.start(rhs), self.ast.getRegion(return_type).end);
                     rhs = try self.ast.appendNode(self.gpa, arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
@@ -4363,7 +4363,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                     const return_type = try self.parseExpr();
 
                     // Create the arrow node
-                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_thin_arrow;
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
                     const full_arrow_region = makeRegion(self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(rhs)))).start, self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(return_type)))).end);
                     rhs = try self.ast.appendNode(self.gpa, full_arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
@@ -5743,10 +5743,10 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
             break :blk try self.parseExpr();
         };
 
-        // Create the branch as a binop_thick_arrow or binop_thin_arrow
+        // Create the branch as a binop_thick_arrow or binop_arrow_call
         const binop_idx = try self.ast.appendBinOp(self.gpa, pattern, body);
         const branch_region = makeRegion(self.ast.start(pattern), self.ast.getRegion(body).end);
-        const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_thin_arrow;
+        const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_arrow_call;
         const branch = try self.ast.appendNode(self.gpa, branch_region, arrow_tag, .{ .binop = binop_idx });
 
         // Check if we actually parsed a branch (should be a thick arrow)
@@ -6011,7 +6011,7 @@ fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpLessThan => .binop_lt,
         .OpLessThanOrEq => .binop_lte,
         .OpFatArrow => .binop_thick_arrow,
-        .OpArrow => .binop_thin_arrow,
+        .OpArrow => .binop_arrow_call,
         .OpAnd => .binop_and,
         .OpOr => .binop_or,
         .OpBar => .binop_pipe,

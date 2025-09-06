@@ -387,7 +387,7 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Match/when expression - should have been populated during type checking
                     return expr_var;
                 },
-                .apply_ident => {
+                .fn_call => {
                     // Function application - should have been populated during type checking
                     return expr_var;
                 },
@@ -498,7 +498,7 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Create a fresh type variable
                     return try self.store.fresh();
                 },
-                .binop_thin_arrow => {
+                .binop_arrow_call => {
                     // Function type annotation: arg -> ret
                     const binop_idx = node.payload.binop;
                     const binop = self.cir.ast.node_slices.binOp(&binop_idx);

@@ -842,28 +842,6 @@ pub const Interpreter = struct {
                 self.traceEnter("PUSH frac_literal {}", .{frac_val});
             },
 
-            // Empty record
-            .empty_record => {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                // Empty record is zero-sized and has no bytes
-                std.debug.assert(result_value.ptr == null);
-            },
-
-            // Empty list
-            .empty_list => {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                // Initialize empty list
-                std.debug.assert(result_value.ptr != null);
-                const list: *RocList = @ptrCast(@alignCast(result_value.ptr.?));
-                list.* = RocList.empty();
-            },
-
             // Binary operations
             .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
                 // Get the binop data from the CIR
@@ -997,7 +975,7 @@ pub const Interpreter = struct {
                 return error.PatternNotFound;
             },
 
-            .apply_ident, .apply_anon, .method_call => {
+            .fn_call, .apply_anon, .method_call => {
                 // Handle function applications like foo(bar, baz)
                 const apply_expr = cir.getExpr(expr_idx);
 
@@ -1485,7 +1463,7 @@ pub const Interpreter = struct {
                     // Check if this is the last node (which should be an expression)
                     const is_last = (i == nodes_to_eval.items.len - 1);
 
-                    if (n_tag_value >= can.CIR.STMT_TAG_START and n_tag_value < can.CIR.EXPR_TAG_START) {
+                    if (n_tag_value >= can.CIR.FIRST_STMT_TAG and n_tag_value < can.CIR.FIRST_EXPR_TAG) {
                         // This is a statement - evaluate it as a statement
                         // Statements produce side effects but no values
                         if (n_tag_value == @intFromEnum(can.CIR.StmtTag.assign)) {
@@ -2000,7 +1978,7 @@ pub const Interpreter = struct {
         // Get the argument expressions from the call
         const cir = self.getCIR() catch return error.Crash;
         const call_expr = cir.getExpr(call_expr_idx);
-        if (call_expr.tag != .apply_ident and call_expr.tag != .apply_tag) {
+        if (call_expr.tag != .fn_call and call_expr.tag != .apply_tag) {
             return error.TypeMismatch;
         }
         // Basic implementation that avoids crashes
@@ -2152,7 +2130,7 @@ pub const Interpreter = struct {
                 try self.type_store.setVarContent(str_var, str_content);
                 return str_var;
             },
-            .list_literal, .empty_list => {
+            .list_literal => {
                 // List literal - need to infer element type
                 const elem_var = try self.type_store.fresh();
                 const list_content = types.Content{ .structure = .{ .list = elem_var } };
@@ -2164,7 +2142,7 @@ pub const Interpreter = struct {
                 // Tuple - for now return the body var itself
                 return body_var;
             },
-            .record_literal, .empty_record => {
+            .record_literal => {
                 // Record - for now return the body var itself
                 return body_var;
             },
@@ -2548,7 +2526,7 @@ pub const Interpreter = struct {
         // Check if expr_idx is actually a call expression or something else
         const cir = self.getCIR() catch return error.Crash;
         const expr = cir.getExpr(expr_idx);
-        if (expr.tag == .apply_ident or expr.tag == .apply_tag) {
+        if (expr.tag == .fn_call or expr.tag == .apply_tag) {
             // Normal case: we have a call expression with argument information
             self.traceInfo("handleLambdaCall: Building TypeScope for call expression", .{});
             try self.buildTypeScopeForCall(expr_idx, closure, arg_count, &scope_map);
@@ -2857,15 +2835,24 @@ pub const Interpreter = struct {
                     const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
 
                     // Get the field name from the left side of the colon
-                    const field_name_expr = cir.getExpr(field_binop.lhs);
+                    // Field names are stored as .lc (lowercase) nodes after canonicalization
+                    const field_name_node = cir.getNode(@enumFromInt(@intFromEnum(field_binop.lhs)));
 
-                    if (field_name_expr.tag == .lookup) {
-                        const field_name_ident = field_name_expr.payload.ident;
+                    if (field_name_node.tag == .lc) {
+                        const field_name_ident = field_name_node.payload.ident;
                         if (field_name_ident == current_field_name) {
                             // Found our field! The value is on the right side of the colon
                             value_expr_idx = field_binop.rhs;
                             break;
                         }
+                    }
+                } else if (field_expr.tag == .lookup) {
+                    // Shorthand field: { x } means { x: x }
+                    const field_name_ident = field_expr.payload.ident;
+                    if (field_name_ident == current_field_name) {
+                        // For shorthand fields, the value is the field expression itself
+                        value_expr_idx = field_expr_idx;
+                        break;
                     }
                 }
             }
@@ -3989,7 +3976,7 @@ pub const Interpreter = struct {
                     try expr_stack.append(lhs_expr);
                     try expr_stack.append(rhs_expr);
                 },
-                .apply_ident, .apply_anon => {
+                .fn_call, .apply_anon => {
                     // Traverse function and arguments
                     const nodes_idx = expr.payload.nodes;
                     var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);

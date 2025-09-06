@@ -7,52 +7,50 @@ type=expr
 ~~~roc
 { ..person, age: 31, active: True }
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - record_extension_update.md:1:5:1:11
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_extension_update.md:1:5:1:11:**
-```roc
-{ ..person, age: 31, active: True }
-```
-    ^^^^^^
-
-
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),LowerIdent(1:13-1:16),OpColon(1:16-1:17),Int(1:18-1:20),Comma(1:20-1:21),LowerIdent(1:22-1:28),OpColon(1:28-1:29),UpperIdent(1:30-1:34),CloseCurly(1:35-1:36),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int Comma LowerIdent OpColon UpperIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.36
-	(ext
-		(e-ident @1.5-1.11 (raw "person")))
-	(field (field "age")
-		(e-int @1.18-1.20 (raw "31")))
-	(field (field "active")
-		(e-tag @1.30-1.34 (raw "True"))))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+age
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_extension_update.md:1:5:1:11
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_extension_update.md:1:1:1:13:**
+```roc
+{ ..person, age: 31, active: True }
+```
+^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **age** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_extension_update.md:1:13:1:16:**
+```roc
+{ ..person, age: 31, active: True }
+```
+            ^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.36
-	(ext
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(fields
-		(field (name "age")
-			(e-int @1.18-1.20 (value "31")))
-		(field (name "active")
-			(e-nominal @1.30-1.34 (nominal "Bool")
-				(e-tag @1.30-1.34 (name "True"))))))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.36 (type "{ age: Num(_size), active: Bool }"))
+~~~roc
+# No header found
 ~~~

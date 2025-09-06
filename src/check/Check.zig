@@ -26,6 +26,8 @@ const Instantiate = types_mod.instantiate.Instantiate;
 const Var = types_mod.Var;
 const Func = types_mod.Func;
 const Content = types_mod.Content;
+const RecordField = types_mod.RecordField;
+const Record = types_mod.Record;
 const testing = std.testing;
 const SnapshotStore = @import("snapshot.zig").Store;
 const ProblemStore = @import("problem.zig").Store;
@@ -129,6 +131,13 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             return expr_var;
         },
 
+        // Simple tags without arguments
+        .tag_no_args => {
+            // Simple tags are just values of their tag union type
+            // The type will be inferred based on usage context
+            return expr_var;
+        },
+
         // Binary operations
         .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_lt, .binop_gt, .binop_lte, .binop_gte => {
             // Get the binary operation
@@ -184,21 +193,197 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             return expr_var;
         },
 
+        // Record field access
+        .record_access => {
+            // Handle record field access like record.field
+            const binop_idx = expr.payload.binop;
+            const binop = cir.ast.node_slices.binOp(binop_idx);
+
+            // Type-check the record expression (left side)
+            const record_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            const record_var = try self.checkCIRExpr(CIRType, cir, record_expr_idx);
+
+            // For now, just propagate the record type and return a fresh variable for the field
+            // This is a simplified approach that should work for basic cases
+            _ = record_var;
+
+            return expr_var;
+        },
+
         // Records
         .record_literal => {
-            // For now, just return a fresh type variable
-            return expr_var;
+            // Create a proper record type by analyzing the fields
+            const nodes_idx = expr.payload.nodes;
+
+            var record_fields = std.ArrayList(RecordField).init(self.gpa);
+            defer record_fields.deinit();
+
+            if (!nodes_idx.isNil()) {
+                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                while (iter.next()) |field_node| {
+                    const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node)));
+                    const field_expr = cir.getExpr(field_expr_idx);
+
+                    if (field_expr.tag == .binop_colon) {
+                        // Field with explicit value: { name: value }
+                        const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
+
+                        // Get field name from left side (should be an identifier)
+                        // Field names remain as .lc (lowercase) nodes after canonicalization
+                        const field_name_node = cir.getNode(@enumFromInt(@intFromEnum(field_binop.lhs)));
+                        if (field_name_node.tag == .lc) {
+                            const field_ident = field_name_node.payload.ident;
+
+                            // Type-check the field value (right side)
+                            const field_value_var = try self.checkCIRExpr(CIRType, cir, field_binop.rhs);
+
+                            // Create the record field
+                            const record_field = RecordField{
+                                .name = field_ident,
+                                .var_ = field_value_var,
+                            };
+                            try record_fields.append(record_field);
+                        } else {
+                            // Field name is not an identifier - this shouldn't happen in well-formed code
+                            // For robustness, skip this field
+                            continue;
+                        }
+                    } else if (field_expr.tag == .lookup) {
+                        // Shorthand field: { x } means { x: x }
+                        const field_ident = field_expr.payload.ident;
+
+                        // The value is a lookup of the same identifier
+                        const field_value_var = try self.checkCIRExpr(CIRType, cir, field_expr_idx);
+
+                        // Create the record field
+                        const record_field = RecordField{
+                            .name = field_ident,
+                            .var_ = field_value_var,
+                        };
+                        try record_fields.append(record_field);
+                    }
+                }
+            }
+
+            // Create the record type
+            if (record_fields.items.len == 0) {
+                // Empty record
+                const empty_record_content = Content{ .structure = .empty_record };
+                const empty_record_type = try self.types.freshFromContent(empty_record_content);
+                _ = try self.unify(expr_var, empty_record_type);
+                return expr_var;
+            } else {
+                // Non-empty record: create record with fields
+                const fields_range = try self.types.appendRecordFields(record_fields.items);
+
+                // Create extension variable (for open records)
+                const ext_var = try self.types.freshFromContent(.{ .structure = .empty_record });
+
+                // Create the record
+                const record = Record{ .fields = fields_range, .ext = ext_var };
+                const record_content = Content{ .structure = .{ .record = record } };
+                const record_type = try self.types.freshFromContent(record_content);
+
+                // Unify with the expression's type variable
+                _ = try self.unify(expr_var, record_type);
+                return expr_var;
+            }
         },
 
         // Tuples
         .tuple_literal => {
-            // For now, just return a fresh type variable
+            // Get the tuple elements
+            const nodes_idx = expr.payload.nodes;
+
+            if (nodes_idx.isNil()) {
+                // Empty tuple (unit type)
+                const empty_elems_range = try self.types.appendVars(&.{});
+                const unit_content = Content{ .structure = .{ .tuple = .{ .elems = empty_elems_range } } };
+                const unit_type = try self.types.freshFromContent(unit_content);
+                _ = try self.unify(expr_var, unit_type);
+                return expr_var;
+            }
+
+            // Type check each element
+            var element_vars = std.ArrayList(Var).init(self.gpa);
+            defer element_vars.deinit();
+
+            var iter = cir.ast.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |element_node| {
+                const element_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(element_node)));
+                const element_var = try self.checkCIRExpr(CIRType, cir, element_expr_idx);
+                try element_vars.append(element_var);
+            }
+
+            // Create tuple type
+            const elems_range = try self.types.appendVars(element_vars.items);
+            const tuple_content = Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
+            const tuple_type = try self.types.freshFromContent(tuple_content);
+
+            _ = try self.unify(expr_var, tuple_type);
             return expr_var;
         },
 
         // Blocks
         .block => {
-            // For now, just return a fresh type variable
+            // Blocks contain statements - we need to type check them
+            const nodes_idx = expr.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                // Get the statements in the block
+                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+
+                // Type check each statement in the block
+                while (iter.next()) |stmt_node_idx| {
+                    const stmt_node = cir.ast.nodes.get(@as(@TypeOf(cir.ast.nodes).Idx, @enumFromInt(@intFromEnum(stmt_node_idx))));
+
+                    // Check what kind of statement this is
+                    const stmt_tag_int = @intFromEnum(stmt_node.tag);
+                    const stmt_first = @intFromEnum(CIRType.StmtTag.assign);
+
+                    if (stmt_tag_int >= stmt_first and stmt_tag_int < @intFromEnum(CIRType.ExprTag.lookup)) {
+                        // It's a statement - handle it
+                        const stmt_tag: CIRType.StmtTag = @enumFromInt(stmt_tag_int);
+
+                        switch (stmt_tag) {
+                            .assign => {
+                                // Get the assignment statement
+                                const stmt_idx = @as(CIRType.Stmt.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
+                                const stmt = cir.getStmt(stmt_idx);
+
+                                // An assignment has a pattern and a value stored in a binop
+                                // The payload is a binop with pattern on left and value on right
+                                const binop = cir.ast.node_slices.binOp(stmt.payload.binop);
+
+                                // Get the pattern variable (left side)
+                                const patt_idx = @as(CIRType.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+                                const patt_var = @as(Var, @enumFromInt(@intFromEnum(patt_idx)));
+
+                                // Get the value expression and check its type (right side)
+                                const value_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                                const value_var = try self.checkCIRExpr(CIRType, cir, value_idx);
+
+                                // Unify the pattern with the value!
+                                _ = try self.unify(patt_var, value_var);
+                            },
+                            .expr => {
+                                // Expression statement - just check it
+                                const stmt_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
+                                _ = try self.checkCIRExpr(CIRType, cir, stmt_expr_idx);
+                            },
+                            else => {
+                                // Other statement types - skip for now
+                            },
+                        }
+                    } else if (stmt_tag_int >= @intFromEnum(CIRType.ExprTag.lookup)) {
+                        // It's an expression used as a statement - check it
+                        const stmt_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
+                        _ = try self.checkCIRExpr(CIRType, cir, stmt_expr_idx);
+                    }
+                }
+            }
+
+            // The block evaluates to unit type or the last expression
+            // For now, just return the block's type variable
             return expr_var;
         },
 
@@ -282,9 +467,9 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             return expr_var;
         },
 
-        .apply_ident, .apply_tag => {
-            // Function/tag application
-            // We need to type check both the function and its arguments
+        .fn_call, .tag_applied => {
+            // Function/tag application with arguments
+            // We need to type check both the function/tag and its arguments
 
             // Get the apply node to access function and arguments
             const node = cir.getNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));

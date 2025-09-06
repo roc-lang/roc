@@ -256,7 +256,7 @@ pub fn binOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).B
 /// Returns the first parameter and return type as a BinOp for compatibility
 fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).BinOp {
     const node_tag = self.tag(idx);
-    std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
+    std.debug.assert(node_tag == .binop_arrow_call or node_tag == .binop_thick_arrow);
 
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     const node_payload = self.nodes.fieldItem(.payload, multi_list_idx);
@@ -294,7 +294,7 @@ fn arrowBinOp(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).
 /// The last node in the iteration is the return type, all others are parameters
 fn arrowNodes(self: *const Ast, idx: Node.Idx) collections.NodeSlices(Node.Idx).Iterator {
     const node_tag = self.tag(idx);
-    std.debug.assert(node_tag == .binop_thin_arrow or node_tag == .binop_thick_arrow);
+    std.debug.assert(node_tag == .binop_arrow_call or node_tag == .binop_thick_arrow);
 
     const multi_list_idx = @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(idx)));
     const node_payload = self.nodes.fieldItem(.payload, multi_list_idx);
@@ -346,7 +346,7 @@ pub const Node = struct {
         binop_lt, //               <
         binop_lte, //              <=
         binop_thick_arrow, //      =>
-        binop_thin_arrow, //       ->
+        binop_arrow_call, //       ->
         binop_and, //              and
         binop_or, //               or
         binop_as, //               as
@@ -427,7 +427,7 @@ pub const Node = struct {
                 .binop_lt,
                 .binop_lte,
                 .binop_thick_arrow,
-                .binop_thin_arrow,
+                .binop_arrow_call,
                 .binop_and,
                 .binop_or,
                 .binop_as,

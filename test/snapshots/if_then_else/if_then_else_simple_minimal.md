@@ -7,12 +7,29 @@ type=expr
 ~~~roc
 if bool 1 else 2
 ~~~
+# TOKENS
+~~~text
+KwIf LowerIdent Int KwElse Int ~~~
+# PARSE
+~~~clojure
+(if_else
+  (condition     (lc "bool")
+)
+  (then     (num_literal_i32 1)
+)
+  (else     (num_literal_i32 2)
+))
+~~~
+# FORMATTED
+~~~roc
+if bool 1 else 2
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_simple_minimal.md:1:4:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **bool** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **if_then_else_simple_minimal.md:1:4:1:8:**
 ```roc
@@ -21,33 +38,14 @@ if bool 1 else 2
    ^^^^
 
 
-# TOKENS
-~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-if-then-else @1.1-1.17
-	(e-ident @1.4-1.8 (raw "bool"))
-	(e-int @1.9-1.10 (raw "1"))
-	(e-int @1.16-1.17 (raw "2")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.17
-	(if-branches
-		(if-branch
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @1.9-1.10 (value "1"))))
-	(if-else
-		(e-int @1.16-1.17 (value "2"))))
+(Expr.if_else)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.17 (type "Num(_size)"))
+~~~roc
+# No header found
 ~~~

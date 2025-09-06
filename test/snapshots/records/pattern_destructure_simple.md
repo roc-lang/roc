@@ -9,13 +9,35 @@ match person {
     { name, age } => name
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpFatArrow LowerIdent CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "person")
+)
+  (branch1     (binop_thick_arrow
+      (record_literal
+        (lc "name")
+        (lc "age")
+      )
+      (lc "name")
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match person
+	{name, age} => name
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **person** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **pattern_destructure_simple.md:1:7:1:13:**
 ```roc
@@ -24,65 +46,33 @@ match person {
       ^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `age` is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-**pattern_destructure_simple.md:2:13:2:16:**
+**pattern_destructure_simple.md:2:5:2:26:**
 ```roc
     { name, age } => name
 ```
-            ^^^
+    ^^^^^^^^^^^^^^^^^^^^^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),
-OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:16),CloseCurly(2:17-2:18),OpFatArrow(2:19-2:21),LowerIdent(2:22-2:26),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.13 (raw "person"))
-	(branches
-		(branch @2.5-2.26
-			(p-record @2.5-2.18
-				(field @2.7-2.11 (name "name") (rest false))
-				(field @2.13-2.16 (name "age") (rest false)))
-			(e-ident @2.22-2.26 (raw "name")))))
-~~~
-# FORMATTED
-~~~roc
-match person {
-	{ name, age } => name
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-3.2
-	(match @1.1-3.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-record-destructure @2.5-2.18
-							(destructs
-								(record-destruct @2.7-2.11 (label "name") (ident "name")
-									(required
-										(p-assign @2.7-2.11 (ident "name"))))
-								(record-destruct @2.13-2.16 (label "age") (ident "age")
-									(required
-										(p-assign @2.13-2.16 (ident "age"))))))))
-				(value
-					(e-lookup-local @2.22-2.26
-						(p-assign @2.7-2.11 (ident "name"))))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 8
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-3.2 (type "_a"))
+~~~roc
 ~~~

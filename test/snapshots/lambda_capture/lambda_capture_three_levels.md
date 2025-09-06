@@ -7,77 +7,75 @@ type=expr
 ~~~roc
 (|outer| |middle| |inner| outer + middle + inner)(1)(2)(3)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:8),OpBar(1:8-1:9),OpBar(1:10-1:11),LowerIdent(1:11-1:17),OpBar(1:17-1:18),OpBar(1:19-1:20),LowerIdent(1:20-1:25),OpBar(1:25-1:26),LowerIdent(1:27-1:32),OpPlus(1:33-1:34),LowerIdent(1:35-1:41),OpPlus(1:42-1:43),LowerIdent(1:44-1:49),CloseRound(1:49-1:50),NoSpaceOpenRound(1:50-1:51),Int(1:51-1:52),CloseRound(1:52-1:53),NoSpaceOpenRound(1:53-1:54),Int(1:54-1:55),CloseRound(1:55-1:56),NoSpaceOpenRound(1:56-1:57),Int(1:57-1:58),CloseRound(1:58-1:59),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar LowerIdent OpBar OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseRound OpenRound Int CloseRound OpenRound Int CloseRound OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.59
-	(e-apply @1.1-1.56
-		(e-apply @1.1-1.53
-			(e-tuple @1.1-1.50
-				(e-lambda @1.2-1.49
-					(args
-						(p-ident @1.3-1.8 (raw "outer")))
-					(e-lambda @1.10-1.49
-						(args
-							(p-ident @1.11-1.17 (raw "middle")))
-						(e-lambda @1.19-1.49
-							(args
-								(p-ident @1.20-1.25 (raw "inner")))
-							(e-binop @1.27-1.49 (op "+")
-								(e-binop @1.27-1.41 (op "+")
-									(e-ident @1.27-1.32 (raw "outer"))
-									(e-ident @1.35-1.41 (raw "middle")))
-								(e-ident @1.44-1.49 (raw "inner")))))))
-			(e-int @1.51-1.52 (raw "1")))
-		(e-int @1.54-1.55 (raw "2")))
-	(e-int @1.57-1.58 (raw "3")))
+(apply_anon
+  (apply_anon
+    (apply_anon
+      (lambda
+        (body
+          (lambda
+            (body
+              (lambda
+                (body
+                  (binop_plus
+                    (binop_plus
+                      (lc "outer")
+                      (lc "middle")
+                    )
+                    (lc "inner")
+                  )
+                )
+                (args
+                  (lc "inner")
+                )
+              )
+            )
+            (args
+              (lc "middle")
+            )
+          )
+        )
+        (args
+          (lc "outer")
+        )
+      )
+      (num_literal_i32 1)
+    )
+    (num_literal_i32 2)
+  )
+  (num_literal_i32 3)
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|outer| |middle| |inner| (outer + middle) + inner)(1)(2)(3)
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**lambda_capture_three_levels.md:1:49:1:50:**
+```roc
+(|outer| |middle| |inner| outer + middle + inner)(1)(2)(3)
+```
+                                                ^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.59
-	(e-call @1.1-1.56
-		(e-call @1.1-1.53
-			(e-lambda @1.2-1.49
-				(args
-					(p-assign @1.3-1.8 (ident "outer")))
-				(e-closure @1.10-1.49
-					(captures
-						(capture @1.3-1.8 (ident "outer")))
-					(e-lambda @1.10-1.49
-						(args
-							(p-assign @1.11-1.17 (ident "middle")))
-						(e-closure @1.19-1.49
-							(captures
-								(capture @1.3-1.8 (ident "outer"))
-								(capture @1.11-1.17 (ident "middle")))
-							(e-lambda @1.19-1.49
-								(args
-									(p-assign @1.20-1.25 (ident "inner")))
-								(e-binop @1.27-1.49 (op "add")
-									(e-binop @1.27-1.41 (op "add")
-										(e-lookup-local @1.27-1.32
-											(p-assign @1.3-1.8 (ident "outer")))
-										(e-lookup-local @1.35-1.41
-											(p-assign @1.11-1.17 (ident "middle"))))
-									(e-lookup-local @1.44-1.49
-										(p-assign @1.20-1.25 (ident "inner")))))))))
-			(e-int @1.51-1.52 (value "1")))
-		(e-int @1.54-1.55 (value "2")))
-	(e-int @1.57-1.58 (value "3")))
+(Expr.apply_ident)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.59 (type "Num(_size)"))
+~~~roc
+# No header found
 ~~~

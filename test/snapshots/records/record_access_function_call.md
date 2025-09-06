@@ -7,12 +7,40 @@ type=expr
 ~~~roc
 (person.transform)(42)
 ~~~
+# TOKENS
+~~~text
+OpenRound LowerIdent Dot LowerIdent CloseRound OpenRound Int CloseRound ~~~
+# PARSE
+~~~clojure
+(apply_anon
+  (binop_pipe
+    (lc "person")
+    (dot_lc "transform")
+  )
+  (num_literal_i32 42)
+)
+~~~
+# FORMATTED
+~~~roc
+person.transform(42)
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_access_function_call.md:1:18:1:19:**
+```roc
+(person.transform)(42)
+```
+                 ^
+
+
 **UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **person** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **record_access_function_call.md:1:2:1:8:**
 ```roc
@@ -21,33 +49,14 @@ Is there an `import` or `exposing` missing up-top?
  ^^^^^^
 
 
-# TOKENS
-~~~zig
-OpenRound(1:1-1:2),LowerIdent(1:2-1:8),NoSpaceDotLowerIdent(1:8-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),Int(1:20-1:22),CloseRound(1:22-1:23),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-apply @1.1-1.23
-	(e-tuple @1.1-1.19
-		(e-field-access @1.2-1.18
-			(e-ident @1.2-1.8 (raw "person"))
-			(e-ident @1.8-1.18 (raw "transform"))))
-	(e-int @1.20-1.22 (raw "42")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.23
-	(e-dot-access @1.2-1.18 (field "transform")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-int @1.20-1.22 (value "42")))
+(Expr.apply_ident)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.23 (type "_a"))
+~~~roc
+# No header found
 ~~~

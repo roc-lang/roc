@@ -7,12 +7,26 @@ type=expr
 ~~~roc
 Json.utf8
 ~~~
+# TOKENS
+~~~text
+UpperIdent Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(binop_pipe
+  (uc "Json")
+  (dot_lc "utf8")
+)
+~~~
+# FORMATTED
+~~~roc
+Json.utf8
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **Json.utf8** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **external_lookup_expr.md:1:1:1:10:**
 ```roc
@@ -21,24 +35,17 @@ Json.utf8
 ^^^^^^^^^
 
 
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-ident @1.1-1.10 (raw "Json.utf8"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(Expr.module_access
+  (Expr.lookup "Json")
+  (Expr.record_accessor)
+)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "Error"))
+~~~roc
+# No header found
 ~~~

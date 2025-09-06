@@ -228,7 +228,7 @@ test "fractional literal - decimal in function call" {
     const expr = test_env.getCanonicalExpr(canonical_expr);
 
     // This should be a function call
-    try testing.expectEqual(CIR.Expr.Tag.apply_ident, expr.tag);
+    try testing.expectEqual(CIR.Expr.Tag.fn_call, expr.tag);
 }
 
 test "fractional literal - decimal in list" {

@@ -7,44 +7,52 @@ type=expr
 ~~~roc
 (|x| x + 1)(5)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),OpBar(1:4-1:5),LowerIdent(1:6-1:7),OpPlus(1:8-1:9),Int(1:10-1:11),CloseRound(1:11-1:12),NoSpaceOpenRound(1:12-1:13),Int(1:13-1:14),CloseRound(1:14-1:15),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar LowerIdent OpBar LowerIdent OpPlus Int CloseRound OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.15
-	(e-tuple @1.1-1.12
-		(e-lambda @1.2-1.11
-			(args
-				(p-ident @1.3-1.4 (raw "x")))
-			(e-binop @1.6-1.11 (op "+")
-				(e-ident @1.6-1.7 (raw "x"))
-				(e-int @1.10-1.11 (raw "1")))))
-	(e-int @1.13-1.14 (raw "5")))
+(apply_anon
+  (lambda
+    (body
+      (binop_plus
+        (lc "x")
+        (num_literal_i32 1)
+      )
+    )
+    (args
+      (lc "x")
+    )
+  )
+  (num_literal_i32 5)
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|x| x + 1)(5)
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**lambda_capture_simple.md:1:11:1:12:**
+```roc
+(|x| x + 1)(5)
+```
+          ^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.15
-	(e-lambda @1.2-1.11
-		(args
-			(p-assign @1.3-1.4 (ident "x")))
-		(e-binop @1.6-1.11 (op "add")
-			(e-lookup-local @1.6-1.7
-				(p-assign @1.3-1.4 (ident "x")))
-			(e-int @1.10-1.11 (value "1"))))
-	(e-int @1.13-1.14 (value "5")))
+(Expr.apply_ident)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.15 (type "Num(_size)"))
+~~~roc
+# No header found
 ~~~

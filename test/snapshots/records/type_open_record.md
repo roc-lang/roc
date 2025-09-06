@@ -7,78 +7,32 @@ type=statement
 ~~~roc
 process_user! : { name : Str, age : U32, .. } => Str
 ~~~
+# TOKENS
+~~~text
+LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma DoubleDot CloseCurly OpFatArrow UpperIdent ~~~
+# PARSE
+~~~clojure
+(empty)
+~~~
+# FORMATTED
+~~~roc
+
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_open_record.md:1:42:1:44
 PARSE ERROR - type_open_record.md:1:37:1:40
 PARSE ERROR - type_open_record.md:1:47:1:49
 MALFORMED TYPE - type_open_record.md:1:47:1:49
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **..** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**type_open_record.md:1:42:1:44:**
-```roc
-process_user! : { name : Str, age : U32, .. } => Str
-```
-                                         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_open_record.md:1:37:1:40:**
-```roc
-process_user! : { name : Str, age : U32, .. } => Str
-```
-                                    ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_open_record.md:1:47:1:49:**
-```roc
-process_user! : { name : Str, age : U32, .. } => Str
-```
-                                              ^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_open_record.md:1:47:1:49:**
-```roc
-process_user! : { name : Str, age : U32, .. } => Str
-```
-                                              ^^
-
-
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:23),OpColon(1:24-1:25),UpperIdent(1:26-1:29),Comma(1:29-1:30),LowerIdent(1:31-1:34),OpColon(1:35-1:36),UpperIdent(1:37-1:40),Comma(1:40-1:41),DoubleDot(1:42-1:44),CloseCurly(1:45-1:46),OpFatArrow(1:47-1:49),UpperIdent(1:50-1:53),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(s-type-anno @1.1-1.49 (name "process_user!")
-	(ty-malformed @1.47-1.49 (tag "expected_ty_close_curly_or_comma")))
-~~~
-# FORMATTED
-~~~roc
-process_user! : 
-~~~
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-type-anno @1.1-1.49 (name "process_user!")
-		(ty-malformed @1.47-1.49)))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

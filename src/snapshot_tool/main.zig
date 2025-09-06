@@ -754,6 +754,7 @@ fn convertCIRDiagnosticToReport(
         .ident_not_in_scope => "UNDEFINED VARIABLE",
         .ident_already_defined => "IDENTIFIER ALREADY DEFINED",
         .unused_variable => "UNUSED VARIABLE",
+        .unused_expression => "UNUSED EXPRESSION",
         .type_not_in_scope => "TYPE NOT IN SCOPE",
         .invalid_type_var_in_constraint => "INVALID TYPE VARIABLE IN CONSTRAINT",
         .invalid_ability_in_constraint => "INVALID ABILITY IN CONSTRAINT",
@@ -852,6 +853,15 @@ fn convertCIRDiagnosticToReport(
             try report.document.addText(" to suppress this warning.");
             try report.document.addLineBreak();
             try report.document.addText("The unused variable is declared here:");
+        },
+        .unused_expression => {
+            try report.document.addReflowingText("This expression produces a value that is not used.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("If you don't need the result, consider calling a function that has side effects instead.");
+            try report.document.addText(" If you do need the result, assign it to a variable or use it in another expression.");
+            try report.document.addLineBreak();
+            try report.document.addText("The unused expression is here:");
         },
         .type_not_in_scope => {
             const type_text = if (region.start.offset < region.end.offset)
@@ -2671,17 +2681,32 @@ fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST
     try output.begin_code_block("clojure");
 
     // Output AST structure as S-expressions
-    // Always check for header first - headers are the primary content for header types
-    if (ast.header) |header| {
-        try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
-    } else if (parse_result) |node_idx_int| {
-        const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
-        try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
-    } else {
-        try output.md_writer.writeAll("(empty)\n");
-    }
+    // For file type, output both header and body
+    if (content.meta.node_type == .file) {
+        // Output header if present
+        if (ast.header) |header| {
+            try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
+        }
 
-    _ = content;
+        // Also output the body (root node)
+        if (parse_result) |node_idx_int| {
+            const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+            try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
+        } else if (ast.header == null) {
+            // Only show empty if there's no header AND no body
+            try output.md_writer.writeAll("(empty)\n");
+        }
+    } else {
+        // For non-file types, keep the old behavior
+        if (ast.header) |header| {
+            try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
+        } else if (parse_result) |node_idx_int| {
+            const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+            try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
+        } else {
+            try output.md_writer.writeAll("(empty)\n");
+        }
+    }
 
     try output.end_code_block();
     try output.end_section();
@@ -2888,7 +2913,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
         },
 
         // Binops use the binop field - must list them all explicitly
-        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_thin_arrow, .binop_and, .binop_or, .binop_as, .binop_exposing, .binop_where, .binop_platform, .binop_pipe => {
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_arrow_call, .binop_and, .binop_or, .binop_as, .binop_exposing, .binop_where, .binop_platform, .binop_pipe => {
             const binop = ast.node_slices.binOp(node.payload.binop);
             try writer.writeAll("\n");
             try outputASTNodeAsSExpr(writer, ast, env, binop.lhs, indent + 1);
@@ -3458,7 +3483,7 @@ fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
                 try writer.writeAll("  ");
             }
         },
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_thin_arrow, .binop_colon, .binop_equals => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_arrow_call, .binop_colon, .binop_equals => {
             // After mutation, binop nodes still have their binop payloads
             // The mutation only changes the tag, not the payload
             const has_binop = true;
@@ -3523,11 +3548,11 @@ fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
                 const tag_value = @as(u8, @intFromEnum(node.tag));
 
                 // Check if it's a statement, expression, or pattern
-                if (tag_value >= CIR.STMT_TAG_START and tag_value < CIR.EXPR_TAG_START) {
+                if (tag_value >= CIR.FIRST_STMT_TAG and tag_value < CIR.FIRST_EXPR_TAG) {
                     // It's a statement
                     const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
                     try outputCIRStmtAsSExpr(writer, cir, env, stmt_idx, indent + 1);
-                } else if (tag_value >= CIR.EXPR_TAG_START and tag_value < CIR.PATT_TAG_START) {
+                } else if (tag_value >= CIR.FIRST_EXPR_TAG and tag_value < CIR.FIRST_PATT_TAG) {
                     // It's an expression
                     const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
                     try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
@@ -3605,59 +3630,42 @@ fn outputCIRStmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
                 try writer.writeAll("  ");
             }
         },
-        .type_anno => {
-            // Type annotation has binop with identifier and type
+        .standalone_type_anno => {
+            // Standalone type annotation uses binop payload with pattern and type
             const binop = cir.getBinOp(CIR.Stmt.Idx, stmt.payload.binop);
             try writer.writeAll("\n");
 
-            // Output the identifier
+            // Output the pattern (left side - the identifier being annotated)
             for (0..indent + 1) |_| {
                 try writer.writeAll("  ");
             }
-            const lhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
-            // Check if the LHS has an identifier in its payload
-            const tag_value = @as(u8, @intFromEnum(lhs_node.tag));
-            if (tag_value >= CIR.PATT_TAG_START) {
-                // It's been mutated to a pattern - check if it's an ident pattern
-                const patt_tag = @as(CIR.PattTag, @enumFromInt(tag_value));
-                if (patt_tag == .ident or patt_tag == .var_ident) {
-                    const ident_name = env.idents.getText(lhs_node.payload.ident);
-                    try writer.print("(name \"{s}\")\n", .{ident_name});
-                } else {
-                    // Output the pattern type at least
-                    try writer.print("(name pattern:{s})\n", .{@tagName(patt_tag)});
-                }
-            } else if (lhs_node.tag == .lc or lhs_node.tag == .var_lc or lhs_node.tag == .not_lc) {
-                const ident_name = env.idents.getText(lhs_node.payload.ident);
-                try writer.print("(name \"{s}\")\n", .{ident_name});
-            } else {
-                // Output what we have at least
-                try writer.print("(name node:{s})\n", .{@tagName(lhs_node.tag)});
-            }
+            try writer.writeAll("(pattern ");
+            const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            try outputCIRPattAsSExpr(writer, cir, env, patt_idx, 0);
+            try writer.writeAll(")\n");
 
-            // Output the type expression
+            // Output the type (right side - the type annotation)
             for (0..indent + 1) |_| {
                 try writer.writeAll("  ");
             }
             try writer.writeAll("(type ");
-            // The RHS is the type - it's stored as a node index that we need to interpret
-            const type_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(binop.rhs)));
-            const type_tag_value = @as(u8, @intFromEnum(type_node.tag));
-
-            // Check if the tag is a valid AST.Node.Tag
-            const max_ast_tag = @typeInfo(parse.AST.Node.Tag).@"enum".fields.len;
-            if (type_tag_value < max_ast_tag) {
-                // It's a valid AST tag
-                try writer.print("{s}", .{@tagName(type_node.tag)});
-            } else {
-                // It's been mutated to a CIR tag or is invalid
-                try writer.print("<mutated_tag:{}>", .{type_tag_value});
-            }
+            const type_idx = @as(CIR.Type.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+            try writer.print("type_{}", .{@intFromEnum(type_idx)});
             try writer.writeAll(")\n");
 
             for (0..indent) |_| {
                 try writer.writeAll("  ");
             }
+        },
+        .assign_annotated => {
+            // TODO: Assignment with type annotation - not yet implemented in canonicalization
+            // When implemented, will need to handle the payload properly
+            try writer.writeAll(" (TODO: not yet implemented)");
+        },
+        .init_var_annotated => {
+            // TODO: Var initialization with type annotation - not yet implemented in canonicalization
+            // When implemented, will need to handle the payload properly
+            try writer.writeAll(" (TODO: not yet implemented)");
         },
         else => {},
     }
@@ -3691,14 +3699,139 @@ fn outputCIRPattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
     try writer.writeAll(")");
 }
 
+/// Output a type variable as an s-expression
+fn outputTypeVarAsSExpr(writer: anytype, store: *const types.Store, var_: types.Var, env: *const CommonEnv) !void {
+    const slot = @constCast(store).getSlot(var_);
+
+    switch (slot) {
+        .root => |desc_idx| {
+            const desc = @constCast(store).getDesc(desc_idx);
+            try outputTypeDescAsSExpr(writer, store, desc, @intFromEnum(var_), env);
+        },
+        .redirect => |target| {
+            // This is a redirected variable, show it points to another var
+            try writer.print("(var #{} -> #{})\n", .{ @intFromEnum(var_), @intFromEnum(target) });
+        },
+    }
+}
+
+/// Output a type descriptor as an s-expression
+fn outputTypeDescAsSExpr(writer: anytype, store: *const types.Store, desc: types.Descriptor, var_num: u32, env: *const CommonEnv) !void {
+    _ = store;
+
+    switch (desc.content) {
+        .structure => |flat| {
+            switch (flat) {
+                .str => try writer.print("(var #{} Str)\n", .{var_num}),
+                .num => |num_type| {
+                    switch (num_type) {
+                        .num_compact => |compact| {
+                            switch (compact) {
+                                .int => |precision| {
+                                    const type_name = switch (precision) {
+                                        .i8 => "I8",
+                                        .i16 => "I16",
+                                        .i32 => "I32",
+                                        .i64 => "I64",
+                                        .i128 => "I128",
+                                        .u8 => "U8",
+                                        .u16 => "U16",
+                                        .u32 => "U32",
+                                        .u64 => "U64",
+                                        .u128 => "U128",
+                                    };
+                                    try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                                },
+                                .frac => |precision| {
+                                    const type_name = switch (precision) {
+                                        .f32 => "F32",
+                                        .f64 => "F64",
+                                        .dec => "Dec",
+                                    };
+                                    try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                                },
+                            }
+                        },
+                        .int_precision => |precision| {
+                            const type_name = switch (precision) {
+                                .i8 => "I8",
+                                .i16 => "I16",
+                                .i32 => "I32",
+                                .i64 => "I64",
+                                .i128 => "I128",
+                                .u8 => "U8",
+                                .u16 => "U16",
+                                .u32 => "U32",
+                                .u64 => "U64",
+                                .u128 => "U128",
+                            };
+                            try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                        },
+                        .frac_precision => |precision| {
+                            const type_name = switch (precision) {
+                                .f32 => "F32",
+                                .f64 => "F64",
+                                .dec => "Dec",
+                            };
+                            try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                        },
+                        .num_unbound => try writer.print("(var #{} Num *)\n", .{var_num}),
+                        .int_unbound => try writer.print("(var #{} Int *)\n", .{var_num}),
+                        .frac_unbound => try writer.print("(var #{} Frac *)\n", .{var_num}),
+                        .num_poly => |poly| {
+                            try writer.print("(var #{} Num #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                        .int_poly => |poly| {
+                            try writer.print("(var #{} Int #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                        .frac_poly => |poly| {
+                            try writer.print("(var #{} Frac #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                    }
+                },
+                .box => |elem_var| {
+                    try writer.print("(var #{} Box #{})\n", .{ var_num, @intFromEnum(elem_var) });
+                },
+                .list => |elem_var| {
+                    try writer.print("(var #{} List #{})\n", .{ var_num, @intFromEnum(elem_var) });
+                },
+                .list_unbound => try writer.print("(var #{} List *)\n", .{var_num}),
+                .record => try writer.print("(var #{} record)\n", .{var_num}),
+                .record_unbound => try writer.print("(var #{} record *)\n", .{var_num}),
+                .record_poly => |poly| {
+                    try writer.print("(var #{} record #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                },
+                .empty_record => try writer.print("(var #{} {{}})\n", .{var_num}),
+                .tag_union => try writer.print("(var #{} tag_union)\n", .{var_num}),
+                .empty_tag_union => try writer.print("(var #{} [])\n", .{var_num}),
+                .tuple => try writer.print("(var #{} tuple)\n", .{var_num}),
+                .nominal_type => try writer.print("(var #{} nominal_type)\n", .{var_num}),
+                .fn_pure => try writer.print("(var #{} fn_pure)\n", .{var_num}),
+                .fn_effectful => try writer.print("(var #{} fn_effectful)\n", .{var_num}),
+                .fn_unbound => try writer.print("(var #{} fn_unbound)\n", .{var_num}),
+            }
+        },
+        .flex_var => |maybe_name| {
+            if (maybe_name) |name| {
+                const flex_name = @constCast(env).idents.getText(name);
+                try writer.print("(var #{} _{s})\n", .{ var_num, flex_name });
+            } else {
+                try writer.print("(var #{} _)\n", .{var_num});
+            }
+        },
+        .rigid_var => |name| {
+            const rigid_name = @constCast(env).idents.getText(name);
+            try writer.print("(var #{} {s})\n", .{ var_num, rigid_name });
+        },
+        .alias => try writer.print("(var #{} alias)\n", .{var_num}),
+        .err => try writer.print("(var #{} <error>)\n", .{var_num}),
+    }
+}
+
 /// Generate SOLVED section showing internal type solving details
 fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    _ = env; // May be used in future for identifier resolution
-    std.debug.print("generateSolvedSection called with expr_idx: {?}\n", .{maybe_expr_idx});
     try output.begin_section("SOLVED");
-    std.debug.print("begin_section completed\n", .{});
     try output.begin_code_block("clojure");
-    std.debug.print("begin_code_block completed\n", .{});
 
     // Create a ModuleEnv for type checking with the CIR properly set
     // This is needed because the type checker might call the interpreter
@@ -3709,9 +3842,7 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // First run type checking to generate constraints
     var regions = Region.List{};
-    std.debug.print("About to call Check.initForCIR\n", .{});
     var checker = Check.initForCIR(output.gpa, @constCast(types_store), &regions) catch |err| {
-        std.debug.print("Check.initForCIR failed with error: {}\n", .{err});
         try output.md_writer.print("; Type checker init failed: {}\n", .{err});
         try output.end_code_block();
         try output.end_section();
@@ -3721,13 +3852,21 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
 
     // Run type checking on the expression if we have one
     if (maybe_expr_idx) |expr_idx| {
-        std.debug.print("About to call checkCIRExpr with expr_idx: {}\n", .{@intFromEnum(expr_idx)});
         _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch |err| {
-            std.debug.print("checkCIRExpr failed with error: {}\n", .{err});
             try output.md_writer.print("; Type checking failed: {}\n", .{err});
         };
-        std.debug.print("checkCIRExpr completed successfully\n", .{});
     } else {}
+
+    // Output complete type information as s-expressions
+    const var_count = types_store.len();
+    try output.md_writer.print("; Total type variables: {}\n", .{var_count});
+
+    // Output each type variable with its full details
+    var i: u32 = 0;
+    while (i < var_count) : (i += 1) {
+        const var_ = @as(types.Var, @enumFromInt(i));
+        try outputTypeVarAsSExpr(&output.md_writer, types_store, var_, env);
+    }
 
     try output.end_code_block();
     try output.end_section();
@@ -3758,11 +3897,46 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const Commo
         _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch {};
     } else {}
 
-    // Extract and display the exported symbols
+    // Look for all defined symbols in the CIR
+    // Walk through the symbol table to find all definitions
+    var symbol_iter = cir.scope_state.symbol_table.iterator();
+    while (symbol_iter.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const node_idx = entry.value_ptr.*;
+        const name = env.idents.getText(ident_idx);
 
-    // Headers are stored in the AST, not in CIR expressions
-    // We need to access the AST header information
-    if (cir.ast.header) |header| {
+        // Check if this node has been converted to an expression
+        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+        const tag_int = @intFromEnum(node.tag);
+
+        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+            // It's an expression - we can get its type
+            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+            const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Resolve the type variable to get the actual type
+            const resolved = @constCast(types_store).resolveVar(expr_var);
+
+            // Format the type using TypeWriter
+            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                try output.md_writer.print("{s} : ?\n", .{name});
+                continue;
+            };
+            defer type_writer.deinit();
+
+            type_writer.write(resolved.var_) catch {
+                try output.md_writer.print("{s} : ?\n", .{name});
+                continue;
+            };
+
+            const type_str = type_writer.get();
+            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+        }
+    }
+
+    // Don't try to process header exposed items separately - they're already in the symbol table
+    if (false and cir.ast.header != null) { // Disabled - symbol table already has all definitions
+        const header = cir.ast.header.?;
         switch (header) {
             .app => |app| {
                 // App headers expose functions - now stored in the platform binop
@@ -3861,7 +4035,7 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const Commo
             },
         }
     } else {
-        try output.md_writer.writeAll("# No header found\n");
+        // No header to process
     }
 
     try output.end_code_block();
@@ -3916,7 +4090,6 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
 fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
-    std.debug.print("DEBUG: Starting processSnapshotFileUnified for: {s}\n", .{snapshot_path});
 
     const @"1Mb" = 1024 * 1024;
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {

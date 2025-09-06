@@ -12,144 +12,172 @@ mapList = |list, fn| list.map(fn)
 
 main! = |_| mapList([1,2,3,4,5])
 ~~~
-# EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
-# PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_with_vars.md:6:13:6:20:**
-```roc
-main! = |_| mapList([1,2,3,4,5])
-```
-            ^^^^^^^
-
-It has the type:
-    _List(Num(_size)) -> _ret_
-
-But here it's being used as:
-    _List(a), a -> b -> List(b)_
-
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:15),NoSpaceOpenRound(3:15-3:16),LowerIdent(3:16-3:17),CloseRound(3:17-3:18),Comma(3:18-3:19),OpenRound(3:20-3:21),LowerIdent(3:21-3:22),OpArrow(3:23-3:25),LowerIdent(3:26-3:27),CloseRound(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:36),NoSpaceOpenRound(3:36-3:37),LowerIdent(3:37-3:38),CloseRound(3:38-3:39),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:16),Comma(4:16-4:17),LowerIdent(4:18-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:26),NoSpaceDotLowerIdent(4:26-4:30),NoSpaceOpenRound(4:30-4:31),LowerIdent(4:31-4:33),CloseRound(4:33-4:34),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:20),NoSpaceOpenRound(6:20-6:21),OpenSquare(6:21-6:22),Int(6:22-6:23),Comma(6:23-6:24),Int(6:24-6:25),Comma(6:25-6:26),Int(6:26-6:27),Comma(6:27-6:28),Int(6:28-6:29),Comma(6:29-6:30),Int(6:30-6:31),CloseSquare(6:31-6:32),CloseRound(6:32-6:33),
-EndOfFile(7:1-7:1),
-~~~
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent OpArrow LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare Int Comma Int Comma Int Comma Int Comma Int CloseSquare CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.33
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.39 (name "mapList")
-			(ty-fn @3.11-3.39
-				(ty-apply @3.11-3.18
-					(ty @3.11-3.15 (name "List"))
-					(ty-var @3.16-3.17 (raw "a")))
-				(ty-fn @3.21-3.27
-					(ty-var @3.21-3.22 (raw "a"))
-					(ty-var @3.26-3.27 (raw "b")))
-				(ty-apply @3.32-3.39
-					(ty @3.32-3.36 (name "List"))
-					(ty-var @3.37-3.38 (raw "b")))))
-		(s-decl @4.1-4.34
-			(p-ident @4.1-4.8 (raw "mapList"))
-			(e-lambda @4.11-4.34
-				(args
-					(p-ident @4.12-4.16 (raw "list"))
-					(p-ident @4.18-4.20 (raw "fn")))
-				(e-field-access @4.22-4.34
-					(e-ident @4.22-4.26 (raw "list"))
-					(e-apply @4.26-4.34
-						(e-ident @4.26-4.30 (raw "map"))
-						(e-ident @4.31-4.33 (raw "fn"))))))
-		(s-decl @6.1-6.33
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.33
-				(args
-					(p-underscore))
-				(e-apply @6.13-6.33
-					(e-ident @6.13-6.20 (raw "mapList"))
-					(e-list @6.21-6.32
-						(e-int @6.22-6.23 (raw "1"))
-						(e-int @6.24-6.25 (raw "2"))
-						(e-int @6.26-6.27 (raw "3"))
-						(e-int @6.28-6.29 (raw "4"))
-						(e-int @6.30-6.31 (raw "5"))))))))
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "mapList")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (lc "a")
+      )
+      (binop_arrow_call
+        (binop_arrow_call
+          (lc "a")
+          (lc "b")
+        )
+        (apply_uc
+          (uc "List")
+          (lc "b")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "mapList")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (lc "list")
+            (dot_lc "map")
+          )
+          (lc "fn")
+        )
+      )
+      (args
+        (lc "list")
+        (lc "fn")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "mapList")
+          (list_literal
+            (num_literal_i32 1)
+            (num_literal_i32 2)
+            (num_literal_i32 3)
+            (num_literal_i32 4)
+            (num_literal_i32 5)
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
-mapList : List(a), (a -> b) -> List(b)
+mapList : List a -> (a -> b) -> List b
 mapList = |list, fn| list.map(fn)
 
 main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~
+# EXPECTED
+TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.8 (ident "mapList"))
-		(e-lambda @4.11-4.34
-			(args
-				(p-assign @4.12-4.16 (ident "list"))
-				(p-assign @4.18-4.20 (ident "fn")))
-			(e-dot-access @4.22-4.34 (field "map")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.12-4.16 (ident "list"))))
-				(args
-					(e-lookup-local @4.31-4.33
-						(p-assign @4.18-4.20 (ident "fn"))))))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.39 (effectful false)
-					(ty-apply @3.11-3.18 (symbol "List")
-						(ty-var @3.16-3.17 (name "a")))
-					(ty-parens @3.20-3.28
-						(ty-fn @3.21-3.27 (effectful false)
-							(ty-var @3.21-3.22 (name "a"))
-							(ty-var @3.26-3.27 (name "b"))))
-					(ty-apply @3.32-3.39 (symbol "List")
-						(ty-var @3.37-3.38 (name "b")))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.33
-			(captures
-				(capture @4.1-4.8 (ident "mapList")))
-			(e-lambda @6.9-6.33
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.33
-					(e-lookup-local @6.13-6.20
-						(p-assign @4.1-4.8 (ident "mapList")))
-					(e-list @6.21-6.32
-						(elems
-							(e-int @6.22-6.23 (value "1"))
-							(e-int @6.24-6.25 (value "2"))
-							(e-int @6.26-6.27 (value "3"))
-							(e-int @6.28-6.29 (value "4"))
-							(e-int @6.30-6.31 (value "5")))))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "mapList"))
+    (type type_18)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "mapList"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 50
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 -> #46)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 -> #45)
+(var #26 _)
+(var #27 _)
+(var #28 -> #46)
+(var #29 _)
+(var #30 -> #49)
+(var #31 _)
+(var #32 -> #48)
+(var #33 Num *)
+(var #34 Num *)
+(var #35 Num *)
+(var #36 Num *)
+(var #37 Num *)
+(var #38 _)
+(var #39 _)
+(var #40 -> #49)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 fn_pure)
+(var #46 fn_pure)
+(var #47 _)
+(var #48 fn_pure)
+(var #49 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.8 (type "List(a), a -> b -> List(b)"))
-		(patt @6.1-6.6 (type "_arg -> _ret")))
-	(expressions
-		(expr @4.11-4.34 (type "List(a), a -> b -> List(b)"))
-		(expr @6.9-6.33 (type "_arg -> _ret"))))
+~~~roc
+mapList : _arg, _arg2 -> _ret
+main : _arg -> _ret
+fn : _c
+list : _c
 ~~~

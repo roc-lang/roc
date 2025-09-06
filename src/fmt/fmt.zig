@@ -698,7 +698,7 @@ const Formatter = struct {
             .binop_lt => try self.formatBinOp(node_idx, "<"),
             .binop_lte => try self.formatBinOp(node_idx, "<="),
             .binop_thick_arrow => try self.formatBinOp(node_idx, "=>"),
-            .binop_thin_arrow => try self.formatBinOp(node_idx, "->"),
+            .binop_arrow_call => try self.formatBinOp(node_idx, "->"),
             .binop_and => try self.formatBinOp(node_idx, "&&"),
             .binop_or => try self.formatBinOp(node_idx, "||"),
             .binop_as => try self.formatBinOp(node_idx, "as"),
@@ -1188,11 +1188,11 @@ const Formatter = struct {
         const rhs_node = self.getNode(rhs);
         const is_complex_type = switch (rhs_node.tag) {
             // Only make function types multiline if they have nested arrows (curried functions)
-            .binop_thin_arrow => blk: {
+            .binop_arrow_call => blk: {
                 const arrow_binop = self.ast.node_slices.binOp(rhs_node.payload.binop);
                 const arrow_lhs_node = self.getNode(arrow_binop.lhs);
                 // Only multiline for nested arrows, not simple tuples
-                break :blk arrow_lhs_node.tag == .binop_thin_arrow;
+                break :blk arrow_lhs_node.tag == .binop_arrow_call;
             },
             // Record types with many fields
             .record_literal => self.collectionIsMultiline(rhs),
@@ -1240,13 +1240,13 @@ const Formatter = struct {
         const node = self.getNode(node_idx);
 
         switch (node.tag) {
-            .binop_thin_arrow => {
+            .binop_arrow_call => {
                 // Function type: format with proper precedence and spacing
                 const binop = self.ast.node_slices.binOp(node.payload.binop);
 
                 // Check if LHS needs parentheses (another function type)
                 const lhs_node = self.getNode(binop.lhs);
-                const needs_parens = lhs_node.tag == .binop_thin_arrow;
+                const needs_parens = lhs_node.tag == .binop_arrow_call;
 
                 if (needs_parens) try self.push('(');
                 try self.formatTypeExpression(binop.lhs);
@@ -1372,7 +1372,7 @@ const Formatter = struct {
 
             // Check if argument needs parentheses (e.g., function types as arguments)
             const elem_node = self.getNode(elem);
-            const needs_parens = elem_node.tag == .binop_thin_arrow;
+            const needs_parens = elem_node.tag == .binop_arrow_call;
 
             if (needs_parens) try self.push('(');
             try self.formatTypeExpression(elem);
@@ -1857,7 +1857,7 @@ const Formatter = struct {
             while (check_it.next()) |child| {
                 const child_node = self.getNode(child);
                 // Check for type with where clause
-                if (child_node.tag == .binop_thin_arrow) {
+                if (child_node.tag == .binop_arrow_call) {
                     const arrow_binop = self.ast.node_slices.binOp(child_node.payload.binop);
                     const lhs_node = self.getNode(arrow_binop.lhs);
                     if (lhs_node.tag == .binop_where) {
@@ -2827,7 +2827,7 @@ const Formatter = struct {
                     }
                 }
             },
-            .binop_colon, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_lt, .binop_gt, .binop_lte, .binop_gte, .binop_double_equals, .binop_not_equals, .binop_and, .binop_or, .binop_pipe, .binop_dot, .binop_colon_equals, .binop_as, .binop_where, .binop_thick_arrow, .binop_thin_arrow, .binop_platform => {
+            .binop_colon, .binop_equals, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_lt, .binop_gt, .binop_lte, .binop_gte, .binop_double_equals, .binop_not_equals, .binop_and, .binop_or, .binop_pipe, .binop_dot, .binop_colon_equals, .binop_as, .binop_where, .binop_thick_arrow, .binop_arrow_call, .binop_platform => {
                 // Binary operators use binop payload
                 const binop = self.ast.node_slices.binOp(node.payload.binop);
                 const lhs_node = self.getNode(binop.lhs);
@@ -3333,7 +3333,7 @@ const Formatter = struct {
             .binop_double_question => .OpDoubleQuestion,
             .binop_equals => .OpAssign,
             .binop_colon => .OpColon,
-            .binop_thin_arrow => .OpArrow,
+            .binop_arrow_call => .OpArrow,
             .binop_thick_arrow => .OpFatArrow,
             .binop_as => .KwAs,
             .binop_where => .KwWhere,

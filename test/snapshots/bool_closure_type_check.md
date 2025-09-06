@@ -7,43 +7,49 @@ type=expr
 ~~~roc
 (|x| !x)(True)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),OpBar(1:4-1:5),OpBang(1:6-1:7),LowerIdent(1:7-1:8),CloseRound(1:8-1:9),NoSpaceOpenRound(1:9-1:10),UpperIdent(1:10-1:14),CloseRound(1:14-1:15),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar LowerIdent OpBar OpBang LowerIdent CloseRound OpenRound UpperIdent CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.15
-	(e-tuple @1.1-1.9
-		(e-lambda @1.2-1.8
-			(args
-				(p-ident @1.3-1.4 (raw "x")))
-			(unary "!"
-				(e-ident @1.7-1.8 (raw "x")))))
-	(e-tag @1.10-1.14 (raw "True")))
+(apply_anon
+  (lambda
+    (body
+      (unary_not <unary_op>)
+    )
+    (args
+      (lc "x")
+    )
+  )
+  (uc "True")
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|x| !x)(True)
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**bool_closure_type_check.md:1:7:1:9:**
+```roc
+(|x| !x)(True)
+```
+      ^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.15
-	(e-lambda @1.2-1.8
-		(args
-			(p-assign @1.3-1.4 (ident "x")))
-		(e-unary-not @1.6-1.8
-			(e-lookup-local @1.7-1.8
-				(p-assign @1.3-1.4 (ident "x")))))
-	(e-nominal @1.10-1.14 (nominal "Bool")
-		(e-tag @1.10-1.14 (name "True"))))
+(Expr.apply_ident)
+~~~
+# SOLVED
+~~~clojure
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.15 (type "Bool"))
+~~~roc
+# No header found
 ~~~

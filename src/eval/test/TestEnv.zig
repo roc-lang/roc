@@ -2,7 +2,8 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const eval = @import("../interpreter.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
+const EvalError = @import("../interpreter.zig").EvalError;
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -15,7 +16,7 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const TestEnv = @This();
 
 allocator: std.mem.Allocator,
-interpreter: ?*eval.Interpreter,
+interpreter: ?*Interpreter,
 roc_ops: ?RocOps,
 
 pub fn init(allocator: std.mem.Allocator) TestEnv {
@@ -27,7 +28,7 @@ pub fn init(allocator: std.mem.Allocator) TestEnv {
 }
 
 /// Set the interpreter instance for this test environment
-pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
+pub fn setInterpreter(self: *TestEnv, interp: *Interpreter) void {
     self.interpreter = interp;
 }
 

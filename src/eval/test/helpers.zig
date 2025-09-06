@@ -10,7 +10,8 @@ const layout = @import("layout");
 const builtins = @import("builtins");
 
 const TestEnv = @import("TestEnv.zig");
-const eval = @import("../interpreter.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
+const EvalError = @import("../interpreter.zig").EvalError;
 const stack = @import("../stack.zig");
 const StackValue = @import("../StackValue.zig");
 
@@ -19,14 +20,14 @@ const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Layout = layout.Layout;
-const Closure = eval.Closure;
+const Closure = @import("../interpreter.zig").Closure;
 const LayoutStore = layout.Store;
 const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
 /// Helper function to run an expression and expect a specific error.
-pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
+pub fn runExpectError(src: []const u8, expected_error: EvalError, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -39,7 +40,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -76,7 +77,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -113,7 +114,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -174,7 +175,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -239,7 +240,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -294,7 +295,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -461,7 +462,7 @@ test "eval runtime error - returns crash error" {
     defer test_env_instance.deinit();
 
     // Create interpreter and evaluate the crash expression
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -472,7 +473,7 @@ test "eval runtime error - returns crash error" {
     test_env_instance.setInterpreter(&interpreter);
 
     const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-    try std.testing.expectError(eval.EvalError.Crash, result);
+    try std.testing.expectError(EvalError.Crash, result);
 }
 
 test "eval tag - already primitive" {
@@ -493,7 +494,7 @@ test "eval tag - already primitive" {
     defer test_env_instance.deinit();
 
     // Create interpreter
-    var interpreter = try eval.Interpreter.init(
+    var interpreter = try Interpreter.init(
         test_allocator,
         resources.module_env,
         &eval_stack,
@@ -533,7 +534,7 @@ test "interpreter reuse across multiple evaluations" {
         defer test_env_instance.deinit();
 
         // Create interpreter for this evaluation
-        var interpreter = try eval.Interpreter.init(
+        var interpreter = try Interpreter.init(
             test_allocator,
             resources.module_env,
             &eval_stack,
