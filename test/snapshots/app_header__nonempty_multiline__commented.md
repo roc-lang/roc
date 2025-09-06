@@ -40,7 +40,8 @@ KwApp LineComment OpenSquare LineComment LowerIdent OpBang Comma LineComment Clo
 ~~~
 # FORMATTED
 ~~~roc
-app [ # Comment after keyword
+app [
+	# Comment after keyword
 	# Comment after provides open
 	main!,
 ]
@@ -62,6 +63,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
 ~~~roc

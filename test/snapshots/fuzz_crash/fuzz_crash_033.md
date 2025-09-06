@@ -7,24 +7,35 @@ type=expr
 ~~~roc
 { i, Complete]
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent Comma UpperIdent CloseSquare ~~~
+# PARSE
+~~~clojure
+(malformed)
+~~~
+# FORMATTED
+~~~roc
+]
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_033.md:1:6:1:14
 PARSE ERROR - fuzz_crash_033.md:1:14:1:15
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_record_field_name`
+A parsing error occurred: **expected_expr_close_curly**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_033.md:1:6:1:14:**
+**fuzz_crash_033.md:1:1:1:14:**
 ```roc
 { i, Complete]
 ```
-     ^^^^^^^^
+^^^^^^^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_033.md:1:14:1:15:**
 ```roc
@@ -33,26 +44,20 @@ This is an unexpected parsing error. Please check your syntax.
              ^
 
 
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),UpperIdent(1:6-1:14),CloseSquare(1:14-1:15),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-malformed @1.14-1.15 (reason "expected_expr_close_curly_or_comma"))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

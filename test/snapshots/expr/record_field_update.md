@@ -7,47 +7,55 @@ type=expr
 ~~~roc
 { ..person, age: 31 }
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - record_field_update.md:1:5:1:11
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_field_update.md:1:5:1:11:**
-```roc
-{ ..person, age: 31 }
-```
-    ^^^^^^
-
-
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),DoubleDot(1:3-1:5),LowerIdent(1:5-1:11),Comma(1:11-1:12),LowerIdent(1:13-1:16),OpColon(1:16-1:17),Int(1:18-1:20),CloseCurly(1:21-1:22),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenCurly DoubleDot LowerIdent Comma LowerIdent OpColon Int CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.22
-	(ext
-		(e-ident @1.5-1.11 (raw "person")))
-	(field (field "age")
-		(e-int @1.18-1.20 (raw "31"))))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+age
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_field_update.md:1:5:1:11
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_field_update.md:1:1:1:13:**
+```roc
+{ ..person, age: 31 }
+```
+^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **age** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_field_update.md:1:13:1:16:**
+```roc
+{ ..person, age: 31 }
+```
+            ^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.22
-	(ext
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(fields
-		(field (name "age")
-			(e-int @1.18-1.20 (value "31")))))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.22 (type "{ age: Num(_size) }"))
+~~~roc
 ~~~

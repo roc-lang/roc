@@ -66,7 +66,10 @@ const Formatter = struct {
         // Format the header if present
         if (self.ast.header) |header| {
             try self.formatHeader(header);
-            // Don't add blank line here - let the source tokens handle spacing
+            // Always add a blank line after header to separate it from the body
+            if (root_node != null) {
+                try self.ensureBlankLine();
+            }
         }
 
         // Format the root node (which is usually a block containing all top-level statements)
@@ -139,17 +142,9 @@ const Formatter = struct {
                     self.token_cursor += 1;
                 },
                 .BlankLine => {
-                    // Only add a blank line if we don't already have one
-                    // A blank line needs 2 consecutive newlines total
-                    if (self.consecutive_newlines < 2) {
-                        // Add newlines to make a blank line
-                        while (self.consecutive_newlines < 2) {
-                            try self.newline();
-                        }
-                    }
-                    // If we already have 2+ newlines, skip this blank line token
+                    // Skip blank line tokens in regions - they're handled separately
+                    // This is mainly used for comments between statements
                     self.token_cursor += 1;
-                    found_any = true;
                 },
                 else => {
                     // Skip non-comment tokens
@@ -161,7 +156,9 @@ const Formatter = struct {
         return found_any;
     }
 
-    /// Flush any comment and blank line tokens before the given position
+    /// Flush any comment tokens before the given position
+    /// Note: This does NOT handle blank lines - those are handled separately
+    /// to distinguish between blank lines within expressions vs between statements
     fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
         var found_any = false;
 
@@ -195,20 +192,12 @@ const Formatter = struct {
                     self.token_cursor += 1;
                 },
                 .BlankLine => {
-                    // Only add a blank line if we don't already have one
-                    // A blank line needs 2 consecutive newlines total
-                    if (self.consecutive_newlines < 2) {
-                        // Add newlines to make a blank line
-                        while (self.consecutive_newlines < 2) {
-                            try self.newline();
-                        }
-                    }
-                    // If we already have 2+ newlines, skip this blank line token
+                    // Skip blank line tokens - they are handled separately
+                    // This prevents blank lines from being preserved within expressions
                     self.token_cursor += 1;
-                    found_any = true;
                 },
                 else => {
-                    // Skip non-comment/blank tokens but keep looking for comments
+                    // Skip non-comment tokens but keep looking for comments
                     // This ensures we find all comments before the target position
                     self.token_cursor += 1;
                 },
@@ -576,13 +565,14 @@ const Formatter = struct {
         const multiline = has_comments or has_trailing_comma;
 
         if (multiline) {
+            // First ensure we're on a new line for the comment/content
+            try self.ensureNewline();
             self.curr_indent_level += 1;
-            // Check for comments after the opening bracket before newline
+            // Check for comments after the opening bracket
             if (first_node_idx) |first_idx| {
                 const first_node = self.getNode(first_idx);
                 _ = try self.flushCommentsBeforePosition(first_node.region.start);
             }
-            try self.ensureNewline();
         }
 
         // Reset iterator for second pass
@@ -1111,20 +1101,20 @@ const Formatter = struct {
             if (multiline) {
                 self.curr_indent_level += 1;
                 if (!has_comments) {
-                    // Only add blank line if there wasn't a comment (which already added newline)
-                    try self.ensureBlankLine();
+                    // Add newline and indent for the value
+                    try self.ensureNewline();
                     try self.pushIndent();
                 } else {
                     // Comment already added newline and indentation
-                    // Don't add duplicate indentation
+                    // Just add indentation if needed
+                    if (self.has_newline) {
+                        try self.pushIndent();
+                    }
                 }
                 if (needs_rhs_parens) try self.push('(');
                 try self.formatNode(rhs);
                 if (needs_rhs_parens) try self.push(')');
                 self.curr_indent_level -= 1;
-
-                // Add a blank line after multiline assignment expressions
-                try self.ensureBlankLine();
             } else {
                 try self.ensureSpace();
                 if (needs_rhs_parens) try self.push('(');

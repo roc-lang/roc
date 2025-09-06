@@ -7,53 +7,61 @@ type=file
 ~~~roc
 package[]{d:{{d:{0}?}}}
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),OpenCurly(1:10-1:11),LowerIdent(1:11-1:12),OpColon(1:12-1:13),OpenCurly(1:13-1:14),OpenCurly(1:14-1:15),LowerIdent(1:15-1:16),OpColon(1:16-1:17),OpenCurly(1:17-1:18),Int(1:18-1:19),CloseCurly(1:19-1:20),NoSpaceOpQuestion(1:20-1:21),CloseCurly(1:21-1:22),CloseCurly(1:22-1:23),CloseCurly(1:23-1:24),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+KwPackage OpenSquare CloseSquare OpenCurly LowerIdent OpColon OpenCurly OpenCurly LowerIdent OpColon OpenCurly Int CloseCurly OpQuestion CloseCurly CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.24
-	(package @1.1-1.24
-		(exposes @1.8-1.10)
-		(packages @1.10-1.24
-			(record-field @1.11-1.23 (name "d")
-				(e-block @1.13-1.23
-					(statements
-						(e-record @1.14-1.22
-							(field (field "d")
-								(e-question-suffix @1.17-1.21
-									(e-block @1.17-1.20
-										(statements
-											(e-int @1.18-1.19 (raw "0"))))))))))))
-	(statements))
+(package-header
+  (packages
+    (lc "d")
+
+    (block
+      (block
+        (binop_colon
+          (lc "d")
+          (block
+            (num_literal_i32 0)
+          )
+        )
+        (malformed)
+      )
+    )
+))
 ~~~
 # FORMATTED
 ~~~roc
-package
-	[]
+package [] packages {d, {
 	{
-		d: {
-			{
-				d: {
-					0
-				}?,
-			}
-		},
+		d : {
+			0
+		}
+		?
 	}
+}}
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_071.md:1:20:1:21:**
+```roc
+package[]{d:{{d:{0}?}}}
+```
+                   ^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

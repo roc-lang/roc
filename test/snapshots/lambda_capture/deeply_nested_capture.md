@@ -119,40 +119,51 @@ Is there an **import** or **exposing** missing up-top?
             ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **b** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-
-**deeply_nested_capture.md:4:25:4:26:**
-```roc
-        b_loc = a_loc + b
-```
-                        ^
-
-
-**UNUSED VARIABLE**
-Variable **a** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-
-**deeply_nested_capture.md:1:5:1:6:**
-```roc
-(((|a| {
-```
-    ^
-
-
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.fn_call)
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 34
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 Num *)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #12)
+(var #12 -> #13)
+(var #13 _)
+(var #14 -> #28)
+(var #15 _)
+(var #16 -> #29)
+(var #17 -> #20)
+(var #18 -> #30)
+(var #19 Num *)
+(var #20 -> #32)
+(var #21 Num *)
+(var #22 -> #33)
+(var #23 Num *)
+(var #24 _)
+(var #25 -> #19)
+(var #26 _)
+(var #27 _)
+(var #28 fn_pure)
+(var #29 fn_pure)
+(var #30 -> #31)
+(var #31 fn_pure)
+(var #32 fn_pure)
+(var #33 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+a : _d
+b : _d
+c : _d
 ~~~

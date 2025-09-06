@@ -32,8 +32,13 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 Num *)
+(var #2 F64)
+(var #3 Str)
+(var #4 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

@@ -28,6 +28,19 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       )
     )
 ))
+(block
+  (binop_equals
+    (lc "a")
+    (num_literal_i32 5)
+  )
+  (binop_equals
+    (lc "b")
+    (binop_plus
+      (lc "a")
+      (num_literal_i32 1)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -58,7 +71,26 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #8)
+(var #8 Num *)
+(var #9 _)
+(var #10 -> #13)
+(var #11 -> #12)
+(var #12 -> #13)
+(var #13 Num *)
+(var #14 _)
+(var #15 _)
 ~~~
 # TYPES
 ~~~roc
+b : Num(_size)
+a : Num(_size)
 ~~~

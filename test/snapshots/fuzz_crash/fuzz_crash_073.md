@@ -7,76 +7,62 @@ type=file
 ~~~roc
 module[]!0.t
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare OpBang Int MalformedUnknownToken Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (unary_not <unary_op>)
+  (binop_pipe
+    (malformed)
+    (dot_lc "t")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+!0
+ | .t
+~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
 PARSE ERROR - fuzz_crash_073.md:1:9:1:10
 PARSE ERROR - fuzz_crash_073.md:1:10:1:11
 PARSE ERROR - fuzz_crash_073.md:1:12:1:14
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
-ASCII control characters are not allowed in Roc source code.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_073.md:1:9:1:10:**
+**fuzz_crash_073.md:1:11:1:12:**
 ```roc
 module[]!0.t
 ```
-        ^
+          ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_073.md:1:10:1:11:**
-```roc
-module[]!0.t
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_073.md:1:12:1:14:**
-```roc
-module[]!0.t
-```
-           ^^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpBang(1:9-1:10),Int(1:10-1:11),DotLowerIdent(1:12-1:14),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.14
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
-		(s-malformed @1.12-1.14 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-module []
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.unary_not)
+  (Expr.binop_pipe)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 Num *)
+(var #2 -> #1)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

@@ -99,38 +99,38 @@ NIL
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (lc "person")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (lc "name")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (lc "age")
+        (Expr.malformed)
         (Expr.num_literal_i32 30)
       )
     )
   )
   (Expr.binop_colon
-    (lc "address")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (lc "street")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (lc "city")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (lc "coordinates")
+        (Expr.malformed)
         (Expr.record_literal
           (Expr.binop_colon
-            (lc "lat")
+            (Expr.malformed)
             (Expr.frac_literal_big big:<idx:112>)
           )
           (Expr.binop_colon
-            (lc "lng")
+            (Expr.malformed)
             (Expr.unary_neg)
           )
         )
@@ -138,21 +138,21 @@ NIL
     )
   )
   (Expr.binop_colon
-    (lc "contact")
+    (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
-        (lc "email")
+        (Expr.malformed)
         (Expr.str_literal_big)
       )
       (Expr.binop_colon
-        (lc "phone")
+        (Expr.malformed)
         (Expr.record_literal
           (Expr.binop_colon
-            (lc "home")
+            (Expr.malformed)
             (Expr.str_literal_big)
           )
           (Expr.binop_colon
-            (lc "work")
+            (Expr.malformed)
             (Expr.str_literal_big)
           )
         )
@@ -163,8 +163,54 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 46
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 Str)
+(var #4 _)
+(var #5 _)
+(var #6 Num *)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 Str)
+(var #13 _)
+(var #14 _)
+(var #15 Str)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 F64)
+(var #20 _)
+(var #21 _)
+(var #22 F64)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 Str)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 Str)
+(var #36 _)
+(var #37 _)
+(var #38 Str)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 -> #45)
+(var #45 {})
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

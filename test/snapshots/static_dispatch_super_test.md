@@ -38,8 +38,14 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

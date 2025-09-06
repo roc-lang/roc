@@ -7,39 +7,56 @@ type=expr
 ~~~roc
 { name: "Alice", age: 30 }
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly ~~~
+# PARSE
+~~~clojure
+(record_literal
+  (binop_colon
+    (lc "name")
+    (str_literal_big "Alice")
+  )
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 30)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+{ name: "Alice", age: 30 }
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:21),OpColon(1:21-1:22),Int(1:23-1:25),CloseCurly(1:26-1:27),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-record @1.1-1.27
-	(field (field "name")
-		(e-string @1.9-1.16
-			(e-string-part @1.10-1.15 (raw "Alice"))))
-	(field (field "age")
-		(e-int @1.23-1.25 (raw "30"))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.27
-	(fields
-		(field (name "name")
-			(e-string @1.9-1.16
-				(e-literal @1.10-1.15 (string "Alice"))))
-		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))))
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.str_literal_big)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.num_literal_i32 30)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 Str)
+(var #3 _)
+(var #4 _)
+(var #5 Num *)
+(var #6 _)
+(var #7 -> #8)
+(var #8 {})
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.27 (type "{ name: Str, age: Num(_size) }"))
+~~~roc
 ~~~

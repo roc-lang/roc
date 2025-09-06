@@ -7,12 +7,23 @@ type=expr
 ~~~roc
 -rec1.field
 ~~~
+# TOKENS
+~~~text
+OpUnaryMinus LowerIdent Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(unary_neg <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+-rec1.field
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - unary_negation_access.md:1:2:1:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `rec1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **rec1** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **unary_negation_access.md:1:2:1:6:**
 ```roc
@@ -21,30 +32,19 @@ Is there an `import` or `exposing` missing up-top?
  ^^^^
 
 
-# TOKENS
-~~~zig
-OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),NoSpaceDotLowerIdent(1:6-1:12),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(unary "-"
-	(e-field-access @1.2-1.12
-		(e-ident @1.2-1.6 (raw "rec1"))
-		(e-ident @1.6-1.12 (raw "field"))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.12
-	(e-dot-access @1.2-1.12 (field "field")
-		(receiver
-			(e-runtime-error (tag "ident_not_in_scope")))))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 -> #3)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.12 (type "Num(_size)"))
+~~~roc
 ~~~

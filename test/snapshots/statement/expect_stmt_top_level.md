@@ -11,56 +11,78 @@ foo = Bool.True
 
 expect foo != Bool.False
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign UpperIdent Dot UpperIdent BlankLine KwExpect LowerIdent OpNotEquals UpperIdent Dot UpperIdent ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (lc "foo")
+))
+(block
+  (binop_equals
+    (lc "foo")
+    (binop_pipe
+      (uc "Bool")
+      (uc "True")
+    )
+  )
+  (expect
+    (binop_not_equals
+      (lc "foo")
+      (binop_pipe
+        (uc "Bool")
+        (uc "False")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module [foo]
+
+foo = Bool.True
+expect foo != Bool.False
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),UpperIdent(3:7-3:11),NoSpaceDotUpperIdent(3:11-3:16),
-KwExpect(5:1-5:7),LowerIdent(5:8-5:11),OpNotEquals(5:12-5:14),UpperIdent(5:15-5:19),NoSpaceDotUpperIdent(5:19-5:25),
-EndOfFile(6:1-6:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-5.25
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
-	(statements
-		(s-decl @3.1-3.16
-			(p-ident @3.1-3.4 (raw "foo"))
-			(e-tag @3.7-3.16 (raw "Bool.True")))
-		(s-expect @5.1-5.25
-			(e-binop @5.8-5.25 (op "!=")
-				(e-ident @5.8-5.11 (raw "foo"))
-				(e-tag @5.15-5.25 (raw "Bool.False"))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-nominal @3.7-3.16 (nominal "Bool")
-			(e-tag @3.7-3.16 (name "True"))))
-	(s-expect @5.1-5.25
-		(e-binop @5.8-5.25 (op "ne")
-			(e-lookup-local @5.8-5.11
-				(p-assign @3.1-3.4 (ident "foo")))
-			(e-nominal @5.15-5.25 (nominal "Bool")
-				(e-tag @5.15-5.25 (name "False"))))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.module_access
+      (Expr.tag_no_args)
+      (Expr.tag_no_args)
+    )
+  )
+  (Stmt.expr)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 15
+(var #0 _)
+(var #1 _)
+(var #2 -> #5)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.4 (type "Bool")))
-	(expressions
-		(expr @3.7-3.16 (type "Bool"))))
+~~~roc
+foo : _a
 ~~~

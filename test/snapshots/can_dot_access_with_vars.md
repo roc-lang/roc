@@ -69,13 +69,39 @@ NIL
     (pattern (Patt.ident "fn"))
     (Expr.lambda (canonicalized))
   )
-  (Expr.apply_ident)
+  (Expr.fn_call)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 23
+(var #0 _)
+(var #1 -> #5)
+(var #2 Num *)
+(var #3 Num *)
+(var #4 Num *)
+(var #5 _)
+(var #6 _)
+(var #7 -> #21)
+(var #8 _)
+(var #9 -> #10)
+(var #10 -> #11)
+(var #11 Num *)
+(var #12 -> #21)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #22)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 fn_pure)
+(var #22 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+fn : _arg -> Num(_size)
+list : _a
+x : _a
 ~~~

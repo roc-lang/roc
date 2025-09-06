@@ -24,28 +24,19 @@ Json.utf8
 # EXPECTED
 UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **Json.utf8** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**external_lookup_expr.md:1:1:1:10:**
-```roc
-Json.utf8
-```
-^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.module_access
-  (Expr.lookup "Json")
-  (Expr.record_accessor)
-)
+(Expr.binop_pipe)
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

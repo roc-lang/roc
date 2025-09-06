@@ -30,9 +30,7 @@ OpenSquare LineComment Int Comma LineComment BlankLine LineComment BlankLine Int
 ~~~roc
 [ # Open
 	1, # First
-
 	# A comment in the middle
-
 	2, # Second
 	# This comment has no blanks around it
 	3, # Third
@@ -48,8 +46,13 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 Num *)
+(var #2 Num *)
+(var #3 Num *)
+(var #4 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

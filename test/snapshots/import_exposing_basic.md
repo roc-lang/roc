@@ -78,7 +78,6 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
 module [main]
 
 import json.Json exposing [decode, encode]
-
 main = {
 	data = { name: "Alice", age: 30 }
 	encoded = encode(data)

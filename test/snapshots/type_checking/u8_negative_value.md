@@ -16,6 +16,16 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_colon
+    (lc "x")
+    (uc "U8")
+  )
+  (binop_equals
+    (lc "x")
+    (unary_neg <unary_op>)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,9 +41,9 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "x")
-    (type uc)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "x"))
+    (type type_2)
   )
   (Stmt.assign
     (pattern (Patt.ident "x"))
@@ -43,7 +53,18 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 -> #5)
+(var #5 Num *)
+(var #6 -> #5)
+(var #7 _)
+(var #8 _)
 ~~~
 # TYPES
 ~~~roc
+x : Num(_size)
 ~~~

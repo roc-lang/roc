@@ -18,10 +18,22 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign String LowerIdent
   (exposes
     (lc "foo")
 ))
+(block
+  (binop_equals
+    (lc "name")
+    (str_literal_small "luc")
+  )
+  (binop_equals
+    (lc "foo")
+    (str_literal_big "hello ${name}")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]name = "luc"
+module [foo]
+
+name = "luc"
 foo = "hello ${name}"
 ~~~
 # EXPECTED
@@ -43,7 +55,19 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 Str)
+(var #4 _)
+(var #5 -> #6)
+(var #6 Str)
+(var #7 _)
+(var #8 _)
 ~~~
 # TYPES
 ~~~roc
+foo : Str
+name : Str
 ~~~

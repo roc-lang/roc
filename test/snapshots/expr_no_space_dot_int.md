@@ -15,6 +15,15 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign LowerIdent Dot Int
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (lc "foo")
+    (binop_pipe
+      (lc "asd")
+      (num_literal_i32 0)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,15 +35,15 @@ foo = (asd | 0)
 PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
 UNRECOGNIZED SYNTAX - expr_no_space_dot_int.md:3:10:3:12
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **asd** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**expr_no_space_dot_int.md:3:7:3:12:**
+**expr_no_space_dot_int.md:3:7:3:10:**
 ```roc
 foo = asd.0
 ```
-      ^^^^^
+      ^^^
 
 
 # CANONICALIZE
@@ -42,13 +51,22 @@ foo = asd.0
 (Expr.block
   (Stmt.assign
     (pattern (Patt.ident "foo"))
-    (Expr.malformed)
+    (Expr.binop_pipe)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 -> #4)
+(var #2 _)
+(var #3 Num *)
+(var #4 _)
+(var #5 _)
+(var #6 _)
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

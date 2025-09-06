@@ -66,8 +66,22 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 Num *)
+(var #2 Num *)
+(var #3 Num *)
+(var #4 Num *)
+(var #5 Num *)
+(var #6 Num *)
+(var #7 F64)
+(var #8 F64)
+(var #9 Num *)
+(var #10 Num *)
+(var #11 Num *)
+(var #12 -> #13)
+(var #13 tuple)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

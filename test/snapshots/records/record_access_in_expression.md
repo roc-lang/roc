@@ -1,59 +1,51 @@
 # META
 ~~~ini
-description=Record field access used in expressions (dot-access)
+description=Record field access in expression
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-person.age + 5
+record.field
 ~~~
 # TOKENS
 ~~~text
-LowerIdent Dot LowerIdent OpPlus Int ~~~
+LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(binop_plus
-  (binop_pipe
-    (lc "person")
-    (dot_lc "age")
-  )
-  (num_literal_i32 5)
+(binop_pipe
+  (lc "record")
+  (dot_lc "field")
 )
 ~~~
 # FORMATTED
 ~~~roc
-person.age + 5
+record.field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_access_in_expression.md:1:1:1:7
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **person** in this scope.
+Nothing is named **record** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
 **record_access_in_expression.md:1:1:1:7:**
 ```roc
-person.age + 5
+record.field
 ```
 ^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
-(Expr.binop_plus
-  (Expr.binop_pipe)
-  (Expr.num_literal_i32 5)
-)
+(Expr.binop_pipe)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 6
+; Total type variables: 4
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 -> #4)
-(var #4 -> #5)
-(var #5 Num *)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc

@@ -52,6 +52,195 @@ KwApp OpenSquare LowerIdent CloseSquare OpenCurly LowerIdent OpColon KwPlatform 
       )
     )
 ))
+(block
+  (binop_colon
+    (lc "map_result")
+    (binop_arrow_call
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (lc "a")
+          (lc "e")
+        )
+      )
+      (binop_arrow_call
+        (binop_arrow_call
+          (lc "a")
+          (lc "b")
+        )
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (lc "b")
+            (lc "e")
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "map_result")
+    (lambda
+      (body
+        (block
+          (match
+            (scrutinee               (lc "result")
+)
+            (branch1               (binop_thick_arrow
+                (apply_uc
+                  (uc "Ok")
+                  (lc "value")
+                )
+                (malformed)
+              )
+))
+          (malformed)
+          (malformed)
+          (apply_uc
+            (uc "Err")
+            (lc "error")
+          )
+          (malformed)
+          (apply_uc
+            (uc "Err")
+            (lc "error")
+          )
+        )
+      )
+      (args
+        (lc "result")
+        (lc "transform")
+      )
+    )
+  )
+  (malformed)
+  (binop_colon
+    (lc "identity")
+    (binop_arrow_call
+      (lc "a")
+      (lc "a")
+    )
+  )
+  (binop_equals
+    (lc "identity")
+    (lambda
+      (body
+        (lc "x")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_colon
+    (lc "make_pair")
+    (binop_arrow_call
+      (lc "a")
+      (binop_arrow_call
+        (lc "b")
+        (record_literal
+          (binop_colon
+            (lc "first")
+            (lc "a")
+          )
+          (binop_colon
+            (lc "second")
+            (lc "b")
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "make_pair")
+    (lambda
+      (body
+        (record_literal
+          (binop_colon
+            (lc "first")
+            (lc "x")
+          )
+          (binop_colon
+            (lc "second")
+            (lc "y")
+          )
+        )
+      )
+      (args
+        (lc "x")
+        (lc "y")
+      )
+    )
+  )
+  (binop_colon
+    (lc "list_length")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (lc "_a")
+      )
+      (uc "U64")
+    )
+  )
+  (binop_equals
+    (lc "list_length")
+    (lambda
+      (body
+        (num_literal_i32 42)
+      )
+      (args
+        (lc "_lst")
+      )
+    )
+  )
+  (binop_colon
+    (lc "wrap_in_result")
+    (binop_arrow_call
+      (lc "a")
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (apply_uc
+            (uc "Result")
+            (tuple_literal
+              (lc "a")
+              (uc "Str")
+            )
+          )
+          (uc "Str")
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "wrap_in_result")
+    (lambda
+      (body
+        (apply_uc
+          (uc "Ok")
+          (apply_uc
+            (uc "Ok")
+            (lc "value")
+          )
+        )
+      )
+      (args
+        (lc "value")
+      )
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (lambda
+      (body
+        (str_literal_small "done")
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -74,19 +263,15 @@ map_result = |result, transform| {
 # Simple identity function with type variable
 identity : a -> a
 identity = |x| x
-
 # Nested type variables in records
 make_pair : a -> b -> {first: a, second: b}
 make_pair = |x, y| { first: x, second: y }
-
 # Function that works with lists of any type
 list_length : List _a -> U64
 list_length = |_lst| 42
-
 # Nested Result types
 wrap_in_result : a -> Result(Result(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
-
 main = |_| "done"
 ~~~
 # EXPECTED
@@ -208,71 +393,45 @@ Is there an **import** or **exposing** missing up-top?
                           ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable **transform** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_transform` to suppress this warning.
-The unused variable is declared here:
-
-**type_var_nested.md:5:23:5:32:**
-```roc
-map_result = |result, transform| {
-```
-                      ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_var_nested.md:10:1:13:1:**
-```roc
-}
-
-# Simple identity function with type variable
-identity : a -> a
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "map_result")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "map_result"))
+    (type type_22)
   )
   (Stmt.assign
     (pattern (Patt.ident "map_result"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
-  (Stmt.type_anno
-    (name "identity")
-    (type binop_thin_arrow)
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "identity"))
+    (type type_53)
   )
   (Stmt.assign
     (pattern (Patt.ident "identity"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "make_pair")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "make_pair"))
+    (type type_71)
   )
   (Stmt.assign
     (pattern (Patt.ident "make_pair"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "list_length")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "list_length"))
+    (type type_90)
   )
   (Stmt.assign
     (pattern (Patt.ident "list_length"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "wrap_in_result")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "wrap_in_result"))
+    (type type_108)
   )
   (Stmt.assign
     (pattern (Patt.ident "wrap_in_result"))
@@ -286,7 +445,168 @@ identity : a -> a
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 148
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 -> #132)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 -> #129)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 -> #131)
+(var #44 _)
+(var #45 _)
+(var #46 _)
+(var #47 -> #132)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 _)
+(var #53 _)
+(var #54 _)
+(var #55 -> #135)
+(var #56 _)
+(var #57 _)
+(var #58 -> #135)
+(var #59 _)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 _)
+(var #66 _)
+(var #67 _)
+(var #68 _)
+(var #69 _)
+(var #70 _)
+(var #71 _)
+(var #72 _)
+(var #73 -> #139)
+(var #74 _)
+(var #75 _)
+(var #76 _)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 _)
+(var #81 _)
+(var #82 -> #138)
+(var #83 -> #139)
+(var #84 _)
+(var #85 _)
+(var #86 _)
+(var #87 _)
+(var #88 _)
+(var #89 _)
+(var #90 _)
+(var #91 _)
+(var #92 -> #141)
+(var #93 _)
+(var #94 Num *)
+(var #95 -> #141)
+(var #96 _)
+(var #97 _)
+(var #98 _)
+(var #99 _)
+(var #100 _)
+(var #101 _)
+(var #102 _)
+(var #103 _)
+(var #104 _)
+(var #105 _)
+(var #106 _)
+(var #107 _)
+(var #108 _)
+(var #109 _)
+(var #110 -> #145)
+(var #111 _)
+(var #112 -> #144)
+(var #113 -> #143)
+(var #114 _)
+(var #115 _)
+(var #116 _)
+(var #117 -> #145)
+(var #118 _)
+(var #119 -> #147)
+(var #120 _)
+(var #121 Str)
+(var #122 -> #147)
+(var #123 _)
+(var #124 _)
+(var #125 _)
+(var #126 _)
+(var #127 _)
+(var #128 _)
+(var #129 fn_pure)
+(var #130 _)
+(var #131 fn_pure)
+(var #132 fn_pure)
+(var #133 _)
+(var #134 _)
+(var #135 fn_pure)
+(var #136 _)
+(var #137 _)
+(var #138 {})
+(var #139 fn_pure)
+(var #140 _)
+(var #141 fn_pure)
+(var #142 _)
+(var #143 fn_pure)
+(var #144 fn_pure)
+(var #145 fn_pure)
+(var #146 _)
+(var #147 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+wrap_in_result : _arg -> _ret
+list_length : _arg -> Num(_size)
+make_pair : _arg, _arg2 -> {}
+map_result : _arg, _arg2 -> _ret
+x : _c
+_lst : _c
+result : _c
+y : _c
+value : _c
+main : _arg -> Str
+identity : _arg -> _ret
+transform : _c
 ~~~

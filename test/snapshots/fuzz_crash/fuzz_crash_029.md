@@ -23,6 +23,87 @@ pkg: "..l", mmen		} # Cose
 ar,
 		]
 ~~~
+# TOKENS
+~~~text
+KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineComment LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare LineComment CloseSquare LineComment KwPackages LineComment LowerIdent LineComment OpenCurly LineComment LowerIdent OpColon String Comma LowerIdent CloseCurly LineComment KwProvides LineComment OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent LineComment LowerIdent Comma CloseSquare ~~~
+# PARSE
+~~~clojure
+(platform-header
+  (exposes
+    (malformed)
+))
+(block
+  (uc "Str")
+  (malformed)
+  (malformed)
+  (record_literal)
+  (malformed)
+  (malformed)
+  (malformed)
+  (list_literal)
+  (malformed)
+  (lc "vides")
+  (record_literal
+    (binop_colon
+      (lc "pkg")
+      (str_literal_small "..l")
+    )
+    (lc "mmen")
+  )
+  (malformed)
+  (list_literal
+    (apply_uc
+      (uc "Ok")
+      (lc "world")
+    )
+    (lc "n")
+  )
+  (lc "ar")
+  (malformed)
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+platform # Cd
+"foo" requires # Ce
+# Co		{	} #ose
+# d
+{} exposes [: ]
+
+Str
+) 
+=> 
+{}
+, # ure
+			
+} #Ce
+	
+exposes #rd
+		
+[, #
+]
+# Cse
+packages # Cd
+		
+vides
+# Cd
+{ # pen
+	pkg: "..l",
+	mmen,
+}
+# Cose
+provides # Cd
+		
+[
+	Ok(world),
+	n, # pen
+]
+ar
+,
+		
+]
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_029.md:4:4:4:5
 PARSE ERROR - fuzz_crash_029.md:5:14:5:17
@@ -53,319 +134,343 @@ PARSE ERROR - fuzz_crash_029.md:16:3:16:4
 PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_requires_rigids_close_curly`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **n** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:4:4:4:5:**
+**fuzz_crash_029.md:5:4:5:5:**
 ```roc
-			{ # d
+			n! : List(Str) => {}, # ure
 ```
 			^
 
 
 **PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
+A parsing error occurred: **expected_requires_rigids_close_curly**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:5:14:5:17:**
+**fuzz_crash_029.md:1:1:5:5:**
 ```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
 			n! : List(Str) => {}, # ure
 ```
-			          ^^^
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: **expected_requires_signatures_open_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**fuzz_crash_029.md:1:1:5:5:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **! ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_029.md:5:19:5:21:**
+**fuzz_crash_029.md:5:5:5:7:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			               ^^
+			 ^^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_requires_signatures_close_curly**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:5:22:5:23:**
+**fuzz_crash_029.md:1:1:5:7:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**EXPECTED EXPOSES**
+Module headers must have an `exposing` section that lists what the module exposes.
+For example:     module [main, add, subtract]
+
+**fuzz_crash_029.md:1:1:5:7:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**EXPECTED OPENING BRACKET**
+Module headers must have an `exposing` section that lists what the module exposes.
+For example:     module [main, add, subtract]
+
+**fuzz_crash_029.md:1:1:5:7:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:5:7:5:9:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			                  ^
+			   ^^
+
+
+**EXPECTED CLOSING BRACKET**
+Module headers must have an `exposing` section that lists what the module exposes.
+For example:     module [main, add, subtract]
+
+**fuzz_crash_029.md:1:1:5:9:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**EXPECTED PACKAGES**
+A parsing error occurred: **expected_packages**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:1:1:5:9:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_packages_open_curly**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:5:23:5:24:**
+**fuzz_crash_029.md:1:1:5:9:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **List** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_029.md:5:9:5:13:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			                   ^
+			     ^^^^
+
+
+**EXPECTED CLOSE CURLY BRACE**
+A parsing error occurred: **expected_packages_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:1:1:5:13:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_provides**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:5:24:5:25:**
+**fuzz_crash_029.md:1:1:5:13:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_provides_open_square**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:1:1:5:13:**
+```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **exposed_item_unexpected_token**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:5:13:5:14:**
 ```roc
 			n! : List(Str) => {}, # ure
 ```
-			                    ^
+			         ^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_provides_close_square**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:6:4:6:5:**
+**fuzz_crash_029.md:1:1:5:14:**
 ```roc
+platform # Cd
+	"foo" # Ce
+	requires # Co		{	} #ose
+			{ # d
+			n! : List(Str) => {}, # ure
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **) ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_029.md:5:17:5:19:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			             ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_029.md:5:19:5:22:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			               ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, # ure
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_029.md:5:24:6:4:**
+```roc
+			n! : List(Str) => {}, # ure
 			} #Ce
 ```
-			^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} #Ce
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:7:2:7:9:**
+**fuzz_crash_029.md:6:4:7:2:**
 ```roc
+			} #Ce
 	exposes #rd
 ```
-	^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **exposes #rd
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:8:3:8:4:**
+**fuzz_crash_029.md:7:2:8:3:**
 ```roc
+	exposes #rd
 		[ #
 ```
-		^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **packages # Cd
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:9:3:9:4:**
-```roc
-		] # Cse
-```
-		^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:10:2:10:10:**
+**fuzz_crash_029.md:10:2:11:3:**
 ```roc
 	packages # Cd
-```
-	^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:11:3:11:8:**
-```roc
 		vides # Cd
 ```
-		^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **provides # Cd
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:12:3:12:4:**
-```roc
-		{ # pen
-```
-		^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_029.md:13:6:13:7:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:7:13:10:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-      ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:10:13:11:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:11:13:12:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:13:13:17:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-            ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:13:19:13:20:**
-```roc
-pkg: "..l", mmen		} # Cose
-```
-                		^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:14:2:14:10:**
+**fuzz_crash_029.md:14:2:15:3:**
 ```roc
 	provides # Cd
-```
-	^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:15:3:15:4:**
-```roc
 		[ Ok(world), (n # pen
 ```
-		^
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_029.md:15:14:15:15:**
-```roc
-		[ Ok(world), (n # pen
-```
-		           ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_expr_close_round_or_comma**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_029.md:15:16:15:17:**
+
+
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**fuzz_crash_029.md:15:3:16:1:**
 ```roc
 		[ Ok(world), (n # pen
-```
-		             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:15:17:15:18:**
-```roc
-		[ Ok(world), (n # pen
-```
-		              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_029.md:16:1:16:3:**
-```roc
 ar,
 ```
-^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_029.md:16:3:16:4:**
+**fuzz_crash_029.md:16:3:17:3:**
 ```roc
 ar,
+		]
 ```
-  ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_029.md:17:3:17:4:**
 ```roc
@@ -374,93 +479,138 @@ This is an unexpected parsing error. Please check your syntax.
 		^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **vides** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_029.md:13:6:13:7:**
+**fuzz_crash_029.md:11:3:11:8:**
+```roc
+		vides # Cd
+```
+		^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **mmen** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_029.md:13:13:13:17:**
 ```roc
 pkg: "..l", mmen		} # Cose
 ```
-     ^
+            ^^^^
 
 
-# TOKENS
-~~~zig
-KwPlatform(1:1-1:9),
-StringStart(2:2-2:3),StringPart(2:3-2:6),StringEnd(2:6-2:7),
-KwRequires(3:2-3:10),
-OpenCurly(4:4-4:5),
-LowerIdent(5:4-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:13),NoSpaceOpenRound(5:13-5:14),UpperIdent(5:14-5:17),CloseRound(5:17-5:18),OpFatArrow(5:19-5:21),OpenCurly(5:22-5:23),CloseCurly(5:23-5:24),Comma(5:24-5:25),
-CloseCurly(6:4-6:5),
-KwExposes(7:2-7:9),
-OpenSquare(8:3-8:4),
-CloseSquare(9:3-9:4),
-KwPackages(10:2-10:10),
-LowerIdent(11:3-11:8),
-OpenCurly(12:3-12:4),
-LowerIdent(13:1-13:4),OpColon(13:4-13:5),StringStart(13:6-13:7),StringPart(13:7-13:10),StringEnd(13:10-13:11),Comma(13:11-13:12),LowerIdent(13:13-13:17),CloseCurly(13:19-13:20),
-KwProvides(14:2-14:10),
-OpenSquare(15:3-15:4),UpperIdent(15:5-15:7),NoSpaceOpenRound(15:7-15:8),LowerIdent(15:8-15:13),CloseRound(15:13-15:14),Comma(15:14-15:15),OpenRound(15:16-15:17),LowerIdent(15:17-15:18),
-LowerIdent(16:1-16:3),Comma(16:3-16:4),
-CloseSquare(17:3-17:4),
-EndOfFile(18:1-18:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-17.4
-	(malformed-header @4.4-5.8 (tag "expected_requires_rigids_close_curly"))
-	(statements
-		(s-malformed @5.19-5.21 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @5.22-5.23 (tag "statement_unexpected_token"))
-		(s-malformed @5.23-5.24 (tag "statement_unexpected_token"))
-		(s-malformed @5.24-5.25 (tag "statement_unexpected_token"))
-		(s-malformed @6.4-6.5 (tag "statement_unexpected_token"))
-		(s-malformed @7.2-7.9 (tag "statement_unexpected_token"))
-		(s-malformed @8.3-8.4 (tag "statement_unexpected_token"))
-		(s-malformed @9.3-9.4 (tag "statement_unexpected_token"))
-		(s-malformed @10.2-10.10 (tag "statement_unexpected_token"))
-		(s-malformed @11.3-11.8 (tag "statement_unexpected_token"))
-		(s-malformed @12.3-12.4 (tag "statement_unexpected_token"))
-		(s-type-anno @13.1-13.7 (name "pkg")
-			(ty-malformed @13.6-13.7 (tag "ty_anno_unexpected_token")))
-		(s-malformed @13.7-13.10 (tag "statement_unexpected_token"))
-		(s-malformed @13.10-13.11 (tag "statement_unexpected_token"))
-		(s-malformed @13.11-13.12 (tag "statement_unexpected_token"))
-		(s-malformed @13.13-13.17 (tag "statement_unexpected_token"))
-		(s-malformed @13.19-13.20 (tag "statement_unexpected_token"))
-		(s-malformed @14.2-14.10 (tag "statement_unexpected_token"))
-		(s-malformed @15.3-15.4 (tag "statement_unexpected_token"))
-		(s-malformed @15.14-15.15 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @15.16-15.17 (tag "statement_unexpected_token"))
-		(s-malformed @15.17-15.18 (tag "statement_unexpected_token"))
-		(s-malformed @16.1-16.3 (tag "statement_unexpected_token"))
-		(s-malformed @16.3-16.4 (tag "statement_unexpected_token"))
-		(s-malformed @17.3-17.4 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-# Co		{	} #ose
-# ure
-# Ce
-# rd
-#
-# Cse
-# Cd
-# Cd
-# pen
-pkg : 
-# Cose
-# Cd
-# pen
+**UNDEFINED VARIABLE**
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-~~~
+**fuzz_crash_029.md:15:8:15:13:**
+```roc
+		[ Ok(world), (n # pen
+```
+		     ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **n** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_029.md:15:17:15:18:**
+```roc
+		[ Ok(world), (n # pen
+```
+		              ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **ar** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_029.md:16:1:16:3:**
+```roc
+ar,
+```
+^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.lookup "vides")
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.malformed)
+      (Expr.str_literal_small)
+    )
+    (Expr.lookup "mmen")
+  )
+  (Expr.malformed)
+  (Expr.list_literal)
+  (Expr.lookup "ar")
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 45
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #35)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 Str)
+(var #20 _)
+(var #21 _)
+(var #22 -> #41)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 {})
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 {})
+(var #41 record)
+(var #42 _)
+(var #43 _)
+(var #44 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

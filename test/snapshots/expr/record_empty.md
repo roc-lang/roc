@@ -7,28 +7,33 @@ type=expr
 ~~~roc
 {}
 ~~~
+# TOKENS
+~~~text
+OpenCurly CloseCurly ~~~
+# PARSE
+~~~clojure
+(record_literal)
+~~~
+# FORMATTED
+~~~roc
+{}
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-record @1.1-1.3)
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1.1-1.3)
+(Expr.record_literal
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 -> #2)
+(var #2 {})
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.3 (type "{}"))
+~~~roc
 ~~~

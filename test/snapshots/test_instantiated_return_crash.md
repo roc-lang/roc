@@ -23,7 +23,7 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 (block
   (binop_colon
     (lc "identity")
-    (binop_thin_arrow
+    (binop_arrow_call
       (lc "a")
       (lc "a")
     )
@@ -41,8 +41,8 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
   )
   (binop_colon
     (lc "needs_string")
-    (binop_thin_arrow
-      (binop_thin_arrow
+    (binop_arrow_call
+      (binop_arrow_call
         (uc "Str")
         (uc "Str")
       )
@@ -75,11 +75,9 @@ OpenCurly LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign O
 ~~~roc
 identity : a -> a
 identity = |x| x
-
 needs_string :
 	(Str -> Str) -> Str
 needs_string = |f| f(["hello"])
-
 needs_string(identity)
 ~~~
 # EXPECTED
@@ -89,29 +87,69 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "identity")
-    (type <mutated_tag:161>)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "identity"))
+    (type type_4)
   )
   (Stmt.assign
     (pattern (Patt.ident "identity"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "needs_string")
-    (type <mutated_tag:161>)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "needs_string"))
+    (type type_16)
   )
   (Stmt.assign
     (pattern (Patt.ident "needs_string"))
     (Expr.lambda (canonicalized))
   )
-  (Expr.apply_ident)
+  (Expr.fn_call)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 36
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 -> #31)
+(var #7 _)
+(var #8 _)
+(var #9 -> #31)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #34)
+(var #19 _)
+(var #20 -> #33)
+(var #21 Str)
+(var #22 _)
+(var #23 _)
+(var #24 -> #34)
+(var #25 _)
+(var #26 -> #35)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 fn_pure)
+(var #32 _)
+(var #33 fn_pure)
+(var #34 fn_pure)
+(var #35 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+identity : _arg -> _ret
+f : _b
+needs_string : _arg -> _ret
+x : _b
 ~~~

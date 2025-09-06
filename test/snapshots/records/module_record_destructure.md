@@ -23,6 +23,64 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon OpenCurl
   (exposes
     (lc "extract_age")
 ))
+(block
+  (binop_colon
+    (lc "extract_age")
+    (binop_arrow_call
+      (block
+        (binop_colon
+          (lc "age")
+          (uc "U64")
+        )
+      )
+      (uc "U64")
+    )
+  )
+  (binop_equals
+    (lc "extract_age")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (block
+              (binop_colon
+                (lc "age")
+                (lc "age")
+              )
+            )
+            (lc "person")
+          )
+          (binop_minus
+            (binop_plus
+              (binop_pipe
+                (block
+                  (binop_colon
+                    (lc "a")
+                    (num_literal_i32 0)
+                  )
+                )
+                (dot_lc "a")
+              )
+              (lc "age")
+            )
+            (binop_pipe
+              (block
+                (binop_colon
+                  (lc "a")
+                  (num_literal_i32 0)
+                )
+              )
+              (dot_lc "a")
+            )
+          )
+        )
+      )
+      (args
+        (lc "person")
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -35,7 +93,6 @@ extract_age = |person| {
 	{
 		age : age
 	} = person
-
 	(({
 		a : 0
 	} | .a) + age) - ({
@@ -46,17 +103,6 @@ extract_age = |person| {
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**module_record_destructure.md:3:15:3:28:**
-```roc
-extract_age : { age : U64 } -> U64
-```
-              ^^^^^^^^^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -82,9 +128,9 @@ Is there an **import** or **exposing** missing up-top?
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "extract_age")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "extract_age"))
+    (type type_8)
   )
   (Stmt.assign
     (pattern (Patt.ident "extract_age"))
@@ -94,7 +140,48 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 38
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #37)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 -> #15)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 Num *)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 -> #23)
+(var #23 -> #24)
+(var #24 -> #30)
+(var #25 _)
+(var #26 Num *)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 -> #31)
+(var #31 _)
+(var #32 _)
+(var #33 -> #37)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+extract_age : _arg -> _ret
+person : _b
 ~~~

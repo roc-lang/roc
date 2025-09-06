@@ -7,6 +7,23 @@ type=expr
 ~~~roc
 Stdout.line???
 ~~~
+# TOKENS
+~~~text
+UpperIdent Dot LowerIdent OpDoubleQuestion OpQuestion ~~~
+# PARSE
+~~~clojure
+(binop_double_question
+  (binop_pipe
+    (uc "Stdout")
+    (dot_lc "line")
+  )
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+Stdout.line ?? ?
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
@@ -22,39 +39,23 @@ Stdout.line???
              ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**suffixed_question.md:1:1:1:12:**
-```roc
-Stdout.line???
-```
-^^^^^^^^^^^
-
-
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-binop @1.1-1.15 (op "??")
-	(e-ident @1.1-1.12 (raw "Stdout.line"))
-	(e-malformed @1.14-1.15 (reason "expr_unexpected_token")))
-~~~
-# FORMATTED
-~~~roc
-Stdout.line ?? 
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.binop_double_question
+  (Expr.binop_pipe)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

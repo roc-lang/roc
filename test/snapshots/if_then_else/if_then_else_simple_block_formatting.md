@@ -53,8 +53,14 @@ if bool {
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 Num *)
+(var #5 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

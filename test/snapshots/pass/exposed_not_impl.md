@@ -35,6 +35,20 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma UpperIdent Comma UpperIden
 
     (uc "MyType")
 ))
+(block
+  (binop_equals
+    (lc "foo")
+    (num_literal_i32 42)
+  )
+  (binop_colon
+    (uc "MyType")
+    (list_literal
+      (uc "A")
+      (uc "B")
+      (uc "C")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -44,9 +58,7 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 # but only implements foo and MyType
 # This should generate "exposed but not implemented" errors for bar and OtherType
 # Also tests redundant exposed entries for foo and MyType
-
 foo = 42
-
 MyType : [A, B, C]
 ~~~
 # EXPECTED
@@ -63,15 +75,31 @@ NIL
     (pattern (Patt.ident "foo"))
     (Expr.num_literal_i32 42)
   )
-  (Stmt.type_anno
-    (name node:uc)
-    (type list_literal)
-  )
+  (Stmt.type_alias)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 17
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #8)
+(var #8 Num *)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
 ~~~
 # TYPES
 ~~~roc
+foo : Num(_size)
 ~~~

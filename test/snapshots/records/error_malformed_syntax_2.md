@@ -49,7 +49,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (lc "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 42)
   )
   (Expr.binop_equals
@@ -60,8 +60,17 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 _)
+(var #4 _)
+(var #5 Str)
+(var #6 _)
+(var #7 -> #8)
+(var #8 {})
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

@@ -16,119 +16,300 @@ main = {
 	decoded
 }
 ~~~
-# EXPECTED
-MODULE NOT FOUND - import_exposing_alias.md:3:1:3:65
-# PROBLEMS
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**import_exposing_alias.md:3:1:3:65:**
-```roc
-import json.Json exposing [decode as fromJson, encode as toJson]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:34),KwAs(3:35-3:37),LowerIdent(3:38-3:46),Comma(3:46-3:47),LowerIdent(3:48-3:54),KwAs(3:55-3:57),LowerIdent(3:58-3:64),CloseSquare(3:64-3:65),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpenCurly(5:8-5:9),
-LowerIdent(6:2-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),LowerIdent(6:11-6:15),OpColon(6:15-6:16),StringStart(6:17-6:18),StringPart(6:18-6:21),StringEnd(6:21-6:22),Comma(6:22-6:23),LowerIdent(6:24-6:27),OpColon(6:27-6:28),Int(6:29-6:31),CloseCurly(6:32-6:33),
-LowerIdent(7:2-7:9),OpAssign(7:10-7:11),LowerIdent(7:12-7:18),NoSpaceOpenRound(7:18-7:19),LowerIdent(7:19-7:23),CloseRound(7:23-7:24),
-LowerIdent(8:2-8:9),OpAssign(8:10-8:11),LowerIdent(8:12-8:20),NoSpaceOpenRound(8:20-8:21),LowerIdent(8:21-8:28),CloseRound(8:28-8:29),
-LowerIdent(9:2-9:9),
-CloseCurly(10:1-10:2),
-EndOfFile(11:1-11:1),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent Comma LowerIdent KwAs LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpenCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent OpAssign LowerIdent OpenRound LowerIdent CloseRound LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "main"))))
-	(statements
-		(s-import @3.1-3.65 (raw "json.Json")
-			(exposing
-				(exposed-lower-ident @3.28-3.46
-					(text "decode")
-					(as "fromJson"))
-				(exposed-lower-ident @3.48-3.64
-					(text "encode")
-					(as "toJson"))))
-		(s-decl @5.1-10.2
-			(p-ident @5.1-5.5 (raw "main"))
-			(e-block @5.8-10.2
-				(statements
-					(s-decl @6.2-6.33
-						(p-ident @6.2-6.6 (raw "data"))
-						(e-record @6.9-6.33
-							(field (field "name")
-								(e-string @6.17-6.22
-									(e-string-part @6.18-6.21 (raw "Bob"))))
-							(field (field "age")
-								(e-int @6.29-6.31 (raw "25")))))
-					(s-decl @7.2-7.24
-						(p-ident @7.2-7.9 (raw "encoded"))
-						(e-apply @7.12-7.24
-							(e-ident @7.12-7.18 (raw "toJson"))
-							(e-ident @7.19-7.23 (raw "data"))))
-					(s-decl @8.2-8.29
-						(p-ident @8.2-8.9 (raw "decoded"))
-						(e-apply @8.12-8.29
-							(e-ident @8.12-8.20 (raw "fromJson"))
-							(e-ident @8.21-8.28 (raw "encoded"))))
-					(e-ident @9.2-9.9 (raw "decoded")))))))
+(module-header
+  (exposes
+    (lc "main")
+))
+(block
+  (import
+    (binop_exposing
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (list_literal
+        (lc "decode")
+      )
+    )
+  )
+  (malformed)
+  (lc "fromJson")
+  (malformed)
+  (lc "encode")
+  (malformed)
+  (lc "toJson")
+  (malformed)
+  (binop_equals
+    (lc "main")
+    (block
+      (binop_equals
+        (lc "data")
+        (record_literal
+          (binop_colon
+            (lc "name")
+            (str_literal_small "Bob")
+          )
+          (binop_colon
+            (lc "age")
+            (num_literal_i32 25)
+          )
+        )
+      )
+      (binop_equals
+        (lc "encoded")
+        (apply_lc
+          (lc "toJson")
+          (lc "data")
+        )
+      )
+      (binop_equals
+        (lc "decoded")
+        (apply_lc
+          (lc "fromJson")
+          (lc "encoded")
+        )
+      )
+      (lc "decoded")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [main]
+
+import json.Json exposing [decode]
+as 
+fromJson
+, 
+encode
+as 
+toJson
+]
+
+main = {
+	data = { name: "Bob", age: 25 }
+	encoded = toJson(data)
+	decoded = fromJson(encoded)
+	decoded
+}
 ~~~
+# EXPECTED
+MODULE NOT FOUND - import_exposing_alias.md:3:1:3:65
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:35:3:38:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                  ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **, ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:46:3:48:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                             ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:55:3:58:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                                      ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**import_exposing_alias.md:3:64:5:1:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+
+main = {
+```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **json** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:3:8:3:12:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+       ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **fromJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:3:38:3:46:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                     ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **encode** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:3:48:3:54:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                               ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **toJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:3:58:3:64:**
+```roc
+import json.Json exposing [decode as fromJson, encode as toJson]
+```
+                                                         ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **toJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:7:12:7:18:**
+```roc
+	encoded = toJson(data)
+```
+	          ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **fromJson** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**import_exposing_alias.md:8:12:8:20:**
+```roc
+	decoded = fromJson(encoded)
+```
+	          ^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @5.1-5.5 (ident "main"))
-		(e-block @5.8-10.2
-			(s-let @6.2-6.33
-				(p-assign @6.2-6.6 (ident "data"))
-				(e-record @6.9-6.33
-					(fields
-						(field (name "name")
-							(e-string @6.17-6.22
-								(e-literal @6.18-6.21 (string "Bob"))))
-						(field (name "age")
-							(e-int @6.29-6.31 (value "25"))))))
-			(s-let @7.2-7.24
-				(p-assign @7.2-7.9 (ident "encoded"))
-				(e-call @7.12-7.24
-					(e-lookup-external @7.12-7.18
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @7.19-7.23
-						(p-assign @6.2-6.6 (ident "data")))))
-			(s-let @8.2-8.29
-				(p-assign @8.2-8.9 (ident "decoded"))
-				(e-call @8.12-8.29
-					(e-lookup-external @8.12-8.20
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @8.21-8.28
-						(p-assign @7.2-7.9 (ident "encoded")))))
-			(e-lookup-local @9.2-9.9
-				(p-assign @8.2-8.9 (ident "decoded")))))
-	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
-		(exposes
-			(exposed (name "decode") (alias "fromJson") (wildcard false))
-			(exposed (name "encode") (alias "toJson") (wildcard false)))))
+(Expr.block
+  (Stmt.import)
+  (Expr.malformed)
+  (Expr.lookup "fromJson")
+  (Expr.malformed)
+  (Expr.lookup "encode")
+  (Expr.malformed)
+  (Expr.lookup "toJson")
+  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.block
+      (Stmt.assign
+        (pattern (Patt.ident "data"))
+        (Expr.record_literal
+          (Expr.binop_colon
+            (Expr.malformed)
+            (Expr.str_literal_small)
+          )
+          (Expr.binop_colon
+            (Expr.malformed)
+            (Expr.num_literal_i32 25)
+          )
+        )
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "encoded"))
+        (Expr.fn_call)
+      )
+      (Stmt.assign
+        (pattern (Patt.ident "decoded"))
+        (Expr.fn_call)
+      )
+      (Expr.lookup "decoded")
+    )
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 47
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #37)
+(var #17 -> #44)
+(var #18 _)
+(var #19 Str)
+(var #20 _)
+(var #21 _)
+(var #22 Num *)
+(var #23 _)
+(var #24 -> #44)
+(var #25 _)
+(var #26 -> #29)
+(var #27 -> #45)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 -> #34)
+(var #32 -> #46)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 {})
+(var #45 fn_pure)
+(var #46 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @5.1-5.5 (type "_a")))
-	(expressions
-		(expr @5.8-10.2 (type "_a"))))
+~~~roc
+data : {}
+encoded : _a
+main : _a
+decoded : _a
 ~~~

@@ -42,7 +42,6 @@ KwModule OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpColonEqual Ope
 module [Color]
 
 Color := [Red, Blue]
-
 test = Color.Red
 ~~~
 # EXPECTED
@@ -65,7 +64,10 @@ Color := [Red, Blue]
   (Stmt.malformed)
   (Stmt.assign
     (pattern (Patt.ident "test"))
-    (Expr.binop_pipe)
+    (Expr.module_access
+      (Expr.tag_no_args)
+      (Expr.tag_no_args)
+    )
   )
 )
 ~~~

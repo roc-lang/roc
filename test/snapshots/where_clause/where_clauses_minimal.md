@@ -12,71 +12,93 @@ convert_me : a -> b
 		module(a).convert : a -> b
 convert_me = ...
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon LowerIdent OpArrow LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent LowerIdent OpAssign TripleDot ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (lc "convert_me")
+))
+(block
+  (binop_colon
+    (lc "convert_me")
+    (binop_arrow_call
+      (binop_where
+        (binop_arrow_call
+          (lc "a")
+          (lc "b")
+        )
+        (binop_colon
+          (binop_pipe
+            (apply_module
+              (lc "a")
+            )
+            (dot_lc "convert")
+          )
+          (lc "a")
+        )
+      )
+      (lc "b")
+    )
+  )
+  (binop_equals
+    (lc "convert_me")
+    (ellipsis)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module [convert_me]
+
+convert_me : a -> b where module(a).convert : a -> b
+convert_me = ...
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),CloseSquare(1:19-1:20),
-LowerIdent(3:1-3:11),OpColon(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
-KwWhere(4:2-4:7),
-KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),
-LowerIdent(6:1-6:11),OpAssign(6:12-6:13),TripleDot(6:14-6:17),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-6.17
-	(module @1.1-1.20
-		(exposes @1.8-1.20
-			(exposed-lower-ident @1.9-1.19
-				(text "convert_me"))))
-	(statements
-		(s-type-anno @3.1-5.29 (name "convert_me")
-			(ty-fn @3.14-3.20
-				(ty-var @3.14-3.15 (raw "a"))
-				(ty-var @3.19-3.20 (raw "b")))
-			(where
-				(method @5.3-5.29 (module-of "a") (name "convert")
-					(args
-						(ty-var @5.23-5.24 (raw "a")))
-					(ty-var @5.28-5.29 (raw "b")))))
-		(s-decl @6.1-6.17
-			(p-ident @6.1-6.11 (raw "convert_me"))
-			(e-ellipsis))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.11 (ident "convert_me"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @6.1-6.11
-			(declared-type
-				(ty-fn @3.14-3.20 (effectful false)
-					(ty-var @3.14-3.15 (name "a"))
-					(ty-var @3.19-3.20 (name "b"))))))
-	(s-type-anno @3.1-5.29 (name "convert_me")
-		(ty-fn @3.14-3.20 (effectful false)
-			(ty-var @3.14-3.15 (name "a"))
-			(ty-var @3.19-3.20 (name "b")))
-		(where
-			(method @5.3-5.29 (module-of "a") (ident "convert")
-				(args
-					(ty-var @5.23-5.24 (name "a")))
-				(ty-var @5.28-5.29 (name "b")))))
-	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value")))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "convert_me"))
+    (type type_14)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "convert_me"))
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 21
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #20)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.11 (type "a -> b")))
-	(expressions
-		(expr @1.1-1.1 (type "a -> b"))))
+~~~roc
+convert_me : _c
 ~~~

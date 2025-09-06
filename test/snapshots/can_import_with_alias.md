@@ -17,45 +17,64 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwA
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (import
+    (binop_as
+      (binop_pipe
+        (lc "json")
+        (uc "Json")
+      )
+      (uc "MyJson")
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (binop_pipe
+      (uc "MyJson")
+      (dot_lc "decode")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 import json.Json as MyJson
-
 main = MyJson.decode
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **MyJson.decode** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**can_import_with_alias.md:5:8:5:21:**
-```roc
-main = MyJson.decode
-```
-       ^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.module_access
-      (Expr.lookup "MyJson")
-      (Expr.record_accessor)
-    )
+    (Expr.binop_pipe)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 13
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #10)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

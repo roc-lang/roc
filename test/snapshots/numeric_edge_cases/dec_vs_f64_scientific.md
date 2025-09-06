@@ -7,28 +7,31 @@ type=expr
 ~~~roc
 1.5e2
 ~~~
+# TOKENS
+~~~text
+Float ~~~
+# PARSE
+~~~clojure
+(frac_literal_big big:<idx:6>)
+~~~
+# FORMATTED
+~~~roc
+1.5e2
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Float(1:1-1:6),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-frac @1.1-1.6 (raw "1.5e2"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1.1-1.6 (numerator "150") (denominator-power-of-ten "0") (value "150"))
+(Expr.frac_literal_big big:<idx:6>)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 F64)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.6 (type "Frac(_size)"))
+~~~roc
 ~~~

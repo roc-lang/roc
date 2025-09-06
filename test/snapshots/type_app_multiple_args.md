@@ -12,133 +12,166 @@ processDict = |_dict| []
 
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound OpArrow UpperIdent OpenRound UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare CloseSquare BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound UpperIdent Dot LowerIdent OpenRound CloseRound Dot LowerIdent OpenRound String Comma Int CloseRound CloseRound ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "processDict")
+    (binop_arrow_call
+      (apply_uc
+        (uc "Dict")
+        (tuple_literal
+          (uc "Str")
+          (uc "U64")
+        )
+      )
+      (apply_uc
+        (uc "List")
+        (uc "Str")
+      )
+    )
+  )
+  (binop_equals
+    (lc "processDict")
+    (lambda
+      (body
+        (list_literal)
+      )
+      (args
+        (lc "_dict")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processDict")
+          (apply_anon
+            (binop_pipe
+              (apply_anon
+                (binop_pipe
+                  (uc "Dict")
+                  (dot_lc "empty")
+                )
+              )
+              (dot_lc "insert")
+            )
+            (tuple_literal
+              (str_literal_small "one")
+              (num_literal_i32 1)
+            )
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
+
+processDict : Dict(Str, U64) -> List Str
+processDict = |_dict| []
+main! = |_| processDict(Dict.empty() | .insert(("one", 1)))
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `empty` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_app_multiple_args.md:6:25:6:35:**
-```roc
-main! = |_| processDict(Dict.empty().insert("one", 1))
-```
-                        ^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects 0 argument, but got 2 instead.
-**type_app_multiple_args.md:3:15:3:29:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^^^^^^^^^^^
-
-
-
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:23),Comma(3:23-3:24),UpperIdent(3:25-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),UpperIdent(3:33-3:37),NoSpaceOpenRound(3:37-3:38),UpperIdent(3:38-3:41),CloseRound(3:41-3:42),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),NamedUnderscore(4:16-4:21),OpBar(4:21-4:22),OpenSquare(4:23-4:24),CloseSquare(4:24-4:25),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:24),NoSpaceOpenRound(6:24-6:25),UpperIdent(6:25-6:29),NoSpaceDotLowerIdent(6:29-6:35),NoSpaceOpenRound(6:35-6:36),CloseRound(6:36-6:37),NoSpaceDotLowerIdent(6:37-6:44),NoSpaceOpenRound(6:44-6:45),StringStart(6:45-6:46),StringPart(6:46-6:49),StringEnd(6:49-6:50),Comma(6:50-6:51),Int(6:52-6:53),CloseRound(6:53-6:54),CloseRound(6:54-6:55),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-6.55
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.42 (name "processDict")
-			(ty-fn @3.15-3.42
-				(ty-apply @3.15-3.29
-					(ty @3.15-3.19 (name "Dict"))
-					(ty @3.20-3.23 (name "Str"))
-					(ty @3.25-3.28 (name "U64")))
-				(ty-apply @3.33-3.42
-					(ty @3.33-3.37 (name "List"))
-					(ty @3.38-3.41 (name "Str")))))
-		(s-decl @4.1-4.25
-			(p-ident @4.1-4.12 (raw "processDict"))
-			(e-lambda @4.15-4.25
-				(args
-					(p-ident @4.16-4.21 (raw "_dict")))
-				(e-list @4.23-4.25)))
-		(s-decl @6.1-6.55
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.55
-				(args
-					(p-underscore))
-				(e-apply @6.13-6.55
-					(e-ident @6.13-6.24 (raw "processDict"))
-					(e-field-access @6.25-6.54
-						(e-apply @6.25-6.37
-							(e-ident @6.25-6.35 (raw "Dict.empty")))
-						(e-apply @6.37-6.54
-							(e-ident @6.37-6.44 (raw "insert"))
-							(e-string @6.45-6.50
-								(e-string-part @6.46-6.49 (raw "one")))
-							(e-int @6.52-6.53 (raw "1")))))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.12 (ident "processDict"))
-		(e-lambda @4.15-4.25
-			(args
-				(p-assign @4.16-4.21 (ident "_dict")))
-			(e-empty_list @4.23-4.25))
-		(annotation @4.1-4.12
-			(declared-type
-				(ty-fn @3.15-3.42 (effectful false)
-					(ty-apply @3.15-3.29 (symbol "Dict")
-						(ty @3.20-3.23 (name "Str"))
-						(ty @3.25-3.28 (name "U64")))
-					(ty-apply @3.33-3.42 (symbol "List")
-						(ty @3.38-3.41 (name "Str")))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.55
-			(captures
-				(capture @4.1-4.12 (ident "processDict")))
-			(e-lambda @6.9-6.55
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.55
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processDict")))
-					(e-dot-access @6.25-6.54 (field "insert")
-						(receiver
-							(e-call @6.25-6.37
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(args
-							(e-string @6.45-6.50
-								(e-literal @6.46-6.49 (string "one")))
-							(e-int @6.52-6.53 (value "1")))))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "processDict"))
+    (type type_16)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processDict"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 47
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #41)
+(var #19 _)
+(var #20 _)
+(var #21 -> #41)
+(var #22 _)
+(var #23 -> #46)
+(var #24 _)
+(var #25 -> #45)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 -> #44)
+(var #32 Str)
+(var #33 Num *)
+(var #34 -> #43)
+(var #35 _)
+(var #36 _)
+(var #37 -> #46)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 fn_pure)
+(var #42 _)
+(var #43 tuple)
+(var #44 fn_pure)
+(var #45 fn_pure)
+(var #46 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.12 (type "Error -> List(Str)"))
-		(patt @6.1-6.6 (type "_arg -> List(Str)")))
-	(expressions
-		(expr @4.15-4.25 (type "Error -> List(Str)"))
-		(expr @6.9-6.55 (type "_arg -> List(Str)"))))
+~~~roc
+processDict : _arg -> _ret
+main : _arg -> _ret
+_dict : _a
 ~~~

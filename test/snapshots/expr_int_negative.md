@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=Negative integer literal canonicalization
+description=Negative integer literal expression
 type=expr
 ~~~
 # SOURCE
 ~~~roc
--123
+-42
 ~~~
 # TOKENS
 ~~~text
@@ -16,7 +16,7 @@ OpUnaryMinus Int ~~~
 ~~~
 # FORMATTED
 ~~~roc
--123
+-42
 ~~~
 # EXPECTED
 NIL

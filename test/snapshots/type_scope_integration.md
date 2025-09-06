@@ -30,6 +30,24 @@ KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LineCommen
 
     (uc "Bar")
 ))
+(block
+  (binop_colon
+    (uc "Foo")
+    (uc "U64")
+  )
+  (binop_colon
+    (uc "Foo")
+    (uc "Str")
+  )
+  (binop_colon
+    (uc "Bar")
+    (uc "SomeUndeclaredType")
+  )
+  (binop_colon
+    (uc "Baz")
+    (uc "Foo")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -37,13 +55,10 @@ module [Foo, Bar]
 
 # First declare a type
 Foo : U64
-
 # Try to redeclare the same type (should error)
 Foo : Str
-
 # Declare another type that uses an undeclared type
 Bar : SomeUndeclaredType
-
 # Declare a type that properly uses a declared type
 Baz : Foo
 ~~~
@@ -55,26 +70,31 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name node:uc)
-    (type uc)
-  )
-  (Stmt.type_anno
-    (name node:uc)
-    (type uc)
-  )
-  (Stmt.type_anno
-    (name node:uc)
-    (type uc)
-  )
-  (Stmt.type_anno
-    (name node:uc)
-    (type uc)
-  )
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
 ~~~
 # TYPES
 ~~~roc

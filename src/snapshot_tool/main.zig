@@ -4472,10 +4472,17 @@ test "snapshot validation" {
 pub const SnapshotOps = struct {
     allocator: std.mem.Allocator,
     roc_ops: RocOps,
+    allocations: std.AutoHashMap(*anyopaque, AllocationInfo),
+
+    const AllocationInfo = struct {
+        size: usize,
+        alignment: u32,
+    };
 
     pub fn init(allocator: std.mem.Allocator) SnapshotOps {
         return SnapshotOps{
             .allocator = allocator,
+            .allocations = std.AutoHashMap(*anyopaque, AllocationInfo).init(allocator),
             .roc_ops = RocOps{
                 .env = undefined, // will be set below
                 .roc_alloc = snapshotRocAlloc,
@@ -4490,8 +4497,22 @@ pub const SnapshotOps = struct {
     }
 
     pub fn deinit(self: *SnapshotOps) void {
-        _ = self;
-        // nothing to do here?
+        // Free any remaining allocations
+        var iter = self.allocations.iterator();
+        while (iter.next()) |entry| {
+            const bytes: [*]u8 = @ptrCast(@alignCast(entry.key_ptr.*));
+            const slice = bytes[0..entry.value_ptr.size];
+            // Free with proper alignment
+            switch (entry.value_ptr.alignment) {
+                1 => self.allocator.free(slice),
+                2 => self.allocator.free(@as([]align(2) u8, @alignCast(slice))),
+                4 => self.allocator.free(@as([]align(4) u8, @alignCast(slice))),
+                8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
+                16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
+                else => {}, // Ignore unsupported alignments
+            }
+        }
+        self.allocations.deinit();
     }
 
     pub fn get_ops(self: *SnapshotOps) *RocOps {
@@ -4503,78 +4524,120 @@ pub const SnapshotOps = struct {
 fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
+    // Allocate with proper alignment
+    const ptr = switch (alloc_args.alignment) {
+        1 => snapshot_env.allocator.alignedAlloc(u8, 1, alloc_args.length),
+        2 => snapshot_env.allocator.alignedAlloc(u8, 2, alloc_args.length),
+        4 => snapshot_env.allocator.alignedAlloc(u8, 4, alloc_args.length),
+        8 => snapshot_env.allocator.alignedAlloc(u8, 8, alloc_args.length),
+        16 => snapshot_env.allocator.alignedAlloc(u8, 16, alloc_args.length),
+        else => @panic("Unsupported alignment in snapshot allocator"),
+    } catch {
         @panic("Out of memory during snapshot test allocation");
     };
 
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
+    const result: *anyopaque = @ptrCast(ptr.ptr);
 
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    // Track the allocation
+    snapshot_env.allocations.put(result, SnapshotOps.AllocationInfo{
+        .size = alloc_args.length,
+        .alignment = @intCast(alloc_args.alignment),
+    }) catch {
+        snapshot_env.allocator.free(ptr);
+        @panic("Failed to track snapshot allocation");
+    };
+
+    alloc_args.answer = result;
 }
 
 fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
+    if (snapshot_env.allocations.fetchRemove(dealloc_args.ptr)) |entry| {
+        const bytes: [*]u8 = @ptrCast(@alignCast(dealloc_args.ptr));
+        const slice = bytes[0..entry.value.size];
+        // Free with proper alignment
+        switch (entry.value.alignment) {
+            1 => snapshot_env.allocator.free(slice),
+            2 => snapshot_env.allocator.free(@as([]align(2) u8, @alignCast(slice))),
+            4 => snapshot_env.allocator.free(@as([]align(4) u8, @alignCast(slice))),
+            8 => snapshot_env.allocator.free(@as([]align(8) u8, @alignCast(slice))),
+            16 => snapshot_env.allocator.free(@as([]align(16) u8, @alignCast(slice))),
+            else => {}, // Ignore unsupported alignments
+        }
+    }
 }
 
 fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+    // If answer is null, this is an initial allocation
+    if (@intFromPtr(realloc_args.answer) == 0) {
+        var alloc_args = RocAlloc{
+            .alignment = realloc_args.alignment,
+            .length = realloc_args.new_length,
+            .answer = undefined,
+        };
+        snapshotRocAlloc(&alloc_args, env);
+        realloc_args.answer = alloc_args.answer;
+        return;
+    }
 
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
-        // Reallocation failed - keep the original allocation
+    // Look up the old allocation
+    const old_info = snapshot_env.allocations.get(realloc_args.answer) orelse {
+        // Not tracked - can't realloc
         return;
     };
 
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
+    // Remove old tracking entry
+    _ = snapshot_env.allocations.remove(realloc_args.answer);
 
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    // Get the old data
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
+    const old_slice = old_bytes[0..old_info.size];
+
+    // Allocate new memory
+    const new_ptr = switch (realloc_args.alignment) {
+        1 => snapshot_env.allocator.alignedAlloc(u8, 1, realloc_args.new_length),
+        2 => snapshot_env.allocator.alignedAlloc(u8, 2, realloc_args.new_length),
+        4 => snapshot_env.allocator.alignedAlloc(u8, 4, realloc_args.new_length),
+        8 => snapshot_env.allocator.alignedAlloc(u8, 8, realloc_args.new_length),
+        16 => snapshot_env.allocator.alignedAlloc(u8, 16, realloc_args.new_length),
+        else => @panic("Unsupported alignment in snapshot reallocator"),
+    } catch {
+        // Put the old entry back on failure
+        snapshot_env.allocations.put(realloc_args.answer, old_info) catch {};
+        return;
+    };
+
+    // Copy old data to new location
+    const copy_size = @min(old_info.size, realloc_args.new_length);
+    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
+
+    // Free old memory with proper alignment
+    switch (old_info.alignment) {
+        1 => snapshot_env.allocator.free(old_slice),
+        2 => snapshot_env.allocator.free(@as([]align(2) u8, @alignCast(old_slice))),
+        4 => snapshot_env.allocator.free(@as([]align(4) u8, @alignCast(old_slice))),
+        8 => snapshot_env.allocator.free(@as([]align(8) u8, @alignCast(old_slice))),
+        16 => snapshot_env.allocator.free(@as([]align(16) u8, @alignCast(old_slice))),
+        else => {}, // Ignore unsupported alignments
+    }
+
+    const result: *anyopaque = @ptrCast(new_ptr.ptr);
+
+    // Track the new allocation
+    snapshot_env.allocations.put(result, SnapshotOps.AllocationInfo{
+        .size = realloc_args.new_length,
+        .alignment = @intCast(realloc_args.alignment),
+    }) catch {
+        snapshot_env.allocator.free(new_ptr);
+        // Put the old entry back on failure
+        snapshot_env.allocations.put(realloc_args.answer, old_info) catch {};
+        return;
+    };
+
+    realloc_args.answer = result;
 }
 
 fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {

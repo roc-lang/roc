@@ -48,31 +48,49 @@ NIL
 ~~~clojure
 (Expr.record_literal
   (Expr.binop_colon
-    (lc "name")
+    (Expr.malformed)
     (Expr.str_literal_big)
   )
   (Expr.binop_colon
-    (lc "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 30)
   )
   (Expr.binop_colon
-    (lc "name")
+    (Expr.malformed)
     (Expr.str_literal_small)
   )
   (Expr.binop_colon
-    (lc "email")
+    (Expr.malformed)
     (Expr.str_literal_big)
   )
   (Expr.binop_colon
-    (lc "age")
+    (Expr.malformed)
     (Expr.num_literal_i32 25)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 18
+(var #0 _)
+(var #1 _)
+(var #2 Str)
+(var #3 _)
+(var #4 _)
+(var #5 Num *)
+(var #6 _)
+(var #7 _)
+(var #8 Str)
+(var #9 _)
+(var #10 _)
+(var #11 Str)
+(var #12 _)
+(var #13 _)
+(var #14 Num *)
+(var #15 _)
+(var #16 -> #17)
+(var #17 {})
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

@@ -27,23 +27,72 @@ KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon Underscore BlankLin
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_colon
+    (uc "MyType")
+    (underscore)
+  )
+  (binop_colon_equals
+    (uc "OtherType")
+    (underscore)
+  )
+  (binop_colon_equals
+    (uc "ComplexType")
+    (apply_uc
+      (uc "List")
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "RecordType")
+    (record_literal
+      (binop_colon
+        (lc "field")
+        (underscore)
+      )
+      (binop_colon
+        (lc "other")
+        (uc "U32")
+      )
+    )
+  )
+  (binop_colon_equals
+    (uc "FunctionType")
+    (binop_arrow_call
+      (underscore)
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "TupleType")
+    (tuple_literal
+      (underscore)
+      (uc "U32")
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "TagType")
+    (list_literal
+      (apply_uc
+        (uc "Some")
+        (underscore)
+      )
+      (uc "None")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 MyType : _
-
 OtherType := _
-
 ComplexType := List _
-
 RecordType := {field: _, other: U32}
-
 FunctionType := _ -> _
-
 TupleType := (_, U32, _)
-
 TagType := [Some(_), None]
 ~~~
 # EXPECTED
@@ -126,10 +175,7 @@ TagType := [Some(_), None]
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name node:uc)
-    (type underscore)
-  )
+  (Stmt.type_alias)
   (Stmt.malformed)
   (Stmt.malformed)
   (Stmt.malformed)
@@ -140,6 +186,47 @@ TagType := [Some(_), None]
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 40
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
 ~~~
 # TYPES
 ~~~roc

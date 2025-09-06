@@ -14,6 +14,86 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 -ain! = |_| getUser(900)
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly OpBar LowerIdent OpColon KwPlatform String CloseCurly BlankLine UpperIdent OpColon UpperIdent BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwIf OpenRound LowerIdent OpGreaterThan Int OpBang CloseRound String KwElse String BlankLine OpUnaryMinus LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+))
+(block
+  (malformed)
+  (malformed)
+  (str_literal_small "c")
+  (malformed)
+  (binop_colon
+    (uc "UserId")
+    (uc "U64")
+  )
+  (binop_colon
+    (lc "ser")
+    (binop_arrow_call
+      (uc "UserId")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "getUser")
+    (lambda
+      (body
+        (if_without_else
+          (condition             (binop_gt
+              (lc "id")
+              (num_literal_i32 1)
+            )
+)
+          (then             (unary_not <unary_op>)
+))
+      )
+      (args
+        (lc "id")
+      )
+    )
+  )
+  (str_literal_small "big")
+  (malformed)
+  (binop_equals
+    (binop_minus
+      (str_literal_small "l")
+      (not_lc "ain")
+    )
+    (lambda
+      (body
+        (apply_lc
+          (lc "getUser")
+          (num_literal_i32 900)
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { }
+
+: 
+platform 
+"c"
+}
+
+UserId : U64
+ser : UserId -> Str
+getUser = |id| if id > 1 !) 
+"big"
+else 
+"l" - ain! = |_| getUser(900)
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_022.md:1:1:1:4
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:27
@@ -27,217 +107,181 @@ MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
 INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_package_or_platform_name`
+**EXPECTED PACKAGE OR PLATFORM NAME**
+A parsing error occurred: **expected_package_or_platform_name**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_022.md:1:1:1:4:**
+**fuzz_crash_022.md:1:1:1:15:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-^^^
+^^^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **platform** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+**EXPECTED CLOSE CURLY BRACE**
+A parsing error occurred: **expected_package_platform_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_022.md:1:19:1:27:**
+**fuzz_crash_022.md:1:1:1:15:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                  ^^^^^^^^
+^^^^^^^^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **: ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_022.md:1:28:1:29:**
+**fuzz_crash_022.md:1:17:1:19:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                           ^
+                ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **platform ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_022.md:1:29:1:30:**
+**fuzz_crash_022.md:1:19:1:28:**
 ```roc
 app [main!] { |f: platform "c" }
 ```
-                            ^
+                  ^^^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
 
-**fuzz_crash_022.md:1:30:1:31:**
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_022.md:1:32:3:1:**
 ```roc
 app [main!] { |f: platform "c" }
-```
-                             ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:1:32:1:33:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_round_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:6:27:6:28:**
-```roc
-getUser = |id| if (id > 1!) "big" else "l"
-```
-                          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_022.md:8:1:8:2:**
-```roc
--ain! = |_| getUser(900)
-```
-^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_022.md:1:19:1:27:**
-```roc
-app [main!] { |f: platform "c" }
-```
-                  ^^^^^^^^
-
-
-**INVALID IF CONDITION**
-The condition in this `if` expression could not be processed.
-
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
-
-**UNUSED VARIABLE**
-Variable `id` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_022.md:6:12:6:14:**
-```roc
-getUser = |id| if (id > 1!) "big" else "l"
-```
-           ^^
-
-
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),OpBar(1:15-1:16),LowerIdent(1:16-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:30),StringEnd(1:30-1:31),CloseCurly(1:32-1:33),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:13),OpArrow(5:14-5:16),UpperIdent(5:17-5:20),
-LowerIdent(6:1-6:8),OpAssign(6:9-6:10),OpBar(6:11-6:12),LowerIdent(6:12-6:14),OpBar(6:14-6:15),KwIf(6:16-6:18),OpenRound(6:19-6:20),LowerIdent(6:20-6:22),OpGreaterThan(6:23-6:24),Int(6:25-6:26),OpBang(6:26-6:27),CloseRound(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:33),StringEnd(6:33-6:34),KwElse(6:35-6:39),StringStart(6:40-6:41),StringPart(6:41-6:42),StringEnd(6:42-6:43),
-OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),
-EndOfFile(9:1-9:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-8.25
-	(malformed-header @1.1-1.16 (tag "expected_package_or_platform_name"))
-	(statements
-		(s-type-anno @1.16-1.27 (name "f")
-			(ty-malformed @1.19-1.27 (tag "ty_anno_unexpected_token")))
-		(s-malformed @1.28-1.29 (tag "statement_unexpected_token"))
-		(s-malformed @1.29-1.30 (tag "statement_unexpected_token"))
-		(s-malformed @1.30-1.31 (tag "statement_unexpected_token"))
-		(s-malformed @1.32-1.33 (tag "statement_unexpected_token"))
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.7 (name "UserId")
-				(args))
-			(ty @3.10-3.13 (name "U64")))
-		(s-type-anno @5.1-5.20 (name "ser")
-			(ty-fn @5.7-5.20
-				(ty @5.7-5.13 (name "UserId"))
-				(ty @5.17-5.20 (name "Str"))))
-		(s-decl @6.1-6.43
-			(p-ident @6.1-6.8 (raw "getUser"))
-			(e-lambda @6.11-6.43
-				(args
-					(p-ident @6.12-6.14 (raw "id")))
-				(e-if-then-else @6.16-6.43
-					(e-malformed @6.27-6.28 (reason "expected_expr_close_round_or_comma"))
-					(e-string @6.29-6.34
-						(e-string-part @6.30-6.33 (raw "big")))
-					(e-string @6.40-6.43
-						(e-string-part @6.41-6.42 (raw "l"))))))
-		(s-malformed @8.1-8.2 (tag "statement_unexpected_token"))
-		(s-decl @8.2-8.25
-			(p-ident @8.2-8.6 (raw "ain!"))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore))
-				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "900")))))))
-~~~
-# FORMATTED
-~~~roc
-f : 
-
 
 UserId : U64
+```
 
-ser : UserId -> Str
-getUser = |id| if  "big" else "l"
 
-ain! = |_| getUser(900)
-~~~
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_round_or_comma**
+This is an unexpected parsing error. Please check your syntax.
+
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **) ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_022.md:6:27:6:29:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+                          ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **else ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_022.md:6:35:6:40:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+                                  ^^^^^
+
+
+**EXPRESSION IN PATTERN CONTEXT**
+Found an expression where a pattern was expected.
+This location requires a pattern for matching or destructuring, not a computed value.
+
+**fuzz_crash_022.md:6:40:8:6:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+
+-ain! = |_| getUser(900)
+```
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.43
-			(args
-				(p-assign @6.12-6.14 (ident "id")))
-			(e-runtime-error (tag "if_condition_not_canonicalized"))))
-	(d-let
-		(p-assign @8.2-8.6 (ident "ain!"))
-		(e-closure @8.9-8.25
-			(captures
-				(capture @6.1-6.8 (ident "getUser")))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore @8.10-8.11))
-				(e-call @8.13-8.25
-					(e-lookup-local @8.13-8.20
-						(p-assign @6.1-6.8 (ident "getUser")))
-					(e-int @8.21-8.24 (value "900"))))))
-	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64"))))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Stmt.type_alias)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "ser"))
+    (type type_13)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getUser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.malformed))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 46
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 Str)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 -> #41)
+(var #16 _)
+(var #17 _)
+(var #18 Num *)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 -> #41)
+(var #24 _)
+(var #25 Str)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 -> #45)
+(var #30 _)
+(var #31 -> #44)
+(var #32 Num *)
+(var #33 _)
+(var #34 -> #45)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 fn_pure)
+(var #42 _)
+(var #43 _)
+(var #44 fn_pure)
+(var #45 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.8 (type "_arg -> Error"))
-		(patt @8.2-8.6 (type "_arg -> Error")))
-	(type_decls
-		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId"))))
-	(expressions
-		(expr @6.11-6.43 (type "_arg -> Error"))
-		(expr @8.9-8.25 (type "_arg -> Error"))))
+~~~roc
+ser : _a
+getUser : _arg -> _ret
+id : _a
 ~~~

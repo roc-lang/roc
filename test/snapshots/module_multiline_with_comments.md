@@ -25,7 +25,8 @@ KwModule LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperId
 ~~~
 # FORMATTED
 ~~~roc
-module [ # Comment after module keyword
+module [
+	# Comment after module keyword
 	# Comment After exposes open
 	something,
 	# Comment after exposed item
@@ -43,6 +44,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
 ~~~roc

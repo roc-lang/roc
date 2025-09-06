@@ -29,27 +29,51 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       )
     )
 ))
+(block
+  (import
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "Stdout")
+            (not_lc "line")
+          )
+          (str_literal_big "Hello, world!")
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 app [main!] { pf: "../basic-cli/platform.roc" platform [] }
 
 import pf.Stdout
-
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
 MODULE NOT FOUND - hello_world.md:3:1:3:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Stdout.line!** in this scope.
+Nothing is named **pf** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
-**hello_world.md:5:13:5:25:**
+**hello_world.md:3:8:3:10:**
 ```roc
-main! = |_| Stdout.line!("Hello, world!")
+import pf.Stdout
 ```
-            ^^^^^^^^^^^^
+       ^^
 
 
 **UNDEFINED VARIABLE**
@@ -75,7 +99,33 @@ main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 24
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #23)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 -> #22)
+(var #16 Str)
+(var #17 _)
+(var #18 -> #23)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 fn_pure)
+(var #23 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+main : _arg -> _ret
 ~~~

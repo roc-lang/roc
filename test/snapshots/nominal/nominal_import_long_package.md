@@ -21,6 +21,33 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot Upp
   (exposes
     (lc "red")
 ))
+(block
+  (import
+    (binop_exposing
+      (binop_pipe
+        (binop_pipe
+          (lc "design")
+          (uc "Styles")
+        )
+        (uc "Color")
+      )
+      (list_literal
+        (uc "Encoder")
+      )
+    )
+  )
+  (malformed)
+  (uc "CE")
+  (malformed)
+  (binop_colon
+    (lc "red")
+    (uc "CE")
+  )
+  (binop_equals
+    (lc "red")
+    (ellipsis)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -68,50 +95,27 @@ red : CE
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **design** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**nominal_import_long_package.md:3:46:3:49:**
+**nominal_import_long_package.md:3:8:3:14:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-                                             ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_import_long_package.md:3:49:3:51:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                                ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_import_long_package.md:3:51:5:1:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-
-red : CE
-```
+       ^^^^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.type_anno
-    (name "red")
-    (type uc)
+  (Expr.malformed)
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "red"))
+    (type type_15)
   )
   (Stmt.assign
     (pattern (Patt.ident "red"))
@@ -121,7 +125,33 @@ red : CE
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 24
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 -> #23)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
 ~~~
 # TYPES
 ~~~roc
+red : _a
 ~~~

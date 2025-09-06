@@ -106,10 +106,8 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 Pair((a, b)) : (a, b)
-
 swapPair : Pair(a, b) -> Pair(b, a)
 swapPair = |x, y| (y, x)
-
 main! = |_| swapPair((1, 2))
 ~~~
 # EXPECTED

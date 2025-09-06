@@ -51,12 +51,19 @@ Is there an **import** or **exposing** missing up-top?
 
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.fn_call)
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 -> #6)
+(var #4 Num *)
+(var #5 _)
+(var #6 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

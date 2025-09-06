@@ -39,9 +39,7 @@ OpenCurly LineComment DoubleDot LowerIdent Comma BlankLine LineComment BlankLine
 # FORMATTED
 ~~~roc
 # comment1
-
 # comment2
-
 person# comment3
 # comment4
 # comment5

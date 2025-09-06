@@ -38,8 +38,17 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 8
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 -> #4)
+(var #4 Num *)
+(var #5 -> #7)
+(var #6 _)
+(var #7 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : _a
 ~~~

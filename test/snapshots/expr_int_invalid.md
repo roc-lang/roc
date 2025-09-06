@@ -28,8 +28,10 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 Num *)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

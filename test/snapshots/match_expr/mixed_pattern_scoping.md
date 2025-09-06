@@ -12,12 +12,78 @@ match data {
     Err(y) => y / 2
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly UpperIdent OpenRound OpenSquare LowerIdent Comma LowerIdent CloseSquare CloseRound OpFatArrow LowerIdent OpPlus LowerIdent UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpBinaryMinus Int UpperIdent OpenRound OpenSquare LowerIdent CloseSquare CloseRound OpFatArrow LowerIdent OpStar Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpSlash Int CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "data")
+)
+  (branch1     (binop_thick_arrow
+      (apply_uc
+        (uc "Ok")
+        (list_literal
+          (lc "x")
+          (lc "y")
+        )
+      )
+      (binop_plus
+        (lc "x")
+        (lc "y")
+      )
+    )
+)
+  (branch2     (binop_thick_arrow
+      (apply_uc
+        (uc "Err")
+        (lc "x")
+      )
+      (binop_minus
+        (lc "x")
+        (num_literal_i32 1)
+      )
+    )
+)
+  (branch3     (binop_thick_arrow
+      (apply_uc
+        (uc "Ok")
+        (list_literal
+          (lc "x")
+        )
+      )
+      (binop_star
+        (lc "x")
+        (num_literal_i32 2)
+      )
+    )
+)
+  (branch4     (binop_thick_arrow
+      (apply_uc
+        (uc "Err")
+        (lc "y")
+      )
+      (binop_slash
+        (lc "y")
+        (num_literal_i32 2)
+      )
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match data
+	Ok([x, y]) => x + y
+	Err(x) => x - 1
+	Ok([x]) => x * 2
+	Err(y) => y / 2
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **mixed_pattern_scoping.md:1:7:1:11:**
 ```roc
@@ -26,108 +92,72 @@ match data {
       ^^^^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),
-UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),OpenSquare(2:8-2:9),LowerIdent(2:9-2:10),Comma(2:10-2:11),LowerIdent(2:12-2:13),CloseSquare(2:13-2:14),CloseRound(2:14-2:15),OpFatArrow(2:16-2:18),LowerIdent(2:19-2:20),OpPlus(2:21-2:22),LowerIdent(2:23-2:24),
-UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:10),CloseRound(3:10-3:11),OpFatArrow(3:12-3:14),LowerIdent(3:15-3:16),OpBinaryMinus(3:17-3:18),Int(3:19-3:20),
-UpperIdent(4:5-4:7),NoSpaceOpenRound(4:7-4:8),OpenSquare(4:8-4:9),LowerIdent(4:9-4:10),CloseSquare(4:10-4:11),CloseRound(4:11-4:12),OpFatArrow(4:13-4:15),LowerIdent(4:16-4:17),OpStar(4:18-4:19),Int(4:20-4:21),
-UpperIdent(5:5-5:8),NoSpaceOpenRound(5:8-5:9),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),OpFatArrow(5:12-5:14),LowerIdent(5:15-5:16),OpSlash(5:17-5:18),Int(5:19-5:20),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.11 (raw "data"))
-	(branches
-		(branch @2.5-2.24
-			(p-tag @2.5-2.15 (raw "Ok")
-				(p-list @2.8-2.14
-					(p-ident @2.9-2.10 (raw "x"))
-					(p-ident @2.12-2.13 (raw "y"))))
-			(e-binop @2.19-2.24 (op "+")
-				(e-ident @2.19-2.20 (raw "x"))
-				(e-ident @2.23-2.24 (raw "y"))))
-		(branch @3.5-3.20
-			(p-tag @3.5-3.11 (raw "Err")
-				(p-ident @3.9-3.10 (raw "x")))
-			(e-binop @3.15-3.20 (op "-")
-				(e-ident @3.15-3.16 (raw "x"))
-				(e-int @3.19-3.20 (raw "1"))))
-		(branch @4.5-4.21
-			(p-tag @4.5-4.12 (raw "Ok")
-				(p-list @4.8-4.11
-					(p-ident @4.9-4.10 (raw "x"))))
-			(e-binop @4.16-4.21 (op "*")
-				(e-ident @4.16-4.17 (raw "x"))
-				(e-int @4.20-4.21 (raw "2"))))
-		(branch @5.5-5.20
-			(p-tag @5.5-5.11 (raw "Err")
-				(p-ident @5.9-5.10 (raw "y")))
-			(e-binop @5.15-5.20 (op "/")
-				(e-ident @5.15-5.16 (raw "y"))
-				(e-int @5.19-5.20 (raw "2"))))))
-~~~
-# FORMATTED
-~~~roc
-match data {
-	Ok([x, y]) => x + y
-	Err(x) => x - 1
-	Ok([x]) => x * 2
-	Err(y) => y / 2
-}
-~~~
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**mixed_pattern_scoping.md:2:5:2:24:**
+```roc
+    Ok([x, y]) => x + y
+```
+    ^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**mixed_pattern_scoping.md:4:5:4:21:**
+```roc
+    Ok([x]) => x * 2
+```
+    ^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @2.5-2.15
-							(p-applied-tag @2.5-2.15))))
-				(value
-					(e-binop @2.19-2.24 (op "add")
-						(e-lookup-local @2.19-2.20
-							(p-assign @2.9-2.10 (ident "x")))
-						(e-lookup-local @2.23-2.24
-							(p-assign @2.12-2.13 (ident "y"))))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @3.5-3.11
-							(p-applied-tag @3.5-3.11))))
-				(value
-					(e-binop @3.15-3.20 (op "sub")
-						(e-lookup-local @3.15-3.16
-							(p-assign @3.9-3.10 (ident "x")))
-						(e-int @3.19-3.20 (value "1")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @4.5-4.12
-							(p-applied-tag @4.5-4.12))))
-				(value
-					(e-binop @4.16-4.21 (op "mul")
-						(e-lookup-local @4.16-4.17
-							(p-assign @4.9-4.10 (ident "x")))
-						(e-int @4.20-4.21 (value "2")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @5.5-5.11
-							(p-applied-tag @5.5-5.11))))
-				(value
-					(e-binop @5.15-5.20 (op "div")
-						(e-lookup-local @5.15-5.16
-							(p-assign @5.9-5.10 (ident "y")))
-						(e-int @5.19-5.20 (value "2"))))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 34
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 Num *)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 Num *)
+(var #31 _)
+(var #32 _)
+(var #33 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.2 (type "Num(_size)"))
+~~~roc
+y : _a
+x : _a
 ~~~

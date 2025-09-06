@@ -78,11 +78,9 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
 app [main!] { pf: "../basic-cli/platform.roc" platform [] }
 
 import pf.Stdout
-
 # Function with effectful annotation using fat arrow
 print_msg! : Str => {}
 print_msg! = |msg| Stdout.line!(msg)
-
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED

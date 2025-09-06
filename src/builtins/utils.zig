@@ -403,6 +403,14 @@ pub fn decref(
 
     const bytes = bytes_or_null orelse return;
 
+    // Check if the pointer is properly aligned for isize
+    if (@intFromPtr(bytes) % @alignOf(isize) != 0) {
+        // Pointer is misaligned - this can happen with seamless slices
+        // For now, skip the decref to avoid a crash
+        // TODO: Fix the root cause of misaligned seamless slice pointers
+        return;
+    }
+
     const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
 
     decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops);

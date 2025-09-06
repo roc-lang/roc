@@ -31,9 +31,7 @@ Int LineComment OpPlus LineComment BlankLine LineComment BlankLine Int LineComme
 ~~~roc
 1 + # One
 # Plus
-
 # A comment in between
-
 2 * # Two
 # Times
 3
@@ -54,8 +52,14 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 -> #4)
+(var #2 -> #3)
+(var #3 -> #4)
+(var #4 -> #5)
+(var #5 Num *)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

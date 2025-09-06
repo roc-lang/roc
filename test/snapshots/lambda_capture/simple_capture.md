@@ -67,15 +67,33 @@ This is an unexpected parsing error. Please check your syntax.
   )
   (Stmt.assign
     (pattern (Patt.ident "y"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
   (Expr.lookup "y")
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 -> #2)
+(var #2 Num *)
+(var #3 _)
+(var #4 -> #9)
+(var #5 _)
+(var #6 -> #9)
+(var #7 -> #14)
+(var #8 Num *)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 -> #8)
+(var #14 -> #15)
+(var #15 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : Num(_size)
+y : _a
 ~~~

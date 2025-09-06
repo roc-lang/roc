@@ -9,83 +9,96 @@ module[]_0={
 )
  
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare Underscore Int OpAssign OpenCurly CloseRound ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (underscore)
+  (binop_equals
+    (num_literal_i32 0)
+    (block
+      (malformed)
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+_
+0 = {
+	)
+}
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
 PARSE ERROR - fuzz_crash_050.md:4:1:4:1
 UNRECOGNIZED SYNTAX - fuzz_crash_050.md:2:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
+The token **)
+ ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_050.md:2:1:2:2:**
+**fuzz_crash_050.md:2:1:3:2:**
 ```roc
 )
+ 
 ```
-^
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly`
+A parsing error occurred: **expected_expr_close_curly**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_050.md:4:1:4:1:**
+**fuzz_crash_050.md:1:12:3:2:**
 ```roc
-
-```
-^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_050.md:2:1:2:2:**
-```roc
+module[]_0={
 )
+ 
 ```
-^
 
-This might be a syntax error, an unsupported language feature, or a typo.
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NamedUnderscore(1:9-1:11),OpAssign(1:11-1:12),OpenCurly(1:12-1:13),
-CloseRound(2:1-2:2),
-EndOfFile(4:1-4:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-2.2
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-decl @1.9-2.2
-			(p-ident @1.9-1.11 (raw "_0"))
-			(e-block @1.12-2.2
-				(statements
-					(e-malformed @2.1-2.2 (reason "expr_unexpected_token")))))))
-~~~
-# FORMATTED
-~~~roc
-module []
-_0 = {
-	
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-}
-~~~
+**fuzz_crash_050.md:1:9:1:10:**
+```roc
+module[]_0={
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @1.9-1.11 (ident "_0"))
-		(e-block @1.12-2.2
-			(e-runtime-error (tag "expr_not_canonicalized")))))
+(Expr.block
+  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.num_literal_i32))
+    (Expr.block
+      (Expr.malformed)
+    )
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 -> #4)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @1.9-1.11 (type "Error")))
-	(expressions
-		(expr @1.12-2.2 (type "Error"))))
+~~~roc
 ~~~

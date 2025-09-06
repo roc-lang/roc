@@ -7,12 +7,29 @@ type=expr
 ~~~roc
 get_name!({}) ?? "Bob"
 ~~~
+# TOKENS
+~~~text
+LowerIdent OpBang OpenRound OpenCurly CloseCurly CloseRound OpDoubleQuestion String ~~~
+# PARSE
+~~~clojure
+(binop_double_question
+  (apply_anon
+    (not_lc "get_name")
+    (record_literal)
+  )
+  (str_literal_small "Bob")
+)
+~~~
+# FORMATTED
+~~~roc
+get_name!({}) ?? "Bob"
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `get_name!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **get_name!** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **double_question_binop.md:1:1:1:10:**
 ```roc
@@ -21,34 +38,23 @@ get_name!({}) ?? "Bob"
 ^^^^^^^^^
 
 
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:10),NoSpaceOpenRound(1:10-1:11),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),CloseRound(1:13-1:14),OpDoubleQuestion(1:15-1:17),StringStart(1:18-1:19),StringPart(1:19-1:22),StringEnd(1:22-1:23),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-binop @1.1-1.23 (op "??")
-	(e-apply @1.1-1.14
-		(e-ident @1.1-1.10 (raw "get_name!"))
-		(e-record @1.11-1.13))
-	(e-string @1.18-1.23
-		(e-string-part @1.19-1.22 (raw "Bob"))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.23 (op "null_coalesce")
-	(e-call @1.1-1.14
-		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-empty_record @1.11-1.13))
-	(e-string @1.18-1.23
-		(e-literal @1.19-1.22 (string "Bob"))))
+(Expr.binop_double_question
+  (Expr.fn_call)
+  (Expr.str_literal_small)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 Str)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.23 (type "_a"))
+~~~roc
 ~~~

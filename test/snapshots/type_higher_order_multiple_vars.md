@@ -30,6 +30,63 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       )
     )
 ))
+(block
+  (binop_colon
+    (lc "compose")
+    (binop_arrow_call
+      (binop_arrow_call
+        (binop_arrow_call
+          (lc "_b")
+          (lc "_c")
+        )
+        (binop_arrow_call
+          (lc "_a")
+          (lc "_b")
+        )
+      )
+      (binop_arrow_call
+        (lc "_a")
+        (lc "_c")
+      )
+    )
+  )
+  (binop_equals
+    (lc "compose")
+    (lambda
+      (body
+        (lambda
+          (body
+            (apply_lc
+              (lc "f")
+              (apply_lc
+                (lc "g")
+                (lc "x")
+              )
+            )
+          )
+          (args
+            (lc "x")
+          )
+        )
+      )
+      (args
+        (lc "f")
+        (lc "g")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,7 +95,6 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 compose :
 	((_b -> _c) -> _a -> _b) -> _a -> _c
 compose = |f, g| |x| f(g(x))
-
 main! = |_| {}
 ~~~
 # EXPECTED
@@ -53,9 +109,9 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "compose")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "compose"))
+    (type type_18)
   )
   (Stmt.assign
     (pattern (Patt.ident "compose"))
@@ -69,7 +125,61 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 48
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 -> #44)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 -> #42)
+(var #25 -> #41)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 -> #43)
+(var #30 -> #44)
+(var #31 _)
+(var #32 -> #47)
+(var #33 _)
+(var #34 -> #46)
+(var #35 -> #47)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 fn_pure)
+(var #42 fn_pure)
+(var #43 fn_pure)
+(var #44 fn_pure)
+(var #45 _)
+(var #46 {})
+(var #47 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+g : _a
+compose : _arg, _arg2 -> _arg3 -> _ret
+main : _arg -> {}
+x : _a
+f : _a
 ~~~

@@ -7,18 +7,33 @@ type=file
 ~~~roc
 ff8.8.d
 ~~~
+# TOKENS
+~~~text
+LowerIdent Dot Int Dot LowerIdent ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_pipe
+    (binop_pipe
+      (lc "ff8")
+      (num_literal_i32 8)
+    )
+    (dot_lc "d")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+ff8 | 8.d | .d
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_007.md:1:1:1:4
 PARSE ERROR - fuzz_crash_007.md:1:4:1:6
 PARSE ERROR - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**UNDEFINED VARIABLE**
+Nothing is named **ff8** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_007.md:1:1:1:4:**
 ```roc
@@ -27,51 +42,23 @@ ff8.8.d
 ^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_007.md:1:4:1:6:**
-```roc
-ff8.8.d
-```
-   ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_007.md:1:6:1:8:**
-```roc
-ff8.8.d
-```
-     ^^
-
-
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.8
-	(malformed-header @1.1-1.4 (tag "missing_header"))
-	(statements
-		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.8 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.binop_pipe)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

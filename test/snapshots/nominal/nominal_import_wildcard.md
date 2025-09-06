@@ -31,6 +31,36 @@ KwModule OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 
     (lc "blue")
 ))
+(block
+  (import
+    (uc "Color")
+  )
+  (malformed)
+  (binop_colon
+    (lc "red")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "red")
+    (uc "Red")
+  )
+  (binop_colon
+    (lc "blue")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "blue")
+    (uc "Blue")
+  )
+  (binop_colon
+    (lc "green")
+    (uc "Color")
+  )
+  (binop_equals
+    (lc "green")
+    (uc "Green")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,10 +71,8 @@ import Color
 
 red : Color
 red = Red
-
 blue : Color
 blue = Blue
-
 green : Color
 green = Green
 ~~~
@@ -69,52 +97,71 @@ red : Color
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_import_wildcard.md:3:14:5:1:**
-```roc
-import Color.*
-
-red : Color
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
-  (Stmt.malformed)
-  (Stmt.type_anno
-    (name "red")
-    (type uc)
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "red"))
+    (type type_8)
   )
   (Stmt.assign
     (pattern (Patt.ident "red"))
-    (Expr.lookup "Red")
+    (Expr.tag_no_args)
   )
-  (Stmt.type_anno
-    (name "blue")
-    (type uc)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "blue"))
+    (type type_14)
   )
   (Stmt.assign
     (pattern (Patt.ident "blue"))
-    (Expr.lookup "Blue")
+    (Expr.tag_no_args)
   )
-  (Stmt.type_anno
-    (name "green")
-    (type uc)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "green"))
+    (type type_20)
   )
   (Stmt.assign
     (pattern (Patt.ident "green"))
-    (Expr.lookup "Green")
+    (Expr.tag_no_args)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 27
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #11)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #17)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 -> #23)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
 ~~~
 # TYPES
 ~~~roc
+blue : _a
+red : _a
+green : _a
 ~~~

@@ -9,30 +9,44 @@ type=expr
 !
 &z.t
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:2),
-OpBang(2:1-2:2),
-OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),
-EndOfFile(4:1-4:1),
-~~~
+~~~text
+Int OpBang OpAmpersand LowerIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.2 (raw "4"))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-4
+!
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **!
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**num_bang_amp_z_dot_t.md:2:1:3:1:**
+```roc
+!
+&z.t
+```
+
+
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "4"))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.2 (type "Num(_size)"))
+~~~roc
 ~~~

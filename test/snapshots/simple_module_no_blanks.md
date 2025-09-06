@@ -21,10 +21,34 @@ KwModule OpenSquare LowerIdent OpBang Comma LowerIdent CloseSquare KwImport Lowe
 
     (lc "world")
 ))
+(block
+  (import
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
+  )
+  (binop_equals
+    (not_lc "hello")
+    (apply_anon
+      (binop_pipe
+        (uc "Stdout")
+        (not_lc "line")
+      )
+      (str_literal_big "Hello")
+    )
+  )
+  (binop_equals
+    (lc "world")
+    (str_literal_big "World")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module [hello!, world]import pf.Stdout
+module [hello!, world]
+
+import pf.Stdout
 hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
@@ -32,14 +56,14 @@ world = "World"
 MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Stdout.line!** in this scope.
+Nothing is named **pf** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
-**simple_module_no_blanks.md:3:10:3:22:**
+**simple_module_no_blanks.md:2:8:2:10:**
 ```roc
-hello! = Stdout.line!("Hello")
+import pf.Stdout
 ```
-         ^^^^^^^^^^^^
+       ^^
 
 
 **UNDEFINED VARIABLE**
@@ -59,7 +83,7 @@ hello! = Stdout.line!("Hello")
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "hello"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
   (Stmt.assign
     (pattern (Patt.ident "world"))
@@ -69,7 +93,29 @@ hello! = Stdout.line!("Hello")
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 19
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #12)
+(var #8 _)
+(var #9 _)
+(var #10 -> #18)
+(var #11 Str)
+(var #12 _)
+(var #13 _)
+(var #14 -> #15)
+(var #15 Str)
+(var #16 _)
+(var #17 _)
+(var #18 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+hello : _a
+world : Str
 ~~~

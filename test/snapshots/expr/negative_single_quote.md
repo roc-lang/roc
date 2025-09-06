@@ -7,40 +7,32 @@ type=expr
 ~~~roc
 -'i'
 ~~~
-# EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
-# PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**negative_single_quote.md:1:1:1:2:**
-```roc
--'i'
-```
-^
-
-
 # TOKENS
-~~~zig
-OpBinaryMinus(1:1-1:2),SingleQuote(1:2-1:5),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpUnaryMinus SingleQuote ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.2 (reason "expr_unexpected_token"))
+(unary_neg <unary_op>)
 ~~~
 # FORMATTED
 ~~~roc
-
+-'i'
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:2
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 Str)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

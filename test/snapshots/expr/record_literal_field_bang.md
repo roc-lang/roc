@@ -10,50 +10,65 @@ type=expr
     launchTheNukes!: |{}| ...,
 }
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent OpColon Int Comma LowerIdent OpBang OpColon OpBar OpenCurly CloseCurly OpBar TripleDot Comma CloseCurly ~~~
+# PARSE
+~~~clojure
+(record_literal
+  (binop_colon
+    (lc "answer")
+    (num_literal_i32 42)
+  )
+  (binop_colon
+    (not_lc "launchTheNukes")
+    (lambda
+      (body
+        (ellipsis)
+      )
+      (args
+        (record_literal)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+{ answer: 42, launchTheNukes!: |{}| ... }
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:11),OpColon(2:11-2:12),Int(2:13-2:15),Comma(2:15-2:16),
-LowerIdent(3:5-3:20),OpColon(3:20-3:21),OpBar(3:22-3:23),OpenCurly(3:23-3:24),CloseCurly(3:24-3:25),OpBar(3:25-3:26),TripleDot(3:27-3:30),Comma(3:30-3:31),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
-~~~
-# PARSE
-~~~clojure
-(e-record @1.1-4.2
-	(field (field "answer")
-		(e-int @2.13-2.15 (raw "42")))
-	(field (field "launchTheNukes!")
-		(e-lambda @3.22-3.30
-			(args
-				(p-record @3.23-3.25))
-			(e-ellipsis))))
-~~~
-# FORMATTED
-~~~roc
-{
-	answer: 42,
-	launchTheNukes!: |{}| ...,
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-4.2
-	(fields
-		(field (name "answer")
-			(e-int @2.13-2.15 (value "42")))
-		(field (name "launchTheNukes!")
-			(e-lambda @3.22-3.30
-				(args
-					(p-record-destructure @3.23-3.25
-						(destructs)))
-				(e-not-implemented @1.1-1.1)))))
+(Expr.record_literal
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.num_literal_i32 42)
+  )
+  (Expr.binop_colon
+    (Expr.malformed)
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 11
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 -> #10)
+(var #10 {})
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: _arg -> _ret }"))
+~~~roc
 ~~~

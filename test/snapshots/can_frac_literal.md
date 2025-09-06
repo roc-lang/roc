@@ -17,6 +17,20 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign Float LowerIdent O
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (lc "x")
+    (frac_literal_small 3.14)
+  )
+  (binop_equals
+    (lc "y")
+    (frac_literal_big big:<idx:8>)
+  )
+  (binop_equals
+    (lc "z")
+    (frac_literal_small 0.5)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +63,22 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 11
+(var #0 _)
+(var #1 -> #2)
+(var #2 F64)
+(var #3 _)
+(var #4 -> #5)
+(var #5 F64)
+(var #6 _)
+(var #7 -> #8)
+(var #8 F64)
+(var #9 _)
+(var #10 _)
 ~~~
 # TYPES
 ~~~roc
+x : F64
+y : F64
+z : F64
 ~~~

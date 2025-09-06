@@ -11,6 +11,31 @@ foo =
 
     "on        (string 'onmo %')))
 ~~~
+# TOKENS
+~~~text
+UpperIdent OpenCurly LowerIdent Comma MalformedUnknownToken CloseSquare LowerIdent OpAssign BlankLine MalformedString ~~~
+# PARSE
+~~~clojure
+(block
+  (uc "H")
+  (record_literal
+    (lc "o")
+    (malformed)
+  )
+  (malformed)
+  (binop_equals
+    (lc "foo")
+    (malformed)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+H
+{ o }
+]
+foo = "on        (string 'onmo %')))
+~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
@@ -20,49 +45,54 @@ PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
-**ASCII CONTROL CHARACTER**
-ASCII control characters are not allowed in Roc source code.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **  ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_010.md:2:3:2:6:**
+```roc
+    ]
+```
+  ^^^
 
 
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
 
-**UNCLOSED STRING**
-This string is missing a closing quote.
+**fuzz_crash_010.md:1:2:2:6:**
+```roc
+H{o,
+    ]
+```
 
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_010.md:2:6:3:1:**
+```roc
+    ]
+foo =
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"on        (string 'onmo %')))** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_010.md:5:5:5:35:**
 ```roc
     "on        (string 'onmo %')))
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_010.md:1:1:1:2:**
-```roc
-H{o,
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:1:2:1:3:**
-```roc
-H{o,
-```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **o** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_010.md:1:3:1:4:**
 ```roc
@@ -71,71 +101,40 @@ H{o,
   ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:1:4:1:5:**
-```roc
-H{o,
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_010.md:2:6:2:7:**
-```roc
-    ]
-```
-     ^
-
-
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
-CloseSquare(2:6-2:7),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),
-StringStart(5:5-5:6),StringPart(5:6-5:35),StringEnd(5:35-5:35),
-EndOfFile(6:1-6:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-5.35
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))
-		(s-decl @3.1-5.35
-			(p-ident @3.1-3.4 (raw "foo"))
-			(e-string @5.5-5.35
-				(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))"))))))
-~~~
-# FORMATTED
-~~~roc
-
-
-foo = 
-
-	"on        (string 'onmo %')))"
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-string @5.5-5.35
-			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
+(Expr.block
+  (Expr.tag_no_args)
+  (Expr.record_literal
+    (Expr.lookup "o")
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 -> #11)
+(var #5 _)
+(var #6 -> #13)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 {})
+(var #11 record)
+(var #12 _)
+(var #13 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.4 (type "Str")))
-	(expressions
-		(expr @5.5-5.35 (type "Str"))))
+~~~roc
+foo : _a
 ~~~

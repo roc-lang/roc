@@ -7,28 +7,32 @@ type=expr
 ~~~roc
 -128
 ~~~
+# TOKENS
+~~~text
+OpUnaryMinus Int ~~~
+# PARSE
+~~~clojure
+(unary_neg <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+-128
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Int(1:1-1:5),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-int @1.1-1.5 (raw "-128"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.5 (value "-128"))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 Num *)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Num(_size)"))
+~~~roc
 ~~~

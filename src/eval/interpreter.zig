@@ -708,7 +708,7 @@ pub const Interpreter = struct {
                     .num_literal_i32, .int_literal_i32 => @as(i128, expr.payload.num_literal_i32),
                     .num_literal_big, .int_literal_big => blk: {
                         // Big literals are stored in ByteSlices
-                        const byte_slice_idx = @as(collections.ByteSlices.Idx, @enumFromInt(expr.payload.num_literal_i32));
+                        const byte_slice_idx = expr.payload.num_literal_big;
                         const bytes = cir.ast.byte_slices.slice(byte_slice_idx);
 
                         // Parse the digits from the byte slice
@@ -725,8 +725,13 @@ pub const Interpreter = struct {
 
                         // Parse digits
                         while (i < bytes.len) : (i += 1) {
-                            const digit = bytes[i] - '0';
-                            result = result * 10 + digit;
+                            if (bytes[i] >= '0' and bytes[i] <= '9') {
+                                const digit = bytes[i] - '0';
+                                result = result * 10 + digit;
+                            } else {
+                                // Invalid character in number
+                                break;
+                            }
                         }
 
                         if (is_negative) {
@@ -792,8 +797,13 @@ pub const Interpreter = struct {
 
                         // Parse integer part
                         while (i < bytes.len and bytes[i] != '.') : (i += 1) {
-                            const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
-                            result = result * 10.0 + digit;
+                            if (bytes[i] >= '0' and bytes[i] <= '9') {
+                                const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
+                                result = result * 10.0 + digit;
+                            } else {
+                                // Invalid character in number
+                                break;
+                            }
                         }
 
                         // Skip decimal point
@@ -803,9 +813,14 @@ pub const Interpreter = struct {
                             // Parse fractional part
                             var divisor: f64 = 10.0;
                             while (i < bytes.len) : (i += 1) {
-                                const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
-                                result += digit / divisor;
-                                divisor *= 10.0;
+                                if (bytes[i] >= '0' and bytes[i] <= '9') {
+                                    const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
+                                    result += digit / divisor;
+                                    divisor *= 10.0;
+                                } else {
+                                    // Invalid character in number
+                                    break;
+                                }
                             }
                         }
 
@@ -1334,8 +1349,8 @@ pub const Interpreter = struct {
                 };
             },
 
-            .apply_tag => {
-                // Handle tag application - this includes True and False
+            .tag_no_args => {
+                // Handle simple tags without arguments - this includes True and False
                 // Get the tag identifier from the payload
                 const tag_ident = expr.payload.ident;
                 const tag_name = self.env.getIdent(tag_ident);
@@ -1364,23 +1379,35 @@ pub const Interpreter = struct {
                 // Module access uses binop payload where lhs is module, rhs is member
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
 
-                // Get module name from lhs
-                const module_expr = cir.getExpr(binop.lhs);
-                if (module_expr.tag != .lookup) {
-                    self.traceError("Module access expects lookup on lhs, got: {s}", .{@tagName(module_expr.tag)});
-                    return error.TypeMismatch;
-                }
-                const module_ident = module_expr.payload.ident;
-                const module_name = self.env.getIdent(module_ident);
+                // For Bool.True/False, the children might be unconverted AST nodes
+                // Try to get the module and member names from the AST directly
+                const ast_binop = cir.ast.node_slices.binOp(expr.payload.binop);
+                const lhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(ast_binop.lhs)));
+                const rhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(ast_binop.rhs)));
 
-                // Get member name from rhs
-                const member_expr = cir.getExpr(binop.rhs);
-                if (member_expr.tag != .lookup) {
-                    self.traceError("Module access expects lookup on rhs", .{});
-                    return error.TypeMismatch;
-                }
-                const member_ident = member_expr.payload.ident;
-                const member_name = self.env.getIdent(member_ident);
+                const module_name = if (lhs_node.tag == .uc) blk: {
+                    break :blk self.env.getIdent(lhs_node.payload.ident);
+                } else blk: {
+                    // Try CIR node
+                    const module_expr = cir.getExpr(binop.lhs);
+                    if (module_expr.tag == .lookup) {
+                        const module_ident = module_expr.payload.ident;
+                        break :blk self.env.getIdent(module_ident);
+                    }
+                    break :blk "";
+                };
+
+                const member_name = if (rhs_node.tag == .uc) blk: {
+                    break :blk self.env.getIdent(rhs_node.payload.ident);
+                } else blk: {
+                    // Try CIR node
+                    const member_expr = cir.getExpr(binop.rhs);
+                    if (member_expr.tag == .lookup) {
+                        const member_ident = member_expr.payload.ident;
+                        break :blk self.env.getIdent(member_ident);
+                    }
+                    break :blk "";
+                };
 
                 // Handle Bool.True and Bool.False
                 if (std.mem.eql(u8, module_name, "Bool")) {
@@ -1978,7 +2005,7 @@ pub const Interpreter = struct {
         // Get the argument expressions from the call
         const cir = self.getCIR() catch return error.Crash;
         const call_expr = cir.getExpr(call_expr_idx);
-        if (call_expr.tag != .fn_call and call_expr.tag != .apply_tag) {
+        if (call_expr.tag != .fn_call and call_expr.tag != .tag_applied) {
             return error.TypeMismatch;
         }
         // Basic implementation that avoids crashes
@@ -2526,7 +2553,7 @@ pub const Interpreter = struct {
         // Check if expr_idx is actually a call expression or something else
         const cir = self.getCIR() catch return error.Crash;
         const expr = cir.getExpr(expr_idx);
-        if (expr.tag == .fn_call or expr.tag == .apply_tag) {
+        if (expr.tag == .fn_call or expr.tag == .tag_applied) {
             // Normal case: we have a call expression with argument information
             self.traceInfo("handleLambdaCall: Building TypeScope for call expression", .{});
             try self.buildTypeScopeForCall(expr_idx, closure, arg_count, &scope_map);

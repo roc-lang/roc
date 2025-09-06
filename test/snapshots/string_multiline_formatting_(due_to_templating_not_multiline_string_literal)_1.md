@@ -53,8 +53,12 @@ b)} lines of text due to the template parts"
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

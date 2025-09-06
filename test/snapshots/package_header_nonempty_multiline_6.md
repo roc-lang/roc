@@ -40,7 +40,8 @@ KwPackage LineComment OpenSquare LineComment LowerIdent Comma LineComment UpperI
 ~~~
 # FORMATTED
 ~~~roc
-package [ # Comment after keyword
+package [
+	# Comment after keyword
 	# Comment after exposes open
 	something,
 	# Comment after exposed item

@@ -34,6 +34,57 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       )
     )
 ))
+(block
+  (binop_colon
+    (lc "swap")
+    (binop_arrow_call
+      (tuple_literal
+        (lc "a")
+        (lc "b")
+      )
+      (tuple_literal
+        (lc "b")
+        (lc "a")
+      )
+    )
+  )
+  (binop_equals
+    (lc "swap")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (tuple_literal
+              (lc "first")
+              (lc "second")
+            )
+            (apply_lc
+              (lc "pair")
+              (tuple_literal
+                (lc "second")
+                (lc "first")
+              )
+            )
+          )
+        )
+      )
+      (args
+        (lc "pair")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -64,9 +115,9 @@ This is an unexpected parsing error. Please check your syntax.
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "swap")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "swap"))
+    (type type_14)
   )
   (Stmt.assign
     (pattern (Patt.ident "swap"))
@@ -80,7 +131,56 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 43
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #39)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 -> #25)
+(var #21 -> #38)
+(var #22 _)
+(var #23 _)
+(var #24 -> #37)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 -> #39)
+(var #29 _)
+(var #30 -> #42)
+(var #31 _)
+(var #32 -> #41)
+(var #33 -> #42)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 tuple)
+(var #38 fn_pure)
+(var #39 fn_pure)
+(var #40 _)
+(var #41 {})
+(var #42 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+second : _c
+swap : _arg -> _ret
+main : _arg -> {}
+pair : _c
+first : _c
 ~~~

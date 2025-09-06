@@ -49,8 +49,8 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
 ~~~roc
-# Header type not yet fully supported
 ~~~

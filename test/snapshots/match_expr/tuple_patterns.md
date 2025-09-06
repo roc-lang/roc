@@ -12,13 +12,95 @@ match coord {
     (x, y) => x
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound OpFatArrow String OpenRound LowerIdent Comma UpperIdent CloseRound OpFatArrow LowerIdent OpenRound UpperIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "coord")
+)
+  (branch1     (binop_thick_arrow
+      (tuple_literal
+        (uc "Zero")
+        (uc "Zero")
+      )
+      (binop_thick_arrow
+        (binop_thick_arrow
+          (binop_thick_arrow
+            (apply_anon
+              (str_literal_big "origin")
+              (tuple_literal
+                (lc "x")
+                (uc "Zero")
+              )
+            )
+            (apply_lc
+              (lc "x")
+              (tuple_literal
+                (uc "Zero")
+                (lc "y")
+              )
+            )
+          )
+          (apply_lc
+            (lc "y")
+            (tuple_literal
+              (lc "x")
+              (lc "y")
+            )
+          )
+        )
+        (lc "x")
+      )
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match coord
+	(Zero, Zero) => (("origin"((x, Zero)) => x((Zero, y))) => y((x, y))) => x
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
 UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**tuple_patterns.md:2:29:3:5:**
+```roc
+    (Zero, Zero) => "origin"
+    (x, Zero) => x
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**tuple_patterns.md:3:19:4:5:**
+```roc
+    (x, Zero) => x
+    (Zero, y) => y
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**tuple_patterns.md:4:19:5:5:**
+```roc
+    (Zero, y) => y
+    (x, y) => x
+```
+
+
 **UNDEFINED VARIABLE**
-Nothing is named `coord` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **coord** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **tuple_patterns.md:1:7:1:12:**
 ```roc
@@ -27,113 +109,53 @@ match coord {
       ^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**tuple_patterns.md:5:9:5:10:**
+**tuple_patterns.md:2:5:5:16:**
 ```roc
+    (Zero, Zero) => "origin"
+    (x, Zero) => x
+    (Zero, y) => y
     (x, y) => x
 ```
-        ^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-OpenRound(2:5-2:6),UpperIdent(2:6-2:10),Comma(2:10-2:11),UpperIdent(2:12-2:16),CloseRound(2:16-2:17),OpFatArrow(2:18-2:20),StringStart(2:21-2:22),StringPart(2:22-2:28),StringEnd(2:28-2:29),
-OpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),UpperIdent(3:9-3:13),CloseRound(3:13-3:14),OpFatArrow(3:15-3:17),LowerIdent(3:18-3:19),
-OpenRound(4:5-4:6),UpperIdent(4:6-4:10),Comma(4:10-4:11),LowerIdent(4:12-4:13),CloseRound(4:13-4:14),OpFatArrow(4:15-4:17),LowerIdent(4:18-4:19),
-OpenRound(5:5-5:6),LowerIdent(5:6-5:7),Comma(5:7-5:8),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),OpFatArrow(5:12-5:14),LowerIdent(5:15-5:16),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.12 (raw "coord"))
-	(branches
-		(branch @2.5-2.29
-			(p-tuple @2.5-2.17
-				(p-tag @2.6-2.10 (raw "Zero"))
-				(p-tag @2.12-2.16 (raw "Zero")))
-			(e-string @2.21-2.29
-				(e-string-part @2.22-2.28 (raw "origin"))))
-		(branch @3.5-3.19
-			(p-tuple @3.5-3.14
-				(p-ident @3.6-3.7 (raw "x"))
-				(p-tag @3.9-3.13 (raw "Zero")))
-			(e-ident @3.18-3.19 (raw "x")))
-		(branch @4.5-4.19
-			(p-tuple @4.5-4.14
-				(p-tag @4.6-4.10 (raw "Zero"))
-				(p-ident @4.12-4.13 (raw "y")))
-			(e-ident @4.18-4.19 (raw "y")))
-		(branch @5.5-5.16
-			(p-tuple @5.5-5.11
-				(p-ident @5.6-5.7 (raw "x"))
-				(p-ident @5.9-5.10 (raw "y")))
-			(e-ident @5.15-5.16 (raw "x")))))
-~~~
-# FORMATTED
-~~~roc
-match coord {
-	(Zero, Zero) => "origin"
-	(x, Zero) => x
-	(Zero, y) => y
-	(x, y) => x
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-tuple @2.5-2.17
-							(patterns
-								(p-applied-tag @2.6-2.10)
-								(p-applied-tag @2.12-2.16)))))
-				(value
-					(e-string @2.21-2.29
-						(e-literal @2.22-2.28 (string "origin")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-tuple @3.5-3.14
-							(patterns
-								(p-assign @3.6-3.7 (ident "x"))
-								(p-applied-tag @3.9-3.13)))))
-				(value
-					(e-lookup-local @3.18-3.19
-						(p-assign @3.6-3.7 (ident "x")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-tuple @4.5-4.14
-							(patterns
-								(p-applied-tag @4.6-4.10)
-								(p-assign @4.12-4.13 (ident "y"))))))
-				(value
-					(e-lookup-local @4.18-4.19
-						(p-assign @4.12-4.13 (ident "y")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-tuple @5.5-5.11
-							(patterns
-								(p-assign @5.6-5.7 (ident "x"))
-								(p-assign @5.9-5.10 (ident "y"))))))
-				(value
-					(e-lookup-local @5.15-5.16
-						(p-assign @5.6-5.7 (ident "x"))))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 26
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.2 (type "Str"))
+~~~roc
 ~~~

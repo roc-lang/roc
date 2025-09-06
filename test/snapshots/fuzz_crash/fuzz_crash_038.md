@@ -7,58 +7,49 @@ type=file
 ~~~roc
 *import B as
 ~~~
+# TOKENS
+~~~text
+OpStar KwImport UpperIdent KwAs ~~~
+# PARSE
+~~~clojure
+(block
+  (malformed)
+  (import
+    (uc "B")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+import B
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_038.md:1:1:1:2
 PARSE ERROR - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_038.md:1:1:1:2:**
-```roc
-*import B as
-```
-^
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_upper_name_after_import_as`
-This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_038.md:1:2:1:8:**
-```roc
-*import B as
-```
- ^^^^^^
-
-
-# TOKENS
-~~~zig
-OpStar(1:1-1:2),KwImport(1:2-1:8),UpperIdent(1:9-1:10),KwAs(1:11-1:13),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.13
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.2-1.13 (tag "expected_upper_name_after_import_as"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Stmt.import)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

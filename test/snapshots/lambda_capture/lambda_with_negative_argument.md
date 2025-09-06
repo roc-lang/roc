@@ -47,12 +47,25 @@ This is an unexpected parsing error. Please check your syntax.
 
 # CANONICALIZE
 ~~~clojure
-(Expr.apply_ident)
+(Expr.fn_call)
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 12
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 -> #4)
+(var #4 -> #8)
+(var #5 -> #10)
+(var #6 Num *)
+(var #7 -> #6)
+(var #8 Num *)
+(var #9 -> #6)
+(var #10 -> #11)
+(var #11 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : _a
 ~~~

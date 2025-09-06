@@ -12,114 +12,144 @@ processList = |list| list.len()
 
 main! = |_| processList(["one","two"])
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent Dot LowerIdent OpenRound CloseRound BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare String Comma String CloseSquare CloseRound ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "processList")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (uc "Str")
+      )
+      (uc "U64")
+    )
+  )
+  (binop_equals
+    (lc "processList")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (lc "list")
+            (dot_lc "len")
+          )
+        )
+      )
+      (args
+        (lc "list")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processList")
+          (list_literal
+            (str_literal_small "one")
+            (str_literal_small "two")
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
+
+processList : List Str -> U64
+processList = |list| list.len()
+main! = |_| processList(["one", "two"])
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:23),CloseRound(3:23-3:24),OpArrow(3:25-3:27),UpperIdent(3:28-3:31),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:26),NoSpaceDotLowerIdent(4:26-4:30),NoSpaceOpenRound(4:30-4:31),CloseRound(4:31-4:32),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:24),NoSpaceOpenRound(6:24-6:25),OpenSquare(6:25-6:26),StringStart(6:26-6:27),StringPart(6:27-6:30),StringEnd(6:30-6:31),Comma(6:31-6:32),StringStart(6:32-6:33),StringPart(6:33-6:36),StringEnd(6:36-6:37),CloseSquare(6:37-6:38),CloseRound(6:38-6:39),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-6.39
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.31 (name "processList")
-			(ty-fn @3.15-3.31
-				(ty-apply @3.15-3.24
-					(ty @3.15-3.19 (name "List"))
-					(ty @3.20-3.23 (name "Str")))
-				(ty @3.28-3.31 (name "U64"))))
-		(s-decl @4.1-4.32
-			(p-ident @4.1-4.12 (raw "processList"))
-			(e-lambda @4.15-4.32
-				(args
-					(p-ident @4.16-4.20 (raw "list")))
-				(e-field-access @4.22-4.32
-					(e-ident @4.22-4.26 (raw "list"))
-					(e-apply @4.26-4.32
-						(e-ident @4.26-4.30 (raw "len"))))))
-		(s-decl @6.1-6.39
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.39
-				(args
-					(p-underscore))
-				(e-apply @6.13-6.39
-					(e-ident @6.13-6.24 (raw "processList"))
-					(e-list @6.25-6.38
-						(e-string @6.26-6.31
-							(e-string-part @6.27-6.30 (raw "one")))
-						(e-string @6.32-6.37
-							(e-string-part @6.33-6.36 (raw "two")))))))))
-~~~
-# FORMATTED
-~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-processList : List(Str) -> U64
-processList = |list| list.len()
-
-main! = |_| processList(["one", "two"])
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.12 (ident "processList"))
-		(e-lambda @4.15-4.32
-			(args
-				(p-assign @4.16-4.20 (ident "list")))
-			(e-dot-access @4.22-4.32 (field "len")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.16-4.20 (ident "list"))))
-				(args)))
-		(annotation @4.1-4.12
-			(declared-type
-				(ty-fn @3.15-3.31 (effectful false)
-					(ty-apply @3.15-3.24 (symbol "List")
-						(ty @3.20-3.23 (name "Str")))
-					(ty @3.28-3.31 (name "U64"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.39
-			(captures
-				(capture @4.1-4.12 (ident "processList")))
-			(e-lambda @6.9-6.39
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.39
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processList")))
-					(e-list @6.25-6.38
-						(elems
-							(e-string @6.26-6.31
-								(e-literal @6.27-6.30 (string "one")))
-							(e-string @6.32-6.37
-								(e-literal @6.33-6.36 (string "two"))))))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "processList"))
+    (type type_12)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processList"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 38
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 -> #34)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #33)
+(var #19 _)
+(var #20 -> #34)
+(var #21 _)
+(var #22 -> #37)
+(var #23 _)
+(var #24 -> #36)
+(var #25 Str)
+(var #26 Str)
+(var #27 _)
+(var #28 _)
+(var #29 -> #37)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 fn_pure)
+(var #34 fn_pure)
+(var #35 _)
+(var #36 fn_pure)
+(var #37 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.12 (type "List(Str) -> U64"))
-		(patt @6.1-6.6 (type "_arg -> U64")))
-	(expressions
-		(expr @4.15-4.32 (type "List(Str) -> U64"))
-		(expr @6.9-6.39 (type "_arg -> U64"))))
+~~~roc
+processList : _arg -> _ret
+main : _arg -> _ret
+list : _a
 ~~~

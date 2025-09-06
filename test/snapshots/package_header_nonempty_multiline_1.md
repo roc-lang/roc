@@ -28,7 +28,8 @@ KwPackage LineComment OpenSquare LowerIdent Comma UpperIdent CloseSquare OpenCur
 ~~~
 # FORMATTED
 ~~~roc
-package [ # This comment is here
+package [
+	# This comment is here
 	something,
 	SomeType,
 ] packages {somePkg, "../main.roc"}
@@ -44,8 +45,8 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
 ~~~roc
-# Header type not yet fully supported
 ~~~

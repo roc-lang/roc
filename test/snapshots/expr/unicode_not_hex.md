@@ -7,36 +7,31 @@ type=expr
 ~~~roc
 "abc\u(zzzz)def"
 ~~~
-# EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-# PROBLEMS
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-```roc
-"abc\u(zzzz)def"
-```
-    ^^^^^^^^
-
-
 # TOKENS
-~~~zig
-StringStart(1:1-1:2),MalformedStringPart(1:2-1:16),StringEnd(1:16-1:17),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+String ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.17)
+(str_literal_big "abcu(zzzz)def")
 ~~~
 # FORMATTED
 ~~~roc
-""
+"abc\u(zzzz)def"
 ~~~
+# EXPECTED
+INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.17)
+(Expr.str_literal_big)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 Str)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.17 (type "Str"))
+~~~roc
 ~~~

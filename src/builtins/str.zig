@@ -188,7 +188,7 @@ pub const RocStr = extern struct {
     // This does not return a valid value if the input is a small string.
     pub fn getAllocationPtr(self: RocStr) ?[*]u8 {
         const str_alloc_ptr = @intFromPtr(self.bytes);
-        const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
+        const slice_alloc_ptr = self.capacity_or_alloc_ptr;
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
@@ -675,9 +675,9 @@ pub fn substringUnsafe(
             output.setLen(length);
             return output;
         } else {
-            // Shifting right by 1 is required to avoid the highest bit of capacity being set.
-            // If it was set, the slice would get interpreted as a small string.
-            const str_alloc_ptr = (@intFromPtr(source_ptr) >> 1);
+            // For non-seamless slices, use the original bytes pointer as the allocation pointer
+            // For seamless slices, preserve the existing allocation pointer
+            const str_alloc_ptr = @intFromPtr(source_ptr);
             const slice_alloc_ptr = string.capacity_or_alloc_ptr;
             const slice_mask = string.seamlessSliceMask();
             const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);

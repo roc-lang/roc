@@ -15,42 +15,40 @@ foo = |num| {
     dbg(num)
 }
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),OpBar(3:7-3:8),LowerIdent(3:8-3:11),OpBar(3:11-3:12),OpenCurly(3:13-3:14),
-KwDbg(5:5-5:8),LowerIdent(5:9-5:12),NoSpaceDotLowerIdent(5:12-5:19),NoSpaceOpenRound(5:19-5:20),CloseRound(5:20-5:21),
-KwDbg(8:5-8:8),NoSpaceOpenRound(8:8-8:9),LowerIdent(8:9-8:12),CloseRound(8:12-8:13),
-CloseCurly(9:1-9:2),
-EndOfFile(10:1-10:1),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment KwDbg LowerIdent Dot LowerIdent OpenRound CloseRound BlankLine LineComment KwDbg OpenRound LowerIdent CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.2
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
-	(statements
-		(s-decl @3.1-9.2
-			(p-ident @3.1-3.4 (raw "foo"))
-			(e-lambda @3.7-9.2
-				(args
-					(p-ident @3.8-3.11 (raw "num")))
-				(e-block @3.13-9.2
-					(statements
-						(s-dbg @5.5-5.21
-							(e-field-access @5.9-5.21
-								(e-ident @5.9-5.12 (raw "num"))
-								(e-apply @5.12-5.21
-									(e-ident @5.12-5.19 (raw "to_str")))))
-						(s-dbg @8.5-8.13
-							(e-tuple @8.8-8.13
-								(e-ident @8.9-8.12 (raw "num"))))))))))
+(module-header
+  (exposes
+    (lc "foo")
+))
+(block
+  (binop_equals
+    (lc "foo")
+    (lambda
+      (body
+        (block
+          (malformed)
+          (apply_anon
+            (binop_pipe
+              (lc "num")
+              (dot_lc "to_str")
+            )
+          )
+          (apply_anon
+            (malformed)
+            (lc "num")
+          )
+        )
+      )
+      (args
+        (lc "num")
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -58,36 +56,74 @@ module [foo]
 
 foo = |num| {
 	# statement - prints out the value of num convertert to a string
-	dbg num.to_str()
-
+	dbg 
+	num.to_str()
 	# expression - prints out the value of num and then returns it
-	dbg (num)
+	dbg(num)
 }
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_block_example.md:5:5:5:9:**
+```roc
+    dbg num.to_str()
+```
+    ^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_block_example.md:8:5:8:8:**
+```roc
+    dbg(num)
+```
+    ^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.4 (ident "foo"))
-		(e-lambda @3.7-9.2
-			(args
-				(p-assign @3.8-3.11 (ident "num")))
-			(e-block @3.13-9.2
-				(s-dbg @5.5-5.21
-					(e-dot-access @5.9-5.21 (field "to_str")
-						(receiver
-							(e-lookup-local @5.9-5.12
-								(p-assign @3.8-3.11 (ident "num"))))
-						(args)))
-				(e-dbg @8.5-8.13
-					(e-lookup-local @8.9-8.12
-						(p-assign @3.8-3.11 (ident "num"))))))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 22
+(var #0 _)
+(var #1 _)
+(var #2 -> #21)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #18)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 -> #21)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 fn_pure)
+(var #19 -> #20)
+(var #20 fn_pure)
+(var #21 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.4 (type "_arg -> _ret")))
-	(expressions
-		(expr @3.7-9.2 (type "_arg -> _ret"))))
+~~~roc
+foo : _arg -> _ret
+num : _a
 ~~~

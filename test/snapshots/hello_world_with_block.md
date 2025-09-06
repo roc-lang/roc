@@ -36,16 +36,45 @@ LineComment BlankLine LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare
       )
     )
 ))
+(block
+  (import
+    (binop_pipe
+      (lc "pf")
+      (uc "Stdout")
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "world")
+            (str_literal_big "World")
+          )
+          (apply_anon
+            (binop_pipe
+              (uc "Stdout")
+              (not_lc "line")
+            )
+            (str_literal_big "Hello, world!")
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 # Hello world!
-
 # Multiline comments?
 app [main!] { pf: "../basic-cli/platform.roc" platform [] }
 
 import pf.Stdout
-
 main! = |_| {
 	world = "World"
 	# Hello
@@ -57,14 +86,14 @@ MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Stdout.line!** in this scope.
+Nothing is named **pf** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
-**hello_world_with_block.md:11:2:11:14:**
+**hello_world_with_block.md:6:8:6:10:**
 ```roc
-	Stdout.line!("Hello, world!")
+import pf.Stdout
 ```
-	^^^^^^^^^^^^
+       ^^
 
 
 **UNDEFINED VARIABLE**
@@ -76,19 +105,6 @@ Is there an **import** or **exposing** missing up-top?
 	Stdout.line!("Hello, world!")
 ```
 	      ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable **world** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
-	^^^^^
 
 
 # CANONICALIZE
@@ -103,7 +119,38 @@ The unused variable is declared here:
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 28
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #27)
+(var #12 _)
+(var #13 -> #14)
+(var #14 Str)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #26)
+(var #19 Str)
+(var #20 _)
+(var #21 _)
+(var #22 -> #27)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 fn_pure)
+(var #27 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+main : _arg -> _ret
+world : Str
 ~~~

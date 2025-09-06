@@ -7,14 +7,51 @@ type=file
 ~~~roc
 module[]import u.R}g:r->R.a.E
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare KwImport LowerIdent Dot UpperIdent CloseCurly LowerIdent OpColon LowerIdent OpArrow UpperIdent Dot LowerIdent Dot UpperIdent ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (import
+    (binop_pipe
+      (lc "u")
+      (uc "R")
+    )
+  )
+  (malformed)
+  (binop_colon
+    (lc "g")
+    (binop_arrow_call
+      (lc "r")
+      (binop_pipe
+        (binop_pipe
+          (uc "R")
+          (dot_lc "a")
+        )
+        (uc "E")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+import u.R
+}
+g : r -> R.a | E
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:19:1:20
 MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
 MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_042.md:1:19:1:20:**
 ```roc
@@ -23,21 +60,21 @@ module[]import u.R}g:r->R.a.E
                   ^
 
 
-**MODULE NOT FOUND**
-The module `u.R` was not found in this Roc project.
+**UNDEFINED VARIABLE**
+Nothing is named **u** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-You're attempting to use this module here:
-**fuzz_crash_042.md:1:9:1:19:**
+**fuzz_crash_042.md:1:16:1:17:**
 ```roc
 module[]import u.R}g:r->R.a.E
 ```
-        ^^^^^^^^^^
+               ^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `module[]import u.R}g:r->R.a` imported into this Roc file.
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-You're attempting to use this module here:
 **fuzz_crash_042.md:1:25:1:30:**
 ```roc
 module[]import u.R}g:r->R.a.E
@@ -45,39 +82,39 @@ module[]import u.R}g:r->R.a.E
                         ^^^^^
 
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),LowerIdent(1:16-1:17),NoSpaceDotUpperIdent(1:17-1:19),CloseCurly(1:19-1:20),LowerIdent(1:20-1:21),OpColon(1:21-1:22),LowerIdent(1:22-1:23),OpArrow(1:23-1:25),UpperIdent(1:25-1:26),NoSpaceDotLowerIdent(1:26-1:28),NoSpaceDotUpperIdent(1:28-1:30),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.30
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-import @1.9-1.19 (raw "u.R"))
-		(s-malformed @1.19-1.20 (tag "statement_unexpected_token"))
-		(s-type-anno @1.20-1.30 (name "g")
-			(ty-fn @1.22-1.30
-				(ty-var @1.22-1.23 (raw "r"))
-				(ty @1.25-1.30 (name "R.a.E"))))))
-~~~
-# FORMATTED
-~~~roc
-module []
-import u.R
-g : r -> R.a.E
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-import @1.9-1.19 (module "u.R") (qualifier "u")
-		(exposes)))
+(Expr.block
+  (Stmt.import)
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "g"))
+    (type type_13)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 17
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+g : _b
 ~~~

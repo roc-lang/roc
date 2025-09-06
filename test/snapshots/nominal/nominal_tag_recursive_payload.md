@@ -23,13 +23,44 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 
     (lc "empty")
 ))
+(block
+  (binop_colon_equals
+    (apply_uc
+      (uc "ConsList")
+      (lc "a")
+    )
+    (list_literal
+      (uc "Nil")
+      (apply_uc
+        (uc "Node")
+        (apply_uc
+          (uc "ConsList")
+          (lc "a")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "empty")
+    (apply_uc
+      (uc "ConsList")
+      (lc "_a")
+    )
+  )
+  (binop_equals
+    (lc "empty")
+    (binop_pipe
+      (uc "ConsList")
+      (uc "Nil")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 module [ConsList, empty]
 
 ConsList(a) := [Nil, Node(ConsList(a))]
-
 empty : ConsList _a
 empty = ConsList.Nil
 ~~~
@@ -47,37 +78,53 @@ ConsList(a) := [Nil, Node(ConsList(a))]
             ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **ConsList.Nil** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_tag_recursive_payload.md:6:9:6:21:**
-```roc
-empty = ConsList.Nil
-```
-        ^^^^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.malformed)
-  (Stmt.type_anno
-    (name "empty")
-    (type apply_uc)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "empty"))
+    (type type_17)
   )
   (Stmt.assign
     (pattern (Patt.ident "empty"))
     (Expr.module_access
-      (Expr.lookup "ConsList")
-      (Expr.lookup "Nil")
+      (Expr.tag_no_args)
+      (Expr.tag_no_args)
     )
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 25
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 -> #22)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
 ~~~
 # TYPES
 ~~~roc
+empty : _b
 ~~~

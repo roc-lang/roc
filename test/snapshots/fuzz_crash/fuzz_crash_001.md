@@ -7,40 +7,28 @@ type=file
 ~~~roc
 mo|%
 ~~~
+# TOKENS
+~~~text
+LowerIdent OpBar MalformedUnknownToken ~~~
+# PARSE
+~~~clojure
+(block
+  (lc "mo")
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+mo
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_001.md:1:1:1:3
 PARSE ERROR - fuzz_crash_001.md:1:3:1:4
 PARSE ERROR - fuzz_crash_001.md:1:4:1:5
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_001.md:1:1:1:3:**
-```roc
-mo|%
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_001.md:1:3:1:4:**
-```roc
-mo|%
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **%** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_001.md:1:4:1:5:**
 ```roc
@@ -49,29 +37,40 @@ mo|%
    ^
 
 
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.5
-	(malformed-header @1.1-1.3 (tag "missing_header"))
-	(statements
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **mo** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_001.md:1:1:1:3:**
+```roc
+mo|%
+```
+^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.lookup "mo")
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

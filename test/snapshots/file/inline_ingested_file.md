@@ -21,6 +21,30 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport String KwAs LowerI
   (exposes
     (lc "foo")
 ))
+(block
+  (import
+    (binop_as
+      (str_literal_big "users.json")
+      (binop_colon
+        (lc "data")
+        (uc "Str")
+      )
+    )
+  )
+  (import
+    (uc "Json")
+  )
+  (binop_equals
+    (lc "foo")
+    (apply_anon
+      (binop_pipe
+        (uc "Json")
+        (dot_lc "parse")
+      )
+      (lc "data")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -28,7 +52,6 @@ module [foo]
 
 import "users.json" as data : Str
 import Json
-
 foo = Json.parse(data)
 ~~~
 # EXPECTED
@@ -57,13 +80,34 @@ foo = Json.parse(data)
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "foo"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 19
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #15)
+(var #11 _)
+(var #12 _)
+(var #13 -> #18)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

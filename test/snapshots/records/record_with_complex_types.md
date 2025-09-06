@@ -185,24 +185,24 @@ Statements like **return**, **dbg**, or **expect** cannot be used in expression 
   )
   (Expr.binop_colon
     (Expr.malformed)
-    (Expr.apply_tag)
+    (Expr.tag_applied)
   )
   (Expr.binop_colon
     (Expr.malformed)
     (Expr.record_literal
       (Expr.binop_colon
         (Expr.malformed)
-        (Expr.lookup "Dark")
+        (Expr.tag_no_args)
       )
       (Expr.binop_colon
         (Expr.malformed)
-        (Expr.apply_tag)
+        (Expr.tag_applied)
       )
     )
   )
   (Expr.binop_colon
     (Expr.malformed)
-    (Expr.apply_tag)
+    (Expr.tag_applied)
   )
   (Expr.binop_colon
     (Expr.malformed)

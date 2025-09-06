@@ -16,6 +16,12 @@ KwModule OpenSquare CloseSquare BlankLine LineComment KwVar LowerIdent OpAssign 
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (var_lc "topLevelVar_")
+    (num_literal_i32 0)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,7 +45,14 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 _)
+(var #4 _)
 ~~~
 # TYPES
 ~~~roc
+topLevelVar_ : _a
 ~~~

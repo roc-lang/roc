@@ -61,8 +61,16 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 8
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

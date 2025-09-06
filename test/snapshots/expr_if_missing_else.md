@@ -15,6 +15,16 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign KwIf LowerIdent In
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (lc "foo")
+    (if_without_else
+      (condition         (lc "tru")
+)
+      (then         (num_literal_i32 0)
+))
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,7 +58,16 @@ foo = if tru 0
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 -> #4)
+(var #2 _)
+(var #3 Num *)
+(var #4 _)
+(var #5 _)
+(var #6 _)
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

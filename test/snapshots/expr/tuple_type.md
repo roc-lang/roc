@@ -12,92 +12,100 @@ type=expr
     f((1, 2))
 }
 ~~~
-# EXPECTED
-TYPE MISMATCH - tuple_type.md:5:7:5:13
-# PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**tuple_type.md:5:7:5:13:**
-```roc
-    f((1, 2))
-```
-      ^^^^^^
-
-This argument has the type:
-    _(Num(_size), Num(_size2))_
-
-But the function needs the first argument to be:
-    _(Str, Str)_
-
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:6),OpColon(2:7-2:8),OpenRound(2:9-2:10),UpperIdent(2:10-2:13),Comma(2:13-2:14),UpperIdent(2:15-2:18),CloseRound(2:18-2:19),OpArrow(2:20-2:22),OpenRound(2:23-2:24),UpperIdent(2:24-2:27),Comma(2:27-2:28),UpperIdent(2:29-2:32),CloseRound(2:32-2:33),
-LowerIdent(3:5-3:6),OpAssign(3:7-3:8),OpBar(3:9-3:10),LowerIdent(3:10-3:11),OpBar(3:11-3:12),LowerIdent(3:13-3:14),
-LowerIdent(5:5-5:6),NoSpaceOpenRound(5:6-5:7),NoSpaceOpenRound(5:7-5:8),Int(5:8-5:9),Comma(5:9-5:10),Int(5:11-5:12),CloseRound(5:12-5:13),CloseRound(5:13-5:14),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
-~~~
+~~~text
+OpenCurly LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent CloseRound OpArrow OpenRound UpperIdent Comma UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpenRound OpenRound Int Comma Int CloseRound CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-6.2
-	(statements
-		(s-type-anno @2.5-2.33 (name "f")
-			(ty-fn @2.9-2.33
-				(ty-tuple @2.9-2.19
-					(ty @2.10-2.13 (name "Str"))
-					(ty @2.15-2.18 (name "Str")))
-				(ty-tuple @2.23-2.33
-					(ty @2.24-2.27 (name "Str"))
-					(ty @2.29-2.32 (name "Str")))))
-		(s-decl @3.5-3.14
-			(p-ident @3.5-3.6 (raw "f"))
-			(e-lambda @3.9-3.14
-				(args
-					(p-ident @3.10-3.11 (raw "x")))
-				(e-ident @3.13-3.14 (raw "x"))))
-		(e-apply @5.5-5.14
-			(e-ident @5.5-5.6 (raw "f"))
-			(e-tuple @5.7-5.13
-				(e-int @5.8-5.9 (raw "1"))
-				(e-int @5.11-5.12 (raw "2"))))))
+(block
+  (binop_colon
+    (lc "f")
+    (binop_arrow_call
+      (tuple_literal
+        (uc "Str")
+        (uc "Str")
+      )
+      (tuple_literal
+        (uc "Str")
+        (uc "Str")
+      )
+    )
+  )
+  (binop_equals
+    (lc "f")
+    (lambda
+      (body
+        (lc "x")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (apply_lc
+    (lc "f")
+    (tuple_literal
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-{
-	f : (Str, Str) -> (Str, Str)
-	f = |x| x
-
-	f((1, 2))
-}
+f : (Str, Str) -> (Str, Str)
+f = |x| x
+f((1, 2))
 ~~~
+# EXPECTED
+TYPE MISMATCH - tuple_type.md:5:7:5:13
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-6.2
-	(s-type-anno @2.5-2.33 (name "f")
-		(ty-fn @2.9-2.33 (effectful false)
-			(ty-tuple @2.9-2.19
-				(ty @2.10-2.13 (name "Str"))
-				(ty @2.15-2.18 (name "Str")))
-			(ty-tuple @2.23-2.33
-				(ty @2.24-2.27 (name "Str"))
-				(ty @2.29-2.32 (name "Str")))))
-	(s-let @3.5-3.14
-		(p-assign @3.5-3.6 (ident "f"))
-		(e-lambda @3.9-3.14
-			(args
-				(p-assign @3.10-3.11 (ident "x")))
-			(e-lookup-local @3.13-3.14
-				(p-assign @3.10-3.11 (ident "x")))))
-	(e-call @5.5-5.14
-		(e-lookup-local @5.5-5.6
-			(p-assign @3.5-3.6 (ident "f")))
-		(e-tuple @5.7-5.13
-			(elems
-				(e-int @5.8-5.9 (value "1"))
-				(e-int @5.11-5.12 (value "2"))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "f"))
+    (type type_8)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "f"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.fn_call)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 25
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #22)
+(var #11 _)
+(var #12 _)
+(var #13 -> #22)
+(var #14 _)
+(var #15 -> #24)
+(var #16 Num *)
+(var #17 Num *)
+(var #18 -> #23)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 fn_pure)
+(var #23 tuple)
+(var #24 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.2 (type "Error"))
+~~~roc
+f : _arg -> _ret
+x : _a
 ~~~

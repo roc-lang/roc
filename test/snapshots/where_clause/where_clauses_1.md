@@ -14,109 +14,150 @@ Hash(a, hasher) : a
 
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon LowerIdent OpArrow LowerIdent Comma KwModule OpenRound LowerIdent CloseRound Dot UpperIdent BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon LowerIdent KwWhere KwModule OpenRound LowerIdent CloseRound Dot LowerIdent OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow LowerIdent ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (uc "Hash")
+
+    (uc "Decode")
+))
+(block
+  (binop_colon
+    (apply_uc
+      (uc "Hash")
+      (tuple_literal
+        (lc "a")
+        (lc "hasher")
+      )
+    )
+    (tuple_literal
+      (binop_arrow_call
+        (binop_where
+          (lc "a")
+          (binop_colon
+            (binop_pipe
+              (apply_module
+                (lc "a")
+              )
+              (dot_lc "hash")
+            )
+            (lc "hasher")
+          )
+        )
+        (lc "hasher")
+      )
+      (binop_pipe
+        (apply_module
+          (lc "hasher")
+        )
+        (uc "Hasher")
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Decode")
+      (lc "a")
+    )
+    (binop_arrow_call
+      (binop_where
+        (lc "a")
+        (binop_colon
+          (binop_pipe
+            (apply_module
+              (lc "a")
+            )
+            (dot_lc "decode")
+          )
+          (apply_uc
+            (uc "List")
+            (uc "U8")
+          )
+        )
+      )
+      (lc "a")
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module [Hash, Decode]
+
+Hash((a, hasher)) : (a where module(a).hash : hasher) -> hasher, module(hasher) | Hasher
+Decode(a) : a where module(a).decode : List U8 -> a
+~~~
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
 # PROBLEMS
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-You're attempting do this here:
-**where_clauses_1.md:3:1:6:24:**
+**where_clauses_1.md:6:9:6:24:**
 ```roc
-Hash(a, hasher) : a
-	where
-		module(a).hash : hasher -> hasher,
 		module(hasher).Hasher
 ```
+		      ^^^^^^^^^^^^^^^
 
 
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
-
-You're attempting do this here:
-**where_clauses_1.md:8:1:8:53:**
-```roc
-Decode(a) : a where module(a).decode : List(U8) -> a
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:21),CloseSquare(1:21-1:22),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:15),CloseRound(3:15-3:16),OpColon(3:17-3:18),LowerIdent(3:19-3:20),
-KwWhere(4:2-4:7),
-KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:17),OpColon(5:18-5:19),LowerIdent(5:20-5:26),OpArrow(5:27-5:29),LowerIdent(5:30-5:36),Comma(5:36-5:37),
-KwModule(6:3-6:9),NoSpaceOpenRound(6:9-6:10),LowerIdent(6:10-6:16),CloseRound(6:16-6:17),NoSpaceDotUpperIdent(6:17-6:24),
-UpperIdent(8:1-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:9),CloseRound(8:9-8:10),OpColon(8:11-8:12),LowerIdent(8:13-8:14),KwWhere(8:15-8:20),KwModule(8:21-8:27),NoSpaceOpenRound(8:27-8:28),LowerIdent(8:28-8:29),CloseRound(8:29-8:30),NoSpaceDotLowerIdent(8:30-8:37),OpColon(8:38-8:39),UpperIdent(8:40-8:44),NoSpaceOpenRound(8:44-8:45),UpperIdent(8:45-8:47),CloseRound(8:47-8:48),OpArrow(8:49-8:51),LowerIdent(8:52-8:53),
-EndOfFile(9:1-9:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-8.53
-	(module @1.1-1.22
-		(exposes @1.8-1.22
-			(exposed-upper-ident @1.9-1.13 (text "Hash"))
-			(exposed-upper-ident @1.15-1.21 (text "Decode"))))
-	(statements
-		(s-type-decl @3.1-6.24
-			(header @3.1-3.16 (name "Hash")
-				(args
-					(ty-var @3.6-3.7 (raw "a"))
-					(ty-var @3.9-3.15 (raw "hasher"))))
-			(ty-var @3.19-3.20 (raw "a"))
-			(where
-				(method @5.3-5.36 (module-of "a") (name "hash")
-					(args
-						(ty-var @5.20-5.26 (raw "hasher")))
-					(ty-var @5.30-5.36 (raw "hasher")))
-				(alias @6.3-6.24 (module-of "hasher") (name "Hasher"))))
-		(s-type-decl @8.1-8.53
-			(header @8.1-8.10 (name "Decode")
-				(args
-					(ty-var @8.8-8.9 (raw "a"))))
-			(ty-var @8.13-8.14 (raw "a"))
-			(where
-				(method @8.21-8.53 (module-of "a") (name "decode")
-					(args
-						(ty-apply @8.40-8.48
-							(ty @8.40-8.44 (name "List"))
-							(ty @8.45-8.47 (name "U8"))))
-					(ty-var @8.52-8.53 (raw "a")))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-alias-decl @3.1-6.24
-		(ty-header @3.1-3.16 (name "Hash")
-			(ty-args
-				(ty-var @3.6-3.7 (name "a"))
-				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @3.19-3.20 (name "a")))
-	(s-alias-decl @8.1-8.53
-		(ty-header @8.1-8.10 (name "Decode")
-			(ty-args
-				(ty-var @8.8-8.9 (name "a"))))
-		(ty-var @8.13-8.14 (name "a"))))
+(Expr.block
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 41
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(type_decls
-		(alias @3.1-6.24 (type "Hash(a, hasher)")
-			(ty-header @3.1-3.16 (name "Hash")
-				(ty-args
-					(ty-var @3.6-3.7 (name "a"))
-					(ty-var @3.9-3.15 (name "hasher")))))
-		(alias @8.1-8.53 (type "Decode(a)")
-			(ty-header @8.1-8.10 (name "Decode")
-				(ty-args
-					(ty-var @8.8-8.9 (name "a"))))))
-	(expressions))
+~~~roc
 ~~~

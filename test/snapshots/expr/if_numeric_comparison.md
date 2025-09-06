@@ -7,41 +7,45 @@ type=expr
 ~~~roc
 if 5 > 3 1 else 2
 ~~~
+# TOKENS
+~~~text
+KwIf Int OpGreaterThan Int Int KwElse Int ~~~
+# PARSE
+~~~clojure
+(if_else
+  (condition     (binop_gt
+      (num_literal_i32 5)
+      (num_literal_i32 3)
+    )
+)
+  (then     (num_literal_i32 1)
+)
+  (else     (num_literal_i32 2)
+))
+~~~
+# FORMATTED
+~~~roc
+if 5 > 3 1 else 2
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwIf(1:1-1:3),Int(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),Int(1:10-1:11),KwElse(1:12-1:16),Int(1:17-1:18),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-if-then-else @1.1-1.18
-	(e-binop @1.4-1.9 (op ">")
-		(e-int @1.4-1.5 (raw "5"))
-		(e-int @1.8-1.9 (raw "3")))
-	(e-int @1.10-1.11 (raw "1"))
-	(e-int @1.17-1.18 (raw "2")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.18
-	(if-branches
-		(if-branch
-			(e-binop @1.4-1.9 (op "gt")
-				(e-int @1.4-1.5 (value "5"))
-				(e-int @1.8-1.9 (value "3")))
-			(e-int @1.10-1.11 (value "1"))))
-	(if-else
-		(e-int @1.17-1.18 (value "2"))))
+(Expr.if_else)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 Num *)
+(var #2 Num *)
+(var #3 _)
+(var #4 Num *)
+(var #5 Num *)
+(var #6 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.18 (type "Num(_size)"))
+~~~roc
 ~~~

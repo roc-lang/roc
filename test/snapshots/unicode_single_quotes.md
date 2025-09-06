@@ -35,6 +35,64 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound SingleQu
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (lc "x")
+    (tuple_literal
+      (str_literal_small "a")
+      (malformed)
+    )
+  )
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (apply_anon
+    (malformed)
+    (malformed)
+  )
+  (apply_anon
+    (malformed)
+  )
+  (malformed)
+  (apply_anon
+    (malformed)
+    (num_literal_i32 1)
+  )
+  (uc "F680")
+  (malformed)
+  (malformed)
+  (apply_anon
+    (malformed)
+    (uc "K")
+  )
+  (malformed)
+  (str_literal_small "\")
+  (malformed)
+  (str_literal_small "'")
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (lc "ong")
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (binop_equals
+    (lc "y")
+    (malformed)
+  )
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -521,379 +579,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:5:7:5:8:**
-```roc
-    'é',
-```
-      ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:5:8:6:5:**
-```roc
-    'é',
-    '🚀',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:6:5:6:7:**
-```roc
-    '🚀',
-```
-    ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:6:7:6:8:**
-```roc
-    '🚀',
-```
-      ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:6:8:6:9:**
-```roc
-    '🚀',
-```
-       ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:6:9:6:10:**
-```roc
-    '🚀',
-```
-        ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:6:10:7:5:**
-```roc
-    '🚀',
-    '\u',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:7:5:7:9:**
-```roc
-    '\u',
-```
-    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:7:9:8:5:**
-```roc
-    '\u',
-    '\u)',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:8:5:8:8:**
-```roc
-    '\u)',
-```
-    ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:8:8:8:9:**
-```roc
-    '\u)',
-```
-       ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:8:9:9:5:**
-```roc
-    '\u)',
-    '\u(',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:9:5:10:8:**
-```roc
-    '\u(',
-    '\u()',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:10:5:10:10:**
-```roc
-    '\u()',
-```
-    ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:10:10:11:5:**
-```roc
-    '\u()',
-    '\u(1F680)',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:11:5:11:14:**
-```roc
-    '\u(1F680)',
-```
-    ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:11:10:11:14:**
-```roc
-    '\u(1F680)',
-```
-         ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:11:14:11:15:**
-```roc
-    '\u(1F680)',
-```
-             ^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:11:15:12:5:**
-```roc
-    '\u(1F680)',
-    '\u(K)',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:12:5:12:11:**
-```roc
-    '\u(K)',
-```
-    ^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:12:11:13:5:**
-```roc
-    '\u(K)',
-    '\\',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:13:5:13:9:**
-```roc
-    '\\',
-```
-    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:13:9:14:5:**
-```roc
-    '\\',
-    '\'',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:14:5:14:9:**
-```roc
-    '\'',
-```
-    ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:14:9:15:5:**
-```roc
-    '\'',
-    '',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:15:5:15:7:**
-```roc
-    '',
-```
-    ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:15:7:16:5:**
-```roc
-    '',
-    'long',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:16:5:16:7:**
-```roc
-    'long',
-```
-    ^^
-
-
-**EXPRESSION IN STATEMENT CONTEXT**
-Found an expression where a statement was expected.
-This might be a missing semicolon or an incorrectly placed expression.
+**UNDEFINED VARIABLE**
+Nothing is named **ong** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **unicode_single_quotes.md:16:7:16:10:**
 ```roc
     'long',
 ```
       ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:16:10:17:5:**
-```roc
-    'long',
-    '\',
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:17:5:17:8:**
-```roc
-    '\',
-```
-    ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:17:8:18:1:**
-```roc
-    '\',
-)
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:18:1:20:1:**
-```roc
-)
-
-y = 'u
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**unicode_single_quotes.md:23:1:23:3:**
-```roc
-'\
-```
-^^
 
 
 # CANONICALIZE
@@ -906,49 +600,141 @@ This might be a limitation in the current implementation that will be addressed 
       (Expr.malformed)
     )
   )
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "ong")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
   (Stmt.assign
     (pattern (Patt.ident "y"))
     (Expr.malformed)
   )
-  (Stmt.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 89
+(var #0 _)
+(var #1 -> #52)
+(var #2 Str)
+(var #3 _)
+(var #4 -> #52)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 Num *)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 Str)
+(var #35 _)
+(var #36 Str)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 _)
+(var #46 -> #87)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 tuple)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 _)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 -> #67)
+(var #66 _)
+(var #67 fn_pure)
+(var #68 -> #69)
+(var #69 fn_pure)
+(var #70 _)
+(var #71 -> #72)
+(var #72 fn_pure)
+(var #73 _)
+(var #74 _)
+(var #75 -> #76)
+(var #76 fn_pure)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 _)
+(var #81 _)
+(var #82 _)
+(var #83 _)
+(var #84 _)
+(var #85 _)
+(var #86 _)
+(var #87 _)
+(var #88 _)
 ~~~
 # TYPES
 ~~~roc
+x : (Str, _field)
+y : _a
 ~~~

@@ -31,16 +31,113 @@ KwModule OpenSquare UpperIdent Comma LowerIdent Comma LowerIdent CloseSquare Bla
 
     (lc "is_ok")
 ))
+(block
+  (binop_colon_equals
+    (apply_uc
+      (uc "MyResult")
+      (tuple_literal
+        (lc "ok")
+        (lc "err")
+      )
+    )
+    (list_literal
+      (apply_uc
+        (uc "Ok")
+        (lc "ok")
+      )
+      (apply_uc
+        (uc "Err")
+        (lc "err")
+      )
+    )
+  )
+  (binop_colon
+    (lc "ok")
+    (binop_arrow_call
+      (lc "ok")
+      (apply_uc
+        (uc "MyResult")
+        (tuple_literal
+          (lc "ok")
+          (underscore)
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "ok")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "MyResult")
+            (uc "Ok")
+          )
+          (lc "a")
+        )
+      )
+      (args
+        (lc "a")
+      )
+    )
+  )
+  (binop_colon
+    (lc "is_ok")
+    (binop_arrow_call
+      (apply_uc
+        (uc "MyResult")
+        (tuple_literal
+          (lc "_ok")
+          (lc "_err")
+        )
+      )
+      (uc "Bool")
+    )
+  )
+  (binop_equals
+    (lc "is_ok")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "result")
+))
+      )
+      (args
+        (lc "result")
+      )
+    )
+  )
+  (apply_uc
+    (uc "Ok")
+    (underscore)
+  )
+  (malformed)
+  (binop_pipe
+    (uc "Bool")
+    (uc "True")
+  )
+  (apply_anon
+    (binop_pipe
+      (uc "MyResult")
+      (uc "Err")
+    )
+    (underscore)
+  )
+  (malformed)
+  (binop_pipe
+    (uc "Bool")
+    (uc "False")
+  )
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
 module [MyResult, ok, is_ok]
 
 MyResult((ok, err)) := [Ok(ok), Err(err)]
-
 ok : ok -> MyResult(ok, _)
 ok = |a| MyResult.Ok(a)
-
 is_ok : MyResult(_ok, _err) -> Bool
 is_ok = |result| match result
 
@@ -110,126 +207,153 @@ MyResult(ok, err) := [Ok(ok), Err(err)]
                   ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **MyResult.Ok** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**nominal_tag_payload_two.md:6:10:6:21:**
-```roc
-ok = |a| MyResult.Ok(a)
-```
-         ^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:10:14:10:19:**
+**nominal_tag_payload_two.md:10:17:10:18:**
 ```roc
     MyResult.Ok(_) => Bool.True
 ```
-             ^^^^^
+                ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**nominal_tag_payload_two.md:10:20:10:23:**
-```roc
-    MyResult.Ok(_) => Bool.True
-```
-                   ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:10:23:10:32:**
-```roc
-    MyResult.Ok(_) => Bool.True
-```
-                      ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:11:5:11:20:**
+**nominal_tag_payload_two.md:11:18:11:19:**
 ```roc
     MyResult.Err(_) => Bool.False
 ```
-    ^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:11:21:11:24:**
-```roc
-    MyResult.Err(_) => Bool.False
-```
-                    ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:11:24:11:34:**
-```roc
-    MyResult.Err(_) => Bool.False
-```
-                       ^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:12:1:12:2:**
-```roc
-}
-```
-^
+                 ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.malformed)
-  (Stmt.type_anno
-    (name "ok")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "ok"))
+    (type type_24)
   )
   (Stmt.assign
     (pattern (Patt.ident "ok"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "is_ok")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "is_ok"))
+    (type type_42)
   )
   (Stmt.assign
     (pattern (Patt.ident "is_ok"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Expr.tag_applied)
+  (Expr.malformed)
+  (Expr.module_access
+    (Expr.tag_no_args)
+    (Expr.tag_no_args)
+  )
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.module_access
+    (Expr.tag_no_args)
+    (Expr.tag_no_args)
+  )
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 82
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 -> #72)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 -> #71)
+(var #31 _)
+(var #32 _)
+(var #33 -> #72)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 -> #74)
+(var #45 _)
+(var #46 _)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 -> #74)
+(var #51 _)
+(var #52 -> #76)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 _)
+(var #60 _)
+(var #61 -> #79)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 _)
+(var #66 _)
+(var #67 _)
+(var #68 _)
+(var #69 _)
+(var #70 _)
+(var #71 fn_pure)
+(var #72 fn_pure)
+(var #73 _)
+(var #74 fn_pure)
+(var #75 _)
+(var #76 fn_pure)
+(var #77 _)
+(var #78 _)
+(var #79 fn_pure)
+(var #80 _)
+(var #81 _)
 ~~~
 # TYPES
 ~~~roc
+result : _b
+ok : _arg -> _ret
+is_ok : _arg -> _ret
+a : _b
 ~~~

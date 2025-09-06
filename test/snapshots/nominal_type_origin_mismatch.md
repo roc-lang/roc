@@ -22,44 +22,65 @@ KwModule OpenSquare CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSqu
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (import
+    (binop_exposing
+      (uc "Data")
+      (list_literal
+        (uc "Person")
+      )
+    )
+  )
+  (binop_colon
+    (lc "expectsPerson")
+    (binop_arrow_call
+      (uc "Person")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "expectsPerson")
+    (lambda
+      (body
+        (str_literal_big "Got a person")
+      )
+      (args
+        (lc "p")
+      )
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (apply_lc
+      (lc "expectsPerson")
+      (str_literal_big "not a person")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 import Data exposing [Person]
-
 expectsPerson : Person -> Str
 expectsPerson = |p| "Got a person"
-
 main = # This will cause a type mismatch
-expectsPerson("not a person")
+	expectsPerson("not a person")
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable **p** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
-The unused variable is declared here:
-
-**nominal_type_origin_mismatch.md:6:18:6:19:**
-```roc
-expectsPerson = |p| "Got a person"
-```
-                 ^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
-  (Stmt.type_anno
-    (name "expectsPerson")
-    (type <mutated_tag:161>)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "expectsPerson"))
+    (type type_9)
   )
   (Stmt.assign
     (pattern (Patt.ident "expectsPerson"))
@@ -67,13 +88,42 @@ expectsPerson = |p| "Got a person"
   )
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 25
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #23)
+(var #12 _)
+(var #13 Str)
+(var #14 -> #23)
+(var #15 _)
+(var #16 -> #19)
+(var #17 -> #24)
+(var #18 Str)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 fn_pure)
+(var #24 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+p : _a
+expectsPerson : _arg -> Str
+main : _a
 ~~~

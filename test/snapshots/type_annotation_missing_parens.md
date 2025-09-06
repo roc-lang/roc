@@ -18,6 +18,13 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIde
   (exposes
     (lc "nums")
 ))
+(block
+  (binop_colon
+    (lc "nums")
+    (uc "List")
+  )
+  (uc "U8")
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,30 +37,29 @@ U8
 PARSE ERROR - type_annotation_missing_parens.md:4:1:4:1
 EXPOSED BUT NOT DEFINED - type_annotation_missing_parens.md:1:9:1:13
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_annotation_missing_parens.md:3:13:3:15:**
-```roc
-nums : List U8
-```
-            ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "nums")
-    (type <mutated_tag:160>)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "nums"))
+    (type type_3)
   )
-  (Stmt.malformed)
+  (Expr.tag_no_args)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 7
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
 ~~~
 # TYPES
 ~~~roc
+nums : _a
 ~~~

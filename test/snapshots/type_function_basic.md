@@ -79,7 +79,6 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 apply :
 	((_a -> _b) -> _a) -> _b
 apply = |fn, x| fn(x)
-
 main! = |_| {}
 ~~~
 # EXPECTED

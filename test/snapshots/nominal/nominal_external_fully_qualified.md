@@ -26,13 +26,73 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport UpperIdent BlankLi
   (exposes
     (lc "handleResult")
 ))
+(block
+  (import
+    (uc "MyResultModule")
+  )
+  (binop_colon
+    (lc "handleResult")
+    (binop_arrow_call
+      (apply_anon
+        (binop_pipe
+          (uc "MyResultModule")
+          (uc "MyResultType")
+        )
+        (tuple_literal
+          (uc "Str")
+          (uc "I32")
+        )
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "handleResult")
+    (lambda
+      (body
+        (block
+          (match
+            (scrutinee               (lc "result")
+))
+          (apply_anon
+            (binop_pipe
+              (uc "MyResultType")
+              (uc "Ok")
+            )
+            (lc "value")
+          )
+          (malformed)
+          (binop_colon
+            (lc "value")
+            (lc "value")
+          )
+          (apply_anon
+            (binop_pipe
+              (binop_pipe
+                (uc "MyResultModule")
+                (uc "MyResultType")
+              )
+              (uc "Err")
+            )
+            (lc "code")
+          )
+          (malformed)
+          (str_literal_big "Error: $(code.toStr())")
+        )
+      )
+      (args
+        (lc "result")
+      )
+    )
+  )
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
 module [handleResult]
 
 import MyResultModule
-
 handleResult : MyResultModule.MyResultType((Str, I32)) -> Str
 handleResult = |result| {
 	match result
@@ -94,15 +154,15 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **MyResultType.Ok** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-**nominal_external_fully_qualified.md:8:24:8:39:**
+**nominal_external_fully_qualified.md:5:16:5:53:**
 ```roc
-        MyResultModule.MyResultType.Ok(value) => value
+handleResult : MyResultModule.MyResultType(Str, I32) -> Str
 ```
-                       ^^^^^^^^^^^^^^^
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -116,17 +176,6 @@ Is there an **import** or **exposing** missing up-top?
                                        ^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_external_fully_qualified.md:9:9:9:40:**
-```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-```
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **code** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -138,48 +187,78 @@ Is there an **import** or **exposing** missing up-top?
                                         ^^^^
 
 
-**UNUSED VARIABLE**
-Variable **value** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-
-**nominal_external_fully_qualified.md:8:50:8:55:**
-```roc
-        MyResultModule.MyResultType.Ok(value) => value
-```
-                                                 ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_external_fully_qualified.md:11:1:11:2:**
-```roc
-}
-```
-^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.import)
-  (Stmt.type_anno
-    (name "handleResult")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "handleResult"))
+    (type type_13)
   )
   (Stmt.assign
     (pattern (Patt.ident "handleResult"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 50
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 -> #48)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 -> #44)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 -> #46)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 Str)
+(var #38 _)
+(var #39 -> #48)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 fn_pure)
+(var #45 _)
+(var #46 fn_pure)
+(var #47 _)
+(var #48 fn_pure)
+(var #49 _)
 ~~~
 # TYPES
 ~~~roc
+value : _a
+handleResult : _arg -> _ret
+result : _a
 ~~~

@@ -20,6 +20,19 @@ KwPlatform String KwRequires OpenCurly CloseCurly OpenCurly LowerIdent OpColon U
 # PARSE
 ~~~clojure
 (platform-header)
+(block
+  (binop_colon
+    (lc "entrypoint")
+    (binop_arrow_call
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "entrypoint")
+    (lc "main")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -45,9 +58,9 @@ entrypoint = main
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "entrypoint")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "entrypoint"))
+    (type type_12)
   )
   (Stmt.assign
     (pattern (Patt.ident "entrypoint"))
@@ -57,8 +70,27 @@ entrypoint = main
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 18
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 -> #15)
+(var #15 _)
+(var #16 _)
+(var #17 _)
 ~~~
 # TYPES
 ~~~roc
-# Header type not yet fully supported
+entrypoint : _a
 ~~~

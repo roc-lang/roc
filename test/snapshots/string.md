@@ -27,13 +27,28 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound String C
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (binop_equals
+    (lc "x")
+    (tuple_literal
+      (str_literal_small "one")
+      (str_literal_small "two")
+      (str_literal_small "u")
+      (str_literal_small "u)")
+      (str_literal_small "u(")
+      (str_literal_small "u()")
+      (str_literal_small "u(K)")
+      (str_literal_big "u(1F680)")
+    )
+  )
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 x = ("one", "two", "\u", "\u)", "\u(", "\u()", "\u(K)", "\u(1F680)")
-
 # Test backslash before EOF
 "\
 ~~~
@@ -60,17 +75,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**string.md:15:1:15:3:**
-```roc
-"\
-```
-^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -87,12 +91,30 @@ This might be a limitation in the current implementation that will be addressed 
       (Expr.str_literal_big)
     )
   )
-  (Stmt.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 -> #14)
+(var #2 Str)
+(var #3 Str)
+(var #4 Str)
+(var #5 Str)
+(var #6 Str)
+(var #7 Str)
+(var #8 Str)
+(var #9 Str)
+(var #10 -> #14)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 tuple)
+(var #15 _)
 ~~~
 # TYPES
 ~~~roc
+x : (Str, Str, Str, Str, Str, Str, Str, Str)
 ~~~

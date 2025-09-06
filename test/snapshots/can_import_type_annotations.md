@@ -45,6 +45,360 @@ combineResults = |result1, result2|
         Err(err) => Err(err)
     }
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwAs UpperIdent KwExposing OpenSquare UpperIdent Comma UpperIdent CloseSquare KwImport LowerIdent Dot UpperIdent KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare UpperIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent Dot UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent OpColon UpperIdent Dot UpperIdent OpArrow UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent Dot LowerIdent CloseRound KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound CloseRound UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly CloseCurly BlankLine LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot LowerIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent Dot UpperIdent Comma UpperIdent OpArrow UpperIdent OpenRound UpperIdent Dot UpperIdent Comma UpperIdent Dot UpperIdent Dot UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar UpperIdent Dot UpperIdent Dot LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound Comma UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpArrow UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound Comma LowerIdent CloseRound LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow KwMatch OpenRound LowerIdent CloseRound OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow UpperIdent OpenRound LowerIdent CloseRound CloseCurly ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (import
+    (binop_exposing
+      (binop_as
+        (binop_pipe
+          (lc "http")
+          (uc "Client")
+        )
+        (uc "Http")
+      )
+      (list_literal
+        (uc "Request")
+        (uc "Response")
+      )
+    )
+  )
+  (import
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
+  )
+  (import
+    (binop_exposing
+      (binop_pipe
+        (lc "utils")
+        (uc "Result")
+      )
+      (list_literal
+        (uc "Result")
+      )
+    )
+  )
+  (binop_colon
+    (lc "processRequest")
+    (binop_arrow_call
+      (uc "Request")
+      (uc "Response")
+    )
+  )
+  (binop_equals
+    (lc "processRequest")
+    (lambda
+      (body
+        (binop_pipe
+          (uc "Http")
+          (dot_lc "defaultResponse")
+        )
+      )
+      (args
+        (lc "req")
+      )
+    )
+  )
+  (binop_colon
+    (lc "parseJson")
+    (binop_arrow_call
+      (uc "Str")
+      (binop_pipe
+        (uc "Json")
+        (uc "Value")
+      )
+    )
+  )
+  (binop_equals
+    (lc "parseJson")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (uc "Json")
+            (dot_lc "parse")
+          )
+          (lc "input")
+        )
+      )
+      (args
+        (lc "input")
+      )
+    )
+  )
+  (binop_colon
+    (lc "handleApi")
+    (binop_arrow_call
+      (binop_pipe
+        (uc "Http")
+        (uc "Request")
+      )
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (binop_pipe
+            (uc "Http")
+            (uc "Response")
+          )
+          (binop_pipe
+            (uc "Json")
+            (uc "Error")
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "handleApi")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "result")
+            (apply_anon
+              (binop_pipe
+                (uc "Json")
+                (dot_lc "decode")
+              )
+              (binop_pipe
+                (lc "request")
+                (dot_lc "body")
+              )
+            )
+          )
+          (apply_anon
+            (match
+              (scrutinee                 (lc "result")
+)
+              (branch1                 (binop_thick_arrow
+                  (apply_uc
+                    (uc "Ok")
+                    (lc "data")
+                  )
+                  (malformed)
+                )
+))
+            (lc "data")
+          )
+          (malformed)
+          (apply_uc
+            (uc "Err")
+            (lc "err")
+          )
+          (malformed)
+          (apply_uc
+            (uc "Err")
+            (lc "err")
+          )
+        )
+      )
+      (args
+        (lc "request")
+      )
+    )
+  )
+  (malformed)
+  (binop_colon
+    (lc "config")
+    (binop_pipe
+      (uc "Json")
+      (uc "Config")
+    )
+  )
+  (binop_equals
+    (lc "config")
+    (binop_pipe
+      (uc "Json")
+      (dot_lc "defaultConfig")
+    )
+  )
+  (binop_colon
+    (lc "advancedParser")
+    (binop_arrow_call
+      (binop_pipe
+        (binop_pipe
+          (uc "Json")
+          (uc "Parser")
+        )
+        (uc "Config")
+      )
+      (binop_arrow_call
+        (uc "Str")
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (binop_pipe
+              (uc "Json")
+              (uc "Value")
+            )
+            (binop_pipe
+              (binop_pipe
+                (uc "Json")
+                (uc "Parser")
+              )
+              (uc "Error")
+            )
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "advancedParser")
+    (lambda
+      (body
+        (apply_anon
+          (binop_pipe
+            (binop_pipe
+              (uc "Json")
+              (uc "Parser")
+            )
+            (dot_lc "parseWith")
+          )
+          (tuple_literal
+            (lc "parserConfig")
+            (lc "input")
+          )
+        )
+      )
+      (args
+        (lc "parserConfig")
+        (lc "input")
+      )
+    )
+  )
+  (binop_colon
+    (lc "combineResults")
+    (binop_arrow_call
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (lc "a")
+          (lc "err")
+        )
+      )
+      (binop_arrow_call
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (lc "b")
+            (lc "err")
+          )
+        )
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (tuple_literal
+              (lc "a")
+              (lc "b")
+            )
+            (lc "err")
+          )
+        )
+      )
+    )
+  )
+  (binop_equals
+    (lc "combineResults")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "result1")
+)
+          (branch1             (binop_thick_arrow
+              (apply_uc
+                (uc "Ok")
+                (lc "value1")
+              )
+              (binop_thick_arrow
+                (apply_anon
+                  (match
+                    (scrutinee                       (lc "result2")
+)
+                    (branch1                       (binop_thick_arrow
+                        (apply_uc
+                          (uc "Ok")
+                          (lc "value2")
+                        )
+                        (malformed)
+                      )
+))
+                  (lc "err")
+                )
+                (apply_uc
+                  (uc "Err")
+                  (lc "err")
+                )
+              )
+            )
+))
+      )
+      (args
+        (lc "result1")
+        (lc "result2")
+      )
+    )
+  )
+  (apply_uc
+    (uc "Err")
+    (lc "err")
+  )
+  (malformed)
+  (apply_uc
+    (uc "Err")
+    (lc "err")
+  )
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+	result = Json.decode(request.body)
+	match result
+		Ok(data) => Ok
+(data)
+	)
+	Err(err)
+	=> 
+	Err(err)
+}
+
+}
+
+config : Json.Config
+config = Json.defaultConfig
+# Test nested type qualification
+advancedParser : Json.Parser | Config -> Str -> Result(Json.Value, Json.Parser | Error)
+advancedParser = |parserConfig, input| Json.Parser | .parseWith((parserConfig, input))
+# Test function with multiple type parameters
+combineResults : Result(a, err) -> Result(b, err) -> Result((a, b), err)
+combineResults = |result1, result2| match result1
+	Ok(value1) => match result2
+		Ok(value2) => Ok
+(err) => Err(err)
+
+Err(err)
+=> 
+Err(err)
+}
+~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
 MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
@@ -55,102 +409,278 @@ UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Ok** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:3:1:3:56:**
+**can_import_type_annotations.md:17:21:17:23:**
 ```roc
-import http.Client as Http exposing [Request, Response]
+        Ok(data) => Ok(Http.success(data))
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    ^^
 
 
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
+**PARSE ERROR**
+A parsing error occurred: **expected_close_round**
+This is an unexpected parsing error. Please check your syntax.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:4:1:4:17:**
+**can_import_type_annotations.md:17:28:17:29:**
 ```roc
-import json.Json
+        Ok(data) => Ok(Http.success(data))
 ```
-^^^^^^^^^^^^^^^^
+                           ^
 
 
-**MODULE NOT FOUND**
-The module `utils.Result` was not found in this Roc project.
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:5:1:5:38:**
+**can_import_type_annotations.md:17:29:17:36:**
 ```roc
-import utils.Result exposing [Result]
+        Ok(data) => Ok(Http.success(data))
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            ^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Request_ is not declared in this scope.
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
 
-This type is referenced here:
-**can_import_type_annotations.md:7:18:7:25:**
+**can_import_type_annotations.md:17:23:17:36:**
 ```roc
-processRequest : Request -> Response
+        Ok(data) => Ok(Http.success(data))
 ```
-                 ^^^^^^^
+                      ^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Response_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+        ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-This type is referenced here:
-**can_import_type_annotations.md:7:29:7:37:**
+**can_import_type_annotations.md:17:42:18:9:**
 ```roc
-processRequest : Request -> Response
-```
-                            ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `req` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
-The unused variable is declared here:
-**can_import_type_annotations.md:8:19:8:22:**
-```roc
-processRequest = |req| Http.defaultResponse
-```
-                  ^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `module []
-
-import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
-
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
-
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
-
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
         Ok(data) => Ok(Http.success(data))
         Err(err) => Err(err)
-    }
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_import_type_annotations.md:18:18:18:21:**
+```roc
+        Err(err) => Err(err)
+```
+                 ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_import_type_annotations.md:20:1:22:1:**
+```roc
 }
 
 config : Json.Config
-config = Json.defaultConfig
+```
 
-# Test nested type qualification
-advancedParser : Json.Parser` imported into this Roc file.
 
-You're attempting to use this module here:
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Ok** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_import_type_annotations.md:35:31:35:33:**
+```roc
+                Ok(value2) => Ok((value1, value2))
+```
+                              ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_arrow_after_pattern**
+This is an unexpected parsing error. Please check your syntax.
+
+**can_import_type_annotations.md:36:17:36:20:**
+```roc
+                Err(err) => Err(err)
+```
+                ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**can_import_type_annotations.md:35:33:36:20:**
+```roc
+                Ok(value2) => Ok((value1, value2))
+                Err(err) => Err(err)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_import_type_annotations.md:38:18:38:21:**
+```roc
+        Err(err) => Err(err)
+```
+                 ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_import_type_annotations.md:39:5:39:6:**
+```roc
+    }
+```
+    ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **http** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:3:8:3:12:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+       ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **json** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:4:8:4:12:**
+```roc
+import json.Json
+```
+       ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **utils** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:5:8:5:13:**
+```roc
+import utils.Result exposing [Result]
+```
+       ^^^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**can_import_type_annotations.md:10:20:10:30:**
+```roc
+parseJson : Str -> Json.Value
+```
+                   ^^^^^^^^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**can_import_type_annotations.md:13:13:13:25:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+            ^^^^^^^^^^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**can_import_type_annotations.md:13:36:13:49:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                                   ^^^^^^^^^^^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**can_import_type_annotations.md:13:51:13:61:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                                                  ^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**can_import_type_annotations.md:17:9:17:23:**
+```roc
+        Ok(data) => Ok(Http.success(data))
+```
+        ^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:17:37:17:41:**
+```roc
+        Ok(data) => Ok(Http.success(data))
+```
+                                    ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:18:13:18:16:**
+```roc
+        Err(err) => Err(err)
+```
+            ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**can_import_type_annotations.md:18:25:18:28:**
+```roc
+        Err(err) => Err(err)
+```
+                        ^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**can_import_type_annotations.md:22:10:22:21:**
+```roc
+config : Json.Config
+```
+         ^^^^^^^^^^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
 **can_import_type_annotations.md:26:18:26:36:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
@@ -158,35 +688,21 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                  ^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `module []
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
+**can_import_type_annotations.md:26:52:26:62:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                                                   ^^^^^^^^^^
 
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
 
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
-        Ok(data) => Ok(Http.success(data))
-        Err(err) => Err(err)
-    }
-}
-
-config : Json.Config
-config = Json.defaultConfig
-
-# Test nested type qualification
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser` imported into this Roc file.
-
-You're attempting to use this module here:
 **can_import_type_annotations.md:26:64:26:81:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
@@ -194,471 +710,348 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                                                                ^^^^^^^^^^^^^^^^^
 
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),KwAs(3:20-3:22),UpperIdent(3:23-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:45),Comma(3:45-3:46),UpperIdent(3:47-3:55),CloseSquare(3:55-3:56),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:17),
-KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),
-LowerIdent(7:1-7:15),OpColon(7:16-7:17),UpperIdent(7:18-7:25),OpArrow(7:26-7:28),UpperIdent(7:29-7:37),
-LowerIdent(8:1-8:15),OpAssign(8:16-8:17),OpBar(8:18-8:19),LowerIdent(8:19-8:22),OpBar(8:22-8:23),UpperIdent(8:24-8:28),NoSpaceDotLowerIdent(8:28-8:44),
-LowerIdent(10:1-10:10),OpColon(10:11-10:12),UpperIdent(10:13-10:16),OpArrow(10:17-10:19),UpperIdent(10:20-10:24),NoSpaceDotUpperIdent(10:24-10:30),
-LowerIdent(11:1-11:10),OpAssign(11:11-11:12),OpBar(11:13-11:14),LowerIdent(11:14-11:19),OpBar(11:19-11:20),UpperIdent(11:21-11:25),NoSpaceDotLowerIdent(11:25-11:31),NoSpaceOpenRound(11:31-11:32),LowerIdent(11:32-11:37),CloseRound(11:37-11:38),
-LowerIdent(13:1-13:10),OpColon(13:11-13:12),UpperIdent(13:13-13:17),NoSpaceDotUpperIdent(13:17-13:25),OpArrow(13:26-13:28),UpperIdent(13:29-13:35),NoSpaceOpenRound(13:35-13:36),UpperIdent(13:36-13:40),NoSpaceDotUpperIdent(13:40-13:49),Comma(13:49-13:50),UpperIdent(13:51-13:55),NoSpaceDotUpperIdent(13:55-13:61),CloseRound(13:61-13:62),
-LowerIdent(14:1-14:10),OpAssign(14:11-14:12),OpBar(14:13-14:14),LowerIdent(14:14-14:21),OpBar(14:21-14:22),OpenCurly(14:23-14:24),
-LowerIdent(15:5-15:11),OpAssign(15:12-15:13),UpperIdent(15:14-15:18),NoSpaceDotLowerIdent(15:18-15:25),NoSpaceOpenRound(15:25-15:26),LowerIdent(15:26-15:33),NoSpaceDotLowerIdent(15:33-15:38),CloseRound(15:38-15:39),
-KwMatch(16:5-16:10),LowerIdent(16:11-16:17),OpenCurly(16:18-16:19),
-UpperIdent(17:9-17:11),NoSpaceOpenRound(17:11-17:12),LowerIdent(17:12-17:16),CloseRound(17:16-17:17),OpFatArrow(17:18-17:20),UpperIdent(17:21-17:23),NoSpaceOpenRound(17:23-17:24),UpperIdent(17:24-17:28),NoSpaceDotLowerIdent(17:28-17:36),NoSpaceOpenRound(17:36-17:37),LowerIdent(17:37-17:41),CloseRound(17:41-17:42),CloseRound(17:42-17:43),
-UpperIdent(18:9-18:12),NoSpaceOpenRound(18:12-18:13),LowerIdent(18:13-18:16),CloseRound(18:16-18:17),OpFatArrow(18:18-18:20),UpperIdent(18:21-18:24),NoSpaceOpenRound(18:24-18:25),LowerIdent(18:25-18:28),CloseRound(18:28-18:29),
-CloseCurly(19:5-19:6),
-CloseCurly(20:1-20:2),
-LowerIdent(22:1-22:7),OpColon(22:8-22:9),UpperIdent(22:10-22:14),NoSpaceDotUpperIdent(22:14-22:21),
-LowerIdent(23:1-23:7),OpAssign(23:8-23:9),UpperIdent(23:10-23:14),NoSpaceDotLowerIdent(23:14-23:28),
-LowerIdent(26:1-26:15),OpColon(26:16-26:17),UpperIdent(26:18-26:22),NoSpaceDotUpperIdent(26:22-26:29),NoSpaceDotUpperIdent(26:29-26:36),Comma(26:36-26:37),UpperIdent(26:38-26:41),OpArrow(26:42-26:44),UpperIdent(26:45-26:51),NoSpaceOpenRound(26:51-26:52),UpperIdent(26:52-26:56),NoSpaceDotUpperIdent(26:56-26:62),Comma(26:62-26:63),UpperIdent(26:64-26:68),NoSpaceDotUpperIdent(26:68-26:75),NoSpaceDotUpperIdent(26:75-26:81),CloseRound(26:81-26:82),
-LowerIdent(27:1-27:15),OpAssign(27:16-27:17),OpBar(27:18-27:19),LowerIdent(27:19-27:31),Comma(27:31-27:32),LowerIdent(27:33-27:38),OpBar(27:38-27:39),UpperIdent(27:40-27:44),NoSpaceDotUpperIdent(27:44-27:51),NoSpaceDotLowerIdent(27:51-27:61),NoSpaceOpenRound(27:61-27:62),LowerIdent(27:62-27:74),Comma(27:74-27:75),LowerIdent(27:76-27:81),CloseRound(27:81-27:82),
-LowerIdent(30:1-30:15),OpColon(30:16-30:17),UpperIdent(30:18-30:24),NoSpaceOpenRound(30:24-30:25),LowerIdent(30:25-30:26),Comma(30:26-30:27),LowerIdent(30:28-30:31),CloseRound(30:31-30:32),Comma(30:32-30:33),UpperIdent(30:34-30:40),NoSpaceOpenRound(30:40-30:41),LowerIdent(30:41-30:42),Comma(30:42-30:43),LowerIdent(30:44-30:47),CloseRound(30:47-30:48),OpArrow(30:49-30:51),UpperIdent(30:52-30:58),NoSpaceOpenRound(30:58-30:59),NoSpaceOpenRound(30:59-30:60),LowerIdent(30:60-30:61),Comma(30:61-30:62),LowerIdent(30:63-30:64),CloseRound(30:64-30:65),Comma(30:65-30:66),LowerIdent(30:67-30:70),CloseRound(30:70-30:71),
-LowerIdent(31:1-31:15),OpAssign(31:16-31:17),OpBar(31:18-31:19),LowerIdent(31:19-31:26),Comma(31:26-31:27),LowerIdent(31:28-31:35),OpBar(31:35-31:36),
-KwMatch(32:5-32:10),LowerIdent(32:11-32:18),OpenCurly(32:19-32:20),
-UpperIdent(33:9-33:11),NoSpaceOpenRound(33:11-33:12),LowerIdent(33:12-33:18),CloseRound(33:18-33:19),OpFatArrow(33:20-33:22),
-KwMatch(34:13-34:18),NoSpaceOpenRound(34:18-34:19),LowerIdent(34:19-34:26),CloseRound(34:26-34:27),OpenCurly(34:28-34:29),
-UpperIdent(35:17-35:19),NoSpaceOpenRound(35:19-35:20),LowerIdent(35:20-35:26),CloseRound(35:26-35:27),OpFatArrow(35:28-35:30),UpperIdent(35:31-35:33),NoSpaceOpenRound(35:33-35:34),NoSpaceOpenRound(35:34-35:35),LowerIdent(35:35-35:41),Comma(35:41-35:42),LowerIdent(35:43-35:49),CloseRound(35:49-35:50),CloseRound(35:50-35:51),
-UpperIdent(36:17-36:20),NoSpaceOpenRound(36:20-36:21),LowerIdent(36:21-36:24),CloseRound(36:24-36:25),OpFatArrow(36:26-36:28),UpperIdent(36:29-36:32),NoSpaceOpenRound(36:32-36:33),LowerIdent(36:33-36:36),CloseRound(36:36-36:37),
-CloseCurly(37:13-37:14),
-UpperIdent(38:9-38:12),NoSpaceOpenRound(38:12-38:13),LowerIdent(38:13-38:16),CloseRound(38:16-38:17),OpFatArrow(38:18-38:20),UpperIdent(38:21-38:24),NoSpaceOpenRound(38:24-38:25),LowerIdent(38:25-38:28),CloseRound(38:28-38:29),
-CloseCurly(39:5-39:6),
-EndOfFile(40:1-40:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-39.6
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-import @3.1-3.56 (raw "http.Client") (alias "Http")
-			(exposing
-				(exposed-upper-ident @3.38-3.45 (text "Request"))
-				(exposed-upper-ident @3.47-3.55 (text "Response"))))
-		(s-import @4.1-4.17 (raw "json.Json"))
-		(s-import @5.1-5.38 (raw "utils.Result")
-			(exposing
-				(exposed-upper-ident @5.31-5.37 (text "Result"))))
-		(s-type-anno @7.1-7.37 (name "processRequest")
-			(ty-fn @7.18-7.37
-				(ty @7.18-7.25 (name "Request"))
-				(ty @7.29-7.37 (name "Response"))))
-		(s-decl @8.1-8.44
-			(p-ident @8.1-8.15 (raw "processRequest"))
-			(e-lambda @8.18-8.44
-				(args
-					(p-ident @8.19-8.22 (raw "req")))
-				(e-ident @8.24-8.44 (raw "Http.defaultResponse"))))
-		(s-type-anno @10.1-10.30 (name "parseJson")
-			(ty-fn @10.13-10.30
-				(ty @10.13-10.16 (name "Str"))
-				(ty @10.20-10.30 (name "Json.Value"))))
-		(s-decl @11.1-11.38
-			(p-ident @11.1-11.10 (raw "parseJson"))
-			(e-lambda @11.13-11.38
-				(args
-					(p-ident @11.14-11.19 (raw "input")))
-				(e-apply @11.21-11.38
-					(e-ident @11.21-11.31 (raw "Json.parse"))
-					(e-ident @11.32-11.37 (raw "input")))))
-		(s-type-anno @13.1-13.62 (name "handleApi")
-			(ty-fn @13.13-13.62
-				(ty @13.13-13.25 (name "Http.Request"))
-				(ty-apply @13.29-13.62
-					(ty @13.29-13.35 (name "Result"))
-					(ty @13.36-13.49 (name "Http.Response"))
-					(ty @13.51-13.61 (name "Json.Error")))))
-		(s-decl @14.1-20.2
-			(p-ident @14.1-14.10 (raw "handleApi"))
-			(e-lambda @14.13-20.2
-				(args
-					(p-ident @14.14-14.21 (raw "request")))
-				(e-block @14.23-20.2
-					(statements
-						(s-decl @15.5-15.39
-							(p-ident @15.5-15.11 (raw "result"))
-							(e-apply @15.14-15.39
-								(e-ident @15.14-15.25 (raw "Json.decode"))
-								(e-field-access @15.26-15.38
-									(e-ident @15.26-15.33 (raw "request"))
-									(e-ident @15.33-15.38 (raw "body")))))
-						(e-match
-							(e-ident @16.11-16.17 (raw "result"))
-							(branches
-								(branch @17.9-17.43
-									(p-tag @17.9-17.17 (raw "Ok")
-										(p-ident @17.12-17.16 (raw "data")))
-									(e-apply @17.21-17.43
-										(e-tag @17.21-17.23 (raw "Ok"))
-										(e-apply @17.24-17.42
-											(e-ident @17.24-17.36 (raw "Http.success"))
-											(e-ident @17.37-17.41 (raw "data")))))
-								(branch @18.9-18.29
-									(p-tag @18.9-18.17 (raw "Err")
-										(p-ident @18.13-18.16 (raw "err")))
-									(e-apply @18.21-18.29
-										(e-tag @18.21-18.24 (raw "Err"))
-										(e-ident @18.25-18.28 (raw "err"))))))))))
-		(s-type-anno @22.1-22.21 (name "config")
-			(ty @22.10-22.21 (name "Json.Config")))
-		(s-decl @23.1-23.28
-			(p-ident @23.1-23.7 (raw "config"))
-			(e-ident @23.10-23.28 (raw "Json.defaultConfig")))
-		(s-type-anno @26.1-26.82 (name "advancedParser")
-			(ty-fn @26.18-26.82
-				(ty @26.18-26.36 (name "Json.Parser.Config"))
-				(ty @26.38-26.41 (name "Str"))
-				(ty-apply @26.45-26.82
-					(ty @26.45-26.51 (name "Result"))
-					(ty @26.52-26.62 (name "Json.Value"))
-					(ty @26.64-26.81 (name "Json.Parser.Error")))))
-		(s-decl @27.1-27.82
-			(p-ident @27.1-27.15 (raw "advancedParser"))
-			(e-lambda @27.18-27.82
-				(args
-					(p-ident @27.19-27.31 (raw "parserConfig"))
-					(p-ident @27.33-27.38 (raw "input")))
-				(e-apply @27.40-27.82
-					(e-ident @27.40-27.61 (raw "Json.Parser.parseWith"))
-					(e-ident @27.62-27.74 (raw "parserConfig"))
-					(e-ident @27.76-27.81 (raw "input")))))
-		(s-type-anno @30.1-30.71 (name "combineResults")
-			(ty-fn @30.18-30.71
-				(ty-apply @30.18-30.32
-					(ty @30.18-30.24 (name "Result"))
-					(ty-var @30.25-30.26 (raw "a"))
-					(ty-var @30.28-30.31 (raw "err")))
-				(ty-apply @30.34-30.48
-					(ty @30.34-30.40 (name "Result"))
-					(ty-var @30.41-30.42 (raw "b"))
-					(ty-var @30.44-30.47 (raw "err")))
-				(ty-apply @30.52-30.71
-					(ty @30.52-30.58 (name "Result"))
-					(ty-tuple @30.59-30.65
-						(ty-var @30.60-30.61 (raw "a"))
-						(ty-var @30.63-30.64 (raw "b")))
-					(ty-var @30.67-30.70 (raw "err")))))
-		(s-decl @31.1-39.6
-			(p-ident @31.1-31.15 (raw "combineResults"))
-			(e-lambda @31.18-39.6
-				(args
-					(p-ident @31.19-31.26 (raw "result1"))
-					(p-ident @31.28-31.35 (raw "result2")))
-				(e-match
-					(e-ident @32.11-32.18 (raw "result1"))
-					(branches
-						(branch @33.9-37.14
-							(p-tag @33.9-33.19 (raw "Ok")
-								(p-ident @33.12-33.18 (raw "value1")))
-							(e-match
-								(e-tuple @34.18-34.27
-									(e-ident @34.19-34.26 (raw "result2")))
-								(branches
-									(branch @35.17-35.51
-										(p-tag @35.17-35.27 (raw "Ok")
-											(p-ident @35.20-35.26 (raw "value2")))
-										(e-apply @35.31-35.51
-											(e-tag @35.31-35.33 (raw "Ok"))
-											(e-tuple @35.34-35.50
-												(e-ident @35.35-35.41 (raw "value1"))
-												(e-ident @35.43-35.49 (raw "value2")))))
-									(branch @36.17-36.37
-										(p-tag @36.17-36.25 (raw "Err")
-											(p-ident @36.21-36.24 (raw "err")))
-										(e-apply @36.29-36.37
-											(e-tag @36.29-36.32 (raw "Err"))
-											(e-ident @36.33-36.36 (raw "err")))))))
-						(branch @38.9-38.29
-							(p-tag @38.9-38.17 (raw "Err")
-								(p-ident @38.13-38.16 (raw "err")))
-							(e-apply @38.21-38.29
-								(e-tag @38.21-38.24 (raw "Err"))
-								(e-ident @38.25-38.28 (raw "err"))))))))))
-~~~
-# FORMATTED
-~~~roc
-module []
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
+**can_import_type_annotations.md:33:9:36:37:**
+```roc
+        Ok(value1) =>
+            match(result2) {
+                Ok(value2) => Ok((value1, value2))
+                Err(err) => Err(err)
+```
 
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
 
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-	result = Json.decode(request.body)
-	match result {
-		Ok(data) => Ok(Http.success(data))
-		Err(err) => Err(err)
-	}
-}
+**can_import_type_annotations.md:38:13:38:16:**
+```roc
+        Err(err) => Err(err)
+```
+            ^^^
 
-config : Json.Config
-config = Json.defaultConfig
 
-# Test nested type qualification
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+**UNDEFINED VARIABLE**
+Nothing is named **err** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-# Test function with multiple type parameters
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-combineResults = |result1, result2|
-	match result1 {
-		Ok(value1) =>
-			match (result2) {
-				Ok(value2) => Ok((value1, value2))
-				Err(err) => Err(err)
-			}
-		Err(err) => Err(err)
-	}
-~~~
+**can_import_type_annotations.md:38:25:38:28:**
+```roc
+        Err(err) => Err(err)
+```
+                        ^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @8.1-8.15 (ident "processRequest"))
-		(e-lambda @8.18-8.44
-			(args
-				(p-assign @8.19-8.22 (ident "req")))
-			(e-lookup-external @8.24-8.44
-				(module-idx "0")
-				(target-node-idx "0")))
-		(annotation @8.1-8.15
-			(declared-type
-				(ty-fn @7.18-7.37 (effectful false)
-					(ty @7.18-7.25 (name "Request"))
-					(ty @7.29-7.37 (name "Response"))))))
-	(d-let
-		(p-assign @11.1-11.10 (ident "parseJson"))
-		(e-lambda @11.13-11.38
-			(args
-				(p-assign @11.14-11.19 (ident "input")))
-			(e-call @11.21-11.38
-				(e-lookup-external @11.21-11.31
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @11.32-11.37
-					(p-assign @11.14-11.19 (ident "input")))))
-		(annotation @11.1-11.10
-			(declared-type
-				(ty-fn @10.13-10.30 (effectful false)
-					(ty @10.13-10.16 (name "Str"))
-					(ty-lookup-external @10.20-10.30
-						(module-idx "1")
-						(target-node-idx "0"))))))
-	(d-let
-		(p-assign @14.1-14.10 (ident "handleApi"))
-		(e-closure @14.13-20.2
-			(captures
-				(capture @17.12-17.16 (ident "data"))
-				(capture @18.13-18.16 (ident "err")))
-			(e-lambda @14.13-20.2
-				(args
-					(p-assign @14.14-14.21 (ident "request")))
-				(e-block @14.23-20.2
-					(s-let @15.5-15.39
-						(p-assign @15.5-15.11 (ident "result"))
-						(e-call @15.14-15.39
-							(e-lookup-external @15.14-15.25
-								(module-idx "1")
-								(target-node-idx "0"))
-							(e-dot-access @15.26-15.38 (field "body")
-								(receiver
-									(e-lookup-local @15.26-15.33
-										(p-assign @14.14-14.21 (ident "request")))))))
-					(e-match @16.5-19.6
-						(match @16.5-19.6
-							(cond
-								(e-lookup-local @16.11-16.17
-									(p-assign @15.5-15.11 (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal @17.9-17.17
-												(p-applied-tag @17.9-17.17))))
-									(value
-										(e-nominal @17.21-17.43 (nominal "Result")
-											(e-tag @17.21-17.43 (name "Ok")
-												(args
-													(e-call @17.24-17.42
-														(e-lookup-external @17.24-17.36
-															(module-idx "0")
-															(target-node-idx "0"))
-														(e-lookup-local @17.37-17.41
-															(p-assign @17.12-17.16 (ident "data")))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal @18.9-18.17
-												(p-applied-tag @18.9-18.17))))
-									(value
-										(e-nominal @18.21-18.29 (nominal "Result")
-											(e-tag @18.21-18.29 (name "Err")
-												(args
-													(e-lookup-local @18.25-18.28
-														(p-assign @18.13-18.16 (ident "err"))))))))))))))
-		(annotation @14.1-14.10
-			(declared-type
-				(ty-fn @13.13-13.62 (effectful false)
-					(ty-lookup-external @13.13-13.25
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty-apply @13.29-13.62 (symbol "Result")
-						(ty-lookup-external @13.36-13.49
-							(module-idx "0")
-							(target-node-idx "0"))
-						(ty-lookup-external @13.51-13.61
-							(module-idx "1")
-							(target-node-idx "0")))))))
-	(d-let
-		(p-assign @23.1-23.7 (ident "config"))
-		(e-lookup-external @23.10-23.28
-			(module-idx "1")
-			(target-node-idx "0"))
-		(annotation @23.1-23.7
-			(declared-type
-				(ty-lookup-external @22.10-22.21
-					(module-idx "1")
-					(target-node-idx "0")))))
-	(d-let
-		(p-assign @27.1-27.15 (ident "advancedParser"))
-		(e-lambda @27.18-27.82
-			(args
-				(p-assign @27.19-27.31 (ident "parserConfig"))
-				(p-assign @27.33-27.38 (ident "input")))
-			(e-call @27.40-27.82
-				(e-lookup-external @27.40-27.61
-					(module-idx "1")
-					(target-node-idx "0"))
-				(e-lookup-local @27.62-27.74
-					(p-assign @27.19-27.31 (ident "parserConfig")))
-				(e-lookup-local @27.76-27.81
-					(p-assign @27.33-27.38 (ident "input")))))
-		(annotation @27.1-27.15
-			(declared-type
-				(ty-fn @26.18-26.82 (effectful false)
-					(ty-malformed @26.18-26.36)
-					(ty @26.38-26.41 (name "Str"))
-					(ty-apply @26.45-26.82 (symbol "Result")
-						(ty-lookup-external @26.52-26.62
-							(module-idx "1")
-							(target-node-idx "0"))
-						(ty-malformed @26.64-26.81))))))
-	(d-let
-		(p-assign @31.1-31.15 (ident "combineResults"))
-		(e-closure @31.18-39.6
-			(captures
-				(capture @38.13-38.16 (ident "err"))
-				(capture @36.21-36.24 (ident "err"))
-				(capture @33.12-33.18 (ident "value1"))
-				(capture @35.20-35.26 (ident "value2")))
-			(e-lambda @31.18-39.6
-				(args
-					(p-assign @31.19-31.26 (ident "result1"))
-					(p-assign @31.28-31.35 (ident "result2")))
-				(e-match @32.5-39.6
-					(match @32.5-39.6
-						(cond
-							(e-lookup-local @32.11-32.18
-								(p-assign @31.19-31.26 (ident "result1"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal @33.9-33.19
-											(p-applied-tag @33.9-33.19))))
-								(value
-									(e-match @34.13-37.14
-										(match @34.13-37.14
-											(cond
-												(e-lookup-local @34.19-34.26
-													(p-assign @31.28-31.35 (ident "result2"))))
-											(branches
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-nominal @35.17-35.27
-																(p-applied-tag @35.17-35.27))))
-													(value
-														(e-nominal @35.31-35.51 (nominal "Result")
-															(e-tag @35.31-35.51 (name "Ok")
-																(args
-																	(e-tuple @35.34-35.50
-																		(elems
-																			(e-lookup-local @35.35-35.41
-																				(p-assign @33.12-33.18 (ident "value1")))
-																			(e-lookup-local @35.43-35.49
-																				(p-assign @35.20-35.26 (ident "value2"))))))))))
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-nominal @36.17-36.25
-																(p-applied-tag @36.17-36.25))))
-													(value
-														(e-nominal @36.29-36.37 (nominal "Result")
-															(e-tag @36.29-36.37 (name "Err")
-																(args
-																	(e-lookup-local @36.33-36.36
-																		(p-assign @36.21-36.24 (ident "err")))))))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal @38.9-38.17
-											(p-applied-tag @38.9-38.17))))
-								(value
-									(e-nominal @38.21-38.29 (nominal "Result")
-										(e-tag @38.21-38.29 (name "Err")
-											(args
-												(e-lookup-local @38.25-38.28
-													(p-assign @38.13-38.16 (ident "err")))))))))))))
-		(annotation @31.1-31.15
-			(declared-type
-				(ty-fn @30.18-30.71 (effectful false)
-					(ty-apply @30.18-30.32 (symbol "Result")
-						(ty-var @30.25-30.26 (name "a"))
-						(ty-var @30.28-30.31 (name "err")))
-					(ty-apply @30.34-30.48 (symbol "Result")
-						(ty-var @30.41-30.42 (name "b"))
-						(ty-var @30.44-30.47 (name "err")))
-					(ty-apply @30.52-30.71 (symbol "Result")
-						(ty-tuple @30.59-30.65
-							(ty-var @30.60-30.61 (name "a"))
-							(ty-var @30.63-30.64 (name "b")))
-						(ty-var @30.67-30.70 (name "err")))))))
-	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
-		(exposes
-			(exposed (name "Request") (wildcard false))
-			(exposed (name "Response") (wildcard false))))
-	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
-		(exposes))
-	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
-		(exposes
-			(exposed (name "Result") (wildcard false)))))
+(Expr.block
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "processRequest"))
+    (type type_25)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processRequest"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "parseJson"))
+    (type type_39)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "parseJson"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "handleApi"))
+    (type type_63)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "handleApi"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "config"))
+    (type type_103)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "config"))
+    (Expr.binop_pipe)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "advancedParser"))
+    (type type_129)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "advancedParser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "combineResults"))
+    (type type_164)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "combineResults"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.tag_applied)
+  (Expr.malformed)
+  (Expr.tag_applied)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 229
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 -> #204)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 -> #204)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 -> #207)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 -> #206)
+(var #46 _)
+(var #47 _)
+(var #48 -> #207)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 _)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 _)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 -> #215)
+(var #66 _)
+(var #67 -> #74)
+(var #68 _)
+(var #69 _)
+(var #70 -> #209)
+(var #71 _)
+(var #72 _)
+(var #73 _)
+(var #74 _)
+(var #75 _)
+(var #76 _)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 _)
+(var #81 _)
+(var #82 _)
+(var #83 _)
+(var #84 _)
+(var #85 -> #210)
+(var #86 _)
+(var #87 _)
+(var #88 _)
+(var #89 -> #212)
+(var #90 _)
+(var #91 _)
+(var #92 _)
+(var #93 -> #214)
+(var #94 _)
+(var #95 _)
+(var #96 _)
+(var #97 -> #215)
+(var #98 _)
+(var #99 _)
+(var #100 _)
+(var #101 _)
+(var #102 _)
+(var #103 _)
+(var #104 _)
+(var #105 -> #108)
+(var #106 _)
+(var #107 _)
+(var #108 _)
+(var #109 _)
+(var #110 _)
+(var #111 _)
+(var #112 _)
+(var #113 _)
+(var #114 _)
+(var #115 _)
+(var #116 _)
+(var #117 _)
+(var #118 _)
+(var #119 _)
+(var #120 _)
+(var #121 _)
+(var #122 _)
+(var #123 _)
+(var #124 _)
+(var #125 _)
+(var #126 _)
+(var #127 _)
+(var #128 _)
+(var #129 _)
+(var #130 _)
+(var #131 -> #221)
+(var #132 _)
+(var #133 _)
+(var #134 _)
+(var #135 _)
+(var #136 _)
+(var #137 _)
+(var #138 -> #220)
+(var #139 _)
+(var #140 _)
+(var #141 -> #219)
+(var #142 _)
+(var #143 -> #221)
+(var #144 _)
+(var #145 _)
+(var #146 _)
+(var #147 _)
+(var #148 _)
+(var #149 _)
+(var #150 _)
+(var #151 _)
+(var #152 _)
+(var #153 _)
+(var #154 _)
+(var #155 _)
+(var #156 _)
+(var #157 _)
+(var #158 _)
+(var #159 _)
+(var #160 _)
+(var #161 _)
+(var #162 _)
+(var #163 _)
+(var #164 _)
+(var #165 _)
+(var #166 -> #224)
+(var #167 _)
+(var #168 _)
+(var #169 _)
+(var #170 _)
+(var #171 _)
+(var #172 _)
+(var #173 _)
+(var #174 _)
+(var #175 _)
+(var #176 _)
+(var #177 _)
+(var #178 _)
+(var #179 _)
+(var #180 _)
+(var #181 _)
+(var #182 _)
+(var #183 _)
+(var #184 _)
+(var #185 _)
+(var #186 _)
+(var #187 _)
+(var #188 _)
+(var #189 _)
+(var #190 _)
+(var #191 _)
+(var #192 -> #224)
+(var #193 _)
+(var #194 -> #225)
+(var #195 _)
+(var #196 _)
+(var #197 _)
+(var #198 -> #227)
+(var #199 _)
+(var #200 _)
+(var #201 _)
+(var #202 _)
+(var #203 _)
+(var #204 fn_pure)
+(var #205 _)
+(var #206 fn_pure)
+(var #207 fn_pure)
+(var #208 _)
+(var #209 fn_pure)
+(var #210 fn_pure)
+(var #211 _)
+(var #212 fn_pure)
+(var #213 _)
+(var #214 fn_pure)
+(var #215 fn_pure)
+(var #216 _)
+(var #217 _)
+(var #218 _)
+(var #219 tuple)
+(var #220 fn_pure)
+(var #221 fn_pure)
+(var #222 _)
+(var #223 _)
+(var #224 fn_pure)
+(var #225 fn_pure)
+(var #226 _)
+(var #227 fn_pure)
+(var #228 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Error"))
-		(patt @14.1-14.10 (type "Error -> Result(Error, Error)"))
-		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
-		(patt @31.1-31.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
-	(expressions
-		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Error"))
-		(expr @14.13-20.2 (type "Error -> Result(Error, Error)"))
-		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Error, Str -> Result(Error, Error)"))
-		(expr @31.18-39.6 (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
+~~~roc
+parserConfig : _c
+result : _c
+processRequest : _arg -> _ret
+config : _c
+parseJson : _arg -> _ret
+combineResults : _arg, _arg2 -> _ret
+req : _c
+result2 : _c
+result1 : _c
+handleApi : _arg -> _ret
+advancedParser : _arg, _arg2 -> _ret
+request : _c
+input : _c
 ~~~

@@ -42,6 +42,135 @@ KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPl
       )
     )
 ))
+(block
+  (binop_colon
+    (lc "process")
+    (binop_arrow_call
+      (list_literal
+        (apply_uc
+          (uc "Some")
+          (uc "Str")
+        )
+        (uc "None")
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "process")
+    (lambda
+      (body
+        (str_literal_big "result")
+      )
+      (args
+        (lc "maybe")
+      )
+    )
+  )
+  (binop_colon
+    (lc "is_ok_ret_unqualified_bool")
+    (binop_arrow_call
+      (list_literal
+        (apply_uc
+          (uc "Ok")
+          (lc "_ok")
+        )
+        (apply_uc
+          (uc "Err")
+          (lc "_err")
+        )
+      )
+      (uc "Bool")
+    )
+  )
+  (binop_equals
+    (lc "is_ok_ret_unqualified_bool")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "result")
+)
+          (branch1             (binop_thick_arrow
+              (apply_uc
+                (uc "Ok")
+                (underscore)
+              )
+              (malformed)
+            )
+)
+          (branch2             (binop_thick_arrow
+              (apply_uc
+                (uc "Err")
+                (underscore)
+              )
+              (malformed)
+            )
+))
+      )
+      (args
+        (lc "result")
+      )
+    )
+  )
+  (binop_colon
+    (lc "is_ok_ret_bool")
+    (binop_arrow_call
+      (list_literal
+        (apply_uc
+          (uc "Ok")
+          (lc "_ok2")
+        )
+        (apply_uc
+          (uc "Err")
+          (lc "_err2")
+        )
+      )
+      (uc "Bool")
+    )
+  )
+  (binop_equals
+    (lc "is_ok_ret_bool")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "result")
+)
+          (branch1             (binop_thick_arrow
+              (apply_uc
+                (uc "Ok")
+                (underscore)
+              )
+              (malformed)
+            )
+))
+      )
+      (args
+        (lc "result")
+      )
+    )
+  )
+  (apply_uc
+    (uc "Err")
+    (underscore)
+  )
+  (malformed)
+  (binop_pipe
+    (uc "Bool")
+    (uc "False")
+  )
+  (malformed)
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +178,6 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 process : [Some(Str), None] -> Str
 process = |maybe| "result"
-
 is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
 is_ok_ret_unqualified_bool = |result| match result
 	Ok(_) => True
@@ -153,19 +281,6 @@ main! = |_| {}
 ```
 
 
-**UNUSED VARIABLE**
-Variable **maybe** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_maybe` to suppress this warning.
-The unused variable is declared here:
-
-**type_tag_union_basic.md:4:12:4:17:**
-```roc
-process = |maybe| "result"
-```
-           ^^^^^
-
-
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -188,82 +303,51 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**PATTERN IN EXPRESSION CONTEXT**
+Found a pattern where an expression was expected.
+Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
 
-**type_tag_union_basic.md:15:5:15:11:**
+**type_tag_union_basic.md:15:9:15:10:**
 ```roc
     Err(_) => Bool.False
 ```
-    ^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_tag_union_basic.md:15:12:15:15:**
-```roc
-    Err(_) => Bool.False
-```
-           ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_tag_union_basic.md:15:15:15:25:**
-```roc
-    Err(_) => Bool.False
-```
-              ^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**type_tag_union_basic.md:16:1:18:1:**
-```roc
-}
-
-main! = |_| {}
-```
+        ^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.type_anno
-    (name "process")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "process"))
+    (type type_14)
   )
   (Stmt.assign
     (pattern (Patt.ident "process"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "is_ok_ret_unqualified_bool")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "is_ok_ret_unqualified_bool"))
+    (type type_30)
   )
   (Stmt.assign
     (pattern (Patt.ident "is_ok_ret_unqualified_bool"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.type_anno
-    (name "is_ok_ret_bool")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "is_ok_ret_bool"))
+    (type type_57)
   )
   (Stmt.assign
     (pattern (Patt.ident "is_ok_ret_bool"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Expr.tag_applied)
+  (Expr.malformed)
+  (Expr.module_access
+    (Expr.tag_no_args)
+    (Expr.tag_no_args)
+  )
+  (Expr.malformed)
   (Stmt.assign
     (pattern (Patt.ident "main"))
     (Expr.lambda (canonicalized))
@@ -272,7 +356,113 @@ main! = |_| {}
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 99
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #87)
+(var #17 _)
+(var #18 Str)
+(var #19 -> #87)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 -> #89)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 _)
+(var #46 -> #89)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 _)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 -> #91)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 _)
+(var #66 _)
+(var #67 _)
+(var #68 _)
+(var #69 _)
+(var #70 -> #91)
+(var #71 _)
+(var #72 -> #93)
+(var #73 _)
+(var #74 _)
+(var #75 _)
+(var #76 _)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 -> #98)
+(var #81 _)
+(var #82 -> #97)
+(var #83 -> #98)
+(var #84 _)
+(var #85 _)
+(var #86 _)
+(var #87 fn_pure)
+(var #88 _)
+(var #89 fn_pure)
+(var #90 _)
+(var #91 fn_pure)
+(var #92 _)
+(var #93 fn_pure)
+(var #94 _)
+(var #95 _)
+(var #96 _)
+(var #97 {})
+(var #98 fn_pure)
 ~~~
 # TYPES
 ~~~roc
+is_ok_ret_unqualified_bool : _arg -> _ret
+is_ok_ret_bool : _arg -> _ret
+process : _arg -> Str
+main : _arg -> {}
+maybe : _a
+result : _a
 ~~~

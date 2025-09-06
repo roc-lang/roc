@@ -36,6 +36,29 @@ KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineC
   (exposes
     (malformed)
 ))
+(block
+  (uc "Str")
+  (malformed)
+  (malformed)
+  (record_literal)
+  (malformed)
+  (malformed)
+  (malformed)
+  (list_literal
+    (lc "foo")
+  )
+  (malformed)
+  (record_literal
+    (binop_colon
+      (lc "some_pkg")
+      (str_literal_big "../some_pkg.roc")
+    )
+  )
+  (malformed)
+  (list_literal
+    (lc "bar")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -46,7 +69,9 @@ platform # Comment after platform keyword
 Main} # Comment after rigid member
 # Comment after rigids close
 { # Comment after signatures open
-} exposes [: ]Str
+} exposes [: ]
+
+Str
 ) 
 => 
 {}
@@ -371,162 +396,90 @@ Expressions can be identifiers, literals, function calls, or operators.
 ```
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**platform_header_nonempty_1.md:8:18:8:21:**
+**platform_header_nonempty_1.md:12:4:12:7:**
 ```roc
-				main! : List(Str) => {}, # Comment after signature
-```
-				             ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:8:21:8:23:**
-```roc
-				main! : List(Str) => {}, # Comment after signature
-```
-				                ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:8:23:8:26:**
-```roc
-				main! : List(Str) => {}, # Comment after signature
-```
-				                  ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:8:26:8:28:**
-```roc
-				main! : List(Str) => {}, # Comment after signature
-```
-				                     ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:8:28:9:4:**
-```roc
-				main! : List(Str) => {}, # Comment after signature
-			} # Comment after signatures close
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:9:4:10:2:**
-```roc
-			} # Comment after signatures close
-	exposes # Comment after exposes keyword
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:10:2:11:3:**
-```roc
-	exposes # Comment after exposes keyword
-		[ # Comment after exposes open
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:11:3:13:4:**
-```roc
-		[ # Comment after exposes open
 			foo, # Comment after exposed item
-		] # Comment after exposes close
 ```
+			^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
+**UNDEFINED VARIABLE**
+Nothing is named **bar** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**platform_header_nonempty_1.md:14:2:15:3:**
+**platform_header_nonempty_1.md:20:4:20:7:**
 ```roc
-	packages # Comment after packages keyword
-		{ # Comment after packages open
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:15:3:17:4:**
-```roc
-		{ # Comment after packages open
-			some_pkg: "../some_pkg.roc", # Comment after package
-		} # Comment after packages close
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:18:2:19:3:**
-```roc
-	provides # Comment after provides keyword
-		[ # Comment after provides open
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**platform_header_nonempty_1.md:19:3:21:4:**
-```roc
-		[ # Comment after provides open
 			bar, # Comment after exposed item
-		]
 ```
+			^^^
 
 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.list_literal)
+  (Expr.malformed)
+  (Expr.record_literal
+    (Expr.binop_colon
+      (Expr.malformed)
+      (Expr.str_literal_big)
+    )
+  )
+  (Expr.malformed)
+  (Expr.list_literal)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 35
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #28)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 Str)
+(var #20 _)
+(var #21 -> #33)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 {})
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 {})
+(var #34 _)
 ~~~
 # TYPES
 ~~~roc
-# Header type not yet fully supported
 ~~~

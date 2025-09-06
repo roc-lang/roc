@@ -22,6 +22,101 @@ process = |list| {
 
 main! = |_| {}
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LineComment LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpColon LowerIdent LowerIdent OpAssign UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound OpBar OpGreaterThan UpperIdent Dot LowerIdent OpenRound LowerIdent CloseRound BlankLine LowerIdent CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/platform.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "process")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (lc "elem")
+      )
+      (lc "elem")
+    )
+  )
+  (binop_equals
+    (lc "process")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "elem")
+            (num_literal_i32 42)
+          )
+          (binop_colon
+            (lc "result")
+            (lc "elem")
+          )
+          (apply_anon
+            (binop_pipe
+              (uc "List")
+              (dot_lc "first")
+            )
+            (lc "list")
+          )
+          (apply_anon
+            (binop_pipe
+              (malformed)
+              (dot_lc "withDefault")
+            )
+            (lc "elem")
+          )
+          (lc "result")
+        )
+      )
+      (args
+        (lc "list")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { pf: "../basic-cli/platform.roc" platform [] }
+
+# Type variable 'elem' introduced in annotation
+process : List elem -> elem
+process = |list| {
+	# value identifier named 'elem' is allowed - different namespace from type variable
+	elem = 42
+	# type variable 'elem' still refers to the function annotation's type parameter
+	result : elem
+	List.first(list)
+	Result | .withDefault(elem)
+	result
+}
+
+main! = |_| {}
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
@@ -30,203 +125,104 @@ UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 TYPE MISMATCH - type_var_namespace.md:5:18:14:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **|>** is not expected in an expression.
+The token **> ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**type_var_namespace.md:11:31:11:33:**
+**type_var_namespace.md:11:32:11:34:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
-                              ^^
+                               ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Result** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**type_var_namespace.md:11:14:11:24:**
+**type_var_namespace.md:11:34:11:40:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
-             ^^^^^^^^^^
+                                 ^^^^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**type_var_namespace.md:11:31:11:33:**
-```roc
-    result = List.first(list) |> Result.withDefault(elem)
-```
-                              ^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNDEFINED VARIABLE**
-Nothing is named `withDefault` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_namespace.md:11:34:11:52:**
-```roc
-    result = List.first(list) |> Result.withDefault(elem)
-```
-                                 ^^^^^^^^^^^^^^^^^^
-
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_namespace.md:5:18:14:2:**
-```roc
-process = |list| {
-    # value identifier named 'elem' is allowed - different namespace from type variable
-    elem = 42
-
-    # type variable 'elem' still refers to the function annotation's type parameter
-    result : elem
-    result = List.first(list) |> Result.withDefault(elem)
-
-    result
-}
-```
-
-The type annotation says it should have the type:
-    _elem_
-
-But here it's being used as:
-    _elem_
-
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
-LowerIdent(4:1-4:8),OpColon(4:9-4:10),UpperIdent(4:11-4:15),NoSpaceOpenRound(4:15-4:16),LowerIdent(4:16-4:20),CloseRound(4:20-4:21),OpArrow(4:22-4:24),LowerIdent(4:25-4:29),
-LowerIdent(5:1-5:8),OpAssign(5:9-5:10),OpBar(5:11-5:12),LowerIdent(5:12-5:16),OpBar(5:16-5:17),OpenCurly(5:18-5:19),
-LowerIdent(7:5-7:9),OpAssign(7:10-7:11),Int(7:12-7:14),
-LowerIdent(10:5-10:11),OpColon(10:12-10:13),LowerIdent(10:14-10:18),
-LowerIdent(11:5-11:11),OpAssign(11:12-11:13),UpperIdent(11:14-11:18),NoSpaceDotLowerIdent(11:18-11:24),NoSpaceOpenRound(11:24-11:25),LowerIdent(11:25-11:29),CloseRound(11:29-11:30),OpPizza(11:31-11:33),UpperIdent(11:34-11:40),NoSpaceDotLowerIdent(11:40-11:52),NoSpaceOpenRound(11:52-11:53),LowerIdent(11:53-11:57),CloseRound(11:57-11:58),
-LowerIdent(13:5-13:11),
-CloseCurly(14:1-14:2),
-LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),
-EndOfFile(17:1-17:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-16.15
-	(app @1.1-1.57
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.55 (name "pf")
-			(e-string @1.28-1.55
-				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
-		(packages @1.13-1.57
-			(record-field @1.15-1.55 (name "pf")
-				(e-string @1.28-1.55
-					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
-	(statements
-		(s-type-anno @4.1-4.29 (name "process")
-			(ty-fn @4.11-4.29
-				(ty-apply @4.11-4.21
-					(ty @4.11-4.15 (name "List"))
-					(ty-var @4.16-4.20 (raw "elem")))
-				(ty-var @4.25-4.29 (raw "elem"))))
-		(s-decl @5.1-14.2
-			(p-ident @5.1-5.8 (raw "process"))
-			(e-lambda @5.11-14.2
-				(args
-					(p-ident @5.12-5.16 (raw "list")))
-				(e-block @5.18-14.2
-					(statements
-						(s-decl @7.5-7.14
-							(p-ident @7.5-7.9 (raw "elem"))
-							(e-int @7.12-7.14 (raw "42")))
-						(s-type-anno @10.5-10.18 (name "result")
-							(ty-var @10.14-10.18 (raw "elem")))
-						(s-decl @11.5-11.30
-							(p-ident @11.5-11.11 (raw "result"))
-							(e-apply @11.14-11.30
-								(e-ident @11.14-11.24 (raw "List.first"))
-								(e-ident @11.25-11.29 (raw "list"))))
-						(e-malformed @11.31-11.33 (reason "expr_unexpected_token"))
-						(e-apply @11.34-11.58
-							(e-ident @11.34-11.52 (raw "Result.withDefault"))
-							(e-ident @11.53-11.57 (raw "elem")))
-						(e-ident @13.5-13.11 (raw "result"))))))
-		(s-decl @16.1-16.15
-			(p-ident @16.1-16.6 (raw "main!"))
-			(e-lambda @16.9-16.15
-				(args
-					(p-underscore))
-				(e-record @16.13-16.15)))))
-~~~
-# FORMATTED
-~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-# Type variable 'elem' introduced in annotation
-process : List(elem) -> elem
-process = |list| {
-	# value identifier named 'elem' is allowed - different namespace from type variable
-	elem = 42
-
-	# type variable 'elem' still refers to the function annotation's type parameter
-	result : elem
-	result = List.first(list)
-		Result.withDefault(elem)
-
-	result
-}
-
-main! = |_| {}
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @5.1-5.8 (ident "process"))
-		(e-lambda @5.11-14.2
-			(args
-				(p-assign @5.12-5.16 (ident "list")))
-			(e-block @5.18-14.2
-				(s-let @7.5-7.14
-					(p-assign @7.5-7.9 (ident "elem"))
-					(e-int @7.12-7.14 (value "42")))
-				(s-type-anno @10.5-10.18 (name "result")
-					(ty-var @10.14-10.18 (name "elem")))
-				(s-let @11.5-11.30
-					(p-assign @11.5-11.11 (ident "result"))
-					(e-call @11.14-11.30
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11.25-11.29
-							(p-assign @5.12-5.16 (ident "list")))))
-				(s-expr @11.31-11.33
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr @11.34-11.58
-					(e-call @11.34-11.58
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11.53-11.57
-							(p-assign @7.5-7.9 (ident "elem")))))
-				(e-lookup-local @13.5-13.11
-					(p-assign @11.5-11.11 (ident "result")))))
-		(annotation @5.1-5.8
-			(declared-type
-				(ty-fn @4.11-4.29 (effectful false)
-					(ty-apply @4.11-4.21 (symbol "List")
-						(ty-var @4.16-4.20 (name "elem")))
-					(ty-var @4.25-4.29 (name "elem"))))))
-	(d-let
-		(p-assign @16.1-16.6 (ident "main!"))
-		(e-lambda @16.9-16.15
-			(args
-				(p-underscore @16.10-16.11))
-			(e-empty_record @16.13-16.15))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "process"))
+    (type type_12)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "process"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 51
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 -> #47)
+(var #15 _)
+(var #16 -> #17)
+(var #17 Num *)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 -> #45)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 -> #46)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 -> #47)
+(var #37 _)
+(var #38 -> #50)
+(var #39 _)
+(var #40 -> #49)
+(var #41 -> #50)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 fn_pure)
+(var #46 fn_pure)
+(var #47 fn_pure)
+(var #48 _)
+(var #49 {})
+(var #50 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @5.1-5.8 (type "List(elem) -> Error"))
-		(patt @16.1-16.6 (type "_arg -> {}")))
-	(expressions
-		(expr @5.11-14.2 (type "List(elem) -> Error"))
-		(expr @16.9-16.15 (type "_arg -> {}"))))
+~~~roc
+elem : Num(_size)
+process : _arg -> _ret
+main : _arg -> {}
+list : _a
+result : _a
 ~~~

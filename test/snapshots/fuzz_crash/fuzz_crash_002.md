@@ -7,6 +7,49 @@ type=file
 ~~~roc
 modu:;::::::::::::::le[%
 ~~~
+# TOKENS
+~~~text
+LowerIdent OpColon MalformedUnknownToken OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon OpColon LowerIdent OpenSquare MalformedUnknownToken ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_colon
+    (lc "modu")
+    (binop_colon
+      (binop_colon
+        (binop_colon
+          (binop_colon
+            (binop_colon
+              (binop_colon
+                (binop_colon
+                  (malformed)
+                  (malformed)
+                )
+                (malformed)
+              )
+              (malformed)
+            )
+            (malformed)
+          )
+          (malformed)
+        )
+        (malformed)
+      )
+      (malformed)
+    )
+  )
+  (lc "le")
+  (list_literal
+    (malformed)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+modu : ; : : : : : : : : : : : : : :
+le
+[%]
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_002.md:1:1:1:5
 PARSE ERROR - fuzz_crash_002.md:1:5:1:6
@@ -29,35 +72,9 @@ PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_002.md:1:1:1:5:**
-```roc
-modu:;::::::::::::::le[%
-```
-^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:5:1:6:**
-```roc
-modu:;::::::::::::::le[%
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **;** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:6:1:7:**
 ```roc
@@ -66,20 +83,9 @@ modu:;::::::::::::::le[%
      ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:7:1:8:**
-```roc
-modu:;::::::::::::::le[%
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:8:1:9:**
 ```roc
@@ -88,20 +94,9 @@ modu:;::::::::::::::le[%
        ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:9:1:10:**
-```roc
-modu:;::::::::::::::le[%
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:10:1:11:**
 ```roc
@@ -110,20 +105,9 @@ modu:;::::::::::::::le[%
          ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:11:1:12:**
-```roc
-modu:;::::::::::::::le[%
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:12:1:13:**
 ```roc
@@ -132,20 +116,9 @@ modu:;::::::::::::::le[%
            ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:13:1:14:**
-```roc
-modu:;::::::::::::::le[%
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:14:1:15:**
 ```roc
@@ -154,20 +127,9 @@ modu:;::::::::::::::le[%
              ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:15:1:16:**
-```roc
-modu:;::::::::::::::le[%
-```
-              ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:16:1:17:**
 ```roc
@@ -176,20 +138,9 @@ modu:;::::::::::::::le[%
                ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:17:1:18:**
-```roc
-modu:;::::::::::::::le[%
-```
-                ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:18:1:19:**
 ```roc
@@ -198,20 +149,9 @@ modu:;::::::::::::::le[%
                  ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:19:1:20:**
-```roc
-modu:;::::::::::::::le[%
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **:** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:20:1:21:**
 ```roc
@@ -220,31 +160,9 @@ modu:;::::::::::::::le[%
                    ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:21:1:23:**
-```roc
-modu:;::::::::::::::le[%
-```
-                    ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_002.md:1:23:1:24:**
-```roc
-modu:;::::::::::::::le[%
-```
-                      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **%** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_002.md:1:24:1:25:**
 ```roc
@@ -253,46 +171,77 @@ modu:;::::::::::::::le[%
                        ^
 
 
-# TOKENS
-~~~zig
-LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.25
-	(malformed-header @1.1-1.5 (tag "missing_header"))
-	(statements
-		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
-		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
-		(s-malformed @1.8-1.9 (tag "statement_unexpected_token"))
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))
-		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
-		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
-		(s-malformed @1.14-1.15 (tag "statement_unexpected_token"))
-		(s-malformed @1.15-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))
-		(s-malformed @1.17-1.18 (tag "statement_unexpected_token"))
-		(s-malformed @1.18-1.19 (tag "statement_unexpected_token"))
-		(s-malformed @1.19-1.20 (tag "statement_unexpected_token"))
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-malformed @1.21-1.23 (tag "statement_unexpected_token"))
-		(s-malformed @1.23-1.24 (tag "statement_unexpected_token"))
-		(s-malformed @1.24-1.25 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**fuzz_crash_002.md:1:23:1:25:**
+```roc
+modu:;::::::::::::::le[%
+```
+                      ^^
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
+
+**fuzz_crash_002.md:1:6:1:21:**
+```roc
+modu:;::::::::::::::le[%
+```
+     ^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **le** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_002.md:1:21:1:23:**
+```roc
+modu:;::::::::::::::le[%
+```
+                    ^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "modu"))
+    (type type_16)
+  )
+  (Expr.lookup "le")
+  (Expr.list_literal)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 22
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+modu : _a
 ~~~

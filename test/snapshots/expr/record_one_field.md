@@ -7,35 +7,42 @@ type=expr
 ~~~roc
 { name: "Alice" }
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent OpColon String CloseCurly ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_colon
+    (lc "name")
+    (str_literal_big "Alice")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+name : "Alice"
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),CloseCurly(1:17-1:18),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-record @1.1-1.18
-	(field (field "name")
-		(e-string @1.9-1.16
-			(e-string-part @1.10-1.15 (raw "Alice")))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.18
-	(fields
-		(field (name "name")
-			(e-string @1.9-1.16
-				(e-literal @1.10-1.15 (string "Alice"))))))
+(Expr.record_literal
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 Str)
+(var #3 _)
+(var #4 -> #5)
+(var #5 {})
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.18 (type "{ name: Str }"))
+~~~roc
 ~~~

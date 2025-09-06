@@ -175,26 +175,20 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 # Test generic identity function
 identity : a -> a
 identity = |x| x
-
 # Test function with multiple type parameters
 combine : a -> b -> (a, b)
 combine = |first, second| (first, second)
-
 # Test type application with concrete types
 addOne : U64 -> U64
 addOne = |n| n + 1
-
 main! = |_| {
 	# Test identity with different types
 	num = identity(42)
 	text = identity("hello")
-
 	# Test combine function
 	pair = combine((num, text))
-
 	# Test concrete function
 	result = addOne(5)
-
 	result : result
 }
 ~~~

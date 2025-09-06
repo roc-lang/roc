@@ -27,15 +27,16 @@ UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.module_access
-  (Expr.lookup "List")
-  (Expr.record_accessor)
-)
+(Expr.binop_pipe)
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

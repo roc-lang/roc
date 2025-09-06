@@ -7,6 +7,22 @@ type=file
 ~~~roc
 module[]"\
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare MalformedString ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+"\
+~~~
 # EXPECTED
 INVALID ESCAPE SEQUENCE - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
@@ -14,83 +30,31 @@ PARSE ERROR - fuzz_crash_037.md:1:9:1:10
 PARSE ERROR - fuzz_crash_037.md:1:10:1:11
 PARSE ERROR - fuzz_crash_037.md:1:11:1:11
 # PROBLEMS
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"\** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-```roc
-module[]"\
-
-```
-
-
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
+**fuzz_crash_037.md:1:9:1:11:**
 ```roc
 module[]"\
 ```
         ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_037.md:1:9:1:10:**
-```roc
-module[]"\
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_037.md:1:10:1:11:**
-```roc
-module[]"\
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_037.md:1:11:1:11:**
-```roc
-module[]"\
-```
-          ^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),StringStart(1:9-1:10),MalformedStringPart(1:10-1:11),StringEnd(1:11-1:11),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.11
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.11 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-module []
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

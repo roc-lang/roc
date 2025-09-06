@@ -12,126 +12,95 @@ match Answer {
     10 => 4
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow String UpperIdent OpFatArrow Int Int OpFatArrow Int CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (uc "Answer")
+)
+  (branch1     (binop_thick_arrow
+      (uc "Answer")
+      (num_literal_i32 1)
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "Zero")
+      (str_literal_big "hello")
+    )
+)
+  (branch3     (binop_thick_arrow
+      (uc "Greeting")
+      (block
+        (num_literal_i32 3)
+        (binop_thick_arrow
+          (num_literal_i32 10)
+          (num_literal_i32 4)
+        )
+      )
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match Answer
+	Answer => 1
+	Zero => "hello"
+	Greeting => 
+		3
+		10 => 4
+~~~
 # EXPECTED
 INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
 INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
 # PROBLEMS
-**INCOMPATIBLE MATCH BRANCHES**
-The second branch's type in this `match` is different from the previous ones:
-**literal_patterns.md:1:1:**
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**literal_patterns.md:2:5:2:16:**
 ```roc
-match Answer {
     Answer => 1
-    Zero => "hello"
 ```
-            ^^^^^^^
+    ^^^^^^^^^^^
 
-The second branch has this type;
-    _Str_
 
-But the previous branch has this type:
-    _Num(_size)_
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-All branches in an `match` must have compatible types.
-
-Note: You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**literal_patterns.md:1:1:**
+**literal_patterns.md:4:5:5:12:**
 ```roc
-match Answer {
-    Answer => 1
-    Zero => "hello"
     Greeting => 3
     10 => 4
-}
 ```
-    ^^
-
-The fourth pattern has this type:
-    _Num(_size)_
-
-But all the previous patterns have this type: 
-    _[Answer, Zero, Greeting]_others_
-
-All patterns in an `match` must have compatible types.
 
 
-
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),UpperIdent(1:7-1:13),OpenCurly(1:14-1:15),
-UpperIdent(2:5-2:11),OpFatArrow(2:12-2:14),Int(2:15-2:16),
-UpperIdent(3:5-3:9),OpFatArrow(3:10-3:12),StringStart(3:13-3:14),StringPart(3:14-3:19),StringEnd(3:19-3:20),
-UpperIdent(4:5-4:13),OpFatArrow(4:14-4:16),Int(4:17-4:18),
-Int(5:5-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-tag @1.7-1.13 (raw "Answer"))
-	(branches
-		(branch @2.5-2.16
-			(p-tag @2.5-2.11 (raw "Answer"))
-			(e-int @2.15-2.16 (raw "1")))
-		(branch @3.5-3.20
-			(p-tag @3.5-3.9 (raw "Zero"))
-			(e-string @3.13-3.20
-				(e-string-part @3.14-3.19 (raw "hello"))))
-		(branch @4.5-4.18
-			(p-tag @4.5-4.13 (raw "Greeting"))
-			(e-int @4.17-4.18 (raw "3")))
-		(branch @5.5-5.12
-			(p-int @5.5-5.7 (raw "10"))
-			(e-int @5.11-5.12 (raw "4")))))
-~~~
-# FORMATTED
-~~~roc
-match Answer {
-	Answer => 1
-	Zero => "hello"
-	Greeting => 3
-	10 => 4
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
-		(cond
-			(e-tag @1.7-1.13 (name "Answer")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @2.5-2.11)))
-				(value
-					(e-int @2.15-2.16 (value "1"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @3.5-3.9)))
-				(value
-					(e-string @3.13-3.20
-						(e-literal @3.14-3.19 (string "hello")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @4.5-4.13)))
-				(value
-					(e-int @4.17-4.18 (value "3"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-int @5.5-5.7 (value "10"))))
-				(value
-					(e-int @5.11-5.12 (value "4")))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 Str)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.2 (type "Error"))
+~~~roc
 ~~~

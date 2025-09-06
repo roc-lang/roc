@@ -12,116 +12,156 @@ getName = |_person| "hello"
 
 main! = |_| getName({name: "luke", age:21})
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar String BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int CloseCurly CloseRound ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "getName")
+    (binop_arrow_call
+      (record_literal
+        (binop_colon
+          (lc "name")
+          (uc "Str")
+        )
+        (binop_colon
+          (lc "age")
+          (uc "U64")
+        )
+      )
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "getName")
+    (lambda
+      (body
+        (str_literal_big "hello")
+      )
+      (args
+        (lc "_person")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "getName")
+          (record_literal
+            (binop_colon
+              (lc "name")
+              (str_literal_small "luke")
+            )
+            (binop_colon
+              (lc "age")
+              (num_literal_i32 21)
+            )
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
+
+getName : {name: Str, age: U64} -> Str
+getName = |_person| "hello"
+main! = |_| getName({ name: "luke", age: 21 })
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenCurly(3:11-3:12),LowerIdent(3:13-3:17),OpColon(3:17-3:18),UpperIdent(3:19-3:22),Comma(3:22-3:23),LowerIdent(3:24-3:27),OpColon(3:27-3:28),UpperIdent(3:29-3:32),CloseCurly(3:33-3:34),OpArrow(3:35-3:37),UpperIdent(3:38-3:41),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),NamedUnderscore(4:12-4:19),OpBar(4:19-4:20),StringStart(4:21-4:22),StringPart(4:22-4:27),StringEnd(4:27-4:28),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:20),NoSpaceOpenRound(6:20-6:21),OpenCurly(6:21-6:22),LowerIdent(6:22-6:26),OpColon(6:26-6:27),StringStart(6:28-6:29),StringPart(6:29-6:33),StringEnd(6:33-6:34),Comma(6:34-6:35),LowerIdent(6:36-6:39),OpColon(6:39-6:40),Int(6:40-6:42),CloseCurly(6:42-6:43),CloseRound(6:43-6:44),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-6.44
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.41 (name "getName")
-			(ty-fn @3.11-3.41
-				(ty-record @3.11-3.34
-					(anno-record-field @3.13-3.22 (name "name")
-						(ty @3.19-3.22 (name "Str")))
-					(anno-record-field @3.24-3.32 (name "age")
-						(ty @3.29-3.32 (name "U64"))))
-				(ty @3.38-3.41 (name "Str"))))
-		(s-decl @4.1-4.28
-			(p-ident @4.1-4.8 (raw "getName"))
-			(e-lambda @4.11-4.28
-				(args
-					(p-ident @4.12-4.19 (raw "_person")))
-				(e-string @4.21-4.28
-					(e-string-part @4.22-4.27 (raw "hello")))))
-		(s-decl @6.1-6.44
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.44
-				(args
-					(p-underscore))
-				(e-apply @6.13-6.44
-					(e-ident @6.13-6.20 (raw "getName"))
-					(e-record @6.21-6.43
-						(field (field "name")
-							(e-string @6.28-6.34
-								(e-string-part @6.29-6.33 (raw "luke"))))
-						(field (field "age")
-							(e-int @6.40-6.42 (raw "21")))))))))
-~~~
-# FORMATTED
-~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-getName : { name : Str, age : U64 } -> Str
-getName = |_person| "hello"
-
-main! = |_| getName({ name: "luke", age: 21 })
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.8 (ident "getName"))
-		(e-lambda @4.11-4.28
-			(args
-				(p-assign @4.12-4.19 (ident "_person")))
-			(e-string @4.21-4.28
-				(e-literal @4.22-4.27 (string "hello"))))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-fn @3.11-3.41 (effectful false)
-					(ty-record @3.11-3.34
-						(field (field "name")
-							(ty @3.19-3.22 (name "Str")))
-						(field (field "age")
-							(ty @3.29-3.32 (name "U64"))))
-					(ty @3.38-3.41 (name "Str"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.44
-			(captures
-				(capture @4.1-4.8 (ident "getName")))
-			(e-lambda @6.9-6.44
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.44
-					(e-lookup-local @6.13-6.20
-						(p-assign @4.1-4.8 (ident "getName")))
-					(e-record @6.21-6.43
-						(fields
-							(field (name "name")
-								(e-string @6.28-6.34
-									(e-literal @6.29-6.33 (string "luke"))))
-							(field (name "age")
-								(e-int @6.40-6.42 (value "21"))))))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "getName"))
+    (type type_16)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getName"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 43
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #38)
+(var #19 _)
+(var #20 Str)
+(var #21 -> #38)
+(var #22 _)
+(var #23 -> #42)
+(var #24 _)
+(var #25 -> #41)
+(var #26 _)
+(var #27 Str)
+(var #28 _)
+(var #29 _)
+(var #30 Num *)
+(var #31 _)
+(var #32 -> #40)
+(var #33 _)
+(var #34 -> #42)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 fn_pure)
+(var #39 _)
+(var #40 {})
+(var #41 fn_pure)
+(var #42 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
-		(patt @6.1-6.6 (type "_arg -> Str")))
-	(expressions
-		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
-		(expr @6.9-6.44 (type "_arg -> Str"))))
+~~~roc
+getName : _arg -> Str
+main : _arg -> _ret
+_person : _a
 ~~~

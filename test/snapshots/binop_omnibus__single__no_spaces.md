@@ -78,7 +78,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
   (Expr.binop_or
     (Expr.binop_gt
       (Expr.binop_double_question
-        (Expr.apply_tag)
+        (Expr.tag_applied)
         (Expr.num_literal_i32 12)
       )
       (Expr.binop_star
@@ -114,8 +114,36 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 28
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 Num *)
+(var #5 -> #8)
+(var #6 -> #7)
+(var #7 -> #8)
+(var #8 -> #9)
+(var #9 -> #20)
+(var #10 -> #11)
+(var #11 -> #12)
+(var #12 -> #13)
+(var #13 -> #14)
+(var #14 -> #19)
+(var #15 -> #16)
+(var #16 -> #17)
+(var #17 -> #18)
+(var #18 -> #19)
+(var #19 -> #20)
+(var #20 -> #21)
+(var #21 -> #26)
+(var #22 -> #25)
+(var #23 -> #24)
+(var #24 -> #25)
+(var #25 -> #26)
+(var #26 -> #27)
+(var #27 Num *)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

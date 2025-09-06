@@ -22,6 +22,20 @@ KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpAssign KwIf In
   (exposes
     (lc "foo")
 ))
+(block
+  (binop_equals
+    (lc "foo")
+    (if_else
+      (condition         (num_literal_i32 1)
+)
+      (then         (uc "A")
+)
+      (else         (block
+          (str_literal_big "hello")
+        )
+))
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,9 +43,7 @@ module [foo]
 
 foo = if 1
 	A
-else 
-
-{
+else {
 	"hello"
 }
 ~~~
@@ -51,7 +63,19 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 10
+(var #0 _)
+(var #1 _)
+(var #2 -> #7)
+(var #3 Num *)
+(var #4 _)
+(var #5 Str)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
 ~~~
 # TYPES
 ~~~roc
+foo : _a
 ~~~

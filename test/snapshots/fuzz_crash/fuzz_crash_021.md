@@ -9,6 +9,41 @@ Fli/main.roc" }
 
 Pair(a, b+ : (
 ~~~
+# TOKENS
+~~~text
+UpperIdent OpSlash LowerIdent Dot LowerIdent MalformedString BlankLine UpperIdent OpenRound LowerIdent Comma LowerIdent OpPlus OpColon OpenRound ~~~
+# PARSE
+~~~clojure
+(block
+  (binop_slash
+    (uc "Fli")
+    (binop_pipe
+      (lc "main")
+      (dot_lc "roc")
+    )
+  )
+  (malformed)
+  (apply_uc
+    (uc "Pair")
+    (tuple_literal
+      (lc "a")
+      (binop_plus
+        (lc "b")
+        (apply_anon
+          (malformed)
+        )
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+Fli / main.roc
+" }
+
+Pair((a, b + : ()))
+~~~
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
 MISSING HEADER - fuzz_crash_021.md:1:1:1:4
@@ -22,44 +57,56 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:4:1:4:1
 MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
 # PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **" }
 
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_021.md:1:13:3:1:**
 ```roc
 Fli/main.roc" }
+
+Pair(a, b+ : (
 ```
-            ^^^
 
 
-**MISSING HEADER**
-Roc files must start with a module header.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **: ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_021.md:1:1:1:4:**
+**fuzz_crash_021.md:3:12:3:14:**
 ```roc
-Fli/main.roc" }
+Pair(a, b+ : (
 ```
-^^^
+           ^^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_expr_apply_close_round**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_021.md:1:4:1:5:**
+**fuzz_crash_021.md:3:12:3:15:**
 ```roc
-Fli/main.roc" }
+Pair(a, b+ : (
 ```
-   ^
+           ^^^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_expr_apply_close_round**
 This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_021.md:3:1:3:15:**
+```roc
+Pair(a, b+ : (
+```
+^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **main** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_021.md:1:5:1:9:**
 ```roc
@@ -68,123 +115,64 @@ Fli/main.roc" }
     ^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **a** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_021.md:1:9:1:13:**
-```roc
-Fli/main.roc" }
-```
-        ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_021.md:1:13:1:14:**
-```roc
-Fli/main.roc" }
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_021.md:1:14:1:16:**
-```roc
-Fli/main.roc" }
-```
-             ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_021.md:1:16:1:16:**
-```roc
-Fli/main.roc" }
-```
-               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_021.md:3:1:3:5:**
+**fuzz_crash_021.md:3:6:3:7:**
 ```roc
 Pair(a, b+ : (
 ```
-^^^^
+     ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round`
-This is an unexpected parsing error. Please check your syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_021.md:4:1:4:1:**
-```roc
-
-```
-^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_021.md:3:14:3:15:**
+**fuzz_crash_021.md:3:9:3:10:**
 ```roc
 Pair(a, b+ : (
 ```
-             ^
+        ^
 
 
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:4),OpSlash(1:4-1:5),LowerIdent(1:5-1:9),NoSpaceDotLowerIdent(1:9-1:13),StringStart(1:13-1:14),StringPart(1:14-1:16),StringEnd(1:16-1:16),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),OpPlus(3:10-3:11),OpColon(3:12-3:13),OpenRound(3:14-3:15),
-EndOfFile(4:1-4:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-3.15
-	(malformed-header @1.1-1.4 (tag "missing_header"))
-	(statements
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.5-1.9 (tag "statement_unexpected_token"))
-		(s-malformed @1.9-1.13 (tag "statement_unexpected_token"))
-		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
-		(s-malformed @1.14-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.16 (tag "statement_unexpected_token"))
-		(s-type-decl @3.1-3.15
-			(header @3.1-3.11 (name "<malformed>")
-				(args))
-			(ty-malformed @3.14-3.15 (tag "expected_ty_anno_close_round")))))
-~~~
-# FORMATTED
-~~~roc
-
-
-<malformed> : 
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-alias-decl @3.1-3.15
-		(ty-header @3.1-3.11 (name ""))
-		(ty-malformed @3.14-3.15)))
+(Expr.block
+  (Expr.binop_slash
+    (Expr.tag_no_args)
+    (Expr.binop_pipe)
+  )
+  (Expr.malformed)
+  (Expr.tag_applied)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 21
+(var #0 _)
+(var #1 -> #4)
+(var #2 _)
+(var #3 _)
+(var #4 -> #5)
+(var #5 _)
+(var #6 _)
+(var #7 -> #20)
+(var #8 _)
+(var #9 -> #11)
+(var #10 _)
+(var #11 -> #12)
+(var #12 _)
+(var #13 -> #19)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 -> #18)
+(var #18 fn_pure)
+(var #19 tuple)
+(var #20 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(type_decls
-		(alias @3.1-3.15 (type "Error")
-			(ty-header @3.1-3.11 (name ""))))
-	(expressions))
+~~~roc
 ~~~

@@ -17,10 +17,18 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Float ~~~
   (exposes
     (lc "foo")
 ))
+(block
+  (binop_equals
+    (lc "foo")
+    (frac_literal_small 12.34)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]foo = 12.34
+module [foo]
+
+foo = 12.34
 ~~~
 # EXPECTED
 NIL
@@ -37,7 +45,15 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 F64)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
 ~~~roc
+foo : F64
 ~~~

@@ -50,27 +50,28 @@ Is there an **import** or **exposing** missing up-top?
             ^
 
 
-**UNUSED VARIABLE**
-Variable **y** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-
-**lambda_invalid_references.md:1:6:1:7:**
-```roc
-|x| |y| x + z
-```
-     ^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.lambda (canonicalized))
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 12
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 -> #4)
+(var #4 -> #5)
+(var #5 _)
+(var #6 -> #10)
+(var #7 -> #11)
+(var #8 _)
+(var #9 _)
+(var #10 fn_pure)
+(var #11 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : _a
+y : _a
 ~~~

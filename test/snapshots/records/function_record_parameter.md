@@ -37,40 +37,27 @@ OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar String ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable **age** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-
-**function_record_parameter.md:1:10:1:13:**
-```roc
-|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
-```
-         ^^^
-
-
-**UNUSED VARIABLE**
-Variable **name** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-
-**function_record_parameter.md:1:4:1:8:**
-```roc
-|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
-```
-   ^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.lambda (canonicalized))
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 10
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 Str)
+(var #7 -> #9)
+(var #8 _)
+(var #9 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+age : _a
+name : _a
 ~~~

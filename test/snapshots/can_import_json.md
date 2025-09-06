@@ -17,27 +17,41 @@ KwModule OpenSquare CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent Bla
 # PARSE
 ~~~clojure
 (module-header)
+(block
+  (import
+    (binop_pipe
+      (lc "json")
+      (uc "Json")
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (binop_pipe
+      (uc "Json")
+      (dot_lc "utf8")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
 
 import json.Json
-
 main = Json.utf8
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_json.md:3:1:3:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named **Json.utf8** in this scope.
+Nothing is named **json** in this scope.
 Is there an **import** or **exposing** missing up-top?
 
-**can_import_json.md:5:8:5:17:**
+**can_import_json.md:3:8:3:12:**
 ```roc
-main = Json.utf8
+import json.Json
 ```
-       ^^^^^^^^^
+       ^^^^
 
 
 # CANONICALIZE
@@ -46,16 +60,26 @@ main = Json.utf8
   (Stmt.import)
   (Stmt.assign
     (pattern (Patt.ident "main"))
-    (Expr.module_access
-      (Expr.lookup "Json")
-      (Expr.record_accessor)
-    )
+    (Expr.binop_pipe)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 11
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 -> #8)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
 ~~~
 # TYPES
 ~~~roc
+main : _a
 ~~~

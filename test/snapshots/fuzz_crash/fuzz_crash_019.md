@@ -127,6 +127,670 @@ expect {
 h == foo
 }
 ~~~
+# TOKENS
+~~~text
+LineComment KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang CloseSquare BlankLine KwImport UpperIdent KwExposing OpenSquare LineComment UpperIdent CloseSquare BlankLine KwImport UpperIdent KwAs UpperIdent KwImport UpperIdent UpperIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpColon UpperIdent Comma OpenRound LowerIdent CloseRound OpArrow UpperIdent OpenRound LowerIdent CloseRound UpperIdent OpenRound LineComment CloseRound LineComment OpColon LineComment UpperIdent OpenRound LineComment CloseRound Comma OpenRound LowerIdent CloseRound OpArrow LineComment UpperIdent OpenRound LowerIdent CloseRound LineComment BlankLine LowerIdent OpColon OpenRound LineComment CloseRound LineComment UpperIdent OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon LowerIdent CloseCurly UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LineComment CloseCurly BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenCurly LineComment CloseCurly LineComment UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare UpperIdent CloseSquare BlankLine UpperIdent OpenRound LowerIdent CloseRound OpColon OpenSquare LineComment CloseSquare LineComment BlankLine LowerIdent OpAssign OpBar LowerIdent OpBar KwIf LowerIdent Int KwElse Int BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly Int KwIf LowerIdent OpenCurly KwDbg LineComment LowerIdent LowerIdent CloseCurly KwElse OpenCurly KwDbg Int LowerIdent CloseCurly CloseCurly BlankLine LowerIdent OpAssign OpBar LowerIdent Comma UpperIdent Comma OpBar LineComment KwMatch LowerIdent OpenCurly LowerIdent OpenCurly LowerIdent CloseCurly UpperIdent OpFatArrow OpenCurly LowerIdent CloseCurly LowerIdent LineComment Int String OpFatArrow Int OpenSquare Int Comma CloseSquare LineComment LowerIdent OpenSquare Int Comma Int Comma Int Comma LowerIdent CloseSquare Int OpenSquare CloseSquare Int Float Int Float OpBar Float OpFatArrow Int OpenRound Int Comma CloseRound OpFatArrow Int OpenRound Int Comma Int Comma Int CloseRound Int OpenCurly CloseCurly OpFatArrow Int UpperIdent OpenRound Int CloseRound OpFatArrow Int CloseCurly BlankLine KwExpect LineComment LowerIdent BlankLine LowerIdent OpBang OpColon UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpAssign OpBar Underscore OpBar OpenCurly LowerIdent LowerIdent OpAssign String KwVar LowerIdent OpAssign Int KwExpect LowerIdent KwReturn LineComment LowerIdent BlankLine LineComment TripleDot LowerIdent OpenRound TripleDot Comma LineComment CloseRound KwCrash LowerIdent String LineComment LowerIdent OpAssign String LowerIdent OpAssign OpenSquare LowerIdent OpenRound LowerIdent Comma CloseRound Comma Int Comma LineComment Int Comma LineComment CloseSquare KwFor LowerIdent KwIn LowerIdent OpenCurly LowerIdent OpBang OpenRound String CloseRound LowerIdent OpPlus LowerIdent CloseCurly LowerIdent OpAssign OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon String Comma LowerIdent OpColon LowerIdent Comma LowerIdent OpColon UpperIdent OpenRound LowerIdent CloseRound Comma LowerIdent CloseCurly LowerIdent OpAssign OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare CloseRound LowerIdent OpenRound Int Comma String Comma LowerIdent Comma UpperIdent Comma LineComment OpenRound LowerIdent Comma LowerIdent CloseRound Comma OpenSquare Int Comma Int Comma Int CloseSquare Comma CloseRound LowerIdent OpDoubleQuestion Int OpGreaterThan Int OpOr Int OpPlus Int OpLessThan Int OpAnd Int OpBinaryMinus Int OpGreaterThanOrEq Int OpOr Int OpLessThanOrEq Int LowerIdent OpenRound LowerIdent CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpenRound CloseRound OpQuestion Dot LowerIdent OpQuestion UpperIdent OpBang OpenRound MalformedString LowerIdent OpenRound LowerIdent CloseRound LineComment CloseCurly MalformedString CloseRound CloseCurly LineComment BlankLine LowerIdent OpColon OpenCurly CloseCurly LowerIdent OpAssign OpenCurly CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent CloseRound CloseRound BlankLine KwExpect OpenCurly LowerIdent OpEquals Int LowerIdent OpEquals LowerIdent CloseCurly ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_small "c")
+        (block)
+      )
+    )
+))
+(block
+  (import
+    (binop_exposing
+      (binop_pipe
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (not_lc "line")
+      )
+    )
+  )
+  (import
+    (binop_exposing
+      (uc "Stdot")
+      (list_literal
+        (uc "Cust")
+      )
+    )
+  )
+  (import
+    (binop_as
+      (uc "Bae")
+      (uc "Gooe")
+    )
+  )
+  (import
+    (uc "Ba")
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Map")
+      (tuple_literal
+        (lc "a")
+        (lc "b")
+      )
+    )
+    (binop_arrow_call
+      (uc "Lis")
+      (binop_arrow_call
+        (lc "ab")
+        (apply_uc
+          (uc "List")
+          (lc "b")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "MapML")
+    )
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+      )
+      (binop_arrow_call
+        (lc "ab")
+        (apply_uc
+          (uc "List")
+          (lc "b")
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "line")
+    (tuple_literal)
+  )
+  (binop_colon
+    (uc "Som")
+    (record_literal
+      (binop_colon
+        (lc "foo")
+        (uc "O")
+      )
+      (binop_colon
+        (lc "bar")
+        (lc "g")
+      )
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Ml")
+      (lc "a")
+    )
+    (record_literal)
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Soine")
+      (lc "a")
+    )
+    (record_literal)
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Maybe")
+      (lc "a")
+    )
+    (list_literal
+      (uc "Somne")
+    )
+  )
+  (binop_colon
+    (apply_uc
+      (uc "Mayine")
+      (lc "a")
+    )
+    (list_literal)
+  )
+  (binop_equals
+    (lc "ane")
+    (lambda
+      (body
+        (if_else
+          (condition             (lc "num")
+)
+          (then             (num_literal_i32 2)
+)
+          (else             (num_literal_i32 5)
+))
+      )
+      (args
+        (lc "num")
+      )
+    )
+  )
+  (binop_colon
+    (lc "one")
+    (uc "U6")
+  )
+  (binop_equals
+    (lc "add")
+    (lambda
+      (body
+        (block
+          (num_literal_i32 1)
+          (if_else
+            (condition               (lc "num")
+)
+            (then               (block
+                (malformed)
+                (binop_colon
+                  (lc "s")
+                  (lc "s")
+                )
+                (binop_colon
+                  (lc "exp0")
+                  (lc "exp0")
+                )
+              )
+)
+            (else               (block
+                (malformed)
+                (num_literal_i32 123)
+                (binop_colon
+                  (lc "r")
+                  (lc "r")
+                )
+              )
+))
+        )
+      )
+      (args
+        (lc "num")
+      )
+    )
+  )
+  (binop_equals
+    (lc "me")
+    (lambda
+      (body
+        (match
+          (scrutinee             (lc "a")
+))
+      )
+      (args
+        (lc "a")
+        (uc "Tb")
+      )
+    )
+  )
+  (lc "x")
+  (malformed)
+  (uc "Blue")
+  (malformed)
+  (block
+    (lc "x")
+  )
+  (lc "er")
+  (num_literal_i32 1)
+  (str_literal_small "for")
+  (malformed)
+  (num_literal_i32 20)
+  (list_literal
+    (num_literal_i32 1)
+  )
+  (lc "ment")
+  (list_literal
+    (num_literal_i32 1)
+    (num_literal_i32 2)
+    (num_literal_i32 3)
+    (lc "est")
+  )
+  (num_literal_i32 123)
+  (list_literal)
+  (num_literal_i32 23)
+  (frac_literal_small 3.1)
+  (num_literal_i32 314)
+  (frac_literal_small 3.14)
+  (malformed)
+  (apply_anon
+    (num_literal_i32 314)
+    (num_literal_i32 1)
+  )
+  (malformed)
+  (apply_anon
+    (num_literal_i32 123)
+    (tuple_literal
+      (num_literal_i32 1)
+      (num_literal_i32 2)
+      (num_literal_i32 3)
+    )
+  )
+  (num_literal_i32 123)
+  (record_literal)
+  (malformed)
+  (num_literal_i32 12)
+  (apply_uc
+    (uc "Ok")
+    (num_literal_i32 123)
+  )
+  (malformed)
+  (num_literal_i32 12)
+  (malformed)
+  (expect
+    (lc "nt")
+  )
+  (binop_colon
+    (not_lc "main")
+    (apply_uc
+      (uc "Listlt")
+      (tuple_literal
+        (record_literal)
+        (underscore)
+      )
+    )
+  )
+  (binop_equals
+    (lc "ma")
+    (lambda
+      (body
+        (block
+          (binop_colon
+            (lc "e")
+            (lc "e")
+          )
+          (binop_equals
+            (lc "w")
+            (str_literal_small "d")
+          )
+          (binop_equals
+            (var_lc "er")
+            (num_literal_i32 123)
+          )
+          (expect
+            (lc "blaue")
+          )
+          (ret
+            (lc "tag")
+          )
+          (ellipsis)
+          (apply_lc
+            (lc "me")
+            (ellipsis)
+          )
+          (crash
+            (lc "ke")
+          )
+          (str_literal_small "Unr!")
+          (binop_equals
+            (lc "i")
+            (str_literal_big "H, ${d}")
+          )
+          (binop_equals
+            (lc "t")
+            (list_literal
+              (apply_lc
+                (lc "one")
+                (lc "er")
+              )
+              (num_literal_i32 456)
+              (num_literal_i32 9)
+            )
+          )
+          (for_loop
+            (lc "n")
+            (lc "list")
+            (block
+              (apply_anon
+                (not_lc "line")
+                (str_literal_big "Ag ${n} to ${er}")
+              )
+              (binop_plus
+                (lc "ber")
+                (lc "n")
+              )
+            )
+          )
+          (binop_equals
+            (lc "rd")
+            (record_literal
+              (binop_colon
+                (lc "foo")
+                (num_literal_i32 123)
+              )
+              (binop_colon
+                (lc "bar")
+                (str_literal_small "H")
+              )
+              (binop_colon
+                (lc "baz")
+                (lc "tag")
+              )
+              (binop_colon
+                (lc "qux")
+                (apply_uc
+                  (uc "Ok")
+                  (lc "world")
+                )
+              )
+              (binop_colon
+                (lc "ned")
+                (lc "ned")
+              )
+            )
+          )
+          (binop_equals
+            (lc "t")
+            (tuple_literal
+              (num_literal_i32 123)
+              (str_literal_big "World")
+              (lc "tag")
+              (uc "O")
+              (tuple_literal
+                (lc "nd")
+                (lc "t")
+              )
+              (list_literal
+                (num_literal_i32 1)
+                (num_literal_i32 2)
+                (num_literal_i32 3)
+              )
+            )
+          )
+          (apply_lc
+            (lc "m")
+            (tuple_literal
+              (num_literal_i32 123)
+              (str_literal_big "World")
+              (lc "ag1")
+              (uc "O")
+              (tuple_literal
+                (lc "ne")
+                (lc "tuple")
+              )
+              (list_literal
+                (num_literal_i32 1)
+                (num_literal_i32 2)
+                (num_literal_i32 3)
+              )
+            )
+          )
+          (binop_or
+            (binop_or
+              (binop_gt
+                (binop_double_question
+                  (lc "b")
+                  (num_literal_i32 12)
+                )
+                (num_literal_i32 5)
+              )
+              (binop_and
+                (binop_lt
+                  (binop_plus
+                    (num_literal_i32 13)
+                    (num_literal_i32 2)
+                  )
+                  (num_literal_i32 5)
+                )
+                (binop_gte
+                  (binop_minus
+                    (num_literal_i32 10)
+                    (num_literal_i32 1)
+                  )
+                  (num_literal_i32 16)
+                )
+              )
+            )
+            (binop_lte
+              (num_literal_i32 12)
+              (num_literal_i32 3)
+            )
+          )
+          (apply_lc
+            (lc "e_fn")
+            (lc "arg1")
+          )
+          (apply_anon
+            (binop_pipe
+              (malformed)
+              (dot_lc "od")
+            )
+          )
+          (apply_anon
+            (binop_pipe
+              (malformed)
+              (dot_lc "ned")
+            )
+          )
+          (binop_pipe
+            (malformed)
+            (dot_lc "recd")
+          )
+          (malformed)
+          (uc "Stdo")
+          (unary_not <unary_op>)
+          (apply_lc
+            (lc "r")
+            (lc "nu")
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+  (malformed)
+  (malformed)
+  (malformed)
+  (binop_colon
+    (lc "y")
+    (record_literal)
+  )
+  (binop_equals
+    (lc "e")
+    (record_literal)
+  )
+  (binop_colon
+    (lc "t")
+    (apply_uc
+      (uc "V")
+      (tuple_literal
+        (lc "a")
+        (lc "c")
+      )
+    )
+  )
+  (expect
+    (block
+      (binop_double_equals
+        (lc "foo")
+        (num_literal_i32 1)
+      )
+      (binop_double_equals
+        (lc "h")
+        (lc "foo")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+# Thnt!
+app [main!] { pf: "c" platform [] }
+
+import pf.Stdout exposing [line!]
+import Stdot exposing [ #tem
+	Cust,
+]
+import Bae as Gooe
+import Ba
+Map((a, b)) : Lis -> ab -> List b
+# Cb,
+# Ag
+MapML() : # Aon
+List -> #rg
+ab -> # row
+List b
+#z)
+line : (
+,
+)
+# Cm
+# Co
+Som : {foo: O, bar: g}
+Ml(a) :
+	{
+	}
+# ld
+Soine(a) :
+	{
+	}
+#
+#
+Maybe(a) : [Somne]
+Mayine(a) : [, #
+]
+#)
+ane = |num| if num 2 else 5
+one : U6
+add = |num| {
+	1
+	if num
+		{
+			dbg # bug
+			
+			s : s
+			exp0 : exp0
+		}
+	else {
+		dbg 
+		123
+		r : r
+	}
+}
+
+me = |a, Tb| # As
+match a
+
+x
+}
+		
+Blue
+=> 
+{
+	x
+}
+er
+#ent
+1
+"for"
+=> 
+20
+[
+	1,
+]
+# t
+ment
+[1, 2, 3, est]
+123
+[]
+23
+3.1
+314
+3.14
+=> 
+314(
+	1,
+)
+=> 
+123((1, 2, 3))
+123
+{}
+=> 
+12
+Ok(123)
+=> 
+12
+}
+
+expect # Cord
+nt
+main! : Listlt({}, _)
+ma = |
+	_,
+| {
+	e : e
+	w = "d"
+	var er = 123
+	expect blaue
+	return #d
+tag
+	#
+	...
+	me(
+		...,
+	)
+	crash ke
+	"Unr!"
+	#)
+	i = "H, ${d}"
+	t = [
+		one(
+			er,
+		),
+		456, # two
+		9, #ee
+	]
+
+	for n in list {
+		{
+			line!("Ag ${n} to ${er}")
+			ber + n
+		}
+	}
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned: ned }
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+	m((
+		123,
+		"World",
+		ag1,
+		O, # nt
+		(ne, tuple),
+		[1, 2, 3],
+	))
+	(b ?? 12 > 5 || 13 + 2 < 5 && 10 - 1 >= 16) || 12 <= 3
+	e_fn(arg1)
+	? | .od()
+	? | .ned()
+	? | .recd
+	?
+	
+	Stdo
+	!"Ho${ #
+			
+	r(nu)
+}
+
+",
+	
+)
+} # Cocl
+
+y : {}
+e = {}
+t : V(a, c)
+expect {
+	foo == 1
+	h == foo
+}
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_019.md:52:16:52:16
 PARSE ERROR - fuzz_crash_019.md:58:4:58:4
@@ -188,249 +852,280 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg # bug
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:41:3:42:4:**
+```roc
+		dbg # bug
+			s exp0
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:44:3:44:7:**
+```roc
+		dbg 123
+```
+		^^^^
+
+
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: **expected_arrow_after_pattern**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:52:16:52:16:**
+**fuzz_crash_019.md:52:16:53:2:**
 ```roc
 	match a {lue  {
+	x
 ```
-	              ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
+		** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_019.md:58:4:58:4:**
+**fuzz_crash_019.md:54:3:55:3:**
+```roc
+		}
+		Blue=> {x
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:55:7:55:10:**
+```roc
+		Blue=> {x
+```
+		    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:58:12:58:15:**
 ```roc
 			1	"for" => 20[1, ] # t
 ```
-			^
+			 	      ^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_019.md:59:3:59:3:**
+**fuzz_crash_019.md:64:15:64:18:**
 ```roc
-		ment
+		3.14 | 6.28 => 314
 ```
-		^
+		            ^^^
 
 
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: **application_with_whitespace**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:60:16:60:16:**
+**fuzz_crash_019.md:64:21:65:3:**
 ```roc
-		[1, 2, 3,est]123
+		3.14 | 6.28 => 314
+		(1, ) => 123
 ```
-		             ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**fuzz_crash_019.md:62:5:62:5:**
+**fuzz_crash_019.md:65:9:65:12:**
 ```roc
-		] 23
+		(1, ) => 123
 ```
-		  ^
+		      ^^^
 
 
 **PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
+A parsing error occurred: **application_with_whitespace**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_019.md:63:7:63:7:**
+**fuzz_crash_019.md:65:15:66:3:**
 ```roc
-		3.1 314
-```
-		    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `match_branch_missing_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_019.md:66:12:66:12:**
-```roc
+		(1, ) => 123
 		(1, 2, 3)123
 ```
-		         ^
 
 
-**UNDECLARED TYPE**
-The type _Lis_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-This type is referenced here:
-**fuzz_crash_019.md:13:13:13:16:**
+**fuzz_crash_019.md:67:8:67:11:**
 ```roc
-Map(a, b) : Lis, (ab) -> List(b)
+		{ 	} => 12
 ```
-            ^^^
+		  	  ^^^
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _ab_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **=> ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_019.md:13:19:13:21:**
+**fuzz_crash_019.md:68:11:68:14:**
 ```roc
-Map(a, b) : Lis, (ab) -> List(b)
+		Ok(123) => 12
 ```
-                  ^^
+		        ^^^
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _ab_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}
 
-Type variables must be introduced in a type annotation before they can be used.
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-This type variable is referenced here:
-**fuzz_crash_019.md:19:4:19:6:**
+**fuzz_crash_019.md:69:2:71:1:**
 ```roc
-		(ab) -> # row
+	}
+
+expect # Cord
 ```
-		 ^^
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _b_ is not declared in this scope.
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_019.md:20:12:20:13:**
+**fuzz_crash_019.md:98:3:98:4:**
 ```roc
-			List(			b	) #z)
+	m (
 ```
-			     			^
+	 ^
 
 
-**UNDECLARED TYPE**
-The type _O_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-This type is referenced here:
-**fuzz_crash_019.md:24:15:24:16:**
+**fuzz_crash_019.md:105:65:105:66:**
 ```roc
-Som : { foo : O, bar : g }
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-              ^
+	                                                               ^
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _g_ is not declared in this scope.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_019.md:24:24:24:25:**
+**fuzz_crash_019.md:105:71:105:72:**
 ```roc
-Som : { foo : O, bar : g }
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-                       ^
+	                                                                     ^
 
 
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-You're attempting to use this module here:
-**fuzz_crash_019.md:4:1:4:34:**
+**fuzz_crash_019.md:105:78:105:79:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                                            ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:105:84:106:2:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+	Stdo!(
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"Ho${ #
+			** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:107:3:108:4:**
+```roc
+		"Ho${ #
+			r(nu) # xpr
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_round_or_comma**
+This is an unexpected parsing error. Please check your syntax.
+
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **",
+	** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:109:5:110:2:**
+```roc
+		} ",
+	)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:110:2:111:1:**
+```roc
+	)
+} # Cocl
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} # Cocl
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:111:1:113:1:**
+```roc
+} # Cocl
+
+y : {}
+```
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **pf** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:4:8:4:10:**
 ```roc
 import pf.Stdout exposing [line!]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:6:1:8:6:**
-```roc
-import Stdot
-		exposing [ #tem
-Cust]
-```
-
-
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:10:1:10:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:11:1:12:4:**
-```roc
-import
-	Ba
-```
-
-
-**UNDECLARED TYPE**
-The type _U6_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_019.md:37:7:37:9:**
-```roc
-one : U6
-```
-      ^^
+       ^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `s` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:42:4:42:5:**
-```roc
-			s exp0
-```
-			^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `exp0` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:42:6:42:10:**
-```roc
-			s exp0
-```
-			  ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `r` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:45:3:45:4:**
-```roc
-		r
-```
-		^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:53:2:53:3:**
 ```roc
@@ -439,21 +1134,9 @@ Is there an `import` or `exposing` missing up-top?
 	^
 
 
-**UNUSED VARIABLE**
-Variable `lue` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:52:11:52:14:**
-```roc
-	match a {lue  {
-```
-	         ^^^
-
-
 **UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:55:11:55:12:**
 ```roc
@@ -462,11 +1145,10 @@ Is there an `import` or `exposing` missing up-top?
 		        ^
 
 
-**UNUSED VARIABLE**
-Variable `er` is not used anywhere in your code.
+**UNDEFINED VARIABLE**
+Nothing is named **er** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
-The unused variable is declared here:
 **fuzz_crash_019.md:57:2:57:4:**
 ```roc
 	er #ent
@@ -475,8 +1157,8 @@ The unused variable is declared here:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **ment** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:59:3:59:7:**
 ```roc
@@ -485,11 +1167,10 @@ Is there an `import` or `exposing` missing up-top?
 		^^^^
 
 
-**UNUSED VARIABLE**
-Variable `est` is not used anywhere in your code.
+**UNDEFINED VARIABLE**
+Nothing is named **est** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
-The unused variable is declared here:
 **fuzz_crash_019.md:60:12:60:15:**
 ```roc
 		[1, 2, 3,est]123
@@ -498,8 +1179,8 @@ The unused variable is declared here:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `nt` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **nt** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:72:2:72:4:**
 ```roc
@@ -508,31 +1189,9 @@ Is there an `import` or `exposing` missing up-top?
 	^^
 
 
-**UNDECLARED TYPE**
-The type _Listlt_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_019.md:74:9:74:15:**
-```roc
-main! : Listlt({}, _)
-```
-        ^^^^^^
-
-
 **UNDEFINED VARIABLE**
-Nothing is named `e` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:75:11:75:12:**
-```roc
-ma= |_| { e
-```
-          ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `blaue` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **blaue** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:78:9:78:14:**
 ```roc
@@ -542,8 +1201,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:80:3:80:6:**
 ```roc
@@ -552,46 +1211,42 @@ Is there an `import` or `exposing` missing up-top?
 		^^^
 
 
-**CRASH EXPECTS STRING**
-The `crash` keyword expects a string literal as its argument.
-For example: `crash "Something went wrong"`
-**fuzz_crash_019.md:86:3:86:11:**
+**UNDEFINED VARIABLE**
+Nothing is named **ke** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:86:9:86:11:**
 ```roc
 	)crash ke"Unr!" #)
 ```
-	 ^^^^^^^^
+	       ^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **list** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:87:11:87:12:**
+**fuzz_crash_019.md:92:11:92:15:**
 ```roc
-	i= "H, ${d}"
+	for n in list {
 ```
-	         ^
+	         ^^^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `one` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **ber** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:89:3:89:6:**
+**fuzz_crash_019.md:94:3:94:6:**
 ```roc
-		one(er, 		),	456, # two
+		ber + n
 ```
 		^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:96:34:96:37:**
 ```roc
@@ -601,8 +1256,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `world` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **world** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:96:47:96:52:**
 ```roc
@@ -612,37 +1267,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `ned` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:96:54:96:57:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	                                                    ^^^
-
-
-**DUPLICATE DEFINITION**
-The name `t` is being redeclared in this scope.
-
-The redeclaration is here:
-**fuzz_crash_019.md:97:2:97:3:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	^
-
-But `t` was already defined here:
-**fuzz_crash_019.md:88:1:88:2:**
-```roc
-t = [
-```
-^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `tag` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **tag** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:97:21:97:24:**
 ```roc
@@ -652,8 +1278,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `nd` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **nd** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:97:30:97:32:**
 ```roc
@@ -663,8 +1289,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `m` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **m** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:98:2:98:3:**
 ```roc
@@ -674,8 +1300,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `ag1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **ag1** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:100:11:100:14:**
 ```roc
@@ -685,8 +1311,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `ne` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **ne** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:102:4:102:6:**
 ```roc
@@ -696,8 +1322,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `tuple` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **tuple** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:102:8:102:13:**
 ```roc
@@ -707,8 +1333,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **b** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:105:2:105:3:**
 ```roc
@@ -717,25 +1343,31 @@ Is there an `import` or `exposing` missing up-top?
 	^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNDEFINED VARIABLE**
-Nothing is named `r` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **e_fn** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**fuzz_crash_019.md:108:4:108:5:**
+**fuzz_crash_019.md:105:55:105:59:**
 ```roc
-			r(nu) # xpr
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-			^
+	                                                     ^^^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `nu` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **arg1** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_019.md:105:60:105:64:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                          ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **nu** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:108:6:108:8:**
 ```roc
@@ -744,56 +1376,9 @@ Is there an `import` or `exposing` missing up-top?
 			  ^^
 
 
-**UNUSED VARIABLE**
-Variable `w` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:76:2:76:3:**
-```roc
-	w = "d"
-```
-	^
-
-
-**UNUSED VARIABLE**
-Variable `i` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:87:2:87:3:**
-```roc
-	i= "H, ${d}"
-```
-	^
-
-
-**UNUSED VARIABLE**
-Variable `rd` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:96:2:96:4:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-	^^
-
-
-**UNDECLARED TYPE**
-The type _V_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_019.md:116:5:116:6:**
-```roc
-t : V((a,c))
-```
-    ^
-
-
 **UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:119:2:119:5:**
 ```roc
@@ -803,8 +1388,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `h` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **h** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:120:1:120:2:**
 ```roc
@@ -814,8 +1399,8 @@ h == foo
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **fuzz_crash_019.md:120:6:120:9:**
 ```roc
@@ -824,1051 +1409,507 @@ h == foo
      ^^^
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_019.md:52:2:**
-```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
-			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
-```
-     ^^^^^
-
-The fourth pattern has this type:
-    _Str_
-
-But all the previous patterns have this type: 
-    _[Blue]_others_
-
-All patterns in an `match` must have compatible types.
-
-
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_019.md:84:2:86:3:**
-```roc
-	me(
-		..., # r
-	)crash ke"Unr!" #)
-```
-
-It has the type:
-    __arg -> _ret_
-
-But here it's being used as:
-    _[Blue]_others, [Tb]_others2 -> Error_
-
-# TOKENS
-~~~zig
-KwApp(2:1-2:4),OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),CloseSquare(2:11-2:12),OpenCurly(2:13-2:14),LowerIdent(2:15-2:17),OpColon(2:17-2:18),KwPlatform(2:19-2:27),StringStart(2:28-2:29),StringPart(2:29-2:30),StringEnd(2:30-2:31),CloseCurly(2:32-2:33),
-KwImport(4:1-4:7),LowerIdent(4:8-4:10),NoSpaceDotUpperIdent(4:10-4:17),KwExposing(4:18-4:26),OpenSquare(4:27-4:28),LowerIdent(4:28-4:33),CloseSquare(4:33-4:34),
-KwImport(6:1-6:7),UpperIdent(6:8-6:13),
-KwExposing(7:3-7:11),OpenSquare(7:12-7:13),
-UpperIdent(8:1-8:5),CloseSquare(8:5-8:6),
-KwImport(10:1-10:7),UpperIdent(10:8-10:11),KwAs(10:12-10:14),UpperIdent(10:15-10:19),
-KwImport(11:1-11:7),
-UpperIdent(12:2-12:4),
-UpperIdent(13:1-13:4),NoSpaceOpenRound(13:4-13:5),LowerIdent(13:5-13:6),Comma(13:6-13:7),LowerIdent(13:8-13:9),CloseRound(13:9-13:10),OpColon(13:11-13:12),UpperIdent(13:13-13:16),Comma(13:16-13:17),OpenRound(13:18-13:19),LowerIdent(13:19-13:21),CloseRound(13:21-13:22),OpArrow(13:23-13:25),UpperIdent(13:26-13:30),NoSpaceOpenRound(13:30-13:31),LowerIdent(13:31-13:32),CloseRound(13:32-13:33),
-UpperIdent(14:1-14:6),NoSpaceOpenRound(14:6-14:7),
-CloseRound(15:1-15:2),
-OpColon(16:2-16:3),
-UpperIdent(17:3-17:7),NoSpaceOpenRound(17:7-17:8),
-CloseRound(18:3-18:4),Comma(18:4-18:5),
-OpenRound(19:3-19:4),LowerIdent(19:4-19:6),CloseRound(19:6-19:7),OpArrow(19:8-19:10),
-UpperIdent(20:4-20:8),NoSpaceOpenRound(20:8-20:9),LowerIdent(20:12-20:13),CloseRound(20:14-20:15),
-LowerIdent(22:1-22:5),OpColon(22:6-22:7),OpenRound(22:8-22:9),
-CloseRound(23:1-23:2),
-UpperIdent(24:1-24:4),OpColon(24:5-24:6),OpenCurly(24:7-24:8),LowerIdent(24:9-24:12),OpColon(24:13-24:14),UpperIdent(24:15-24:16),Comma(24:16-24:17),LowerIdent(24:18-24:21),OpColon(24:22-24:23),LowerIdent(24:24-24:25),CloseCurly(24:26-24:27),
-UpperIdent(25:1-25:3),NoSpaceOpenRound(25:3-25:4),LowerIdent(25:4-25:5),CloseRound(25:5-25:6),OpColon(25:7-25:8),OpenCurly(25:9-25:10),
-CloseCurly(26:1-26:2),
-UpperIdent(28:1-28:6),NoSpaceOpenRound(28:6-28:7),LowerIdent(28:7-28:8),CloseRound(28:8-28:9),OpColon(28:10-28:11),OpenCurly(28:12-28:13),
-CloseCurly(29:1-29:2),
-UpperIdent(30:1-30:6),NoSpaceOpenRound(30:6-30:7),LowerIdent(30:7-30:8),CloseRound(30:8-30:9),OpColon(30:10-30:11),OpenSquare(30:12-30:13),UpperIdent(30:13-30:18),CloseSquare(30:18-30:19),
-UpperIdent(32:1-32:7),NoSpaceOpenRound(32:7-32:8),LowerIdent(32:8-32:9),CloseRound(32:9-32:10),OpColon(32:11-32:12),OpenSquare(32:13-32:14),
-CloseSquare(33:1-33:2),
-LowerIdent(35:1-35:4),OpAssign(35:5-35:6),OpBar(35:7-35:8),LowerIdent(35:8-35:11),OpBar(35:11-35:12),KwIf(35:13-35:15),LowerIdent(35:16-35:19),Int(35:20-35:21),KwElse(35:22-35:26),Int(35:27-35:28),
-LowerIdent(37:1-37:4),OpColon(37:5-37:6),UpperIdent(37:7-37:9),
-LowerIdent(38:1-38:4),OpAssign(38:5-38:6),OpBar(38:7-38:8),LowerIdent(38:8-38:11),OpBar(38:11-38:12),OpenCurly(38:13-38:14),
-Int(39:2-39:3),
-KwIf(40:2-40:4),LowerIdent(40:5-40:8),OpenCurly(40:9-40:10),
-KwDbg(41:3-41:6),
-LowerIdent(42:4-42:5),LowerIdent(42:6-42:10),
-CloseCurly(43:2-43:3),KwElse(43:4-43:8),OpenCurly(43:9-43:10),
-KwDbg(44:3-44:6),Int(44:7-44:10),
-LowerIdent(45:3-45:4),
-CloseCurly(46:2-46:3),
-CloseCurly(47:1-47:2),
-LowerIdent(49:1-49:3),OpAssign(49:4-49:5),OpBar(49:6-49:7),
-LowerIdent(50:2-50:3),Comma(50:3-50:4),UpperIdent(50:5-50:7),Comma(50:7-50:8),
-OpBar(51:1-51:2),
-KwMatch(52:2-52:7),LowerIdent(52:8-52:9),OpenCurly(52:10-52:11),LowerIdent(52:11-52:14),OpenCurly(52:16-52:17),
-LowerIdent(53:2-53:3),
-CloseCurly(54:3-54:4),
-UpperIdent(55:3-55:7),OpFatArrow(55:7-55:9),OpenCurly(55:10-55:11),LowerIdent(55:11-55:12),
-CloseCurly(56:4-56:5),
-LowerIdent(57:2-57:4),
-Int(58:4-58:5),StringStart(58:6-58:7),StringPart(58:7-58:10),StringEnd(58:10-58:11),OpFatArrow(58:12-58:14),Int(58:15-58:17),OpenSquare(58:17-58:18),Int(58:18-58:19),Comma(58:19-58:20),CloseSquare(58:21-58:22),
-LowerIdent(59:3-59:7),
-OpenSquare(60:3-60:4),Int(60:4-60:5),Comma(60:5-60:6),Int(60:7-60:8),Comma(60:8-60:9),Int(60:10-60:11),Comma(60:11-60:12),LowerIdent(60:12-60:15),CloseSquare(60:15-60:16),Int(60:16-60:19),
-OpenSquare(61:3-61:4),
-CloseSquare(62:3-62:4),Int(62:5-62:7),
-Float(63:3-63:6),Int(63:7-63:10),
-Float(64:3-64:7),OpBar(64:8-64:9),Float(64:10-64:14),OpFatArrow(64:15-64:17),Int(64:18-64:21),
-OpenRound(65:3-65:4),Int(65:4-65:5),Comma(65:5-65:6),CloseRound(65:7-65:8),OpFatArrow(65:9-65:11),Int(65:12-65:15),
-OpenRound(66:3-66:4),Int(66:4-66:5),Comma(66:5-66:6),Int(66:7-66:8),Comma(66:8-66:9),Int(66:10-66:11),CloseRound(66:11-66:12),Int(66:12-66:15),
-OpenCurly(67:3-67:4),CloseCurly(67:6-67:7),OpFatArrow(67:8-67:10),Int(67:11-67:13),
-UpperIdent(68:3-68:5),NoSpaceOpenRound(68:5-68:6),Int(68:6-68:9),CloseRound(68:9-68:10),OpFatArrow(68:11-68:13),Int(68:14-68:16),
-CloseCurly(69:2-69:3),
-KwExpect(71:1-71:7),
-LowerIdent(72:2-72:4),
-LowerIdent(74:1-74:6),OpColon(74:7-74:8),UpperIdent(74:9-74:15),NoSpaceOpenRound(74:15-74:16),OpenCurly(74:16-74:17),CloseCurly(74:17-74:18),Comma(74:18-74:19),Underscore(74:20-74:21),CloseRound(74:21-74:22),
-LowerIdent(75:1-75:3),OpAssign(75:3-75:4),OpBar(75:5-75:6),Underscore(75:6-75:7),OpBar(75:7-75:8),OpenCurly(75:9-75:10),LowerIdent(75:11-75:12),
-LowerIdent(76:2-76:3),OpAssign(76:4-76:5),StringStart(76:6-76:7),StringPart(76:7-76:8),StringEnd(76:8-76:9),
-KwVar(77:2-77:5),LowerIdent(77:6-77:8),OpAssign(77:9-77:10),Int(77:11-77:14),
-KwExpect(78:2-78:8),LowerIdent(78:9-78:14),
-KwReturn(79:2-79:8),
-LowerIdent(80:3-80:6),
-TripleDot(83:2-83:5),
-LowerIdent(84:2-84:4),NoSpaceOpenRound(84:4-84:5),
-TripleDot(85:3-85:6),Comma(85:6-85:7),
-CloseRound(86:2-86:3),KwCrash(86:3-86:8),LowerIdent(86:9-86:11),StringStart(86:11-86:12),StringPart(86:12-86:16),StringEnd(86:16-86:17),
-LowerIdent(87:2-87:3),OpAssign(87:3-87:4),StringStart(87:5-87:6),StringPart(87:6-87:9),OpenStringInterpolation(87:9-87:11),LowerIdent(87:11-87:12),CloseStringInterpolation(87:12-87:13),StringPart(87:13-87:13),StringEnd(87:13-87:14),
-LowerIdent(88:1-88:2),OpAssign(88:3-88:4),OpenSquare(88:5-88:6),
-LowerIdent(89:3-89:6),NoSpaceOpenRound(89:6-89:7),LowerIdent(89:7-89:9),Comma(89:9-89:10),CloseRound(89:13-89:14),Comma(89:14-89:15),Int(89:16-89:19),Comma(89:19-89:20),
-Int(90:1-90:2),Comma(90:2-90:3),
-CloseSquare(91:2-91:3),
-KwFor(92:2-92:5),LowerIdent(92:6-92:7),KwIn(92:8-92:10),LowerIdent(92:11-92:15),OpenCurly(92:16-92:17),
-LowerIdent(93:2-93:7),NoSpaceOpenRound(93:7-93:8),StringStart(93:8-93:9),StringPart(93:9-93:12),OpenStringInterpolation(93:12-93:14),LowerIdent(93:14-93:15),CloseStringInterpolation(93:15-93:16),StringPart(93:16-93:20),OpenStringInterpolation(93:20-93:22),LowerIdent(93:22-93:24),CloseStringInterpolation(93:24-93:25),StringPart(93:25-93:25),StringEnd(93:25-93:26),CloseRound(93:26-93:27),
-LowerIdent(94:3-94:6),OpPlus(94:7-94:8),LowerIdent(94:9-94:10),
-CloseCurly(95:2-95:3),
-LowerIdent(96:2-96:4),OpAssign(96:5-96:6),OpenCurly(96:7-96:8),LowerIdent(96:9-96:12),OpColon(96:12-96:13),Int(96:14-96:17),Comma(96:17-96:18),LowerIdent(96:19-96:22),OpColon(96:22-96:23),StringStart(96:24-96:25),StringPart(96:25-96:26),StringEnd(96:26-96:27),Comma(96:27-96:28),LowerIdent(96:29-96:32),OpColon(96:32-96:33),LowerIdent(96:34-96:37),Comma(96:37-96:38),LowerIdent(96:39-96:42),OpColon(96:42-96:43),UpperIdent(96:44-96:46),NoSpaceOpenRound(96:46-96:47),LowerIdent(96:47-96:52),CloseRound(96:52-96:53),Comma(96:53-96:54),LowerIdent(96:54-96:57),CloseCurly(96:58-96:59),
-LowerIdent(97:2-97:3),OpAssign(97:4-97:5),OpenRound(97:6-97:7),Int(97:7-97:10),Comma(97:10-97:11),StringStart(97:12-97:13),StringPart(97:13-97:18),StringEnd(97:18-97:19),Comma(97:19-97:20),LowerIdent(97:21-97:24),Comma(97:24-97:25),UpperIdent(97:26-97:27),Comma(97:27-97:28),OpenRound(97:29-97:30),LowerIdent(97:30-97:32),Comma(97:32-97:33),LowerIdent(97:34-97:35),CloseRound(97:35-97:36),Comma(97:36-97:37),OpenSquare(97:38-97:39),Int(97:39-97:40),Comma(97:40-97:41),Int(97:42-97:43),Comma(97:43-97:44),Int(97:45-97:46),CloseSquare(97:46-97:47),CloseRound(97:47-97:48),
-LowerIdent(98:2-98:3),OpenRound(98:4-98:5),
-Int(99:3-99:6),Comma(99:6-99:7),
-StringStart(100:3-100:4),StringPart(100:4-100:9),StringEnd(100:9-100:10),Comma(100:10-100:11),LowerIdent(100:11-100:14),Comma(100:14-100:15),
-UpperIdent(101:3-101:4),Comma(101:4-101:5),
-OpenRound(102:3-102:4),LowerIdent(102:4-102:6),Comma(102:6-102:7),LowerIdent(102:8-102:13),CloseRound(102:13-102:14),Comma(102:14-102:15),
-OpenSquare(103:3-103:4),Int(103:4-103:5),Comma(103:5-103:6),Int(103:7-103:8),Comma(103:8-103:9),Int(103:10-103:11),CloseSquare(103:11-103:12),Comma(103:12-103:13),
-CloseRound(104:2-104:3),
-LowerIdent(105:2-105:3),OpDoubleQuestion(105:3-105:5),Int(105:6-105:8),OpGreaterThan(105:9-105:10),Int(105:11-105:12),OpOr(105:13-105:15),Int(105:16-105:18),OpPlus(105:19-105:20),Int(105:21-105:22),OpLessThan(105:23-105:24),Int(105:25-105:26),OpAnd(105:27-105:30),Int(105:31-105:33),OpBinaryMinus(105:34-105:35),Int(105:36-105:37),OpGreaterThanOrEq(105:38-105:40),Int(105:41-105:43),OpOr(105:44-105:46),Int(105:47-105:49),OpLessThanOrEq(105:50-105:52),Int(105:53-105:54),LowerIdent(105:55-105:59),NoSpaceOpenRound(105:59-105:60),LowerIdent(105:60-105:64),CloseRound(105:64-105:65),NoSpaceOpQuestion(105:65-105:66),NoSpaceDotLowerIdent(105:66-105:69),NoSpaceOpenRound(105:69-105:70),CloseRound(105:70-105:71),NoSpaceOpQuestion(105:71-105:72),NoSpaceDotLowerIdent(105:72-105:76),NoSpaceOpenRound(105:76-105:77),CloseRound(105:77-105:78),NoSpaceOpQuestion(105:78-105:79),NoSpaceDotLowerIdent(105:79-105:84),NoSpaceOpQuestion(105:84-105:85),
-UpperIdent(106:2-106:7),NoSpaceOpenRound(106:7-106:8),
-StringStart(107:3-107:4),StringPart(107:4-107:6),OpenStringInterpolation(107:6-107:8),
-LowerIdent(108:4-108:5),NoSpaceOpenRound(108:5-108:6),LowerIdent(108:6-108:8),CloseRound(108:8-108:9),
-CloseStringInterpolation(109:3-109:4),StringPart(109:4-109:5),StringEnd(109:5-109:6),Comma(109:6-109:7),
-CloseRound(110:2-110:3),
-CloseCurly(111:1-111:2),
-LowerIdent(113:1-113:2),OpColon(113:3-113:4),OpenCurly(113:5-113:6),CloseCurly(113:6-113:7),
-LowerIdent(114:1-114:2),OpAssign(114:3-114:4),OpenCurly(114:5-114:6),CloseCurly(114:6-114:7),
-LowerIdent(116:1-116:2),OpColon(116:3-116:4),UpperIdent(116:5-116:6),NoSpaceOpenRound(116:6-116:7),NoSpaceOpenRound(116:7-116:8),LowerIdent(116:8-116:9),Comma(116:9-116:10),LowerIdent(116:10-116:11),CloseRound(116:11-116:12),CloseRound(116:12-116:13),
-KwExpect(118:1-118:7),OpenCurly(118:8-118:9),
-LowerIdent(119:2-119:5),OpEquals(119:6-119:8),Int(119:9-119:10),
-LowerIdent(120:1-120:2),OpEquals(120:3-120:5),LowerIdent(120:6-120:9),
-CloseCurly(121:1-121:2),
-EndOfFile(122:1-122:1),
-~~~
-# PARSE
-~~~clojure
-(file @2.1-121.2
-	(app @2.1-2.33
-		(provides @2.5-2.12
-			(exposed-lower-ident @2.6-2.11
-				(text "main!")))
-		(record-field @2.15-2.31 (name "pf")
-			(e-string @2.28-2.31
-				(e-string-part @2.29-2.30 (raw "c"))))
-		(packages @2.13-2.33
-			(record-field @2.15-2.31 (name "pf")
-				(e-string @2.28-2.31
-					(e-string-part @2.29-2.30 (raw "c"))))))
-	(statements
-		(s-import @4.1-4.34 (raw "pf.Stdout")
-			(exposing
-				(exposed-lower-ident @4.28-4.33
-					(text "line!"))))
-		(s-import @6.1-8.6 (raw "Stdot")
-			(exposing
-				(exposed-upper-ident @8.1-8.5 (text "Cust"))))
-		(s-import @10.1-10.19 (raw "Bae") (alias "Gooe"))
-		(s-import @11.1-12.4 (raw "Ba"))
-		(s-type-decl @13.1-13.33
-			(header @13.1-13.10 (name "Map")
-				(args
-					(ty-var @13.5-13.6 (raw "a"))
-					(ty-var @13.8-13.9 (raw "b"))))
-			(ty-fn @13.13-13.33
-				(ty @13.13-13.16 (name "Lis"))
-				(ty-tuple @13.18-13.22
-					(ty-var @13.19-13.21 (raw "ab")))
-				(ty-apply @13.26-13.33
-					(ty @13.26-13.30 (name "List"))
-					(ty-var @13.31-13.32 (raw "b")))))
-		(s-type-decl @14.1-20.15
-			(header @14.1-15.2 (name "MapML")
-				(args))
-			(ty-fn @17.3-20.15
-				(ty-apply @17.3-18.4
-					(ty @17.3-17.7 (name "List")))
-				(ty-tuple @19.3-19.7
-					(ty-var @19.4-19.6 (raw "ab")))
-				(ty-apply @20.4-20.15
-					(ty @20.4-20.8 (name "List"))
-					(ty-var @20.12-20.13 (raw "b")))))
-		(s-type-anno @22.1-23.2 (name "line")
-			(ty-tuple @22.8-23.2))
-		(s-type-decl @24.1-24.27
-			(header @24.1-24.4 (name "Som")
-				(args))
-			(ty-record @24.7-24.27
-				(anno-record-field @24.9-24.16 (name "foo")
-					(ty @24.15-24.16 (name "O")))
-				(anno-record-field @24.18-24.25 (name "bar")
-					(ty-var @24.24-24.25 (raw "g")))))
-		(s-type-decl @25.1-26.2
-			(header @25.1-25.6 (name "Ml")
-				(args
-					(ty-var @25.4-25.5 (raw "a"))))
-			(ty-record @25.9-26.2))
-		(s-type-decl @28.1-29.2
-			(header @28.1-28.9 (name "Soine")
-				(args
-					(ty-var @28.7-28.8 (raw "a"))))
-			(ty-record @28.12-29.2))
-		(s-type-decl @30.1-30.19
-			(header @30.1-30.9 (name "Maybe")
-				(args
-					(ty-var @30.7-30.8 (raw "a"))))
-			(ty-tag-union @30.12-30.19
-				(tags
-					(ty @30.13-30.18 (name "Somne")))))
-		(s-type-decl @32.1-33.2
-			(header @32.1-32.10 (name "Mayine")
-				(args
-					(ty-var @32.8-32.9 (raw "a"))))
-			(ty-tag-union @32.13-33.2
-				(tags)))
-		(s-decl @35.1-35.28
-			(p-ident @35.1-35.4 (raw "ane"))
-			(e-lambda @35.7-35.28
-				(args
-					(p-ident @35.8-35.11 (raw "num")))
-				(e-if-then-else @35.13-35.28
-					(e-ident @35.16-35.19 (raw "num"))
-					(e-int @35.20-35.21 (raw "2"))
-					(e-int @35.27-35.28 (raw "5")))))
-		(s-type-anno @37.1-37.9 (name "one")
-			(ty @37.7-37.9 (name "U6")))
-		(s-decl @38.1-47.2
-			(p-ident @38.1-38.4 (raw "add"))
-			(e-lambda @38.7-47.2
-				(args
-					(p-ident @38.8-38.11 (raw "num")))
-				(e-block @38.13-47.2
-					(statements
-						(e-int @39.2-39.3 (raw "1"))
-						(e-if-then-else @40.2-46.3
-							(e-ident @40.5-40.8 (raw "num"))
-							(e-block @40.9-43.3
-								(statements
-									(s-dbg @41.3-42.5
-										(e-ident @42.4-42.5 (raw "s")))
-									(e-ident @42.6-42.10 (raw "exp0"))))
-							(e-block @43.9-46.3
-								(statements
-									(s-dbg @44.3-44.10
-										(e-int @44.7-44.10 (raw "123")))
-									(e-ident @45.3-45.4 (raw "r")))))))))
-		(s-decl @49.1-69.3
-			(p-ident @49.1-49.3 (raw "me"))
-			(e-lambda @49.6-69.3
-				(args
-					(p-ident @50.2-50.3 (raw "a"))
-					(p-tag @50.5-50.7 (raw "Tb")))
-				(e-match
-					(e-ident @52.8-52.9 (raw "a"))
-					(branches
-						(branch @52.11-54.4
-							(p-ident @52.11-52.14 (raw "lue"))
-							(e-block @52.16-54.4
-								(statements
-									(e-ident @53.2-53.3 (raw "x")))))
-						(branch @55.3-56.5
-							(p-tag @55.3-55.7 (raw "Blue"))
-							(e-block @55.10-56.5
-								(statements
-									(e-ident @55.11-55.12 (raw "x")))))
-						(branch @57.2-58.5
-							(p-ident @57.2-57.4 (raw "er"))
-							(e-int @58.4-58.5 (raw "1")))
-						(branch @58.6-58.17
-							(p-string @58.6-58.11 (raw """))
-							(e-int @58.15-58.17 (raw "20")))
-						(branch @58.17-59.7
-							(p-list @58.17-58.22
-								(p-int @58.18-58.19 (raw "1")))
-							(e-ident @59.3-59.7 (raw "ment")))
-						(branch @60.3-60.19
-							(p-list @60.3-60.16
-								(p-int @60.4-60.5 (raw "1"))
-								(p-int @60.7-60.8 (raw "2"))
-								(p-int @60.10-60.11 (raw "3"))
-								(p-ident @60.12-60.15 (raw "est")))
-							(e-int @60.16-60.19 (raw "123")))
-						(branch @61.3-62.7
-							(p-list @61.3-62.4)
-							(e-int @62.5-62.7 (raw "23")))
-						(branch @63.3-63.10
-							(p-frac @63.3-63.6 (raw "3.1"))
-							(e-int @63.7-63.10 (raw "314")))
-						(branch @64.3-64.21
-							(p-alternatives
-								(p-frac @64.3-64.7 (raw "3.14"))
-								(p-frac @64.10-64.14 (raw "6.28")))
-							(e-int @64.18-64.21 (raw "314")))
-						(branch @65.3-65.15
-							(p-tuple @65.3-65.8
-								(p-int @65.4-65.5 (raw "1")))
-							(e-int @65.12-65.15 (raw "123")))
-						(branch @66.3-66.15
-							(p-tuple @66.3-66.12
-								(p-int @66.4-66.5 (raw "1"))
-								(p-int @66.7-66.8 (raw "2"))
-								(p-int @66.10-66.11 (raw "3")))
-							(e-int @66.12-66.15 (raw "123")))
-						(branch @67.3-67.13
-							(p-record @67.3-67.7)
-							(e-int @67.11-67.13 (raw "12")))
-						(branch @68.3-68.16
-							(p-tag @68.3-68.10 (raw "Ok")
-								(p-int @68.6-68.9 (raw "123")))
-							(e-int @68.14-68.16 (raw "12")))))))
-		(s-expect @71.1-72.4
-			(e-ident @72.2-72.4 (raw "nt")))
-		(s-type-anno @74.1-74.22 (name "main!")
-			(ty-apply @74.9-74.22
-				(ty @74.9-74.15 (name "Listlt"))
-				(ty-record @74.16-74.18)
-				(_)))
-		(s-decl @75.1-111.2
-			(p-ident @75.1-75.3 (raw "ma"))
-			(e-lambda @75.5-111.2
-				(args
-					(p-underscore))
-				(e-block @75.9-111.2
-					(statements
-						(e-ident @75.11-75.12 (raw "e"))
-						(s-decl @76.2-76.9
-							(p-ident @76.2-76.3 (raw "w"))
-							(e-string @76.6-76.9
-								(e-string-part @76.7-76.8 (raw "d"))))
-						(s-var @77.2-77.14 (name "er")
-							(e-int @77.11-77.14 (raw "123")))
-						(s-expect @78.2-78.14
-							(e-ident @78.9-78.14 (raw "blaue")))
-						(s-return @79.2-80.6
-							(e-ident @80.3-80.6 (raw "tag")))
-						(e-ellipsis)
-						(e-apply @84.2-86.3
-							(e-ident @84.2-84.4 (raw "me"))
-							(e-ellipsis))
-						(s-crash @86.3-86.11
-							(e-ident @86.9-86.11 (raw "ke")))
-						(e-string @86.11-86.17
-							(e-string-part @86.12-86.16 (raw "Unr!")))
-						(s-decl @87.2-87.14
-							(p-ident @87.2-87.3 (raw "i"))
-							(e-string @87.5-87.14
-								(e-string-part @87.6-87.9 (raw "H, "))
-								(e-ident @87.11-87.12 (raw "d"))
-								(e-string-part @87.13-87.13 (raw ""))))
-						(s-decl @88.1-91.3
-							(p-ident @88.1-88.2 (raw "t"))
-							(e-list @88.5-91.3
-								(e-apply @89.3-89.14
-									(e-ident @89.3-89.6 (raw "one"))
-									(e-ident @89.7-89.9 (raw "er")))
-								(e-int @89.16-89.19 (raw "456"))
-								(e-int @90.1-90.2 (raw "9"))))
-						(s-for @92.2-95.3
-							(p-ident @92.6-92.7 (raw "n"))
-							(e-ident @92.11-92.15 (raw "list"))
-							(e-block @92.16-95.3
-								(statements
-									(e-apply @93.2-93.27
-										(e-ident @93.2-93.7 (raw "line!"))
-										(e-string @93.8-93.26
-											(e-string-part @93.9-93.12 (raw "Ag "))
-											(e-ident @93.14-93.15 (raw "n"))
-											(e-string-part @93.16-93.20 (raw " to "))
-											(e-ident @93.22-93.24 (raw "er"))
-											(e-string-part @93.25-93.25 (raw ""))))
-									(e-binop @94.3-94.10 (op "+")
-										(e-ident @94.3-94.6 (raw "ber"))
-										(e-ident @94.9-94.10 (raw "n"))))))
-						(s-decl @96.2-96.59
-							(p-ident @96.2-96.4 (raw "rd"))
-							(e-record @96.7-96.59
-								(field (field "foo")
-									(e-int @96.14-96.17 (raw "123")))
-								(field (field "bar")
-									(e-string @96.24-96.27
-										(e-string-part @96.25-96.26 (raw "H"))))
-								(field (field "baz")
-									(e-ident @96.34-96.37 (raw "tag")))
-								(field (field "qux")
-									(e-apply @96.44-96.53
-										(e-tag @96.44-96.46 (raw "Ok"))
-										(e-ident @96.47-96.52 (raw "world"))))
-								(field (field "ned"))))
-						(s-decl @97.2-97.48
-							(p-ident @97.2-97.3 (raw "t"))
-							(e-tuple @97.6-97.48
-								(e-int @97.7-97.10 (raw "123"))
-								(e-string @97.12-97.19
-									(e-string-part @97.13-97.18 (raw "World")))
-								(e-ident @97.21-97.24 (raw "tag"))
-								(e-tag @97.26-97.27 (raw "O"))
-								(e-tuple @97.29-97.36
-									(e-ident @97.30-97.32 (raw "nd"))
-									(e-ident @97.34-97.35 (raw "t")))
-								(e-list @97.38-97.47
-									(e-int @97.39-97.40 (raw "1"))
-									(e-int @97.42-97.43 (raw "2"))
-									(e-int @97.45-97.46 (raw "3")))))
-						(e-ident @98.2-98.3 (raw "m"))
-						(e-tuple @98.4-104.3
-							(e-int @99.3-99.6 (raw "123"))
-							(e-string @100.3-100.10
-								(e-string-part @100.4-100.9 (raw "World")))
-							(e-ident @100.11-100.14 (raw "ag1"))
-							(e-tag @101.3-101.4 (raw "O"))
-							(e-tuple @102.3-102.14
-								(e-ident @102.4-102.6 (raw "ne"))
-								(e-ident @102.8-102.13 (raw "tuple")))
-							(e-list @103.3-103.12
-								(e-int @103.4-103.5 (raw "1"))
-								(e-int @103.7-103.8 (raw "2"))
-								(e-int @103.10-103.11 (raw "3"))))
-						(e-binop @105.2-105.54 (op "or")
-							(e-binop @105.2-105.12 (op ">")
-								(e-binop @105.2-105.8 (op "??")
-									(e-ident @105.2-105.3 (raw "b"))
-									(e-int @105.6-105.8 (raw "12")))
-								(e-int @105.11-105.12 (raw "5")))
-							(e-binop @105.16-105.54 (op "or")
-								(e-binop @105.16-105.43 (op "and")
-									(e-binop @105.16-105.26 (op "<")
-										(e-binop @105.16-105.22 (op "+")
-											(e-int @105.16-105.18 (raw "13"))
-											(e-int @105.21-105.22 (raw "2")))
-										(e-int @105.25-105.26 (raw "5")))
-									(e-binop @105.31-105.43 (op ">=")
-										(e-binop @105.31-105.37 (op "-")
-											(e-int @105.31-105.33 (raw "10"))
-											(e-int @105.36-105.37 (raw "1")))
-										(e-int @105.41-105.43 (raw "16"))))
-								(e-binop @105.47-105.54 (op "<=")
-									(e-int @105.47-105.49 (raw "12"))
-									(e-int @105.53-105.54 (raw "3")))))
-						(e-field-access @105.55-105.85
-							(e-field-access @105.55-105.79
-								(e-field-access @105.55-105.72
-									(e-question-suffix @105.55-105.66
-										(e-apply @105.55-105.65
-											(e-ident @105.55-105.59 (raw "e_fn"))
-											(e-ident @105.60-105.64 (raw "arg1"))))
-									(e-question-suffix @105.66-105.72
-										(e-apply @105.66-105.71
-											(e-ident @105.66-105.69 (raw "od")))))
-								(e-question-suffix @105.72-105.79
-									(e-apply @105.72-105.78
-										(e-ident @105.72-105.76 (raw "ned")))))
-							(e-question-suffix @105.79-105.85
-								(e-ident @105.79-105.84 (raw "recd"))))
-						(e-apply @106.2-110.3
-							(e-tag @106.2-106.7 (raw "Stdo!"))
-							(e-string @107.3-109.6
-								(e-string-part @107.4-107.6 (raw "Ho"))
-								(e-apply @108.4-108.9
-									(e-ident @108.4-108.5 (raw "r"))
-									(e-ident @108.6-108.8 (raw "nu")))
-								(e-string-part @109.4-109.5 (raw " "))))))))
-		(s-type-anno @113.1-113.7 (name "y")
-			(ty-record @113.5-113.7))
-		(s-decl @114.1-114.7
-			(p-ident @114.1-114.2 (raw "e"))
-			(e-record @114.5-114.7))
-		(s-type-anno @116.1-116.13 (name "t")
-			(ty-apply @116.5-116.13
-				(ty @116.5-116.6 (name "V"))
-				(ty-tuple @116.7-116.12
-					(ty-var @116.8-116.9 (raw "a"))
-					(ty-var @116.10-116.11 (raw "c")))))
-		(s-expect @118.1-121.2
-			(e-block @118.8-121.2
-				(statements
-					(e-binop @119.2-119.10 (op "==")
-						(e-ident @119.2-119.5 (raw "foo"))
-						(e-int @119.9-119.10 (raw "1")))
-					(e-binop @120.1-120.9 (op "==")
-						(e-ident @120.1-120.2 (raw "h"))
-						(e-ident @120.6-120.9 (raw "foo"))))))))
-~~~
-# FORMATTED
-~~~roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!]
-
-import Stdot
-	exposing [ # tem
-		Cust,
-	]
-
-import Bae as Gooe
-import
-	Ba
-Map(a, b) : Lis, (ab) -> List(b)
-MapML # Ag
-	: # Aon
-		List(),
-		(ab) -> # row
-			List(b) # z)
-
-line : () # Co
-Som : { foo : O, bar : g }
-Ml(a) : {}
-
-Soine(a) : {} #
-Maybe(a) : [Somne]
-
-Mayine(a) : [] # )
-
-ane = |num| if num 2 else 5
-
-one : U6
-add = |num| {
-	1
-	if num {
-		dbg # bug
-			s
-		exp0
-	} else {
-		dbg 123
-		r
-	}
-}
-
-me = |
-	a,
-	Tb,
-| # As
-	match a {
-		lue => {
-			x
-		}
-		Blue => {
-			x
-		}
-		er # ent
-			=> # ent
-				1
-		"for" => 20
-		[
-			1,
-		] # t
-			=> # t
-				ment
-		[1, 2, 3, est] => 123
-		[] => 23
-		3.1 => 314
-		3.14 | 6.28 => 314
-		(
-			1,
-		) => 123
-		(1, 2, 3) => 123
-		{} => 12
-		Ok(123) => 12
-	}
-
-expect # Cord
-	nt
-
-main! : Listlt({}, _)
-ma = |_| {
-	e
-	w = "d"
-	var er = 123
-	expect blaue
-	return # d
-		tag
-
-	#
-	...
-	me(
-		..., # r
-	)
-	crash ke
-	"Unr!" # )
-	i = "H, ${d}"
-	t = [
-		one(
-			er,
-		),
-		456, # two
-		9, # ee
-	]
-	for n in list {
-		line!("Ag ${n} to ${er}")
-		ber + n
-	}
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-	m
-	(
-		123,
-		"World",
-		ag1,
-		O, # nt
-		(ne, tuple),
-		[1, 2, 3],
-	)
-	b ?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
-	e_fn(arg1)?.od()?.ned()?.recd?
-	Stdo!(
-		"Ho${ #
-			r(nu) # xpr
-		} ",
-	)
-} # Cocl
-
-y : {}
-e = {}
-
-t : V((a, c))
-
-expect {
-	foo == 1
-	h == foo
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @35.1-35.4 (ident "ane"))
-		(e-lambda @35.7-35.28
-			(args
-				(p-assign @35.8-35.11 (ident "num")))
-			(e-if @35.13-35.28
-				(if-branches
-					(if-branch
-						(e-lookup-local @35.16-35.19
-							(p-assign @35.8-35.11 (ident "num")))
-						(e-int @35.20-35.21 (value "2"))))
-				(if-else
-					(e-int @35.27-35.28 (value "5"))))))
-	(d-let
-		(p-assign @38.1-38.4 (ident "add"))
-		(e-lambda @38.7-47.2
-			(args
-				(p-assign @38.8-38.11 (ident "num")))
-			(e-block @38.13-47.2
-				(s-expr @39.2-39.3
-					(e-int @39.2-39.3 (value "1")))
-				(e-if @40.2-46.3
-					(if-branches
-						(if-branch
-							(e-lookup-local @40.5-40.8
-								(p-assign @38.8-38.11 (ident "num")))
-							(e-block @40.9-43.3
-								(s-dbg @41.3-42.5
-									(e-runtime-error (tag "ident_not_in_scope")))
-								(e-runtime-error (tag "ident_not_in_scope")))))
-					(if-else
-						(e-block @43.9-46.3
-							(s-dbg @44.3-44.10
-								(e-int @44.7-44.10 (value "123")))
-							(e-runtime-error (tag "ident_not_in_scope"))))))))
-	(d-let
-		(p-assign @49.1-49.3 (ident "me"))
-		(e-lambda @49.6-69.3
-			(args
-				(p-assign @50.2-50.3 (ident "a"))
-				(p-applied-tag @50.5-50.7))
-			(e-match @52.2-69.3
-				(match @52.2-69.3
-					(cond
-						(e-lookup-local @52.8-52.9
-							(p-assign @50.2-50.3 (ident "a"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @52.11-52.14 (ident "lue"))))
-							(value
-								(e-block @52.16-54.4
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag @55.3-55.7)))
-							(value
-								(e-block @55.10-56.5
-									(e-runtime-error (tag "ident_not_in_scope")))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-assign @57.2-57.4 (ident "er"))))
-							(value
-								(e-int @58.4-58.5 (value "1"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-str @58.6-58.11 (text """))))
-							(value
-								(e-int @58.15-58.17 (value "20"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @58.17-58.22
-										(patterns
-											(p-int @58.18-58.19 (value "1"))))))
-							(value
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @60.3-60.16
-										(patterns
-											(p-int @60.4-60.5 (value "1"))
-											(p-int @60.7-60.8 (value "2"))
-											(p-int @60.10-60.11 (value "3"))
-											(p-assign @60.12-60.15 (ident "est"))))))
-							(value
-								(e-int @60.16-60.19 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-list @61.3-62.4
-										(patterns))))
-							(value
-								(e-int @62.5-62.7 (value "23"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @63.3-63.6)))
-							(value
-								(e-int @63.7-63.10 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-small-dec @64.3-64.7))
-								(pattern (degenerate false)
-									(p-small-dec @64.10-64.14)))
-							(value
-								(e-int @64.18-64.21 (value "314"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @65.3-65.8
-										(patterns
-											(p-int @65.4-65.5 (value "1"))))))
-							(value
-								(e-int @65.12-65.15 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-tuple @66.3-66.12
-										(patterns
-											(p-int @66.4-66.5 (value "1"))
-											(p-int @66.7-66.8 (value "2"))
-											(p-int @66.10-66.11 (value "3"))))))
-							(value
-								(e-int @66.12-66.15 (value "123"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure @67.3-67.7
-										(destructs))))
-							(value
-								(e-int @67.11-67.13 (value "12"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal @68.3-68.10
-										(p-applied-tag @68.3-68.10))))
-							(value
-								(e-int @68.14-68.16 (value "12")))))))))
-	(d-let
-		(p-assign @75.1-75.3 (ident "ma"))
-		(e-closure @75.5-111.2
-			(captures
-				(capture @49.1-49.3 (ident "me")))
-			(e-lambda @75.5-111.2
-				(args
-					(p-underscore @75.6-75.7))
-				(e-block @75.9-111.2
-					(s-expr @75.11-75.12
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(s-let @76.2-76.9
-						(p-assign @76.2-76.3 (ident "w"))
-						(e-string @76.6-76.9
-							(e-literal @76.7-76.8 (string "d"))))
-					(s-var @77.2-77.14
-						(p-assign @77.2-77.14 (ident "er"))
-						(e-int @77.11-77.14 (value "123")))
-					(s-expect @78.2-78.14
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(s-return @79.2-80.6
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(s-expr @83.2-83.5
-						(e-not-implemented @1.1-1.1))
-					(s-expr @84.2-86.3
-						(e-call @84.2-86.3
-							(e-lookup-local @84.2-84.4
-								(p-assign @49.1-49.3 (ident "me")))
-							(e-not-implemented @1.1-1.1)))
-					(s-runtime-error (tag "crash_expects_string"))
-					(s-expr @86.11-86.17
-						(e-string @86.11-86.17
-							(e-literal @86.12-86.16 (string "Unr!"))))
-					(s-let @87.2-87.14
-						(p-assign @87.2-87.3 (ident "i"))
-						(e-string @87.5-87.14
-							(e-literal @87.6-87.9 (string "H, "))
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-literal @87.13-87.13 (string ""))))
-					(s-let @88.1-91.3
-						(p-assign @88.1-88.2 (ident "t"))
-						(e-list @88.5-91.3
-							(elems
-								(e-call @89.3-89.14
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @89.7-89.9
-										(p-assign @77.2-77.14 (ident "er"))))
-								(e-int @89.16-89.19 (value "456"))
-								(e-int @90.1-90.2 (value "9")))))
-					(s-runtime-error (tag "not_implemented"))
-					(s-let @96.2-96.59
-						(p-assign @96.2-96.4 (ident "rd"))
-						(e-record @96.7-96.59
-							(fields
-								(field (name "foo")
-									(e-int @96.14-96.17 (value "123")))
-								(field (name "bar")
-									(e-string @96.24-96.27
-										(e-literal @96.25-96.26 (string "H"))))
-								(field (name "baz")
-									(e-runtime-error (tag "ident_not_in_scope")))
-								(field (name "qux")
-									(e-nominal @96.44-96.53 (nominal "Result")
-										(e-tag @96.44-96.53 (name "Ok")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope"))))))
-								(field (name "ned")
-									(e-runtime-error (tag "ident_not_in_scope"))))))
-					(s-let @97.2-97.48
-						(p-assign @97.2-97.3 (ident "t"))
-						(e-tuple @97.6-97.48
-							(elems
-								(e-int @97.7-97.10 (value "123"))
-								(e-string @97.12-97.19
-									(e-literal @97.13-97.18 (string "World")))
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-tag @97.26-97.27 (name "O"))
-								(e-tuple @97.29-97.36
-									(elems
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local @97.34-97.35
-											(p-assign @97.2-97.3 (ident "t")))))
-								(e-list @97.38-97.47
-									(elems
-										(e-int @97.39-97.40 (value "1"))
-										(e-int @97.42-97.43 (value "2"))
-										(e-int @97.45-97.46 (value "3")))))))
-					(s-expr @98.2-98.3
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(s-expr @98.4-104.3
-						(e-tuple @98.4-104.3
-							(elems
-								(e-int @99.3-99.6 (value "123"))
-								(e-string @100.3-100.10
-									(e-literal @100.4-100.9 (string "World")))
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-tag @101.3-101.4 (name "O"))
-								(e-tuple @102.3-102.14
-									(elems
-										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-runtime-error (tag "ident_not_in_scope"))))
-								(e-list @103.3-103.12
-									(elems
-										(e-int @103.4-103.5 (value "1"))
-										(e-int @103.7-103.8 (value "2"))
-										(e-int @103.10-103.11 (value "3")))))))
-					(s-expr @105.2-105.54
-						(e-binop @105.2-105.54 (op "or")
-							(e-binop @105.2-105.12 (op "gt")
-								(e-binop @105.2-105.8 (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-int @105.6-105.8 (value "12")))
-								(e-int @105.11-105.12 (value "5")))
-							(e-binop @105.16-105.54 (op "or")
-								(e-binop @105.16-105.43 (op "and")
-									(e-binop @105.16-105.26 (op "lt")
-										(e-binop @105.16-105.22 (op "add")
-											(e-int @105.16-105.18 (value "13"))
-											(e-int @105.21-105.22 (value "2")))
-										(e-int @105.25-105.26 (value "5")))
-									(e-binop @105.31-105.43 (op "ge")
-										(e-binop @105.31-105.37 (op "sub")
-											(e-int @105.31-105.33 (value "10"))
-											(e-int @105.36-105.37 (value "1")))
-										(e-int @105.41-105.43 (value "16"))))
-								(e-binop @105.47-105.54 (op "le")
-									(e-int @105.47-105.49 (value "12"))
-									(e-int @105.53-105.54 (value "3"))))))
-					(s-expr @105.55-105.85
-						(e-dot-access @105.55-105.85 (field "unknown")
-							(receiver
-								(e-dot-access @105.55-105.79 (field "unknown")
-									(receiver
-										(e-dot-access @105.55-105.72 (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
-					(e-tag @106.2-110.3 (name "Stdo!")
-						(args
-							(e-string @107.3-109.6
-								(e-literal @107.4-107.6 (string "Ho"))
-								(e-call @108.4-108.9
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-runtime-error (tag "ident_not_in_scope")))
-								(e-literal @109.4-109.5 (string " ")))))))))
-	(d-let
-		(p-assign @114.1-114.2 (ident "e"))
-		(e-empty_record @114.5-114.7))
-	(s-alias-decl @13.1-13.33
-		(ty-header @13.1-13.10 (name "Map")
-			(ty-args
-				(ty-var @13.5-13.6 (name "a"))
-				(ty-var @13.8-13.9 (name "b"))))
-		(ty-fn @13.13-13.33 (effectful false)
-			(ty @13.13-13.16 (name "Lis"))
-			(ty-malformed @13.19-13.21)
-			(ty-apply @13.26-13.33 (symbol "List")
-				(ty-var @13.31-13.32 (name "b")))))
-	(s-alias-decl @14.1-20.15
-		(ty-header @14.1-15.2 (name "MapML"))
-		(ty-fn @17.3-20.15 (effectful false)
-			(ty-apply @17.3-18.4 (symbol "List"))
-			(ty-malformed @19.4-19.6)
-			(ty-apply @20.4-20.15 (symbol "List")
-				(ty-malformed @20.12-20.13))))
-	(s-alias-decl @24.1-24.27
-		(ty-header @24.1-24.4 (name "Som"))
-		(ty-record @24.7-24.27
-			(field (field "foo")
-				(ty @24.15-24.16 (name "O")))
-			(field (field "bar")
-				(ty-malformed @24.24-24.25))))
-	(s-alias-decl @25.1-26.2
-		(ty-header @25.1-25.6 (name "Ml")
-			(ty-args
-				(ty-var @25.4-25.5 (name "a"))))
-		(ty-record @25.9-26.2))
-	(s-alias-decl @28.1-29.2
-		(ty-header @28.1-28.9 (name "Soine")
-			(ty-args
-				(ty-var @28.7-28.8 (name "a"))))
-		(ty-record @28.12-29.2))
-	(s-alias-decl @30.1-30.19
-		(ty-header @30.1-30.9 (name "Maybe")
-			(ty-args
-				(ty-var @30.7-30.8 (name "a"))))
-		(ty-tag-union @30.12-30.19
-			(ty @30.13-30.18 (name "Somne"))))
-	(s-alias-decl @32.1-33.2
-		(ty-header @32.1-32.10 (name "Mayine")
-			(ty-args
-				(ty-var @32.8-32.9 (name "a"))))
-		(ty-tag-union @32.13-33.2))
-	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf")
-		(exposes
-			(exposed (name "line!") (wildcard false))))
-	(s-import @6.1-8.6 (module "Stdot")
-		(exposes
-			(exposed (name "Cust") (wildcard false))))
-	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
-		(exposes))
-	(s-import @11.1-12.4 (module "Ba")
-		(exposes))
-	(s-expect @71.1-72.4
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expect @118.1-121.2
-		(e-block @118.8-121.2
-			(s-expr @119.2-119.10
-				(e-binop @119.2-119.10 (op "eq")
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-int @119.9-119.10 (value "1"))))
-			(e-binop @120.1-120.9 (op "eq")
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+(Expr.block
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.import)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "line"))
+    (type type_50)
+  )
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.type_alias)
+  (Stmt.assign
+    (pattern (Patt.ident "ane"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "one"))
+    (type type_91)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "add"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "me"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.lookup "x")
+  (Expr.malformed)
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.block
+    (Expr.lookup "x")
+  )
+  (Expr.lookup "er")
+  (Expr.num_literal_i32 1)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.num_literal_i32 20)
+  (Expr.list_literal)
+  (Expr.lookup "ment")
+  (Expr.list_literal)
+  (Expr.num_literal_i32 123)
+  (Expr.list_literal)
+  (Expr.num_literal_i32 23)
+  (Expr.frac_literal_small 3.1)
+  (Expr.num_literal_i32 314)
+  (Expr.frac_literal_small 3.14)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.num_literal_i32 123)
+  (Expr.record_literal
+  )
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.tag_applied)
+  (Expr.malformed)
+  (Expr.num_literal_i32 12)
+  (Expr.malformed)
+  (Stmt.expr)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "main"))
+    (type type_175)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "ma"))
+    (Expr.lambda (canonicalized))
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "y"))
+    (type type_315)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "e"))
+    (Expr.record_literal
+    )
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "t"))
+    (type type_325)
+  )
+  (Stmt.expr)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 381
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 _)
+(var #46 _)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 _)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 _)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 _)
+(var #66 _)
+(var #67 _)
+(var #68 _)
+(var #69 _)
+(var #70 _)
+(var #71 _)
+(var #72 _)
+(var #73 _)
+(var #74 _)
+(var #75 _)
+(var #76 _)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 _)
+(var #81 _)
+(var #82 -> #337)
+(var #83 _)
+(var #84 _)
+(var #85 Num *)
+(var #86 Num *)
+(var #87 _)
+(var #88 -> #337)
+(var #89 _)
+(var #90 _)
+(var #91 _)
+(var #92 _)
+(var #93 -> #339)
+(var #94 _)
+(var #95 Num *)
+(var #96 _)
+(var #97 _)
+(var #98 _)
+(var #99 _)
+(var #100 _)
+(var #101 _)
+(var #102 _)
+(var #103 _)
+(var #104 Num *)
+(var #105 _)
+(var #106 _)
+(var #107 _)
+(var #108 _)
+(var #109 _)
+(var #110 -> #339)
+(var #111 _)
+(var #112 -> #342)
+(var #113 _)
+(var #114 _)
+(var #115 _)
+(var #116 _)
+(var #117 _)
+(var #118 _)
+(var #119 -> #342)
+(var #120 _)
+(var #121 _)
+(var #122 _)
+(var #123 _)
+(var #124 _)
+(var #125 _)
+(var #126 _)
+(var #127 _)
+(var #128 Num *)
+(var #129 Str)
+(var #130 _)
+(var #131 Num *)
+(var #132 Num *)
+(var #133 _)
+(var #134 _)
+(var #135 Num *)
+(var #136 Num *)
+(var #137 Num *)
+(var #138 _)
+(var #139 _)
+(var #140 Num *)
+(var #141 _)
+(var #142 Num *)
+(var #143 F64)
+(var #144 Num *)
+(var #145 F64)
+(var #146 _)
+(var #147 _)
+(var #148 -> #347)
+(var #149 Num *)
+(var #150 _)
+(var #151 _)
+(var #152 -> #350)
+(var #153 Num *)
+(var #154 Num *)
+(var #155 Num *)
+(var #156 -> #349)
+(var #157 _)
+(var #158 Num *)
+(var #159 -> #351)
+(var #160 _)
+(var #161 Num *)
+(var #162 -> #353)
+(var #163 Num *)
+(var #164 _)
+(var #165 _)
+(var #166 Num *)
+(var #167 _)
+(var #168 _)
+(var #169 _)
+(var #170 _)
+(var #171 _)
+(var #172 _)
+(var #173 _)
+(var #174 _)
+(var #175 _)
+(var #176 _)
+(var #177 -> #375)
+(var #178 _)
+(var #179 _)
+(var #180 _)
+(var #181 -> #182)
+(var #182 Str)
+(var #183 _)
+(var #184 _)
+(var #185 Num *)
+(var #186 _)
+(var #187 _)
+(var #188 _)
+(var #189 _)
+(var #190 _)
+(var #191 _)
+(var #192 -> #362)
+(var #193 _)
+(var #194 _)
+(var #195 _)
+(var #196 _)
+(var #197 Str)
+(var #198 -> #199)
+(var #199 Str)
+(var #200 _)
+(var #201 -> #207)
+(var #202 _)
+(var #203 _)
+(var #204 _)
+(var #205 Num *)
+(var #206 Num *)
+(var #207 _)
+(var #208 _)
+(var #209 _)
+(var #210 _)
+(var #211 _)
+(var #212 Str)
+(var #213 _)
+(var #214 _)
+(var #215 _)
+(var #216 _)
+(var #217 _)
+(var #218 {})
+(var #219 -> #363)
+(var #220 _)
+(var #221 Num *)
+(var #222 _)
+(var #223 _)
+(var #224 Str)
+(var #225 _)
+(var #226 _)
+(var #227 _)
+(var #228 _)
+(var #229 _)
+(var #230 _)
+(var #231 _)
+(var #232 _)
+(var #233 _)
+(var #234 _)
+(var #235 _)
+(var #236 -> #363)
+(var #237 _)
+(var #238 -> #365)
+(var #239 Num *)
+(var #240 Str)
+(var #241 _)
+(var #242 _)
+(var #243 _)
+(var #244 _)
+(var #245 -> #364)
+(var #246 Num *)
+(var #247 Num *)
+(var #248 Num *)
+(var #249 _)
+(var #250 -> #365)
+(var #251 _)
+(var #252 -> #368)
+(var #253 Num *)
+(var #254 Str)
+(var #255 _)
+(var #256 _)
+(var #257 _)
+(var #258 _)
+(var #259 -> #366)
+(var #260 Num *)
+(var #261 Num *)
+(var #262 Num *)
+(var #263 _)
+(var #264 -> #367)
+(var #265 _)
+(var #266 _)
+(var #267 Num *)
+(var #268 -> #269)
+(var #269 -> #270)
+(var #270 -> #281)
+(var #271 -> #272)
+(var #272 -> #273)
+(var #273 -> #274)
+(var #274 -> #275)
+(var #275 -> #280)
+(var #276 -> #277)
+(var #277 -> #278)
+(var #278 -> #279)
+(var #279 -> #280)
+(var #280 -> #281)
+(var #281 -> #282)
+(var #282 -> #285)
+(var #283 -> #284)
+(var #284 -> #285)
+(var #285 -> #286)
+(var #286 Num *)
+(var #287 -> #369)
+(var #288 _)
+(var #289 _)
+(var #290 _)
+(var #291 _)
+(var #292 -> #370)
+(var #293 _)
+(var #294 _)
+(var #295 _)
+(var #296 -> #371)
+(var #297 _)
+(var #298 _)
+(var #299 _)
+(var #300 _)
+(var #301 _)
+(var #302 _)
+(var #303 _)
+(var #304 -> #373)
+(var #305 -> #374)
+(var #306 _)
+(var #307 _)
+(var #308 _)
+(var #309 -> #375)
+(var #310 _)
+(var #311 _)
+(var #312 _)
+(var #313 _)
+(var #314 _)
+(var #315 _)
+(var #316 _)
+(var #317 -> #379)
+(var #318 -> #379)
+(var #319 _)
+(var #320 _)
+(var #321 _)
+(var #322 _)
+(var #323 _)
+(var #324 _)
+(var #325 _)
+(var #326 _)
+(var #327 _)
+(var #328 Num *)
+(var #329 _)
+(var #330 _)
+(var #331 _)
+(var #332 _)
+(var #333 _)
+(var #334 _)
+(var #335 _)
+(var #336 _)
+(var #337 fn_pure)
+(var #338 _)
+(var #339 fn_pure)
+(var #340 _)
+(var #341 _)
+(var #342 fn_pure)
+(var #343 _)
+(var #344 _)
+(var #345 _)
+(var #346 _)
+(var #347 <error>)
+(var #348 _)
+(var #349 tuple)
+(var #350 <error>)
+(var #351 {})
+(var #352 _)
+(var #353 fn_pure)
+(var #354 _)
+(var #355 _)
+(var #356 _)
+(var #357 _)
+(var #358 _)
+(var #359 _)
+(var #360 _)
+(var #361 _)
+(var #362 fn_pure)
+(var #363 {})
+(var #364 tuple)
+(var #365 tuple)
+(var #366 tuple)
+(var #367 tuple)
+(var #368 fn_pure)
+(var #369 fn_pure)
+(var #370 fn_pure)
+(var #371 fn_pure)
+(var #372 _)
+(var #373 _)
+(var #374 fn_pure)
+(var #375 fn_pure)
+(var #376 _)
+(var #377 _)
+(var #378 _)
+(var #379 {})
+(var #380 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
-		(patt @38.1-38.4 (type "Bool -> Error"))
-		(patt @49.1-49.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
-		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
-		(patt @114.1-114.2 (type "{}")))
-	(type_decls
-		(alias @13.1-13.33 (type "Map(a, b)")
-			(ty-header @13.1-13.10 (name "Map")
-				(ty-args
-					(ty-var @13.5-13.6 (name "a"))
-					(ty-var @13.8-13.9 (name "b")))))
-		(alias @14.1-20.15 (type "MapML")
-			(ty-header @14.1-15.2 (name "MapML")))
-		(alias @24.1-24.27 (type "Som")
-			(ty-header @24.1-24.4 (name "Som")))
-		(alias @25.1-26.2 (type "Ml(a)")
-			(ty-header @25.1-25.6 (name "Ml")
-				(ty-args
-					(ty-var @25.4-25.5 (name "a")))))
-		(alias @28.1-29.2 (type "Soine(a)")
-			(ty-header @28.1-28.9 (name "Soine")
-				(ty-args
-					(ty-var @28.7-28.8 (name "a")))))
-		(alias @30.1-30.19 (type "Maybe(a)")
-			(ty-header @30.1-30.9 (name "Maybe")
-				(ty-args
-					(ty-var @30.7-30.8 (name "a")))))
-		(alias @32.1-33.2 (type "Mayine(a)")
-			(ty-header @32.1-32.10 (name "Mayine")
-				(ty-args
-					(ty-var @32.8-32.9 (name "a"))))))
-	(expressions
-		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
-		(expr @38.7-47.2 (type "Bool -> Error"))
-		(expr @49.6-69.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
-		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
-		(expr @114.5-114.7 (type "{}"))))
+~~~roc
+s : _d
+ma : _arg -> _ret
+n : _d
+rd : {}
+er : _d
+t : _d
+line : _d
+y : _d
+a : _d
+ane : _arg -> _ret
+i : Str
+exp0 : _d
+add : _arg -> _ret
+w : Str
+e : {}
+one : _d
+main : _d
+num : _d
+me : _arg, _arg2 -> _ret
+r : _d
 ~~~

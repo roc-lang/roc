@@ -44,8 +44,13 @@ if bool 1 else 2
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 Num *)
+(var #4 _)
 ~~~
 # TYPES
 ~~~roc
-# No header found
 ~~~

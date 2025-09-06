@@ -76,19 +76,6 @@ This is an unexpected parsing error. Please check your syntax.
      ^
 
 
-**UNUSED VARIABLE**
-Variable **x** is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-
-**let_shadows_capture.md:5:9:5:10:**
-```roc
-        x 
-```
-        ^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -98,15 +85,39 @@ The unused variable is declared here:
   )
   (Stmt.assign
     (pattern (Patt.ident "y"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
   (Expr.lookup "y")
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 22
+(var #0 _)
+(var #1 -> #2)
+(var #2 Num *)
+(var #3 _)
+(var #4 -> #14)
+(var #5 _)
+(var #6 -> #7)
+(var #7 Num *)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 -> #14)
+(var #12 -> #19)
+(var #13 -> #20)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 -> #20)
+(var #19 -> #21)
+(var #20 {})
+(var #21 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : Num(_size)
+y : _a
 ~~~

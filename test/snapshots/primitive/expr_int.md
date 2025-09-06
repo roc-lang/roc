@@ -17,10 +17,18 @@ KwModule OpenSquare LowerIdent CloseSquare LowerIdent OpAssign Int ~~~
   (exposes
     (lc "foo")
 ))
+(block
+  (binop_equals
+    (lc "foo")
+    (num_literal_i32 42)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]foo = 42
+module [foo]
+
+foo = 42
 ~~~
 # EXPECTED
 NIL
@@ -37,7 +45,15 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 Num *)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
 ~~~roc
+foo : Num(_size)
 ~~~

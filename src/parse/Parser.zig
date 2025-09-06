@@ -966,7 +966,7 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                             // For the binop_pipe, use the region from left's start to field's end
                             const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
                             const pipe_region = makeRegion(left_region.start, field_region.end);
-                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
+                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_dot, .{ .binop = binop_idx });
                         } else {
                             return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                         }
@@ -982,7 +982,7 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                             // For the binop_pipe, use the region from left's start to field's end
                             const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
                             const pipe_region = makeRegion(left_region.start, field_region.end);
-                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
+                            left = try self.ast.appendNode(self.gpa, pipe_region, .binop_dot, .{ .binop = binop_idx });
                         } else {
                             return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                         }
@@ -993,7 +993,7 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                         const left_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(left))));
                         const num_region = self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(num))));
                         const pipe_region = makeRegion(left_region.start, num_region.end);
-                        left = try self.ast.appendNode(self.gpa, pipe_region, .binop_pipe, .{ .binop = binop_idx });
+                        left = try self.ast.appendNode(self.gpa, pipe_region, .binop_dot, .{ .binop = binop_idx });
                     } else {
                         return self.pushMalformed(.expr_dot_suffix_not_allowed, dot_pos);
                     }
@@ -4431,7 +4431,7 @@ fn parseImport(self: *Parser) Error!?Node.Idx {
                         // Chain this identifier to the existing path using binop_pipe
                         const binop_idx = try self.ast.appendBinOp(self.gpa, existing_path, node);
                         const combined_region = makeRegion(self.ast.getRegion(existing_path).start, ident_region.end);
-                        path = try self.ast.appendNode(self.gpa, combined_region, .binop_pipe, .{ .binop = binop_idx });
+                        path = try self.ast.appendNode(self.gpa, combined_region, .binop_dot, .{ .binop = binop_idx });
                     } else {
                         // First identifier in the path
                         path = node;

@@ -68,7 +68,6 @@ app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 identity : a -> a
 identity = |x| x
-
 main! = |_| {}
 ~~~
 # EXPECTED

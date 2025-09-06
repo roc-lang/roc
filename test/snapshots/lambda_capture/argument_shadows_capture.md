@@ -59,14 +59,30 @@ This is an unexpected parsing error. Please check your syntax.
 (Expr.block
   (Stmt.assign
     (pattern (Patt.ident "x"))
-    (Expr.apply_ident)
+    (Expr.fn_call)
   )
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 15
+(var #0 _)
+(var #1 -> #8)
+(var #2 -> #13)
+(var #3 _)
+(var #4 _)
+(var #5 -> #12)
+(var #6 -> #14)
+(var #7 Num *)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 fn_pure)
+(var #13 <error>)
+(var #14 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-# No header found
+x : _a
 ~~~

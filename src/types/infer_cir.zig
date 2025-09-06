@@ -391,7 +391,7 @@ pub fn InferContext(comptime CIR2: type) type {
                     // Function application - should have been populated during type checking
                     return expr_var;
                 },
-                .apply_tag => {
+                .tag_no_args, .tag_applied => {
                     // Tag constructor application - should have been populated during type checking
                     return expr_var;
                 },

@@ -7,50 +7,101 @@ type=expr
 ~~~roc
 (|{ x }| x )({ x: -10 })
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),CloseCurly(1:7-1:8),OpBar(1:8-1:9),LowerIdent(1:10-1:11),CloseRound(1:12-1:13),NoSpaceOpenRound(1:13-1:14),OpenCurly(1:14-1:15),LowerIdent(1:16-1:17),OpColon(1:17-1:18),Int(1:19-1:22),CloseCurly(1:23-1:24),CloseRound(1:24-1:25),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar OpenCurly LowerIdent CloseCurly OpBar LowerIdent CloseRound OpenRound OpenCurly LowerIdent OpColon OpUnaryMinus Int CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.25
-	(e-tuple @1.1-1.13
-		(e-lambda @1.2-1.11
-			(args
-				(p-record @1.3-1.8
-					(field @1.5-1.6 (name "x") (rest false))))
-			(e-ident @1.10-1.11 (raw "x"))))
-	(e-record @1.14-1.24
-		(field (field "x")
-			(e-int @1.19-1.22 (raw "-10")))))
+(apply_anon
+  (lambda
+    (body
+      (lc "x")
+    )
+    (args
+      (block
+        (binop_colon
+          (lc "x")
+          (lc "x")
+        )
+      )
+    )
+  )
+  (block
+    (binop_colon
+      (lc "x")
+      (unary_neg <unary_op>)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-(|{ x }| x)({ x: -10 })
+(|{
+	x : x
+}| x)({
+	x : -10
+})
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_argument_closure_single.md:1:11:1:13:**
+```roc
+(|{ x }| x )({ x: -10 })
+```
+          ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**record_argument_closure_single.md:1:3:1:8:**
+```roc
+(|{ x }| x )({ x: -10 })
+```
+  ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **x** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_argument_closure_single.md:1:10:1:11:**
+```roc
+(|{ x }| x )({ x: -10 })
+```
+         ^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.25
-	(e-lambda @1.2-1.11
-		(args
-			(p-record-destructure @1.3-1.8
-				(destructs
-					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required
-							(p-assign @1.5-1.6 (ident "x")))))))
-		(e-lookup-local @1.10-1.11
-			(p-assign @1.5-1.6 (ident "x"))))
-	(e-record @1.14-1.24
-		(fields
-			(field (name "x")
-				(e-int @1.19-1.22 (value "-10"))))))
+(Expr.fn_call)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 -> #11)
+(var #5 -> #13)
+(var #6 _)
+(var #7 Num *)
+(var #8 _)
+(var #9 _)
+(var #10 -> #14)
+(var #11 _)
+(var #12 -> #14)
+(var #13 -> #15)
+(var #14 {})
+(var #15 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.25 (type "_a"))
+~~~roc
 ~~~

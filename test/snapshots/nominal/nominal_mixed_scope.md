@@ -33,19 +33,78 @@ KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent
 
     (lc "processColor")
 ))
+(block
+  (binop_colon_equals
+    (uc "LocalStatus")
+    (list_literal
+      (uc "Pending")
+      (uc "Complete")
+    )
+  )
+  (binop_colon
+    (lc "processColor")
+    (binop_arrow_call
+      (underscore)
+      (uc "LocalStatus")
+    )
+  )
+  (binop_equals
+    (lc "processColor")
+    (lambda
+      (body
+        (block
+          (import
+            (binop_pipe
+              (uc "Color")
+              (uc "RGB")
+            )
+          )
+          (match
+            (scrutinee               (lc "color")
+))
+          (uc "Red")
+          (malformed)
+          (binop_pipe
+            (uc "LocalStatus")
+            (uc "Pending")
+          )
+          (binop_pipe
+            (uc "RGB")
+            (uc "Green")
+          )
+          (malformed)
+          (binop_pipe
+            (uc "LocalStatus")
+            (uc "Complete")
+          )
+          (binop_pipe
+            (uc "RGB")
+            (uc "Blue")
+          )
+          (malformed)
+          (binop_pipe
+            (uc "LocalStatus")
+            (uc "Pending")
+          )
+        )
+      )
+      (args
+        (lc "color")
+      )
+    )
+  )
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
 module [LocalStatus, processColor]
 
 LocalStatus := [Pending, Complete]
-
 processColor : _ -> LocalStatus
 processColor = |color| {
-
 	# bring RGB into scope
 	import Color.RGB
-
 	match color
 	Red
 	=> 
@@ -145,90 +204,81 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named **LocalStatus.Pending** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_mixed_scope.md:12:20:12:39:**
-```roc
-        RGB.Red => LocalStatus.Pending
-```
-                   ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **RGB.Green** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_mixed_scope.md:13:9:13:18:**
-```roc
-        RGB.Green => LocalStatus.Complete
-```
-        ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **LocalStatus.Complete** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_mixed_scope.md:13:22:13:42:**
-```roc
-        RGB.Green => LocalStatus.Complete
-```
-                     ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **RGB.Blue** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_mixed_scope.md:14:9:14:17:**
-```roc
-        RGB.Blue => LocalStatus.Pending
-```
-        ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **LocalStatus.Pending** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**nominal_mixed_scope.md:14:21:14:40:**
-```roc
-        RGB.Blue => LocalStatus.Pending
-```
-                    ^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_mixed_scope.md:16:1:16:2:**
-```roc
-}
-```
-^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.malformed)
-  (Stmt.type_anno
-    (name "processColor")
-    (type binop_thin_arrow)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "processColor"))
+    (type type_11)
   )
   (Stmt.assign
     (pattern (Patt.ident "processColor"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
+  (Expr.malformed)
 )
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 54
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 -> #52)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 -> #52)
+(var #44 _)
+(var #45 _)
+(var #46 _)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 fn_pure)
+(var #53 _)
 ~~~
 # TYPES
 ~~~roc
+color : _a
+processColor : _arg -> _ret
 ~~~

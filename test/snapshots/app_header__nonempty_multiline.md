@@ -35,7 +35,8 @@ KwApp LineComment OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent 
 ~~~
 # FORMATTED
 ~~~roc
-app [ # This comment is here
+app [
+	# This comment is here
 	main!,
 ] { pf: "../main.roc" platform [], somePkg: "../main.roc" }
 ~~~
@@ -49,6 +50,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
 ~~~roc
