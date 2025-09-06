@@ -1522,7 +1522,7 @@ fn processSnapshotContent(
     defer parser.deinit();
 
     // Parse based on node type
-    std.debug.print("Processing snapshot file: {s}\n", .{output_path});
+    log("Processing snapshot file: {s}\n", .{output_path});
     const parse_result: ?i32 = switch (content.meta.node_type) {
         .file => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .header => blk: {
@@ -3483,7 +3483,7 @@ fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
                 try writer.writeAll("  ");
             }
         },
-        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_arrow_call, .binop_colon, .binop_equals => {
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_arrow_call, .record_field, .binop_equals => {
             // After mutation, binop nodes still have their binop payloads
             // The mutation only changes the tag, not the payload
             const has_binop = true;
@@ -3492,27 +3492,8 @@ fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
                 try writer.writeAll("\n");
 
-                // Special handling for binop_colon in record literals
-                // The left side might still be an identifier node (.lc), not an expression
-                if (expr.tag == .binop_colon) {
-                    // Check if left side is still an identifier
-                    const lhs_node = cir.getNode(@enumFromInt(@intFromEnum(binop.lhs)));
-                    if (lhs_node.tag == .lc) {
-                        // It's a field name - output it as an identifier, not an expression
-                        for (0..indent + 1) |_| {
-                            try writer.writeAll("  ");
-                        }
-                        const ident_idx = lhs_node.payload.ident;
-                        const ident_name = env.idents.getText(ident_idx);
-                        try writer.print("(lc \"{s}\")\n", .{ident_name});
-                    } else {
-                        // It's been canonicalized - output as expression
-                        try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
-                    }
-                } else {
-                    // Normal binop - both sides are expressions
-                    try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
-                }
+                // For all binops, output the left side as an expression
+                try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
 
                 try outputCIRExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
                 for (0..indent) |_| {

@@ -1131,16 +1131,16 @@ pub const Interpreter = struct {
                 // Record access is represented as a binary operation:
                 // record.field becomes binop_dot with record as LHS and field as RHS
                 const binop_idx = access_expr.payload.binop;
-                const binop = cir.ast.node_slices.binOp(binop_idx);
+                const binop = cir.getBinOp(CIR.Expr.Idx, binop_idx);
 
                 self.traceInfo("Record access: record={}, field={}", .{ binop.lhs, binop.rhs });
 
-                // Get the field name from the RHS (should be an identifier)
-                const field_node = cir.getNode(@enumFromInt(@intFromEnum(binop.rhs)));
-                const field_name_idx = switch (field_node.tag) {
-                    .lc, .dot_lc => field_node.payload.ident,
+                // Get the field name from the canonicalized RHS expression
+                const field_expr = cir.getExpr(binop.rhs);
+                const field_name_idx = switch (field_expr.tag) {
+                    .lookup => field_expr.payload.ident,
                     else => {
-                        self.traceError("Record field access: RHS is not an identifier, got {}", .{field_node.tag});
+                        self.traceError("Record field access: RHS is not a lookup, got {}", .{field_expr.tag});
                         return error.InvalidFieldAccess;
                     },
                 };
@@ -1153,10 +1153,9 @@ pub const Interpreter = struct {
                 });
 
                 // Schedule evaluation of the record expression
-                const record_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
-                    .expr_idx = record_expr_idx,
+                    .expr_idx = binop.lhs,
                     .extra = .{ .nothing = {} },
                 });
             },
@@ -1255,9 +1254,9 @@ pub const Interpreter = struct {
                 defer field_exprs.deinit();
 
                 while (fields_iter.next()) |field_node| {
-                    // Each field is a binop_colon with field name on left, value on right
+                    // Each field is a record_field with field name on left, value on right
                     const field_expr = cir.getExpr(@as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node))));
-                    if (field_expr.tag == .binop_colon) {
+                    if (field_expr.tag == .record_field) {
                         const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
                         // We only need to evaluate the value (rhs), not the field name (lhs)
                         try field_exprs.append(field_binop.rhs);
@@ -1379,35 +1378,18 @@ pub const Interpreter = struct {
                 // Module access uses binop payload where lhs is module, rhs is member
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
 
-                // For Bool.True/False, the children might be unconverted AST nodes
-                // Try to get the module and member names from the AST directly
-                const ast_binop = cir.ast.node_slices.binOp(expr.payload.binop);
-                const lhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(ast_binop.lhs)));
-                const rhs_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(ast_binop.rhs)));
+                // Get module and member names from CIR nodes only
+                const module_expr = cir.getExpr(binop.lhs);
+                const module_name = if (module_expr.tag == .lookup) blk: {
+                    const module_ident = module_expr.payload.ident;
+                    break :blk self.env.getIdent(module_ident);
+                } else "";
 
-                const module_name = if (lhs_node.tag == .uc) blk: {
-                    break :blk self.env.getIdent(lhs_node.payload.ident);
-                } else blk: {
-                    // Try CIR node
-                    const module_expr = cir.getExpr(binop.lhs);
-                    if (module_expr.tag == .lookup) {
-                        const module_ident = module_expr.payload.ident;
-                        break :blk self.env.getIdent(module_ident);
-                    }
-                    break :blk "";
-                };
-
-                const member_name = if (rhs_node.tag == .uc) blk: {
-                    break :blk self.env.getIdent(rhs_node.payload.ident);
-                } else blk: {
-                    // Try CIR node
-                    const member_expr = cir.getExpr(binop.rhs);
-                    if (member_expr.tag == .lookup) {
-                        const member_ident = member_expr.payload.ident;
-                        break :blk self.env.getIdent(member_ident);
-                    }
-                    break :blk "";
-                };
+                const member_expr = cir.getExpr(binop.rhs);
+                const member_name = if (member_expr.tag == .lookup) blk: {
+                    const member_ident = member_expr.payload.ident;
+                    break :blk self.env.getIdent(member_ident);
+                } else "";
 
                 // Handle Bool.True and Bool.False
                 if (std.mem.eql(u8, module_name, "Bool")) {
@@ -1484,7 +1466,8 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     const n = nodes_to_eval.items[i];
-                    const n_node = cir.getNode(n);
+                    // Get the node directly from the AST (which has been mutated to a CIR node)
+                    const n_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(n)));
                     const n_tag_value = @as(u8, @intFromEnum(n_node.tag));
 
                     // Check if this is the last node (which should be an expression)
@@ -2196,6 +2179,20 @@ pub const Interpreter = struct {
                 try self.type_store.setVarContent(bool_var, bool_content);
                 return bool_var;
             },
+            .unary_not => {
+                // Boolean negation - result is Bool
+                const bool_var = try self.type_store.fresh();
+                const bool_content = try self.type_store.mkBool(self.allocator, @constCast(&self.env.common.idents), null);
+                try self.type_store.setVarContent(bool_var, bool_content);
+                return bool_var;
+            },
+            .unary_neg => {
+                // Numeric negation - result is numeric
+                const num_var = try self.type_store.fresh();
+                const num_content = types.Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = true, .bits_needed = 0 } } } };
+                try self.type_store.setVarContent(num_var, num_content);
+                return num_var;
+            },
             .if_else => {
                 // If expression - infer from branches
                 // For now, return the body var itself as it should have been unified
@@ -2855,18 +2852,18 @@ pub const Interpreter = struct {
             while (nodes_iter.next()) |field_node_idx| {
                 // Convert AST.Node.Idx to CIR.Expr.Idx
                 const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node_idx)));
-                // Each field is a binop_colon expression: field_name : field_value
+                // Each field is a record_field expression: field_name : field_value
                 const field_expr = cir.getExpr(field_expr_idx);
-                if (field_expr.tag == .binop_colon) {
+                if (field_expr.tag == .record_field) {
                     // Get the binop structure using the correct accessor
                     const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
 
                     // Get the field name from the left side of the colon
-                    // Field names are stored as .lc (lowercase) nodes after canonicalization
-                    const field_name_node = cir.getNode(@enumFromInt(@intFromEnum(field_binop.lhs)));
+                    // Field names are expressions after canonicalization
+                    const field_name_expr = cir.getExpr(field_binop.lhs);
 
-                    if (field_name_node.tag == .lc) {
-                        const field_name_ident = field_name_node.payload.ident;
+                    if (field_name_expr.tag == .lookup) {
+                        const field_name_ident = field_name_expr.payload.ident;
                         if (field_name_ident == current_field_name) {
                             // Found our field! The value is on the right side of the colon
                             value_expr_idx = field_binop.rhs;

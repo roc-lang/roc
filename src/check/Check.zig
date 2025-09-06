@@ -224,15 +224,15 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
                     const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node)));
                     const field_expr = cir.getExpr(field_expr_idx);
 
-                    if (field_expr.tag == .binop_colon) {
+                    if (field_expr.tag == .record_field) {
                         // Field with explicit value: { name: value }
                         const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
 
                         // Get field name from left side (should be an identifier)
-                        // Field names remain as .lc (lowercase) nodes after canonicalization
-                        const field_name_node = cir.getNode(@enumFromInt(@intFromEnum(field_binop.lhs)));
-                        if (field_name_node.tag == .lc) {
-                            const field_ident = field_name_node.payload.ident;
+                        // Field names are expressions after canonicalization
+                        const field_name_expr = cir.getExpr(@enumFromInt(@intFromEnum(field_binop.lhs)));
+                        if (field_name_expr.tag == .lookup) {
+                            const field_ident = field_name_expr.payload.ident;
 
                             // Type-check the field value (right side)
                             const field_value_var = try self.checkCIRExpr(CIRType, cir, field_binop.rhs);
@@ -451,8 +451,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             // For now, just check the operand and let type inference figure it out
 
             // The operand is stored in the nodes payload
-            const node = cir.getNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));
-            const nodes_idx = node.payload.nodes;
+            const nodes_idx = expr.payload.nodes;
             if (!nodes_idx.isNil()) {
                 var iter = cir.ast.node_slices.nodes(&nodes_idx);
                 if (iter.next()) |operand_node| {
@@ -471,9 +470,8 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             // Function/tag application with arguments
             // We need to type check both the function/tag and its arguments
 
-            // Get the apply node to access function and arguments
-            const node = cir.getNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));
-            const nodes_idx = node.payload.nodes;
+            // Get the function and arguments nodes
+            const nodes_idx = cir.getApplyNodes(expr_idx) orelse return expr_var;
 
             if (!nodes_idx.isNil()) {
                 var iter = cir.ast.node_slices.nodes(&nodes_idx);

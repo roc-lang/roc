@@ -29,8 +29,7 @@ fn makeRegion(start: Position, end: Position) Region {
     // In debug mode, catch bugs where end is before start
     if (std.debug.runtime_safety) {
         if (end.offset < start.offset) {
-            std.debug.print("makeRegion error: end.offset ({}) < start.offset ({})\n", .{ end.offset, start.offset });
-            std.debug.assert(end.offset >= start.offset);
+            std.debug.panic("makeRegion error: end.offset ({}) < start.offset ({})", .{ end.offset, start.offset });
         }
     }
     return Region{ .start = start, .end = end };

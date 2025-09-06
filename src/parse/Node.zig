@@ -35,12 +35,6 @@ pub const Tag = enum {
     /// rhs - last token
     root,
 
-    /// TODO: Find a way to remove this
-    /// This is a hack _only_ for the formatter - it should never be emitted by the parser
-    /// * lhs - node that caused this node to be added by formatter
-    /// * rhs - ignored
-    emit_ws,
-
     /// Module header
     /// * lhs - module type
     /// * rhs - extra data pointer
