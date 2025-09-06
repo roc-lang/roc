@@ -297,6 +297,24 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // The header is at index 0, and contains the module exports
     try self.extractModuleHeader(allocator, idents, common_env);
 
+    // Pre-register exposed items in the scope for shadowing detection
+    // Using index 0 as a sentinel is efficient - just an integer comparison instead of a hash lookup
+    const exposed_iter = common_env.exposed_items.iterator();
+    var exposed_item_iter = exposed_iter;
+
+    while (exposed_item_iter.next()) |entry| {
+        const ident_idx = @as(Ident.Idx, @bitCast(entry.ident_idx));
+
+        // Pre-register exposed item in scope if not already there
+        if (self.scope_state.lookupIdent(ident_idx) == null) {
+            // Use index 0 as a sentinel to indicate "exposed but not yet defined"
+            // This is more efficient than maintaining a separate hashmap
+            const placeholder_patt = Patt.Idx.withMutability(@enumFromInt(0), false);
+            try self.scope_state.addIdent(allocator, ident_idx, placeholder_patt);
+            // Don't add to symbol_table - we'll add the actual definition later
+        }
+    }
+
     // Note: Header nodes (app_header, module_header, etc.) are NOT converted to CIR
     // They're metadata that doesn't get evaluated, only the block content is canonicalized
 
@@ -415,13 +433,24 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
                 // Get the name being defined
                 if (lhs.tag == .lc or lhs.tag == .var_lc or lhs.tag == .not_lc) {
                     const ident = lhs.payload.ident;
-                    // Pre-register this identifier as a placeholder if not already registered
-                    // (It might already be registered from a type annotation)
+
+                    if (std.debug.runtime_safety and std.mem.indexOf(u8, raw_src, "module [x, y]") != null and
+                        std.mem.indexOf(u8, raw_src, "\"first\"") != null)
+                    {
+                        const ident_text = idents.getText(ident);
+                        if (std.mem.eql(u8, ident_text, "x") or std.mem.eql(u8, ident_text, "y")) {
+                            std.debug.print("DEBUG first pass: Processing '{s}', LHS node = {any}\n", .{ ident_text, binop.lhs });
+                        }
+                    }
+
+                    // Don't pre-register if it already exists - let the second pass handle shadowing
+                    // Only pre-register the FIRST occurrence
                     if (self.scope_state.lookupIdent(ident) == null) {
                         const placeholder_patt = Patt.Idx.withMutability(binop.lhs, false);
                         try self.scope_state.addIdent(allocator, ident, placeholder_patt);
-                        try self.scope_state.symbol_table.put(allocator, ident, binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, stmt_idx);
                     }
+                    // If it already exists, don't pre-register - the second pass will detect shadowing
                 }
             },
             .binop_colon => {
@@ -436,7 +465,7 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
                     if (self.scope_state.lookupIdent(ident) == null) {
                         const placeholder_patt = Patt.Idx.withMutability(binop.lhs, false);
                         try self.scope_state.addIdent(allocator, ident, placeholder_patt);
-                        try self.scope_state.symbol_table.put(allocator, ident, binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, stmt_idx);
                     }
                 }
             },
@@ -445,8 +474,43 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     }
 
     // Second pass: Canonicalize all the definitions with names in scope
-    for (statements.items) |stmt_idx| {
+    if (std.debug.runtime_safety and std.mem.indexOf(u8, raw_src, "module [x, y]") != null and
+        std.mem.indexOf(u8, raw_src, "\"first\"") != null)
+    {
+        var equals_count: usize = 0;
+        for (statements.items) |si| {
+            const sn = self.getAstNode(si);
+            if (sn.tag == .binop_equals) equals_count += 1;
+        }
+        std.debug.print("DEBUG x,y test: Processing {} statements ({} binop_equals) in second pass\n", .{ statements.items.len, equals_count });
+        // Check tag of first binop_equals LHS
+        for (statements.items) |si| {
+            const sn = self.getAstNode(si);
+            if (sn.tag == .binop_equals) {
+                const binop = self.ast.node_slices.binOp(sn.payload.binop);
+                const lhs = self.getAstNode(binop.lhs);
+                std.debug.print("DEBUG x,y test: binop_equals LHS tag after first pass = {}, value = {}\n", .{ lhs.tag, @intFromEnum(lhs.tag) });
+                break; // Just check first one
+            }
+        }
+    }
+    for (statements.items, 0..) |stmt_idx, i| {
         const stmt_node = self.getAstNode(stmt_idx);
+
+        if (std.debug.runtime_safety and std.mem.indexOf(u8, raw_src, "module [x, y]") != null and
+            std.mem.indexOf(u8, raw_src, "\"first\"") != null)
+        {
+            std.debug.print("DEBUG: Processing statement {} of {}, stmt_idx={}, tag={}\n", .{ i, statements.items.len, stmt_idx, stmt_node.tag });
+            // Check ALL LHS nodes before processing this statement
+            for (statements.items) |check_idx| {
+                const check_node = self.getAstNode(check_idx);
+                if (check_node.tag == .binop_equals) {
+                    const check_binop = self.ast.node_slices.binOp(check_node.payload.binop);
+                    const check_lhs = self.getAstNode(check_binop.lhs);
+                    std.debug.print("  Statement {}: LHS {} has tag value {}\n", .{ check_idx, check_binop.lhs, @intFromEnum(check_lhs.tag) });
+                }
+            }
+        }
 
         // Check if this is already a CIR node (shouldn't be, but be safe)
         const tag_value = @as(u8, @intFromEnum(stmt_node.tag));
@@ -475,6 +539,13 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
     // Validate that all exposed items have been implemented
     try self.validateExposedItems(allocator, common_env, diagnostics);
 
+    // Copy all diagnostics we generated internally to the output parameter
+    if (diagnostics) |diag_list| {
+        for (self.diagnostics.items) |diag| {
+            try diag_list.append(allocator, diag);
+        }
+    }
+
     // In debug mode, verify all non-header nodes have been converted to CIR tags
     // This is a safety check to ensure we don't have unconverted AST nodes
     // NOTE: This check is currently disabled as it was causing false positives
@@ -489,7 +560,7 @@ pub fn canonicalizeFileBlock(self: *CIR, allocator: Allocator, block_idx: AST.No
 }
 
 fn validateExposedItems(self: *CIR, allocator: Allocator, common_env: *base.CommonEnv, diagnostics: ?*std.ArrayListUnmanaged(CanDiagnostic)) !void {
-    if (diagnostics == null) return; // No diagnostics list provided
+    _ = diagnostics; // Not used - we use pushDiagnostic instead
 
     // Iterate through all exposed items and check if they were defined in the current scope
     const exposed_iter = common_env.exposed_items.iterator();
@@ -498,19 +569,23 @@ fn validateExposedItems(self: *CIR, allocator: Allocator, common_env: *base.Comm
     while (iter.next()) |entry| {
         // Check if this identifier was defined in the root scope
         const ident_idx: Ident.Idx = @bitCast(entry.ident_idx);
-        const was_defined = self.scope_state.lookupIdent(ident_idx) != null;
+
+        // Check if this was defined - either as a real pattern or placeholder (index 0)
+        const lookup_result = self.scope_state.lookupIdent(ident_idx);
+        const symbol_def = self.scope_state.symbol_table.get(ident_idx);
+
+        // It's not implemented if:
+        // - It doesn't exist in scope at all
+        // - OR it exists as the placeholder (index 0) and has no symbol table entry
+        const was_defined = lookup_result != null and
+            (!(@intFromEnum(lookup_result.?) == 0) or symbol_def != null);
 
         if (!was_defined) {
             // Generate an exposed_but_not_implemented diagnostic
             const region = base.Region.zero(); // TODO: Get proper region from module header
 
-            const diagnostic = CanDiagnostic{
-                .tag = .exposed_but_not_implemented,
-                .ident = ident_idx,
-                .region = region,
-            };
-
-            try diagnostics.?.append(allocator, diagnostic);
+            // Use pushDiagnostic so it goes to self.diagnostics and gets copied later
+            try self.pushDiagnostic(allocator, .exposed_but_not_implemented, region, ident_idx);
         }
     }
 }
@@ -677,10 +752,11 @@ fn types(self: *const CIR) Types {
     return Types{ .cir = self };
 }
 
-fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region) !void {
+fn pushDiagnostic(self: *CIR, allocator: Allocator, tag: CanDiagnostic.Tag, region: Region, ident: ?base.Ident.Idx) !void {
     try self.diagnostics.append(allocator, .{
         .tag = tag,
         .region = region,
+        .ident = ident orelse .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
     });
 }
 
@@ -709,7 +785,7 @@ fn checkUnusedVariables(self: *CIR, allocator: Allocator, scope: *const Scope) !
         const region = self.ast.getRegion(node_idx);
 
         // Report unused variable
-        try self.pushDiagnostic(allocator, .unused_variable, region);
+        try self.pushDiagnostic(allocator, .unused_variable, region, null);
     }
 }
 
@@ -1645,7 +1721,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 }
             } else {
                 // Variable not in scope - report error
-                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region, null);
             }
 
             return asExprIdx(node_idx);
@@ -1712,7 +1788,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         // Pattern nodes - these are errors in expression context!
         .underscore => {
             // Underscore pattern found in expression context
-            try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
+            try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region, null);
             self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
@@ -1806,7 +1882,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 } else if (n_node.tag == .import) {
                     // Import statement in a block - not allowed, convert to malformed
                     const n_region = self.ast.getRegion(n);
-                    try self.pushDiagnostic(allocator, .unsupported_node, n_region);
+                    try self.pushDiagnostic(allocator, .unsupported_node, n_region, null);
                     self.mutateToExpr(n, .malformed);
                     try self.ensureTypeVarExists(n);
                 } else {
@@ -2090,7 +2166,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 }
             } else {
                 // Variable not in scope - report error
-                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region);
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node_region, null);
             }
 
             return asExprIdx(node_idx);
@@ -2184,7 +2260,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
         // Statement nodes - error in expression context
         .import => {
-            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
+            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region, null);
             self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
@@ -2214,7 +2290,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 self.mutateToExpr(node_idx, .double_dot_lookup);
             } else {
                 // Not in scope - report error
-                try self.pushDiagnostic(allocator, .ident_not_in_scope, node.region);
+                try self.pushDiagnostic(allocator, .ident_not_in_scope, node.region, null);
                 self.mutateToExpr(node_idx, .malformed);
             }
 
@@ -2372,7 +2448,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             } else {
                 // This is the actual pipe operator |, used in pattern alternatives
                 // In expression context, this is an error
-                try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region);
+                try self.pushDiagnostic(allocator, .pattern_in_expr_context, node_region, null);
                 self.mutateToExpr(node_idx, .malformed);
                 return asExprIdx(node_idx);
             }
@@ -2436,7 +2512,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .binop_colon_equals => {
             // This shouldn't appear in expression context
             // It's for nominal type declarations which are statements
-            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
+            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region, null);
             self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
@@ -2492,7 +2568,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .binop_platform => {
             // Platform specification shouldn't appear in expression context
             // It's part of the module header metadata
-            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region);
+            try self.pushDiagnostic(allocator, .stmt_in_expr_context, node_region, null);
             self.mutateToExpr(node_idx, .malformed);
             return asExprIdx(node_idx);
         },
@@ -2615,7 +2691,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         else => {
             // This should never happen if we've handled all cases
             std.log.err("Unhandled AST node tag in canonicalizeExpr: {}", .{node.tag});
-            try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+            try self.pushDiagnostic(allocator, .unsupported_node, node_region, null);
             self.mutateToExpr(node_idx, .malformed);
             try self.ensureTypeVarExists(node_idx);
             return asExprIdx(node_idx);
@@ -2784,6 +2860,16 @@ test "CIR2 canonicalize simple number literal" {
 pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx, raw_src: []const u8, idents: *const Ident.Store) error{OutOfMemory}!Stmt.Idx {
     const node = self.getAstNode(node_idx);
 
+    if (std.debug.runtime_safety and std.mem.indexOf(u8, raw_src, "module [x, y]") != null and
+        std.mem.indexOf(u8, raw_src, "\"first\"") != null)
+    {
+        if (node.tag == .binop_equals) {
+            const binop = self.ast.node_slices.binOp(node.payload.binop);
+            const lhs = self.getAstNode(binop.lhs);
+            std.debug.print("DEBUG canonicalizeStmt entry: stmt_idx={}, LHS idx={}, LHS tag value={}\n", .{ node_idx, binop.lhs, @intFromEnum(lhs.tag) });
+        }
+    }
+
     // Check if this node has already been canonicalized (mutated)
     const tag_value = @as(u8, @intFromEnum(node.tag));
     if (tag_value >= FIRST_STMT_TAG and tag_value < FIRST_EXPR_TAG) {
@@ -2803,10 +2889,89 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             // Check left-hand side to determine if this is a var declaration or reassignment
             const lhs_node = self.getAstNode(ast_binop.lhs);
 
-            // Check if the LHS has already been converted (shouldn't happen, but be defensive)
+            if (std.debug.runtime_safety) {
+                const has_module = std.mem.indexOf(u8, raw_src, "module [x, y]") != null;
+                if (has_module) {
+                    const lhs_tag_value_debug = @as(u8, @intFromEnum(lhs_node.tag));
+                    std.debug.print("DEBUG: lhs_node.tag value = {}, FIRST_STMT_TAG = {}\n", .{ lhs_tag_value_debug, FIRST_STMT_TAG });
+                    if (lhs_tag_value_debug < FIRST_STMT_TAG and (lhs_node.tag == .lc or lhs_node.tag == .var_lc or lhs_node.tag == .not_lc)) {
+                        const ident = lhs_node.payload.ident;
+                        const ident_text = idents.getText(ident);
+                        std.debug.print("DEBUG: Processing binop_equals for '{s}'\n", .{ident_text});
+                    }
+                }
+            }
+
+            // Check if the LHS has already been converted
             const lhs_tag_value = @as(u8, @intFromEnum(lhs_node.tag));
+
+            // If the LHS is already an expression (e.g., lookup), we need to handle shadowing specially
+            if (lhs_tag_value >= FIRST_EXPR_TAG) {
+                // The LHS was already processed as an expression (e.g., standalone identifier)
+                // This happens due to node sharing in the parser
+                // We need to extract the identifier and check for shadowing
+                if (lhs_tag_value == @intFromEnum(ExprTag.lookup)) {
+                    // This is a lookup expression - extract the identifier
+                    const ident = lhs_node.payload.ident;
+
+                    if (std.debug.runtime_safety) {
+                        const ident_text = idents.getText(ident);
+                        std.debug.print("DEBUG: LHS already converted to lookup for '{s}'\n", .{ident_text});
+                    }
+
+                    // Check if this identifier already exists
+                    if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                        // Check if this is the same definition we're processing
+                        const existing_def_node = self.scope_state.symbol_table.get(ident);
+                        const is_same_definition = existing_def_node != null and existing_def_node.? == node_idx;
+
+                        // Check if this is an exposed item placeholder
+                        const is_exposed_item = @intFromEnum(existing_patt_idx) == 0 and existing_def_node == null;
+
+                        if (!is_same_definition and !is_exposed_item) {
+                            // This is a shadowing situation - generate warning
+                            if (std.debug.runtime_safety) {
+                                const ident_text_debug = idents.getText(ident);
+                                std.debug.print("DEBUG: Generating shadowing warning for already-converted identifier '{s}'\n", .{ident_text_debug});
+                            }
+                            const region = self.ast.getRegion(ast_binop.lhs);
+                            try self.pushDiagnostic(allocator, .shadowing_warning, region, ident);
+                        }
+
+                        // Continue with the assignment
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                        // Update the scope with the new definition
+                        // Convert the lookup back to a pattern for registration
+                        self.mutateToPatt(ast_binop.lhs, .ident);
+                        const patt_idx = Patt.Idx.withMutability(ast_binop.lhs, false);
+                        try self.scope_state.updateIdent(allocator, ident, patt_idx);
+                        try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
+                        self.mutateToStmt(node_idx, .assign);
+                        return asStmtIdx(node_idx);
+                    } else {
+                        // First definition of this identifier
+                        _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+
+                        // Convert the lookup back to a pattern
+                        self.mutateToPatt(ast_binop.lhs, .ident);
+                        const patt_idx = Patt.Idx.withMutability(ast_binop.lhs, false);
+                        try self.scope_state.addIdent(allocator, ident, patt_idx);
+                        try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+
+                        self.mutateToStmt(node_idx, .assign);
+                        return asStmtIdx(node_idx);
+                    }
+                }
+
+                // Other expression types on LHS - treat as malformed
+                self.mutateToStmt(node_idx, .malformed);
+                return asStmtIdx(node_idx);
+            }
+
             if (lhs_tag_value >= FIRST_STMT_TAG) {
-                // This node has been corrupted or already converted
+                // This node has been corrupted or already converted to a statement
                 // This shouldn't happen in normal processing
                 // Convert to malformed to avoid crashes
                 self.mutateToStmt(node_idx, .malformed);
@@ -2828,7 +2993,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     try self.scope_state.recordVarPattern(allocator, patt_idx);
 
                     // Add to symbol table so lookups can find this definition
-                    try self.scope_state.symbol_table.put(allocator, var_ident, ast_binop.lhs);
+                    try self.scope_state.symbol_table.put(allocator, var_ident, node_idx);
 
                     // Canonicalize the expression (rhs)
                     _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
@@ -2845,16 +3010,59 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // Could be immutable declaration or reassignment
                     const ident = lhs_node.payload.ident;
 
+                    if (std.debug.runtime_safety) {
+                        const ident_text = idents.getText(ident);
+                        if ((std.mem.eql(u8, ident_text, "x") or std.mem.eql(u8, ident_text, "y")) and
+                            std.mem.indexOf(u8, raw_src, "\"first\"") != null)
+                        {
+                            const existing = self.scope_state.lookupIdent(ident);
+                            std.debug.print("DEBUG shadowing test: Processing assignment for '{s}', exists={}\n", .{ ident_text, existing != null });
+                        }
+                    }
+
                     if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
                         // Identifier already exists
-                        // We always allow type annotation followed by implementation
-                        // Check if it's a var pattern (which means reassignment)
+                        // Check if this is the same definition we pre-registered in the first pass
+                        const existing_def_node = self.scope_state.symbol_table.get(ident);
+                        const is_same_definition = existing_def_node != null and existing_def_node.? == node_idx;
+
+                        // Check if this is an exposed item (pattern index 0 is our placeholder)
+                        const is_exposed_item = @intFromEnum(existing_patt_idx) == 0 and existing_def_node == null;
+
+                        if (std.debug.runtime_safety and std.mem.indexOf(u8, raw_src, "module [x, y]") != null) {
+                            const ident_text = idents.getText(ident);
+                            std.debug.print("DEBUG shadowing test: Processing '{s}', existing_def={any}, lhs={any}, same={}, exposed={}\n", .{ ident_text, existing_def_node, ast_binop.lhs, is_same_definition, is_exposed_item });
+                        }
+
+                        if (is_exposed_item) {
+                            // This is the first definition of an exposed item - process normally
+                            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+                            const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                            // Update from placeholder to actual pattern
+                            try self.scope_state.updateIdent(allocator, ident, patt_idx);
+                            // Add to symbol table - mark that this exposed item has been defined
+                            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+                            self.mutateToStmt(node_idx, .assign);
+                            return asStmtIdx(node_idx);
+                        }
+
+                        if (is_same_definition) {
+                            // This is the definition we pre-registered - process normally
+                            // (This happens when we pre-register in pass 1 and process in pass 2)
+                            _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
+                            const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
+                            try self.scope_state.updateIdent(allocator, ident, patt_idx);
+                            self.mutateToStmt(node_idx, .assign);
+                            return asStmtIdx(node_idx);
+                        }
+
+                        // Different definition - check if it's a var pattern (which means reassignment)
                         if (ScopeState.isVarPattern(existing_patt_idx)) {
                             // This is a var reassignment
                             // Check for cross-function boundary reassignment
                             if (self.scope_state.isVarReassignmentAcrossFunctionBoundary(existing_patt_idx)) {
                                 // Use just the identifier's region, not the whole assignment
-                                try self.pushDiagnostic(allocator, .ident_already_defined, lhs_node.region);
+                                try self.pushDiagnostic(allocator, .ident_already_defined, lhs_node.region, null);
                             }
 
                             // Canonicalize as reassignment
@@ -2867,11 +3075,17 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                             // existing_patt_idx is used above in scope boundary check
                             return asStmtIdx(node_idx);
                         } else {
-                            // This is likely the implementation for a type-annotated function
-                            // We allow type annotation followed by implementation
+                            // This is NOT a var reassignment, but the identifier already exists
+                            // Shadowing warning will be generated by canonicalizePatt
+                            if (std.debug.runtime_safety) {
+                                const ident_text = idents.getText(ident);
+                                std.debug.print("DEBUG: Identifier '{s}' already exists, canonicalizePatt will handle shadowing\n", .{ident_text});
+                            }
+
+                            // Continue with the assignment
                             _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
-                            // Update the pattern to be properly canonicalized
+                            // canonicalizePatt will generate the shadowing warning if needed
                             const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
                             // Update the existing entry with the proper pattern
                             try self.scope_state.updateIdent(allocator, ident, patt_idx);
@@ -2889,7 +3103,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         try self.scope_state.addIdent(allocator, ident, patt_idx);
 
                         // Add to symbol table so lookups can find this definition
-                        try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, node_idx);
 
                         // Canonicalize the expression (rhs) - this mutates the expression nodes in place
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
@@ -2917,7 +3131,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         // New effectful function definition
                         const patt_idx = try self.canonicalizePatt(allocator, ast_binop.lhs);
                         try self.scope_state.addIdent(allocator, ident, patt_idx);
-                        try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, node_idx);
 
                         _ = try self.canonicalizeExpr(allocator, ast_binop.rhs, raw_src, idents);
 
@@ -3079,7 +3293,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // Add to scope if not already there
                     if (self.scope_state.lookupIdent(ident) == null) {
                         try self.scope_state.addIdent(allocator, ident, patt_idx);
-                        try self.scope_state.symbol_table.put(allocator, ident, ast_binop.lhs);
+                        try self.scope_state.symbol_table.put(allocator, ident, node_idx);
                     }
                 }
 
@@ -3283,7 +3497,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 return asStmtIdx(node_idx);
             } else {
                 // Invalid opaque type syntax
-                try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+                try self.pushDiagnostic(allocator, .unsupported_node, node_region, null);
                 self.mutateToStmt(node_idx, .malformed);
                 return asStmtIdx(node_idx);
             }
@@ -3303,7 +3517,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
             _ = try self.canonicalizeExpr(allocator, node_idx, raw_src, idents);
 
             // Add diagnostic for unused expression (except function calls)
-            try self.pushDiagnostic(allocator, .unused_expression, node_region);
+            try self.pushDiagnostic(allocator, .unused_expression, node_region, null);
 
             self.mutateToStmt(node_idx, .expr);
             return asStmtIdx(node_idx);
@@ -3319,7 +3533,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
         else => {
             // Unsupported statement type
-            try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+            try self.pushDiagnostic(allocator, .unsupported_node, node_region, null);
             // Mutate to malformed statement - this AST node type isn't supported in statement context
             self.mutateToStmt(node_idx, .malformed);
             return asStmtIdx(node_idx);
@@ -3347,6 +3561,36 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
     const tag_value = @intFromEnum(node.tag);
     if (tag_value >= FIRST_STMT_TAG) {
         // This node was already processed as a CIR node
+
+        // If it's an expression node (like .lookup), it means the parser gave us
+        // a node that's shared between different contexts. For example, `x` might
+        // appear both as a standalone expression and as the LHS of `x = 1`.
+        // In this case, we need to treat it as an identifier pattern.
+        if (tag_value >= FIRST_EXPR_TAG and tag_value < FIRST_EXPR_TAG + 10) {
+            // Check if this was originally an identifier (.lookup is what .lc becomes)
+            // We'll treat it as an identifier pattern
+            const ident = node.payload.ident;
+
+            // Check for shadowing BEFORE converting to pattern
+            if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+                if (!is_exposed_placeholder) {
+                    // Shadowing warning
+                    if (std.debug.runtime_safety) {
+                        std.debug.print("DEBUG: Generating shadowing warning for already-expr node\n", .{});
+                    }
+                    try self.pushDiagnostic(allocator, .shadowing_warning, node_region, ident);
+                }
+            }
+
+            // Convert to pattern
+            self.mutateToPatt(node_idx, if (is_mutable) .var_ident else .ident);
+            const patt_idx = Patt.Idx.withMutability(node_idx, is_mutable);
+            try self.scope_state.addIdent(allocator, ident, patt_idx);
+            try self.scope_state.symbol_table.put(allocator, ident, node_idx);
+            return patt_idx;
+        }
+
         // If it's already a pattern, just return it
         if (tag_value >= FIRST_PATT_TAG and tag_value < FIRST_TYPE_TAG) {
             return asPattIdx(node_idx);
@@ -3360,10 +3604,26 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         .lc => {
             // Lowercase identifier pattern
             const ident = node.payload.ident;
+
+            if (std.debug.runtime_safety) {
+                std.debug.print("DEBUG canonicalizePatt: processing .lc node {}\n", .{node_idx});
+            }
+
+            // Check for shadowing BEFORE mutating or adding to scope
+            if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                // Check if this is the sentinel value (0) indicating an exposed item
+                const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+
+                if (!is_exposed_placeholder) {
+                    // This identifier shadows an existing one - generate warning
+                    try self.pushDiagnostic(allocator, .shadowing_warning, node_region, ident);
+                }
+            }
+
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, if (is_mutable) .var_ident else .ident);
 
-            // Register in scope
+            // Register in scope (this will overwrite any existing entry)
             const patt_idx = Patt.Idx.withMutability(node_idx, is_mutable);
             try self.scope_state.addIdent(allocator, ident, patt_idx);
             try self.scope_state.symbol_table.put(allocator, ident, node_idx);
@@ -3374,10 +3634,22 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         .var_lc => {
             // Mutable identifier pattern (var_lc always means mutable)
             const ident = node.payload.ident;
+
+            // Check for shadowing BEFORE mutating or adding to scope
+            if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                // Check if this is the sentinel value (0) indicating an exposed item
+                const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+
+                if (!is_exposed_placeholder) {
+                    // This identifier shadows an existing one - generate warning
+                    try self.pushDiagnostic(allocator, .shadowing_warning, node_region, ident);
+                }
+            }
+
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, .var_ident);
 
-            // Register in scope as mutable
+            // Register in scope as mutable (this will overwrite any existing entry)
             const patt_idx = Patt.Idx.withMutability(node_idx, true);
             try self.scope_state.addIdent(allocator, ident, patt_idx);
             try self.scope_state.symbol_table.put(allocator, ident, node_idx);
@@ -3388,10 +3660,22 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         .not_lc => {
             // Effectful identifier pattern: x!
             const ident = node.payload.ident;
+
+            // Check for shadowing BEFORE mutating or adding to scope
+            if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                // Check if this is the sentinel value (0) indicating an exposed item
+                const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+
+                if (!is_exposed_placeholder) {
+                    // This identifier shadows an existing one - generate warning
+                    try self.pushDiagnostic(allocator, .shadowing_warning, node_region, ident);
+                }
+            }
+
             // Mutate the AST node's tag in place
             self.mutateToPatt(node_idx, .ident);
 
-            // Register in scope
+            // Register in scope (this will overwrite any existing entry)
             const patt_idx = Patt.Idx.withMutability(node_idx, is_mutable);
             try self.scope_state.addIdent(allocator, ident, patt_idx);
             try self.scope_state.symbol_table.put(allocator, ident, node_idx);
@@ -3457,6 +3741,19 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
                 } else if (field_node.tag == .lc) {
                     // Shorthand field: { x } means { x: x }
                     const ident = field_node.payload.ident;
+
+                    // Check for shadowing BEFORE mutating or adding to scope
+                    if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                        // Check if this is the sentinel value (0) indicating an exposed item
+                        const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+
+                        if (!is_exposed_placeholder) {
+                            // This identifier shadows an existing one - generate warning
+                            const field_region = self.ast.getRegion(field_idx);
+                            try self.pushDiagnostic(allocator, .shadowing_warning, field_region, ident);
+                        }
+                    }
+
                     self.mutateToPatt(field_idx, .ident);
                     const field_patt_idx = Patt.Idx.withMutability(field_idx, false);
                     try self.scope_state.addIdent(allocator, ident, field_patt_idx);
@@ -3464,6 +3761,19 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
                 } else if (field_node.tag == .double_dot_lc) {
                     // Rest pattern: { ..rest }
                     const ident = field_node.payload.ident;
+
+                    // Check for shadowing BEFORE mutating or adding to scope
+                    if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
+                        // Check if this is the sentinel value (0) indicating an exposed item
+                        const is_exposed_placeholder = @intFromEnum(existing_patt_idx) == 0;
+
+                        if (!is_exposed_placeholder) {
+                            // This identifier shadows an existing one - generate warning
+                            const field_region = self.ast.getRegion(field_idx);
+                            try self.pushDiagnostic(allocator, .shadowing_warning, field_region, ident);
+                        }
+                    }
+
                     self.mutateToPatt(field_idx, .record_rest);
                     const rest_patt_idx = Patt.Idx.withMutability(field_idx, false);
                     try self.scope_state.addIdent(allocator, ident, rest_patt_idx);
@@ -3604,7 +3914,7 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
                     _ = try self.canonicalizePattWithMutability(allocator, ast_param, field_idx, false);
                 } else {
                     // Other field types are not valid in record patterns
-                    try self.pushDiagnostic(allocator, .unsupported_node, ast_param.getRegion(field_idx));
+                    try self.pushDiagnostic(allocator, .unsupported_node, ast_param.getRegion(field_idx), null);
                     self.mutateToPatt(field_idx, .malformed);
                 }
             }
@@ -3614,7 +3924,7 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
 
         // Expression nodes - error in pattern context
         .binop_plus, .binop_minus, .binop_star, .binop_slash => {
-            try self.pushDiagnostic(allocator, .expr_in_pattern_context, node_region);
+            try self.pushDiagnostic(allocator, .expr_in_pattern_context, node_region, null);
             // Mutate to malformed pattern tag
             self.mutateToPatt(node_idx, .malformed);
             // Return with mutability encoded (malformed patterns can't be mutable)
@@ -3632,7 +3942,7 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
 
         else => {
             // Unsupported pattern type
-            try self.pushDiagnostic(allocator, .unsupported_node, node_region);
+            try self.pushDiagnostic(allocator, .unsupported_node, node_region, null);
             // Mutate to malformed pattern tag
             self.mutateToPatt(node_idx, .malformed);
             // Return with mutability encoded (malformed patterns can't be mutable)
@@ -3884,7 +4194,7 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         // Invalid nodes in type position
         .num_literal_i32, .int_literal_i32, .str_literal_small, .str_literal_big, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_equals, .binop_not_equals, .binop_lt, .binop_gt, .if_else, .if_without_else => {
             // These are expressions, not valid in type position
-            try self.pushDiagnostic(allocator, .expr_in_type_context, node_region);
+            try self.pushDiagnostic(allocator, .expr_in_type_context, node_region, null);
             return self.createMalformedType(node_idx);
         },
 
@@ -3898,7 +4208,7 @@ pub fn canonicalizeType(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
 
         else => {
             // Unknown node type in type position
-            try self.pushDiagnostic(allocator, .expr_in_type_context, node_region);
+            try self.pushDiagnostic(allocator, .expr_in_type_context, node_region, null);
             return self.createMalformedType(node_idx);
         },
     }
@@ -3957,7 +4267,7 @@ fn processWhereConstraints(self: *CIR, allocator: Allocator, node_idx: AST.Node.
 
         else => {
             // Invalid constraint syntax
-            try self.pushDiagnostic(allocator, .invalid_where_constraint, node_region);
+            try self.pushDiagnostic(allocator, .invalid_where_constraint, node_region, null);
         },
     }
 }
@@ -5009,50 +5319,202 @@ pub const TypeHeader = struct {
 };
 
 /// Extract exposed items from the module header and populate the exposed_items
+/// Extract exposed items from the module header and populate the exposed_items
 fn extractModuleHeader(self: *CIR, allocator: Allocator, idents: *const Ident.Store, common_env: *base.CommonEnv) !void {
-    // For now, let's implement a simplified approach to test the rest of the system
-    // Look for common identifier names that appear in the tests and add them
+    // Check if there's a header in the AST
+    if (self.ast.header) |header| {
+        switch (header) {
+            .module => |module_header| {
+                // Process the list of exposed items from the module header
+                var iter = self.ast.node_slices.nodes(&module_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
 
-    // Test for "foo", "bar", "MyType" which are used in the failing tests
-    if (idents.findByString("foo")) |foo_idx| {
-        try common_env.addExposedById(allocator, foo_idx);
-    }
-    if (idents.findByString("bar")) |bar_idx| {
-        try common_env.addExposedById(allocator, bar_idx);
-    }
-    if (idents.findByString("MyType")) |mytype_idx| {
-        try common_env.addExposedById(allocator, mytype_idx);
-    }
-    if (idents.findByString("x")) |x_idx| {
-        try common_env.addExposedById(allocator, x_idx);
-    }
-    if (idents.findByString("y")) |y_idx| {
-        try common_env.addExposedById(allocator, y_idx);
-    }
-    if (idents.findByString("z")) |z_idx| {
-        try common_env.addExposedById(allocator, z_idx);
-    }
-    if (idents.findByString("a")) |a_idx| {
-        try common_env.addExposedById(allocator, a_idx);
-    }
-    if (idents.findByString("b")) |b_idx| {
-        try common_env.addExposedById(allocator, b_idx);
-    }
-    if (idents.findByString("c")) |c_idx| {
-        try common_env.addExposedById(allocator, c_idx);
-    }
-    if (idents.findByString("NotImplemented")) |ni_idx| {
-        try common_env.addExposedById(allocator, ni_idx);
-    }
-    if (idents.findByString("OtherType")) |ot_idx| {
-        try common_env.addExposedById(allocator, ot_idx);
-    }
-    if (idents.findByString("baz")) |baz_idx| {
-        try common_env.addExposedById(allocator, baz_idx);
-    }
-    if (idents.findByString("foo!")) |foo_eff_idx| {
-        try common_env.addExposedById(allocator, foo_eff_idx);
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident, // For effectful identifiers like foo!
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .app => |app_header| {
+                // Process the list of exposed items from the app header
+                var iter = self.ast.node_slices.nodes(&app_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
+
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident,
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .package => |package_header| {
+                // Process the list of exposed items from the package header
+                var iter = self.ast.node_slices.nodes(&package_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
+
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident,
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .platform => |platform_header| {
+                // Process the list of exposed items from the platform header
+                var iter = self.ast.node_slices.nodes(&platform_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
+
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident,
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .hosted => |hosted_header| {
+                // Process the list of exposed items from the hosted header
+                var iter = self.ast.node_slices.nodes(&hosted_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
+
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident,
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .interface => |interface_header| {
+                // Process the list of exposed items from the interface header
+                var iter = self.ast.node_slices.nodes(&interface_header.exposes);
+                var seen_exposed = std.AutoHashMap(Ident.Idx, void).init(allocator);
+                defer seen_exposed.deinit();
+
+                while (iter.next()) |node_idx| {
+                    const node = self.getAstNode(node_idx);
+
+                    // Extract the identifier from the node
+                    const ident_idx: ?Ident.Idx = switch (node.tag) {
+                        .lc => node.payload.ident,
+                        .uc => node.payload.ident,
+                        .not_lc => node.payload.ident,
+                        else => null,
+                    };
+
+                    if (ident_idx) |idx| {
+                        // Check for redundant exposed entries
+                        if (seen_exposed.contains(idx)) {
+                            // Add redundant exposed diagnostic
+                            const region = self.ast.getRegion(node_idx);
+                            try self.pushDiagnostic(allocator, .redundant_exposed, region, idx);
+                        } else {
+                            // Add to exposed items
+                            try common_env.addExposedById(allocator, idx);
+                            try seen_exposed.put(idx, {});
+                        }
+                    }
+                }
+            },
+            .malformed => {
+                // Malformed header - skip processing
+            },
+        }
     }
 
-    _ = self; // Avoid unused parameter warning
+    _ = idents; // idents is used indirectly through the nodes
 }
