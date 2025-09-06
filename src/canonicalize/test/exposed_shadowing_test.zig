@@ -25,6 +25,11 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
+    // Debug: Print exact source
+    if (std.debug.runtime_safety) {
+        std.debug.print("\nexposed_shadowing_test source: '{s}'\n", .{source});
+    }
+
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");

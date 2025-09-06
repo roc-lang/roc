@@ -845,9 +845,6 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Clean up parse_ast since it was allocated with gpa, not shared memory
     parse_ast.deinit(gpa);
 
-    // Clean up checker since it was allocated with shared memory, but we need to clean up its gpa allocations
-    checker.deinit();
-
     // Update the header with used size
     shm.updateHeader();
 
