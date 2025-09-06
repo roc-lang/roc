@@ -107,7 +107,7 @@ pub fn install_package<'a>(
                 Ok((dest_dir, root_module_filename))
             } else {
                 // Download into a tempdir; only move it to dest_dir if hash verification passes.
-                println!(
+                eprintln!(
                     "Downloading \u{001b}[36m{url}\u{001b}[0m\n    into {}\n",
                     cache_dir.display()
                 );
