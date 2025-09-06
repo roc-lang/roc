@@ -31,21 +31,11 @@ BadType := _
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - minimal_underscore.md:1:1:1:1
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**minimal_underscore.md:3:9:3:11:**
-```roc
-BadType := _
-```
-        ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
 )
 ~~~
 # SOLVED

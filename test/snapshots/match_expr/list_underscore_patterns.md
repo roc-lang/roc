@@ -170,17 +170,6 @@ Is there an **import** or **exposing** missing up-top?
          ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_underscore_patterns.md:3:14:3:16:**
-```roc
-    [.., last] => last # pattern match on the last item in the list
-```
-             ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **last** in this scope.
 Is there an **import** or **exposing** missing up-top?

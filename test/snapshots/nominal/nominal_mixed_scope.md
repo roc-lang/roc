@@ -186,17 +186,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**nominal_mixed_scope.md:3:13:3:15:**
-```roc
-LocalStatus := [Pending, Complete]
-```
-            ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **nominal_mixed_scope.md:9:5:9:21:**
 ```roc
     import Color.RGB
@@ -207,7 +196,7 @@ This might be a limitation in the current implementation that will be addressed 
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "processColor"))
     (type type_11)

@@ -170,65 +170,11 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_type.md:3:9:3:11:**
-```roc
-BadType := _
-```
-        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_type.md:8:9:8:11:**
-```roc
-BadList := List(_)
-```
-        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_type.md:13:11:13:13:**
-```roc
-BadRecord := { field: _, other: U32 }
-```
-          ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_type.md:18:13:18:15:**
-```roc
-BadFunction := _ -> _
-```
-            ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_type.md:23:10:23:12:**
-```roc
-BadTuple := (_, U32)
-```
-         ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "foo"))
     (type type_5)
@@ -237,7 +183,7 @@ BadTuple := (_, U32)
     (pattern (Patt.ident "foo"))
     (Expr.num_literal_i32 42)
   )
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "bar"))
     (type type_16)
@@ -246,7 +192,7 @@ BadTuple := (_, U32)
     (pattern (Patt.ident "bar"))
     (Expr.list_literal)
   )
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "baz"))
     (type type_34)
@@ -264,7 +210,7 @@ BadTuple := (_, U32)
       )
     )
   )
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "qux"))
     (type type_51)
@@ -273,7 +219,7 @@ BadTuple := (_, U32)
     (pattern (Patt.ident "qux"))
     (Expr.lambda (canonicalized))
   )
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "quux"))
     (type type_64)

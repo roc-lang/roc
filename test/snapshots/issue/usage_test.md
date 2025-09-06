@@ -52,33 +52,12 @@ value = 42
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**usage_test.md:3:12:3:14:**
-```roc
-UnusedType := _
-```
-           ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**usage_test.md:5:10:5:12:**
-```roc
-UsedType := _
-```
-         ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "value"))
     (type type_8)

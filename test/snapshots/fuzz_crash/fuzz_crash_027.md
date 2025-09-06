@@ -1700,17 +1700,6 @@ import pkg.S exposing [func as fry, Custom.*]
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
 
-**fuzz_crash_027.md:40:5:40:7:**
-```roc
-Maya) : [ #
-```
-    ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
 **fuzz_crash_027.md:64:11:64:20:**
 ```roc
 	match a {lue | Red => {
@@ -1751,17 +1740,6 @@ Is there an **import** or **exposing** missing up-top?
 		                                   ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:70:42:71:4:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **ment** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1773,28 +1751,6 @@ Is there an **import** or **exposing** missing up-top?
 			   ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:74:27:74:29:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-		                        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:81:15:81:17:**
-```roc
-		(1, 2 | 5, 3) => 123
-```
-		            ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **add** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1804,17 +1760,6 @@ Is there an **import** or **exposing** missing up-top?
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
 		                                  ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_027.md:89:24:89:26:**
-```roc
-		{ foo: 1, bar: 2 | 7 } => 12
-```
-		                     ^^
 
 
 **UNDEFINED VARIABLE**

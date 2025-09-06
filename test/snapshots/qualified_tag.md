@@ -47,26 +47,16 @@ test = (Color.Red)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_tag.md:3:7:3:9:**
-```roc
-Color := [Red, Blue]
-```
-      ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.assign
     (pattern (Patt.ident "test"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )

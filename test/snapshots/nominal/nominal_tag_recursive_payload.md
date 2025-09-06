@@ -67,21 +67,11 @@ empty = (ConsList.Nil)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_recursive_payload.md:3:13:3:15:**
-```roc
-ConsList(a) := [Nil, Node(ConsList(a))]
-```
-            ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "empty"))
     (type type_17)
@@ -89,8 +79,8 @@ ConsList(a) := [Nil, Node(ConsList(a))]
   (Stmt.assign
     (pattern (Patt.ident "empty"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )

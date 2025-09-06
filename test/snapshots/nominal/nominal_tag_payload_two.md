@@ -196,17 +196,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload_two.md:3:19:3:21:**
-```roc
-MyResult(ok, err) := [Ok(ok), Err(err)]
-```
-                  ^^
-
-
 **PATTERN IN EXPRESSION CONTEXT**
 Found a pattern where an expression was expected.
 Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
@@ -232,7 +221,7 @@ Patterns can only appear in specific contexts like function parameters, destruct
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "ok"))
     (type type_24)

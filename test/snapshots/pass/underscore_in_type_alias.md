@@ -106,82 +106,17 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:5:11:5:13:**
-```roc
-OtherType := _
-```
-          ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:7:13:7:15:**
-```roc
-ComplexType := List(_)
-```
-            ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:9:12:9:14:**
-```roc
-RecordType := { field: _, other: U32 }
-```
-           ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:11:14:11:16:**
-```roc
-FunctionType := _ -> _
-```
-             ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:13:11:13:13:**
-```roc
-TupleType := (_, U32, _)
-```
-          ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_in_type_alias.md:15:9:15:11:**
-```roc
-TagType := [Some(_), None]
-```
-        ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
   (Stmt.type_alias)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
 )
 ~~~
 # SOLVED

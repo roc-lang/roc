@@ -132,21 +132,11 @@ none2 = (Maybe.None)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_payload.md:3:10:3:12:**
-```roc
-Maybe(a) := [Some(a), None]
-```
-         ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "some1"))
     (type type_20)
@@ -162,8 +152,8 @@ Maybe(a) := [Some(a), None]
   (Stmt.assign
     (pattern (Patt.ident "none1"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
   (Stmt.assign
@@ -173,8 +163,8 @@ Maybe(a) := [Some(a), None]
   (Stmt.assign
     (pattern (Patt.ident "none2"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )

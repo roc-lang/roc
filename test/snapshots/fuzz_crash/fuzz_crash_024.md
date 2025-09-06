@@ -141,17 +141,6 @@ var t= 0
 ```
 
 
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**fuzz_crash_024.md:1:24:1:33:**
-```roc
-module [module ] { pf: platform ".-/main._]where # A
-```
-                       ^^^^^^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

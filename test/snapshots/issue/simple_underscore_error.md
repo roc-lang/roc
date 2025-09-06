@@ -44,21 +44,11 @@ foo = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**simple_underscore_error.md:3:9:3:11:**
-```roc
-BadType := _
-```
-        ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "foo"))
     (type type_5)

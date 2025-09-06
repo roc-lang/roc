@@ -53,21 +53,11 @@ value = (MyType.TagA)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**qualified_with_anno.md:3:8:3:10:**
-```roc
-MyType := [TagA, TagB]
-```
-       ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "value"))
     (type type_8)
@@ -75,8 +65,8 @@ MyType := [TagA, TagB]
   (Stmt.assign
     (pattern (Patt.ident "value"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )

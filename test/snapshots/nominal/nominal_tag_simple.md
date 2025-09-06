@@ -72,21 +72,11 @@ yellow = (Color.Yellow)
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nominal_tag_simple.md:3:7:3:9:**
-```roc
-Color := [Red, Green, Blue]
-```
-      ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "blue"))
     (type type_10)
@@ -94,8 +84,8 @@ Color := [Red, Green, Blue]
   (Stmt.assign
     (pattern (Patt.ident "blue"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
   (Stmt.standalone_type_anno
@@ -105,8 +95,8 @@ Color := [Red, Green, Blue]
   (Stmt.assign
     (pattern (Patt.ident "yellow"))
     (Expr.module_access
-      (Expr.tag_no_args)
-      (Expr.tag_no_args)
+      (Expr.malformed)
+      (Expr.malformed)
     )
   )
 )

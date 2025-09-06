@@ -65,17 +65,7 @@ match ...
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_destructure.md:3:22:3:30:**
-```roc
-    { name, address: { city } } => "${city} is the city of ${name}"
-```
-                     ^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -109,4 +99,5 @@ This might be a limitation in the current implementation that will be addressed 
 # TYPES
 ~~~roc
 name : _a
+city : _a
 ~~~

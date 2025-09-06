@@ -51,33 +51,12 @@ value = "test"
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**test_error_propagation.md:3:9:3:11:**
-```roc
-BadBase := _
-```
-        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**test_error_propagation.md:5:11:5:13:**
-```roc
-GoodAlias := BadBase
-```
-          ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "value"))
     (type type_8)

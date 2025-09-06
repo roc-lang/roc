@@ -79,55 +79,12 @@ goodValue = "test"
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_propagation.md:3:9:3:11:**
-```roc
-BadBase := _
-```
-        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_propagation.md:5:12:5:14:**
-```roc
-BadDerived := BadBase
-```
-           ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_propagation.md:10:10:10:12:**
-```roc
-GoodBase := Str
-```
-         ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**underscore_error_propagation.md:12:13:12:15:**
-```roc
-GoodDerived := GoodBase
-```
-            ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "value"))
     (type type_8)
@@ -136,8 +93,8 @@ GoodDerived := GoodBase
     (pattern (Patt.ident "value"))
     (Expr.str_literal_small)
   )
-  (Stmt.malformed)
-  (Stmt.malformed)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "goodValue"))
     (type type_20)

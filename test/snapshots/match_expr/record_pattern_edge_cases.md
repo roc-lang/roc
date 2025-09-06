@@ -144,61 +144,7 @@ match ...
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_pattern_edge_cases.md:4:14:4:23:**
-```roc
-    { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
-```
-             ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_pattern_edge_cases.md:5:10:5:15:**
-```roc
-    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
-```
-         ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_pattern_edge_cases.md:5:20:5:25:**
-```roc
-    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
-```
-                   ^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_pattern_edge_cases.md:6:5:6:16:**
-```roc
-    { name: x } => "renamed: ${x}"
-```
-    ^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**record_pattern_edge_cases.md:7:5:7:50:**
-```roc
-    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -272,5 +218,10 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # TYPES
 ~~~roc
+firstName : _e
+inner : _e
+b : _e
 x : _e
+d : _e
+userAge : _e
 ~~~

@@ -193,17 +193,6 @@ Is there an **import** or **exposing** missing up-top?
                             ^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**middle_rest.md:3:30:3:32:**
-```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
-```
-                             ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **a** in this scope.
 Is there an **import** or **exposing** missing up-top?

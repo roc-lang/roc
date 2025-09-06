@@ -265,17 +265,6 @@ Is there an **import** or **exposing** missing up-top?
                           ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**complex_list_tags.md:4:31:4:33:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
-```
-                              ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **dx** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -331,17 +320,6 @@ Is there an **import** or **exposing** missing up-top?
                                          ^^^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**complex_list_tags.md:5:48:5:50:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr(dx)},${Num.toStr(dy)} then ${Num.toStr(dx2)},${Num.toStr(dy2)}"
-```
-                                               ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **amount** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -362,17 +340,6 @@ Is there an **import** or **exposing** missing up-top?
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
 ```
                                         ^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**complex_list_tags.md:6:50:6:52:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr(amount)} then click at ${Num.toStr(x)},${Num.toStr(y)}"
-```
-                                                 ^^
 
 
 # CANONICALIZE

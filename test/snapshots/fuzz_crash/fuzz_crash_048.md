@@ -159,17 +159,6 @@ main! : List(String) -> Result({}, _)
 ```
 
 
-**EXPRESSION IN TYPE CONTEXT**
-Found an expression where a type was expected.
-Types must be type identifiers, type applications, or type expressions.
-
-**fuzz_crash_048.md:6:12:7:1:**
-```roc
-add_one : (
-U8, U16 -> U32)
-```
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -273,17 +273,6 @@ Color := [
       ^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**Color.md:33:10:33:13:**
-```roc
-        ['#', a, b, c, d, e, f] => {
-```
-         ^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **inner** in this scope.
 Is there an **import** or **exposing** missing up-top?

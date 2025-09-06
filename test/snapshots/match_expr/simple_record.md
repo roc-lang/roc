@@ -71,28 +71,6 @@ Is there an **import** or **exposing** missing up-top?
                 ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**simple_record.md:3:5:3:12:**
-```roc
-    { age } => age
-```
-    ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **age** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**simple_record.md:3:16:3:19:**
-```roc
-    { age } => age
-```
-               ^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -116,4 +94,5 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # TYPES
 ~~~roc
+age : _a
 ~~~

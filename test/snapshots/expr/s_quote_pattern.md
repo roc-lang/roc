@@ -63,17 +63,6 @@ Patterns can contain identifiers, literals, lists, records, or tags.
 	 ^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**s_quote_pattern.md:2:3:2:6:**
-```roc
-	['#'] => ...
-```
-	 ^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

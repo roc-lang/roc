@@ -237,17 +237,6 @@ Is there an **import** or **exposing** missing up-top?
                  ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_destructure_variations.md:5:22:5:24:**
-```roc
-    [head, .. as tail] => head
-```
-                     ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **head** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -268,17 +257,6 @@ Is there an **import** or **exposing** missing up-top?
     [One, Two, .. as rest] => 3
 ```
                      ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_destructure_variations.md:6:26:6:28:**
-```roc
-    [One, Two, .. as rest] => 3
-```
-                         ^^
 
 
 **UNDEFINED VARIABLE**
@@ -312,17 +290,6 @@ Is there an **import** or **exposing** missing up-top?
     [x, y, z, .. as more] => x + y + z
 ```
                     ^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**list_destructure_variations.md:7:25:7:27:**
-```roc
-    [x, y, z, .. as more] => x + y + z
-```
-                        ^^
 
 
 **UNDEFINED VARIABLE**

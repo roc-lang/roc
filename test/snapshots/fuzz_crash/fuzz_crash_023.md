@@ -2112,50 +2112,6 @@ Is there an **import** or **exposing** missing up-top?
 		                ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:102:23:103:4:**
-```roc
-		[1, 2, 3, .. as rest] # After pattern comment
-			=> # After arrow comment
-```
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:108:27:108:29:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-		                        ^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:116:3:116:5:**
-```roc
-		] => 123
-```
-		^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:120:15:120:17:**
-```roc
-		(1, 2 | 5, 3) => 123
-```
-		            ^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named **add** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2165,17 +2121,6 @@ Is there an **import** or **exposing** missing up-top?
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
 		                                  ^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**fuzz_crash_023.md:130:24:130:26:**
-```roc
-		{ foo: 1, bar: 2 | 7 } => 12
-```
-		                     ^^
 
 
 **UNDEFINED VARIABLE**

@@ -98,28 +98,6 @@ Is there an **import** or **exposing** missing up-top?
                                                                             ^^^^
 
 
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**pattern_as_nested.md:3:5:3:13:**
-```roc
-    { name } as simplePerson => (simplePerson, name, "unknown")
-```
-    ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named **name** in this scope.
-Is there an **import** or **exposing** missing up-top?
-
-**pattern_as_nested.md:3:48:3:52:**
-```roc
-    { name } as simplePerson => (simplePerson, name, "unknown")
-```
-                                               ^^^^
-
-
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -160,6 +138,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # TYPES
 ~~~roc
+name : _a
 fullPerson : _a
 simplePerson : _a
 addr : _a

@@ -117,39 +117,7 @@ match ...
 # EXPECTED
 NIL
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nested_record_patterns.md:3:40:3:48:**
-```roc
-    { person: { name, age }, location: { city } } => "${name} (${age.to_str()}) from ${city}"
-```
-                                       ^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nested_record_patterns.md:4:5:4:34:**
-```roc
-    { data: { info: { value } } } => "Deep nested: ${value}"
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**nested_record_patterns.md:5:5:5:15:**
-```roc
-    { simple } => "Simple: ${simple}"
-```
-    ^^^^^^^^^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.match)
@@ -207,4 +175,7 @@ This might be a limitation in the current implementation that will be addressed 
 # TYPES
 ~~~roc
 name : _a
+city : _a
+simple : _a
+value : _a
 ~~~

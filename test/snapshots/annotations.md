@@ -279,21 +279,11 @@ INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
 TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
-**UNSUPPORTED NODE**
-This syntax is not yet supported by the compiler.
-This might be a limitation in the current implementation that will be addressed in a future update.
-
-**annotations.md:3:9:3:11:**
-```roc
-Pair(a) := [Pair(a, a)]
-```
-        ^^
-
-
+NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.block
-  (Stmt.malformed)
+  (Stmt.opaque_type)
   (Stmt.standalone_type_anno
     (pattern (Patt.ident "pairU64"))
     (type type_14)
