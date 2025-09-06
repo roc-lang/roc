@@ -12,6 +12,58 @@ match data {
     [first, ..items, last] => first + last
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "data")
+)
+  (branch1     (binop_thick_arrow
+      (list_literal
+        (double_dot_lc "items")
+      )
+      (block
+        (num_literal_i32 1)
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (unary_double_dot <unary_op>)
+          )
+          (lc "first")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (unary_double_dot <unary_op>)
+            (lc "last")
+          )
+          (lc "last")
+        )
+        (binop_thick_arrow
+          (list_literal
+            (lc "first")
+            (unary_double_dot <unary_op>)
+            (lc "last")
+          )
+          (binop_plus
+            (lc "first")
+            (lc "last")
+          )
+        )
+      )
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match data
+	[..items] => 
+		1
+		[first, ..items] => first
+		[..items, last] => last
+		[first, ..items, last] => first + last
+~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
 BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
@@ -23,53 +75,9 @@ UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:15
 UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:8
 UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:15
 # PROBLEMS
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-
-**list_rest_scoping_variables.md:2:6:2:13:**
-```roc
-    [..items] => 1
-```
-     ^^^^^^^
-
-
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-
-**list_rest_scoping_variables.md:3:13:3:20:**
-```roc
-    [first, ..items] => first
-```
-            ^^^^^^^
-
-
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-
-**list_rest_scoping_variables.md:4:6:4:13:**
-```roc
-    [..items, last] => last
-```
-     ^^^^^^^
-
-
-**BAD LIST REST PATTERN SYNTAX**
-List rest patterns should use the `.. as name` syntax, not `..name`.
-For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
-
-**list_rest_scoping_variables.md:5:13:5:20:**
-```roc
-    [first, ..items, last] => first + last
-```
-            ^^^^^^^
-
-
 **UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **data** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **list_rest_scoping_variables.md:1:7:1:11:**
 ```roc
@@ -78,156 +86,56 @@ match data {
       ^^^^
 
 
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
 
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping_variables.md:2:8:2:8:**
+**list_rest_scoping_variables.md:2:5:5:43:**
 ```roc
     [..items] => 1
-```
-       ^
-
-
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping_variables.md:3:15:3:15:**
-```roc
     [first, ..items] => first
-```
-              ^
-
-
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping_variables.md:4:8:4:8:**
-```roc
     [..items, last] => last
-```
-       ^
-
-
-**UNUSED VARIABLE**
-Variable `items` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping_variables.md:5:15:5:15:**
-```roc
     [first, ..items, last] => first + last
 ```
-              ^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),
-OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),LowerIdent(2:8-2:13),CloseSquare(2:13-2:14),OpFatArrow(2:15-2:17),Int(2:18-2:19),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:20),CloseSquare(3:20-3:21),OpFatArrow(3:22-3:24),LowerIdent(3:25-3:30),
-OpenSquare(4:5-4:6),DoubleDot(4:6-4:8),LowerIdent(4:8-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:19),CloseSquare(4:19-4:20),OpFatArrow(4:21-4:23),LowerIdent(4:24-4:28),
-OpenSquare(5:5-5:6),LowerIdent(5:6-5:11),Comma(5:11-5:12),DoubleDot(5:13-5:15),LowerIdent(5:15-5:20),Comma(5:20-5:21),LowerIdent(5:22-5:26),CloseSquare(5:26-5:27),OpFatArrow(5:28-5:30),LowerIdent(5:31-5:36),OpPlus(5:37-5:38),LowerIdent(5:39-5:43),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.11 (raw "data"))
-	(branches
-		(branch @2.5-2.19
-			(p-list @2.5-2.14
-				(p-list-rest @2.6-2.13 (name "items")))
-			(e-int @2.18-2.19 (raw "1")))
-		(branch @3.5-3.30
-			(p-list @3.5-3.21
-				(p-ident @3.6-3.11 (raw "first"))
-				(p-list-rest @3.13-3.20 (name "items")))
-			(e-ident @3.25-3.30 (raw "first")))
-		(branch @4.5-4.28
-			(p-list @4.5-4.20
-				(p-list-rest @4.6-4.13 (name "items"))
-				(p-ident @4.15-4.19 (raw "last")))
-			(e-ident @4.24-4.28 (raw "last")))
-		(branch @5.5-5.43
-			(p-list @5.5-5.27
-				(p-ident @5.6-5.11 (raw "first"))
-				(p-list-rest @5.13-5.20 (name "items"))
-				(p-ident @5.22-5.26 (raw "last")))
-			(e-binop @5.31-5.43 (op "+")
-				(e-ident @5.31-5.36 (raw "first"))
-				(e-ident @5.39-5.43 (raw "last"))))))
-~~~
-# FORMATTED
-~~~roc
-match data {
-	[.. as items] => 1
-	[first, .. as items] => first
-	[.. as items, last] => last
-	[first, .. as items, last] => first + last
-}
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @2.5-2.14
-							(patterns)
-							(rest-at (index 0)
-								(p-assign @2.8-2.8 (ident "items"))))))
-				(value
-					(e-int @2.18-2.19 (value "1"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @3.5-3.21
-							(patterns
-								(p-assign @3.6-3.11 (ident "first")))
-							(rest-at (index 1)
-								(p-assign @3.15-3.15 (ident "items"))))))
-				(value
-					(e-lookup-local @3.25-3.30
-						(p-assign @3.6-3.11 (ident "first")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @4.5-4.20
-							(patterns
-								(p-assign @4.15-4.19 (ident "last")))
-							(rest-at (index 0)
-								(p-assign @4.8-4.8 (ident "items"))))))
-				(value
-					(e-lookup-local @4.24-4.28
-						(p-assign @4.15-4.19 (ident "last")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-list @5.5-5.27
-							(patterns
-								(p-assign @5.6-5.11 (ident "first"))
-								(p-assign @5.22-5.26 (ident "last")))
-							(rest-at (index 1)
-								(p-assign @5.15-5.15 (ident "items"))))))
-				(value
-					(e-binop @5.31-5.43 (op "add")
-						(e-lookup-local @5.31-5.36
-							(p-assign @5.6-5.11 (ident "first")))
-						(e-lookup-local @5.39-5.43
-							(p-assign @5.22-5.26 (ident "last")))))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 29
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-6.2 (type "Num(_size)"))
+~~~roc
 ~~~

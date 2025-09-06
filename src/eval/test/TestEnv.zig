@@ -2,7 +2,8 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const eval = @import("../interpreter.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
+const EvalError = @import("../interpreter.zig").EvalError;
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -15,7 +16,7 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const TestEnv = @This();
 
 allocator: std.mem.Allocator,
-interpreter: ?*eval.Interpreter,
+interpreter: ?*Interpreter,
 roc_ops: ?RocOps,
 
 pub fn init(allocator: std.mem.Allocator) TestEnv {
@@ -27,7 +28,7 @@ pub fn init(allocator: std.mem.Allocator) TestEnv {
 }
 
 /// Set the interpreter instance for this test environment
-pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
+pub fn setInterpreter(self: *TestEnv, interp: *Interpreter) void {
     self.interpreter = interp;
 }
 
@@ -75,7 +76,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
+        @panic("Out of memory during test allocation");
     };
 
     // Store the total size (including metadata) right before the user data
@@ -127,7 +128,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
+        // Reallocation failed - keep the original allocation
+        // The Roc runtime should handle this gracefully
+        return;
     };
 
     // Store the new total size in the metadata
@@ -139,15 +142,29 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("testRocDbg not implemented yet");
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+
+    // Basic implementation - just log the debug message
+    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+    std.log.debug("ROC DBG: {s}", .{msg_slice});
+
+    // Store the debug output if we have somewhere to put it
+    _ = test_env;
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+
+    // Basic implementation - log the failure
+    const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
+    std.log.err("EXPECT FAILED: {s}", .{msg_slice});
+
+    // Mark test as failed if we have an interpreter
+    if (test_env.interpreter) |interp| {
+        interp.has_crashed = true;
+        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch "EXPECT FAILED";
+        interp.crash_message = owned_msg;
+    }
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

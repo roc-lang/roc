@@ -6,6 +6,7 @@
 //! be interpreted.
 
 const collections = @import("collections");
+const base = @import("base");
 
 const AST = @import("AST.zig");
 const TokenIdx = @import("tokenize.zig").Token.Idx;
@@ -15,7 +16,7 @@ const Node = @This();
 tag: Tag,
 data: Data,
 main_token: TokenIdx,
-region: AST.TokenizedRegion,
+region: base.Region,
 
 /// A SafeMultiList of Nodes
 pub const List = collections.SafeMultiList(Node);
@@ -33,12 +34,6 @@ pub const Tag = enum {
     /// lhs - first token
     /// rhs - last token
     root,
-
-    /// TODO: Find a way to remove this
-    /// This is a hack _only_ for the formatter - it should never be emitted by the parser
-    /// * lhs - node that caused this node to be added by formatter
-    /// * rhs - ignored
-    emit_ws,
 
     /// Module header
     /// * lhs - module type

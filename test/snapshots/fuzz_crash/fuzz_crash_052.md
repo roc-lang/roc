@@ -9,63 +9,47 @@ module[]import
 S
 0
 ~~~
-# EXPECTED
-PARSE ERROR - fuzz_crash_052.md:3:1:3:2
-MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
-# PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_052.md:3:1:3:2:**
-```roc
-0
-```
-^
-
-
-**MODULE NOT FOUND**
-The module `S` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_052.md:1:9:2:2:**
-```roc
-module[]import
-S
-```
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),KwImport(1:9-1:15),
-UpperIdent(2:1-2:2),
-Int(3:1-3:2),
-EndOfFile(4:1-4:1),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare KwImport UpperIdent Int ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.2
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
-	(statements
-		(s-import @1.9-2.2 (raw "S"))
-		(s-malformed @3.1-3.2 (tag "statement_unexpected_token"))))
+(module-header)
+(block
+  (import
+    (uc "S")
+  )
+  (num_literal_i32 0)
+)
 ~~~
 # FORMATTED
 ~~~roc
 module []
-import
-	S
+
+import S
+0
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_052.md:3:1:3:2
+MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-import @1.9-2.2 (module "S")
-		(exposes)))
+(Expr.block
+  (Stmt.import)
+  (Expr.num_literal_i32 0)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 Num *)
+(var #4 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

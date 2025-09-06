@@ -11,12 +11,49 @@ match color {
     White => 3
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "color")
+)
+  (branch1     (binop_thick_arrow
+      (binop_or
+        (binop_or
+          (uc "Blue")
+          (uc "Green")
+        )
+        (uc "Red")
+      )
+      (num_literal_i32 1)
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "Black")
+      (num_literal_i32 2)
+    )
+)
+  (branch3     (binop_thick_arrow
+      (uc "White")
+      (num_literal_i32 3)
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match color
+	(Blue || Green) || Red => 1
+	Black => 2
+	White => 3
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `color` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **color** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **multi_pattern_branch.md:1:7:1:12:**
 ```roc
@@ -25,72 +62,52 @@ match color {
       ^^^^^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-UpperIdent(2:5-2:9),OpBar(2:10-2:11),UpperIdent(2:12-2:17),OpBar(2:18-2:19),UpperIdent(2:20-2:23),OpFatArrow(2:24-2:26),Int(2:27-2:28),
-UpperIdent(3:5-3:10),OpFatArrow(3:11-3:13),Int(3:14-3:15),
-UpperIdent(4:5-4:10),OpFatArrow(4:11-4:13),Int(4:14-4:15),
-CloseCurly(5:1-5:2),
-EndOfFile(6:1-6:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.12 (raw "color"))
-	(branches
-		(branch @2.5-2.28
-			(p-alternatives
-				(p-tag @2.5-2.9 (raw "Blue"))
-				(p-tag @2.12-2.17 (raw "Green"))
-				(p-tag @2.20-2.23 (raw "Red")))
-			(e-int @2.27-2.28 (raw "1")))
-		(branch @3.5-3.15
-			(p-tag @3.5-3.10 (raw "Black"))
-			(e-int @3.14-3.15 (raw "2")))
-		(branch @4.5-4.15
-			(p-tag @4.5-4.10 (raw "White"))
-			(e-int @4.14-4.15 (raw "3")))))
-~~~
-# FORMATTED
-~~~roc
-match color {
-	Blue | Green | Red => 1
-	Black => 2
-	White => 3
-}
-~~~
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_pattern_branch.md:2:5:2:28:**
+```roc
+    Blue | Green | Red => 1
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**multi_pattern_branch.md:4:5:4:15:**
+```roc
+    White => 3
+```
+    ^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-5.2
-	(match @1.1-5.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @2.5-2.9))
-					(pattern (degenerate false)
-						(p-applied-tag @2.12-2.17))
-					(pattern (degenerate false)
-						(p-applied-tag @2.20-2.23)))
-				(value
-					(e-int @2.27-2.28 (value "1"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @3.5-3.10)))
-				(value
-					(e-int @3.14-3.15 (value "2"))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-applied-tag @4.5-4.10)))
-				(value
-					(e-int @4.14-4.15 (value "3")))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 16
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 Num *)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-5.2 (type "Num(_size)"))
+~~~roc
 ~~~

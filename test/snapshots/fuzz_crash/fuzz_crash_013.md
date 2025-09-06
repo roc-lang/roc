@@ -7,27 +7,27 @@ type=file
 ~~~roc
 0{
 ~~~
+# TOKENS
+~~~text
+Int OpenCurly ~~~
+# PARSE
+~~~clojure
+(block
+  (num_literal_i32 0)
+  (block)
+)
+~~~
+# FORMATTED
+~~~roc
+0
+{}
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_013.md:1:1:1:2
 PARSE ERROR - fuzz_crash_013.md:1:2:1:3
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_013.md:1:1:1:2:**
-```roc
-0{
-```
-^
-
-
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_expr_close_curly**
 This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_013.md:1:2:1:3:**
@@ -37,28 +37,23 @@ This is an unexpected parsing error. Please check your syntax.
  ^
 
 
-# TOKENS
-~~~zig
-Int(1:1-1:2),OpenCurly(1:2-1:3),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.3
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.num_literal_i32 0)
+  (Expr.record_literal
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 Num *)
+(var #2 -> #4)
+(var #3 _)
+(var #4 {})
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

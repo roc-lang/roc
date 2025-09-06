@@ -13,58 +13,71 @@ module [
 a = 'a'
 b = 'a'
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare LowerIdent Comma LowerIdent Comma CloseSquare BlankLine LowerIdent OpAssign SingleQuote LowerIdent OpAssign SingleQuote ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (lc "a")
+
+    (lc "b")
+))
+(block
+  (binop_equals
+    (lc "a")
+    (str_literal_small "a")
+  )
+  (binop_equals
+    (lc "b")
+    (str_literal_small "a")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module [
+	a,
+	b,
+]
+
+a = 'a'
+b = 'a'
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),
-LowerIdent(2:2-2:3),Comma(2:3-2:4),
-LowerIdent(3:2-3:3),Comma(3:3-3:4),
-CloseSquare(4:1-4:2),
-LowerIdent(6:1-6:2),OpAssign(6:3-6:4),SingleQuote(6:5-6:8),
-LowerIdent(7:1-7:2),OpAssign(7:3-7:4),SingleQuote(7:5-7:8),
-EndOfFile(8:1-8:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-7.8
-	(module @1.1-4.2
-		(exposes @1.8-4.2
-			(exposed-lower-ident @2.2-2.3
-				(text "a"))
-			(exposed-lower-ident @3.2-3.3
-				(text "b"))))
-	(statements
-		(s-decl @6.1-6.8
-			(p-ident @6.1-6.2 (raw "a"))
-			(e-single-quote @6.5-6.8 (raw "'a'")))
-		(s-decl @7.1-7.8
-			(p-ident @7.1-7.2 (raw "b"))
-			(e-single-quote @7.5-7.8 (raw "'a'")))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.2 (ident "a"))
-		(e-int @6.5-6.8 (value "97")))
-	(d-let
-		(p-assign @7.1-7.2 (ident "b"))
-		(e-int @7.5-7.8 (value "97"))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.str_literal_small)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.str_literal_small)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 10
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 -> #4)
+(var #4 Str)
+(var #5 _)
+(var #6 -> #7)
+(var #7 Str)
+(var #8 _)
+(var #9 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.2 (type "Num(_size)"))
-		(patt @7.1-7.2 (type "Num(_size)")))
-	(expressions
-		(expr @6.5-6.8 (type "Num(_size)"))
-		(expr @7.5-7.8 (type "Num(_size)"))))
+~~~roc
+a : Str
+b : Str
 ~~~

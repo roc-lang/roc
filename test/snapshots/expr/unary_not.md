@@ -7,12 +7,23 @@ type=expr
 ~~~roc
 !blah
 ~~~
+# TOKENS
+~~~text
+OpBang LowerIdent ~~~
+# PARSE
+~~~clojure
+(unary_not <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+!blah
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - unary_not.md:1:2:1:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `blah` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **blah** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **unary_not.md:1:2:1:6:**
 ```roc
@@ -21,26 +32,17 @@ Is there an `import` or `exposing` missing up-top?
  ^^^^
 
 
-# TOKENS
-~~~zig
-OpBang(1:1-1:2),LowerIdent(1:2-1:6),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(unary "!"
-	(e-ident @1.2-1.6 (raw "blah")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-not @1.1-1.6
-	(e-runtime-error (tag "ident_not_in_scope")))
+(Expr.unary_not)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 _)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.6 (type "Error"))
+~~~roc
 ~~~

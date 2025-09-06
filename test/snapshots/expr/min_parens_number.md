@@ -7,31 +7,32 @@ type=expr
 ~~~roc
 -(8)
 ~~~
+# TOKENS
+~~~text
+OpUnaryMinus OpenRound Int CloseRound ~~~
+# PARSE
+~~~clojure
+(unary_neg <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+-8
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(unary "-"
-	(e-tuple @1.2-1.5
-		(e-int @1.3-1.4 (raw "8"))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.5
-	(e-int @1.3-1.4 (value "8")))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 Num *)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Num(_size)"))
+~~~roc
 ~~~

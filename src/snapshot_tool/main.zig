@@ -18,12 +18,12 @@ const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
+const collections = @import("collections");
 
 const Repl = repl.Repl;
 const CommonEnv = base.CommonEnv;
+const Region = base.Region;
 const Check = check.Check;
-const CIR = can.CIR;
-const Can = can.Can;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -35,11 +35,14 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const CacheModule = compile.CacheModule;
-const AST = parse.AST;
+const AST = parse.AST; // Using the new AST (formerly AST)
+const Parser = parse.Parser; // Using the new Parser (formerly Parser)
+const CIR = can.CIR; // Using the new CIR (formerly CIR)
 const Report = reporting.Report;
 const types_problem_mod = check.problem;
 const tokenize = parse.tokenize;
 const parallel = base.parallel;
+const ByteSlices = collections.ByteSlices;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -447,64 +450,500 @@ fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
         a.end_col == b.end_col;
 }
 
-/// Generate all reports from the compilation pipeline
-fn generateAllReports(
+/// Helper to determine if an AST node tag represents an expression
+fn isExpressionNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .num_literal_i32, .int_literal_i32, .num_literal_big, .int_literal_big, .frac_literal_small, .frac_literal_big, .str_literal_small, .str_literal_big, .lc, .uc, .var_lc, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .block, .record_literal, .lambda, .lambda_no_args, .apply_lc, .apply_uc, .apply_anon, .tuple_literal, .list_literal, .if_else, .match, .unary_neg, .unary_not => true,
+        else => false,
+    };
+}
+
+/// Helper to determine if an AST node tag represents a statement
+fn isStatementNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .binop_equals, .binop_colon, .binop_colon_equals, .import => true,
+        else => false,
+    };
+}
+
+/// Helper to determine if an AST node tag represents a pattern
+fn isPatternNode(tag: AST.Node.Tag) bool {
+    return switch (tag) {
+        .underscore => true,
+        else => false,
+    };
+}
+
+/// Generate reports from Parser and CIR diagnostics
+fn generateReportsFromNewSystem(
     allocator: std.mem.Allocator,
-    parse_ast: *AST,
-    can_ir: *ModuleEnv,
-    solver: *Check,
+    parser: *const Parser,
+    cir: *const CIR,
+    env: *const base.CommonEnv,
     snapshot_path: []const u8,
-    module_env: *ModuleEnv,
 ) !std.ArrayList(reporting.Report) {
     var reports = std.ArrayList(reporting.Report).init(allocator);
     errdefer reports.deinit();
 
-    // Generate tokenize reports
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch |err| {
-            std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
+    // Convert Parser diagnostics to reports
+    for (parser.diagnostics.items) |diag| {
+        const report = try convertParserDiagnosticToReport(allocator, diag, parser, env, snapshot_path);
         try reports.append(report);
     }
 
-    // Generate parse reports
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate canonicalization reports
-    const diagnostics = try can_ir.getDiagnostics();
-    defer allocator.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate type checking reports
-    for (solver.problems.problems.items) |problem| {
-        const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
-            allocator,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            snapshot_path,
-            empty_modules,
-        );
-        defer report_builder.deinit();
-
-        const report = report_builder.build(problem) catch |err| {
-            std.debug.panic("Failed to create type checking report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
+    // Convert CIR diagnostics to reports
+    for (cir.diagnostics.items) |diag| {
+        const report = try convertCIRDiagnosticToReport(allocator, diag, env, snapshot_path);
         try reports.append(report);
     }
 
     return reports;
+}
+
+/// Convert Parser diagnostic to a report
+fn convertParserDiagnosticToReport(
+    allocator: std.mem.Allocator,
+    diag: AST.Diagnostic,
+    parser: *const Parser,
+    env: *const base.CommonEnv,
+    snapshot_path: []const u8,
+) !Report {
+    _ = parser;
+
+    const title = switch (diag.tag) {
+        .multiple_platforms => "MULTIPLE PLATFORMS",
+        .no_platform => "NO PLATFORM",
+        .missing_header => "MISSING HEADER",
+        .missing_arrow => "MISSING ARROW",
+        .expected_exposes => "EXPECTED EXPOSES",
+        .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
+        .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
+        .expected_imports => "EXPECTED IMPORTS",
+        .expected_package_or_platform_name => "EXPECTED PACKAGE OR PLATFORM NAME",
+        .expected_package_or_platform_colon => "EXPECTED COLON",
+        .expected_package_or_platform_string => "EXPECTED STRING",
+        .expected_package_platform_close_curly => "EXPECTED CLOSE CURLY BRACE",
+        .expected_package_platform_open_curly => "EXPECTED OPEN CURLY BRACE",
+        .expected_packages => "EXPECTED PACKAGES",
+        .expected_packages_close_curly => "EXPECTED CLOSE CURLY BRACE",
+        .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
+        .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
+        .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+        .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
+        .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
+        .where_expected_mod_open => "WHERE CLAUSE ERROR",
+        .where_expected_var => "WHERE CLAUSE ERROR",
+        .where_expected_mod_close => "WHERE CLAUSE ERROR",
+        .where_expected_arg_open => "WHERE CLAUSE ERROR",
+        .where_expected_arg_close => "WHERE CLAUSE ERROR",
+        .where_expected_method_arrow => "WHERE CLAUSE ERROR",
+        .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
+        .where_expected_module => "WHERE CLAUSE ERROR",
+        .where_expected_colon => "WHERE CLAUSE ERROR",
+        .where_expected_constraints => "WHERE CLAUSE ERROR",
+        .no_else => "IF WITHOUT ELSE",
+        else => "PARSE ERROR",
+    };
+
+    var report = Report.init(allocator, title, .runtime_error);
+
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(diag.region.start.offset, env.source.len) },
+        .end = .{ .offset = @min(@max(diag.region.end.offset, diag.region.start.offset), env.source.len) },
+    };
+
+    // Add detailed error message based on the diagnostic type
+    switch (diag.tag) {
+        .missing_header => {
+            try report.document.addReflowingText("Roc files must start with a module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module [main]");
+            try report.document.addLineBreak();
+            try report.document.addText("or for an app:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .multiple_platforms => {
+            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Remove the duplicate platform declaration.");
+        },
+        .no_platform => {
+            try report.document.addReflowingText("App files must specify a platform.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a platform specification like:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .missing_arrow => {
+            try report.document.addText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
+        },
+        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
+            try report.document.addReflowingText("Module headers must have an ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" section that lists what the module exposes.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module [main, add, subtract]");
+        },
+        .expected_imports => {
+            try report.document.addReflowingText("Import statements must specify what is being imported.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
+        },
+        .pattern_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a pattern.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+        },
+        .pattern_list_rest_old_syntax => {
+            try report.document.addReflowingText("List rest patterns should use the `.. as name` syntax, not `..name`.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("For example, use `[first, .. as rest]` instead of `[first, ..rest]`.");
+        },
+        .pattern_unexpected_eof => {
+            try report.document.addReflowingText("The pattern appears to be incomplete.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure all patterns are complete and properly closed.");
+        },
+        .ty_anno_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a type annotation.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should contain types like ");
+            try report.document.addType("Str");
+            try report.document.addText(", ");
+            try report.document.addType("Num a");
+            try report.document.addText(", or ");
+            try report.document.addType("List U64");
+            try report.document.addText(".");
+        },
+        .string_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a string literal.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String literals should be enclosed in double quotes.");
+        },
+        .expr_unexpected_token => {
+            const token_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in an expression.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
+        },
+        .import_must_be_top_level => {
+            try report.document.addReflowingText("Import statements must appear at the top level of a module.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
+        },
+        .expected_expr_close_square_or_comma => {
+            try report.document.addReflowingText("This list is not properly closed.");
+            try report.document.addLineBreak();
+            try report.document.addText("Expected either a comma ");
+            try report.document.addAnnotated(",", .emphasized);
+            try report.document.addText(" to continue the list or a closing bracket ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" to end it.");
+        },
+        .where_expected_mod_open, .where_expected_var, .where_expected_mod_close, .where_expected_arg_open, .where_expected_arg_close, .where_expected_method_arrow, .where_expected_method_or_alias_name, .where_expected_module, .where_expected_colon, .where_expected_constraints => {
+            try report.document.addReflowingText("There's a problem with this where clause.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses should have the form:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("where module(a).method : args -> ret");
+        },
+        .no_else => {
+            try report.document.addReflowingText("This `if` expression is missing an `else` branch.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("All `if` expressions in Roc must have an `else` branch to ensure they always return a value.");
+        },
+        else => {
+            // Generic parse error message
+            try report.document.addText("A parsing error occurred: ");
+            try report.document.addAnnotated(@tagName(diag.tag), .error_highlight);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
+        },
+    }
+
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Add the source context with line numbers
+    if (diag.region.start.offset < diag.region.end.offset and
+        diag.region.end.offset <= env.source.len)
+    {
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            env.source,
+            env.line_starts.items.items,
+            diag.region.start.offset,
+            diag.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            snapshot_path,
+            env.source,
+            env.line_starts.items.items,
+        );
+    }
+
+    return report;
+}
+
+/// Convert CIR diagnostic to a report
+fn convertCIRDiagnosticToReport(
+    allocator: std.mem.Allocator,
+    diag: CIR.CanDiagnostic,
+    env: *const base.CommonEnv,
+    snapshot_path: []const u8,
+) !Report {
+    const title = switch (diag.tag) {
+        .pattern_in_expr_context => "PATTERN IN EXPRESSION CONTEXT",
+        .expr_in_pattern_context => "EXPRESSION IN PATTERN CONTEXT",
+        .stmt_in_expr_context => "STATEMENT IN EXPRESSION CONTEXT",
+        .expr_in_stmt_context => "EXPRESSION IN STATEMENT CONTEXT",
+        .type_in_expr_context => "TYPE IN EXPRESSION CONTEXT",
+        .expr_in_type_context => "EXPRESSION IN TYPE CONTEXT",
+        .ident_not_in_scope => "UNDEFINED VARIABLE",
+        .ident_already_defined => "IDENTIFIER ALREADY DEFINED",
+        .unused_variable => "UNUSED VARIABLE",
+        .unused_expression => "UNUSED EXPRESSION",
+        .type_not_in_scope => "TYPE NOT IN SCOPE",
+        .invalid_type_var_in_constraint => "INVALID TYPE VARIABLE IN CONSTRAINT",
+        .invalid_ability_in_constraint => "INVALID ABILITY IN CONSTRAINT",
+        .invalid_where_constraint => "INVALID WHERE CONSTRAINT",
+        .exposed_but_not_implemented => "EXPOSED BUT NOT IMPLEMENTED",
+        .redundant_exposed => "REDUNDANT EXPOSED",
+        .shadowing_warning => "SHADOWING",
+        .unsupported_node => "UNSUPPORTED NODE",
+        .malformed_ast => "MALFORMED AST",
+    };
+
+    var report = Report.init(allocator, title, .runtime_error);
+
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(diag.region.start.offset, env.source.len) },
+        .end = .{ .offset = @min(@max(diag.region.end.offset, diag.region.start.offset), env.source.len) },
+    };
+
+    // Add detailed error message based on the diagnostic type
+    switch (diag.tag) {
+        .pattern_in_expr_context => {
+            try report.document.addReflowingText("Found a pattern where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can only appear in specific contexts like function parameters, ");
+            try report.document.addText("destructuring assignments, or ");
+            try report.document.addAnnotated("when", .emphasized);
+            try report.document.addText(" branches.");
+        },
+        .expr_in_pattern_context => {
+            try report.document.addReflowingText("Found an expression where a pattern was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This location requires a pattern for matching or destructuring, not a computed value.");
+        },
+        .stmt_in_expr_context => {
+            try report.document.addReflowingText("Found a statement where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Statements like ");
+            try report.document.addAnnotated("return", .emphasized);
+            try report.document.addText(", ");
+            try report.document.addAnnotated("dbg", .emphasized);
+            try report.document.addText(", or ");
+            try report.document.addAnnotated("expect", .emphasized);
+            try report.document.addText(" cannot be used in expression contexts.");
+        },
+        .expr_in_stmt_context => {
+            try report.document.addReflowingText("Found an expression where a statement was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This might be a missing semicolon or an incorrectly placed expression.");
+        },
+        .type_in_expr_context => {
+            try report.document.addReflowingText("Found a type annotation where an expression was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should appear after a colon in declarations, not in expression contexts.");
+        },
+        .ident_not_in_scope => {
+            const ident_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("Nothing is named ");
+            try report.document.addAnnotated(ident_text, .error_highlight);
+            try report.document.addText(" in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Is there an ");
+            try report.document.addAnnotated("import", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("exposing", .emphasized);
+            try report.document.addText(" missing up-top?");
+        },
+        .ident_already_defined => {
+            const ident_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("The identifier ");
+            try report.document.addAnnotated(ident_text, .error_highlight);
+            try report.document.addText(" has already been defined in this scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Each identifier can only be defined once. Consider using a different name.");
+        },
+        .unused_variable => {
+            const var_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("Variable ");
+            try report.document.addAnnotated(var_text, .error_highlight);
+            try report.document.addText(" is not used anywhere in your code.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+            const underscore_text = try std.fmt.allocPrint(allocator, "_{s}", .{var_text});
+            defer allocator.free(underscore_text);
+            try report.document.addInlineCode(underscore_text);
+            try report.document.addText(" to suppress this warning.");
+            try report.document.addLineBreak();
+            try report.document.addText("The unused variable is declared here:");
+        },
+        .unused_expression => {
+            try report.document.addReflowingText("This expression produces a value that is not used.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("If you don't need the result, consider calling a function that has side effects instead.");
+            try report.document.addText(" If you do need the result, assign it to a variable or use it in another expression.");
+            try report.document.addLineBreak();
+            try report.document.addText("The unused expression is here:");
+        },
+        .type_not_in_scope => {
+            const type_text = if (region.start.offset < region.end.offset)
+                env.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            try report.document.addText("The type ");
+            try report.document.addAnnotated(type_text, .error_highlight);
+            try report.document.addText(" is not in scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure it's imported or defined in this module.");
+        },
+        .expr_in_type_context => {
+            try report.document.addReflowingText("Found an expression where a type was expected.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Types must be type identifiers, type applications, or type expressions.");
+        },
+        .invalid_type_var_in_constraint => {
+            try report.document.addReflowingText("Invalid type variable in where constraint.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only lowercase type variables can be constrained in where clauses.");
+        },
+        .invalid_ability_in_constraint => {
+            try report.document.addReflowingText("Invalid ability reference in where constraint.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Abilities must be uppercase identifiers or qualified names.");
+        },
+        .invalid_where_constraint => {
+            try report.document.addReflowingText("Invalid where clause constraint syntax.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses should contain valid ability constraints.");
+        },
+        .unsupported_node => {
+            try report.document.addReflowingText("This syntax is not yet supported by the compiler.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This might be a limitation in the current implementation that will be addressed in a future update.");
+        },
+        .exposed_but_not_implemented => {
+            try report.document.addReflowingText("This value is exposed in the module header but not defined in the module.");
+        },
+        .redundant_exposed => {
+            try report.document.addReflowingText("This value is exposed multiple times in the module header.");
+        },
+        .shadowing_warning => {
+            try report.document.addReflowingText("This definition shadows an existing one.");
+        },
+        .malformed_ast => {
+            try report.document.addReflowingText("The Abstract Syntax Tree is malformed at this location.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This usually indicates a parsing error that wasn't properly recovered from.");
+        },
+    }
+
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+
+    // Add the source context with line numbers
+    if (diag.region.start.offset < diag.region.end.offset and
+        diag.region.end.offset <= env.source.len)
+    {
+        // Convert region to RegionInfo
+        const region_info = base.RegionInfo.position(
+            env.source,
+            env.line_starts.items.items,
+            diag.region.start.offset,
+            diag.region.end.offset,
+        ) catch {
+            // If we can't calculate region info, just return the report without source context
+            return report;
+        };
+
+        // Add source region to the report
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            snapshot_path,
+            env.source,
+            env.line_starts.items.items,
+        );
+    }
+
+    return report;
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML)
@@ -627,6 +1066,8 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
 
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
+    std.debug.print("DEBUG: Snapshot tool starting\n", .{});
+
     // Use GeneralPurposeAllocator for command-line parsing and general work
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -634,6 +1075,8 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
+
+    std.debug.print("DEBUG: Got {} args\n", .{args.len});
 
     var snapshot_paths = std.ArrayList([]const u8).init(gpa);
     defer snapshot_paths.deinit();
@@ -785,13 +1228,16 @@ pub fn main() !void {
         }
     } else {
         // process all files in snapshots_dir
+        std.debug.print("DEBUG: Collecting work items from {s}\n", .{snapshots_dir});
         try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
 
     const collect_duration_ms = timer.read() / std.time.ns_per_ms;
+    std.debug.print("DEBUG: Collected {} work items\n", .{work_list.items.len});
     log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
 
     // Stage 2: Process work items (in parallel or single-threaded)
+    std.debug.print("DEBUG: Processing work items with {} threads\n", .{max_threads});
     const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, &config);
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
@@ -1041,153 +1487,66 @@ fn processSnapshotContent(
 ) !bool {
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
+    // No debug output needed here
 
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
         return processReplSnapshot(allocator, content, output_path, config);
     }
 
-    // Process the content through the compilation pipeline
-    var module_env = try ModuleEnv.init(allocator, content.source);
-    defer module_env.deinit();
+    // Create ByteSlices for Parser
+    var byte_slices = ByteSlices{ .entries = .{} };
+    defer byte_slices.entries.deinit(allocator);
 
-    // Calculate line starts for source location tracking
-    try module_env.common.calcLineStarts(allocator);
+    // Create AST for Parser
+    // Increase initial capacity to handle large files like let_polymorphism_complex.md
+    var ast = try AST.initCapacity(allocator, 16384);
+    defer ast.deinit(allocator);
 
-    // Parse the source code based on node type
-    var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env.common, allocator),
-        .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr => try parse.parseExpr(&module_env.common, allocator),
-        .statement => try parse.parseStatement(&module_env.common, allocator),
-        .package => try parse.parse(&module_env.common, allocator),
-        .platform => try parse.parse(&module_env.common, allocator),
-        .app => try parse.parse(&module_env.common, allocator),
+    // Create common environment for Parser
+    var env = try base.CommonEnv.init(allocator, content.source);
+    defer env.deinit(allocator);
+    try env.calcLineStarts(allocator);
+
+    // Create diagnostics buffer
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+
+    // Tokenize once for both parser and formatter
+    var tokens = std.ArrayList(parse.tokenize_iter.Token).init(allocator);
+    defer tokens.deinit();
+
+    // Tokenize the source
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(&env, allocator, content.source, &messages, &byte_slices);
+    defer token_iter.deinit(allocator);
+
+    // Collect all tokens (including comments for formatter)
+    while (try token_iter.next(allocator)) |token| {
+        try tokens.append(token);
+        if (token.tag == .EndOfFile) break;
+    }
+
+    // Create Parser
+    var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices, &ast.parse_diagnostics);
+    defer parser.deinit();
+
+    // Parse based on node type
+    log("Processing snapshot file: {s}\n", .{output_path});
+    const parse_result: ?i32 = switch (content.meta.node_type) {
+        .file => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .header => blk: {
+            try parser.parseHeader();
+            break :blk null; // Header doesn't return a node, it sets ast.header
+        },
+        .expr => @intFromEnum(try parser.parseExprFromSource(&messages)),
+        .statement => if (try parser.parseStmt()) |stmt| @intFromEnum(stmt) else null,
+        .package => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .platform => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
+        .app => if (try parser.parseFile()) |idx| @intFromEnum(idx) else null,
         .repl => unreachable, // Handled above
     };
-    defer parse_ast.deinit(allocator);
 
-    parse_ast.store.emptyScratch();
-
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
-    else
-        basename;
-    var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
-
-    var czer = try Can.init(can_ir, &parse_ast, null);
-    defer czer.deinit();
-
-    var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
-
-    switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
-        .header => {
-            // TODO: implement canonicalize_header when available
-        },
-        .expr => {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
-        },
-        .statement => {
-            const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-
-            var last_anno: ?Can.StmtTypeAnno = null;
-            const can_stmt_result = try czer.canonicalizeStatement(ast_stmt_idx, &last_anno);
-            switch (can_stmt_result) {
-                .import_stmt => {
-                    // After we process import statements, there's no
-                    // need to include then in the canonicalize IR
-                },
-                .stmt => |can_stmt| {
-                    // Manually track scratch statements because we aren't using the file entrypoint
-                    const scratch_statements_start = can_ir.store.scratch_statements.top();
-                    try can_ir.store.addScratchStatement(can_stmt.idx);
-                    can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                },
-            }
-        },
-        .package => try czer.canonicalizeFile(),
-        .platform => try czer.canonicalizeFile(),
-        .app => try czer.canonicalizeFile(),
-        .repl => unreachable, // Handled above
-    }
-
-    // Assert that everything is in-sync
-    can_ir.debugAssertArraysInSync();
-
-    // Types
-    const empty_modules: []const *ModuleEnv = &.{};
-    var solver = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        empty_modules,
-        &can_ir.store.regions,
-    );
-    defer solver.deinit();
-
-    // Assert that we have regions for every type variable
-    solver.debugAssertArraysInSync();
-
-    if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx.idx);
-    } else {
-        try solver.checkDefs();
-    }
-
-    // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
-    {
-        // Generate original S-expression for comparison
-        var original_tree = SExprTree.init(allocator);
-        defer original_tree.deinit();
-        try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
-
-        var original_sexpr = std.ArrayList(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
-
-        // Create arena for serialization
-        var cache_arena = std.heap.ArenaAllocator.init(allocator);
-        defer cache_arena.deinit();
-
-        // Create and serialize MmapCache
-        const cache_data = try CacheModule.create(allocator, cache_arena.allocator(), &module_env, can_ir, 0, 0);
-        defer allocator.free(cache_data);
-
-        // Deserialize back
-        var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
-
-        // Create arena for restore operation to handle temporary allocations
-        var restore_arena = std.heap.ArenaAllocator.init(allocator);
-        defer restore_arena.deinit();
-
-        // Restore ModuleEnv
-        const restored_env = try loaded_cache.restore(restore_arena.allocator(), module_name, content.source);
-        // Note: restored_env points to data within the cache, so we don't free it
-
-        // Generate S-expression from restored ModuleEnv
-        var restored_tree = SExprTree.init(allocator);
-        defer restored_tree.deinit();
-        try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
-
-        var restored_sexpr = std.ArrayList(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
-
-        // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
-            std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
-            std.log.err("Original and restored CIR S-expressions don't match!", .{});
-            std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
-            return error.CacheRoundTripValidationFailed;
-        }
-    }
+    // Get pointer to the AST
+    var ast_ptr = &ast;
 
     // Buffer all output in memory before writing files
     var md_buffer = std.ArrayList(u8).init(allocator);
@@ -1201,8 +1560,61 @@ fn processSnapshotContent(
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
 
-    // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, &parse_ast, can_ir, &solver, output_path, &module_env);
+    // Generate the PARSE section BEFORE canonicalization (while we still have AST nodes)
+    // We'll generate other sections that depend on AST here too
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content);
+    try generateTokensSection2(&output, &parser, &content, &env);
+    try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
+    const root_node_idx: ?AST.Node.Idx = if (parse_result) |idx| @as(AST.Node.Idx, @enumFromInt(idx)) else null;
+    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx, tokens.items);
+
+    // Create a TypeStore for type inference
+    // Increase capacity to handle large files with many type variables
+    var types_store = try types.Store.initCapacity(allocator, 8192, 2048);
+    defer types_store.deinit();
+
+    // NOW we can create CIR and canonicalize (which will mutate AST into CIR)
+    var cir = CIR.init(ast_ptr, &types_store);
+    defer cir.deinit(allocator);
+
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
+    var maybe_stmt_idx: ?CIR.Stmt.Idx = null;
+    var maybe_patt_idx: ?CIR.Patt.Idx = null;
+
+    // Initialize the CIR's scope state with a root scope
+    try cir.scope_state.scopes.append(allocator, CIR.Scope.init(false));
+
+    // For headers, canonicalize the header itself
+    if (content.meta.node_type == .header) {
+        try cir.canonicalizeHeader(allocator, content.source, &env.idents);
+    }
+
+    // Canonicalize if we have a parse result
+    if (parse_result) |node_idx_int| {
+        const node_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+        const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+
+        // For file content, check if it's a block and use the file canonicalizer
+        if (content.meta.node_type == .file and node.tag == .block) {
+            // Canonicalize as a file with top-level definitions
+            maybe_expr_idx = try cir.canonicalizeFileBlock(allocator, node_idx, content.source, &env.idents, &env, null);
+        } else if (isExpressionNode(node.tag)) {
+            maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
+        } else if (isStatementNode(node.tag)) {
+            maybe_stmt_idx = try cir.canonicalizeStmt(allocator, node_idx, content.source, &env.idents);
+        } else if (isPatternNode(node.tag)) {
+            maybe_patt_idx = try cir.canonicalizePatt(allocator, node_idx);
+        } else {
+            // Default to expression for unknown nodes
+            maybe_expr_idx = try cir.canonicalizeExpr(allocator, node_idx, content.source, &env.idents);
+        }
+    }
+
+    // Canonicalization has now mutated AST into CIR
+
+    // Generate reports from Parser and CIR diagnostics
+    var generated_reports = try generateReportsFromNewSystem(allocator, &parser, &cir, &env, output_path);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1210,16 +1622,12 @@ fn processSnapshotContent(
         generated_reports.deinit();
     }
 
-    // Generate all sections
-    try generateMetaSection(&output, &content);
-    try generateSourceSection(&output, &content);
+    // Generate remaining sections that depend on canonicalization
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env);
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common);
-    try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateCanonicalizeSection2(&output, &cir, &env, maybe_expr_idx, maybe_stmt_idx, maybe_patt_idx);
+    try generateSolvedSection(&output, &cir, &env, &types_store, maybe_expr_idx);
+    try generateTypesSection2(&output, &cir, &env, &types_store, maybe_expr_idx);
 
     try generateHtmlClosing(&output);
 
@@ -1333,6 +1741,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
         .use_per_thread_arenas = !debug,
     };
 
+    std.debug.print("DEBUG: About to call parallel.process\n", .{});
     try parallel.process(
         ProcessContext,
         &context,
@@ -1625,8 +2034,7 @@ pub const Content = struct {
         var has_canonicalize: bool = false;
 
         if (ranges.get(.source)) |value| {
-            // trailing newlines are part of the source
-            source = content[value.start..value.end];
+            source = value.extract(content);
         } else {
             return Error.MissingSnapshotSource;
         }
@@ -1798,7 +2206,7 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 /// Generate EXPECTED section for both markdown and HTML
 fn generateExpectedSection(
     output: *DualOutput,
-    snapshot_path: []const u8,
+    _: []const u8,
     content: *const Content,
     reports: *const std.ArrayList(reporting.Report),
     config: *const Config,
@@ -1826,10 +2234,6 @@ fn generateExpectedSection(
 
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs, we need to update the expected section
-                std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                std.debug.print("Expected:\n{s}\n", .{expected_content.?});
-                std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations", .{});
 
                 success = false;
             }
@@ -1844,8 +2248,7 @@ fn generateExpectedSection(
 
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs,
-                std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
+                // Disabled for now to reduce output spam
             }
         },
     }
@@ -2049,15 +2452,12 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         },
         .header => {
             try fmt.formatHeader(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
         },
         .expr => {
             try fmt.formatExpr(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
         },
         .statement => {
             try fmt.formatStatement(parse_ast.*, formatted.writer().any());
-            try formatted.append('\n');
         },
         .package => {
             try fmt.formatAst(parse_ast.*, formatted.writer().any());
@@ -2075,12 +2475,13 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     }
 
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
-    const display_content = if (is_changed) formatted.items else "NO CHANGE\n";
+    const display_content = if (is_changed) formatted.items else "NO CHANGE";
 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
     try output.md_writer.writeAll(display_content);
+    try output.md_writer.writeAll("\n");
 
     // HTML FORMATTED section
     if (output.html_writer) |writer| {
@@ -2250,6 +2651,1387 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
     );
 }
 
+// ============================================================================
+// New generation functions for Parser/AST/CIR
+// ============================================================================
+
+/// Generate TOKENS section for Parser
+fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *const Content, env: *base.CommonEnv) !void {
+    try output.begin_section("TOKENS");
+    try output.begin_code_block("text");
+
+    // Create a new tokenizer to iterate through the tokens
+    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    var byte_slices_temp = ByteSlices{ .entries = .{} };
+    defer byte_slices_temp.entries.deinit(parser.gpa);
+
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(
+        env,
+        parser.gpa,
+        content.source,
+        &messages,
+        &byte_slices_temp,
+    );
+
+    // Iterate through tokens and output them
+    while (try token_iter.next(parser.gpa)) |token| {
+        if (token.tag == .EndOfFile) break;
+
+        try output.md_writer.print("{s} ", .{@tagName(token.tag)});
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate PARSE section for AST
+fn generateParseSection2(output: *DualOutput, content: *const Content, ast: *AST, env: *const base.CommonEnv, parse_result: ?i32) !void {
+    try output.begin_section("PARSE");
+    try output.begin_code_block("clojure");
+
+    // Output AST structure as S-expressions
+    // For file type, output both header and body
+    if (content.meta.node_type == .file) {
+        // Output header if present
+        if (ast.header) |header| {
+            try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
+        }
+
+        // Also output the body (root node)
+        if (parse_result) |node_idx_int| {
+            const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+            try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
+        } else if (ast.header == null) {
+            // Only show empty if there's no header AND no body
+            try output.md_writer.writeAll("(empty)\n");
+        }
+    } else {
+        // For non-file types, keep the old behavior
+        if (ast.header) |header| {
+            try outputHeaderAsSExpr(output.md_writer, ast, env, header, 0);
+        } else if (parse_result) |node_idx_int| {
+            const root_idx: AST.Node.Idx = @enumFromInt(node_idx_int);
+            try outputASTNodeAsSExpr(output.md_writer, ast, env, root_idx, 0);
+        } else {
+            try output.md_writer.writeAll("(empty)\n");
+        }
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Helper to output header as S-expression
+fn outputHeaderAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, header: AST.Header, indent: usize) !void {
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output header based on type
+    switch (header) {
+        .app => |app| {
+            try writer.writeAll("(app-header");
+
+            // Output exposes if present
+            if (!app.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&app.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!app.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&app.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .module => |mod| {
+            try writer.writeAll("(module-header");
+
+            // Output exposes
+            if (!mod.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&mod.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .package => |pkg| {
+            try writer.writeAll("(package-header");
+
+            // Output exposes
+            if (!pkg.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&pkg.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!pkg.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&pkg.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .platform => |plat| {
+            try writer.writeAll("(platform-header");
+
+            // Output exposes
+            if (!plat.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&plat.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            // Output packages
+            if (!plat.packages.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(packages");
+                var iter = ast.node_slices.nodes(&plat.packages);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .hosted => |host| {
+            try writer.writeAll("(hosted-header");
+
+            // Output exposes
+            if (!host.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&host.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .interface => |iface| {
+            try writer.writeAll("(interface-header");
+
+            // Output exposes
+            if (!iface.exposes.isNil()) {
+                try writer.writeAll("\n");
+                for (0..(indent + 1)) |_| {
+                    try writer.writeAll("  ");
+                }
+                try writer.writeAll("(exposes");
+                var iter = ast.node_slices.nodes(&iface.exposes);
+                while (iter.next()) |node_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, node_idx, indent + 2);
+                }
+                try writer.writeAll(")");
+            }
+
+            try writer.writeAll(")\n");
+        },
+        .malformed => {
+            try writer.writeAll("(malformed-header)\n");
+        },
+    }
+}
+
+/// Helper to output AST node as S-expression
+fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, node_idx: AST.Node.Idx, indent: usize) !void {
+    const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output node
+    try writer.print("({s}", .{@tagName(node.tag)});
+
+    // Handle payload based on node tag
+    switch (node.tag) {
+        // Handle malformed nodes first to avoid accessing wrong payload
+        .malformed => {
+            // Malformed nodes have src_bytes_end payload
+            // Just output the tag without trying to access children
+        },
+
+        // Binops use the binop field - must list them all explicitly
+        .binop_equals, .binop_double_equals, .binop_not_equals, .binop_colon, .binop_colon_equals, .binop_dot, .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_thick_arrow, .binop_arrow_call, .binop_and, .binop_or, .binop_as, .binop_exposing, .binop_where, .binop_platform, .binop_pipe => {
+            const binop = ast.node_slices.binOp(node.payload.binop);
+            try writer.writeAll("\n");
+            try outputASTNodeAsSExpr(writer, ast, env, binop.lhs, indent + 1);
+            try outputASTNodeAsSExpr(writer, ast, env, binop.rhs, indent + 1);
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        // Identifiers use the ident field
+        .uc, .lc, .var_lc, .neg_lc, .not_lc => {
+            const ident_text = env.idents.getText(node.payload.ident);
+            try writer.print(" \"{s}\"", .{ident_text});
+        },
+
+        // Number literals
+        .num_literal_i32 => {
+            try writer.print(" {}", .{node.payload.num_literal_i32});
+        },
+        .int_literal_i32 => {
+            try writer.print(" 0x{x}", .{node.payload.int_literal_i32});
+        },
+        .frac_literal_small => {
+            // SmallDec has numerator and denominator_power_of_ten fields
+            const small_dec = node.payload.frac_literal_small;
+            const decimal_value = @as(f64, @floatFromInt(small_dec.numerator)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(small_dec.denominator_power_of_ten)));
+            try writer.print(" {d}", .{decimal_value});
+        },
+
+        // String literals
+        .str_literal_small => {
+            // Small string is stored as [4]u8, null-terminated
+            const bytes = node.payload.str_literal_small;
+            var len: usize = 0;
+            while (len < 4 and bytes[len] != 0) : (len += 1) {}
+            try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(bytes[0..len])});
+        },
+        .str_literal_big => {
+            // Big strings are stored in ByteSlices
+            // Check if ByteSlices is empty (happens after CIR mutation)
+            if (ast.byte_slices.entries.items.items.len == 0) {
+                try writer.print(" \"<idx:{}>\"", .{@intFromEnum(node.payload.str_literal_big)});
+            } else {
+                const slice = ast.byte_slices.slice(node.payload.str_literal_big);
+                try writer.print(" \"{}\"", .{std.fmt.fmtSliceEscapeLower(slice)});
+            }
+        },
+
+        // Containers with nodes field
+        .block, .list_literal, .tuple_literal, .record_literal => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Lambda uses body_then_args
+        .lambda => {
+            const body_then_args_idx = node.payload.body_then_args;
+            if (!body_then_args_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&body_then_args_idx);
+                // First node is the body
+                if (iter.next()) |body_idx| {
+                    try writer.writeAll("\n");
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(body\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, body_idx, indent + 2);
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll(")\n");
+
+                    // Remaining nodes are args
+                    var has_args = false;
+                    while (iter.next()) |arg_idx| {
+                        if (!has_args) {
+                            for (0..indent + 1) |_| {
+                                try writer.writeAll("  ");
+                            }
+                            try writer.writeAll("(args\n");
+                            has_args = true;
+                        }
+                        try outputASTNodeAsSExpr(writer, ast, env, arg_idx, indent + 2);
+                    }
+                    if (has_args) {
+                        for (0..indent + 1) |_| {
+                            try writer.writeAll("  ");
+                        }
+                        try writer.writeAll(")\n");
+                    }
+
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Apply nodes use nodes field for function and args
+        .apply_lc, .apply_uc, .apply_anon, .apply_module => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // String interpolation
+        .str_interpolation => {
+            // str_interpolation uses nodes payload
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Other nodes that don't need special payload handling
+        .underscore, .ellipsis => {
+            // These don't need payload details
+        },
+
+        // Loops
+        .while_loop, .for_loop => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Import and expect
+        .import => {
+            // Imports use import_nodes field, containing a single binop or path node
+            const nodes_idx = node.payload.import_nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+        .expect => {
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Big number literals
+        .num_literal_big, .int_literal_big, .frac_literal_big => {
+            // These store digits in ByteSlices
+            // However, after CIR mutation, the ByteSlices might be empty
+            // so we need to handle that case
+            const idx = switch (node.tag) {
+                .num_literal_big => node.payload.num_literal_big,
+                .int_literal_big => node.payload.int_literal_big,
+                .frac_literal_big => node.payload.frac_literal_big,
+                else => unreachable,
+            };
+
+            // Check if we can safely read from ByteSlices
+            const idx_val = @intFromEnum(idx);
+            const idx_usize = @as(usize, @intCast(idx_val));
+            const items = ast.byte_slices.entries.items.items;
+
+            // First check if index is even in bounds
+            if (items.len == 0 or idx_usize >= items.len) {
+                try writer.print(" big:<idx:{}>", .{idx_val});
+            } else {
+                // Now check if we can actually read the slice at this index
+                // The ByteSlices format is: [length_byte(s)] [data...]
+                const first_byte = items[idx_usize];
+
+                const can_read = blk: {
+                    if (first_byte < 128) {
+                        // Single-byte length encoding
+                        const slice_len = first_byte;
+                        const slice_start = idx_usize + 1;
+                        break :blk (slice_start + slice_len <= items.len);
+                    } else {
+                        // Multi-byte length encoding (4 bytes for length)
+                        if (idx_usize + 5 > items.len) break :blk false;
+                        const len_bytes = items[idx_usize + 1 .. idx_usize + 5];
+                        const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
+                        const slice_start = idx_usize + 5;
+                        break :blk (slice_start + @as(usize, @intCast(slice_len)) <= items.len);
+                    }
+                };
+
+                if (can_read) {
+                    const slice = ast.byte_slices.slice(idx);
+                    try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
+                } else {
+                    // Index is valid but data extends beyond buffer
+                    try writer.print(" big:<invalid:{}>", .{idx_val});
+                }
+            }
+        },
+
+        // If/match/when expressions with branches
+        .if_else, .if_without_else => {
+            // if expressions store nodes in the if_branches field (bit-cast as u32)
+            const nodes_idx_val = @as(u32, @bitCast(node.payload.if_branches));
+            const nodes_idx = @as(collections.NodeSlices(parse.AST.Node.Idx).Idx, @enumFromInt(nodes_idx_val));
+
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var count: usize = 0;
+                while (iter.next()) |_| : (count += 1) {}
+
+                // Reset iterator
+                iter = ast.node_slices.nodes(&nodes_idx);
+
+                // For if_else: condition, then_branch, else_branch
+                // For if_without_else: condition, then_branch
+                if (iter.next()) |cond_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(condition ");
+                    try outputASTNodeAsSExpr(writer, ast, env, cond_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                if (iter.next()) |then_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(then ");
+                    try outputASTNodeAsSExpr(writer, ast, env, then_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                if (iter.next()) |else_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(else ");
+                    try outputASTNodeAsSExpr(writer, ast, env, else_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+            }
+        },
+        .match => {
+            // Match nodes store nodes in the nodes payload field
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+
+                // First node is the scrutinee
+                if (iter.next()) |scrutinee_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(scrutinee ");
+                    try outputASTNodeAsSExpr(writer, ast, env, scrutinee_idx, indent + 2);
+                    try writer.writeAll(")");
+                }
+
+                // Remaining nodes are branches (each is a binop_thick_arrow node)
+                var branch_num: usize = 1;
+                while (iter.next()) |branch_idx| {
+                    try writer.writeAll("\n");
+                    for (0..(indent + 1)) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.print("(branch{} ", .{branch_num});
+
+                    // Each branch is a complete expression (usually a binop_thick_arrow)
+                    try outputASTNodeAsSExpr(writer, ast, env, branch_idx, indent + 2);
+
+                    try writer.writeAll(")");
+                    branch_num += 1;
+                }
+            }
+        },
+
+        // Dot accessors
+        .dot_num => {
+            // Payload likely contains the number index
+            // Need to check how this is stored - might be in payload directly
+        },
+        .dot_lc, .double_dot_lc => {
+            const ident_text = env.idents.getText(node.payload.ident);
+            try writer.print(" \"{s}\"", .{ident_text});
+        },
+
+        // Multi-part identifiers
+        .uc_dot_ucs, .lc_dot_ucs => {
+            // These likely use nodes field for the parts
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                var has_children = false;
+                while (iter.next()) |child_idx| {
+                    if (!has_children) {
+                        try writer.writeAll("\n");
+                        has_children = true;
+                    }
+                    try outputASTNodeAsSExpr(writer, ast, env, child_idx, indent + 1);
+                }
+                if (has_children) {
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Unary operators
+        .unary_not, .unary_neg, .unary_double_dot => {
+            // Unary operators should use nodes payload with single operand
+            // But we need to be careful - after CIR mutations, this might not be the right payload
+            // Let's just output without recursing to avoid crashes
+            try writer.writeAll(" <unary_op>");
+        },
+
+        // Return and crash statements
+        .ret, .crash => {
+            // These use nodes payload with expression
+            const nodes_idx = node.payload.nodes;
+            if (!nodes_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&nodes_idx);
+                if (iter.next()) |expr_idx| {
+                    try writer.writeAll("\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, expr_idx, indent + 1);
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+
+        // Lambda with no args
+        .lambda_no_args => {
+            // Lambda with no arguments - uses body_then_args with just body
+            const body_then_args_idx = node.payload.body_then_args;
+            if (!body_then_args_idx.isNil()) {
+                var iter = ast.node_slices.nodes(&body_then_args_idx);
+                // First node is the body (and only node for no-args lambda)
+                if (iter.next()) |body_idx| {
+                    try writer.writeAll("\n");
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(body\n");
+                    try outputASTNodeAsSExpr(writer, ast, env, body_idx, indent + 2);
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll(")\n");
+                    for (0..indent) |_| {
+                        try writer.writeAll("  ");
+                    }
+                }
+            }
+        },
+    }
+
+    try writer.writeAll(")\n");
+}
+
+/// Generate FORMATTED section for AST
+fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx, tokens: []const parse.tokenize_iter.Token) !void {
+    try output.begin_section("FORMATTED");
+    try output.begin_code_block("roc");
+
+    // Use the new AST-aware formatter with pre-tokenized tokens
+    const ident_store = env.getIdentStore();
+    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, content.source, ident_store, tokens, root_node);
+    defer output.gpa.free(formatted_output);
+
+    // Check if formatting changed the source
+    const is_changed = !std.mem.eql(u8, formatted_output, content.source);
+    const display_content = if (is_changed) formatted_output else "NO CHANGE";
+
+    try output.md_writer.writeAll(display_content);
+    if (!std.mem.endsWith(u8, display_content, "\n")) {
+        try output.md_writer.writeAll("\n");
+    }
+
+    _ = parser;
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+// The old Formatter struct has been moved to fmt.zig as the production formatter
+// and is now accessed through fmt.formatSource()
+
+/// Generate CANONICALIZE section for CIR
+fn generateCanonicalizeSection2(
+    output: *DualOutput,
+    cir: *const CIR,
+    env: *const base.CommonEnv,
+    maybe_expr_idx: ?CIR.Expr.Idx,
+    maybe_stmt_idx: ?CIR.Stmt.Idx,
+    maybe_patt_idx: ?CIR.Patt.Idx,
+) !void {
+    try output.begin_section("CANONICALIZE");
+    try output.begin_code_block("clojure");
+
+    // Output CIR structure
+    if (maybe_expr_idx) |expr_idx| {
+        try outputCIRExprAsSExpr(output.md_writer, cir, env, expr_idx, 0);
+    } else if (maybe_stmt_idx) |stmt_idx| {
+        try outputCIRStmtAsSExpr(output.md_writer, cir, env, stmt_idx, 0);
+    } else if (maybe_patt_idx) |patt_idx| {
+        try outputCIRPattAsSExpr(output.md_writer, cir, env, patt_idx, 0);
+    } else {
+        try output.md_writer.writeAll("(empty)\n");
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Helper to output CIR expression as S-expression
+fn outputCIRExprAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, expr_idx: CIR.Expr.Idx, indent: usize) anyerror!void {
+    const expr = cir.getExpr(expr_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output expression
+    try writer.print("(Expr.{s}", .{@tagName(expr.tag)});
+
+    // Add payload details based on tag
+    switch (expr.tag) {
+        .malformed => {
+            // Malformed nodes can have various payload types, don't try to access them
+        },
+        .num_literal_i32 => {
+            try writer.print(" {}", .{expr.payload.num_literal_i32});
+        },
+        .int_literal_i32 => {
+            // Use the expr.payload directly - after mutation, we can't check AST nodes
+            try writer.print(" 0x{x}", .{expr.payload.int_literal_i32});
+        },
+        .frac_literal_small => {
+            // Use the expr.payload directly - it's the same as the AST payload
+            const small_dec = expr.payload.frac_literal_small;
+            const decimal_value = @as(f64, @floatFromInt(small_dec.numerator)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(small_dec.denominator_power_of_ten)));
+            try writer.print(" {d}", .{decimal_value});
+        },
+        .frac_literal_big => {
+            // Use the expr.payload directly - after mutation, we can't check AST nodes
+            const idx = expr.payload.frac_literal_big;
+            // Check if ByteSlices is empty or index is out of bounds
+            const cir_ast = cir.ast.*;
+            const byte_slices_len = cir_ast.byte_slices.entries.items.items.len;
+            const idx_usize = @as(usize, @intCast(@intFromEnum(idx)));
+            if (byte_slices_len == 0 or idx_usize >= byte_slices_len) {
+                try writer.print(" big:<idx:{}>", .{@intFromEnum(idx)});
+            } else {
+                const slice = cir_ast.byte_slices.slice(idx);
+                try writer.print(" {s}", .{slice});
+            }
+        },
+        .lookup => {
+            // Use the expr.payload directly
+            const ident_idx = expr.payload.ident;
+            const ident_name = env.idents.getText(ident_idx);
+            try writer.print(" \"{s}\"", .{ident_name});
+        },
+        .module_access => {
+            // Module access has binop payload
+            const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
+            try writer.writeAll("\n");
+            try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+            try outputCIRExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .crash => {
+            // Crash has nodes payload with the message expression
+            const nodes_idx = expr.payload.nodes;
+            var iter = cir.ast.node_slices.nodes(&nodes_idx);
+            try writer.writeAll("\n");
+            if (iter.next()) |msg_node| {
+                // Cast the AST node to CIR expr
+                const msg_expr = CIR.asExprIdx(msg_node);
+                try outputCIRExprAsSExpr(writer, cir, env, msg_expr, indent + 1);
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_slash, .binop_double_question, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or, .binop_thick_arrow, .binop_arrow_call, .record_field, .binop_equals => {
+            // After mutation, binop nodes still have their binop payloads
+            // The mutation only changes the tag, not the payload
+            const has_binop = true;
+
+            if (has_binop) {
+                const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
+                try writer.writeAll("\n");
+
+                // For all binops, output the left side as an expression
+                try outputCIRExprAsSExpr(writer, cir, env, binop.lhs, indent + 1);
+
+                try outputCIRExprAsSExpr(writer, cir, env, binop.rhs, indent + 1);
+                for (0..indent) |_| {
+                    try writer.writeAll("  ");
+                }
+            } else {
+                // Node was mutated to binop tag but doesn't have binop payload
+                // This is a canonicalization artifact - just close the expression
+            }
+        },
+        .tuple_literal => {
+            // Tuple literal has nodes field
+            const nodes_idx = expr.payload.nodes;
+            try writer.writeAll("\n");
+            var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |block_node_idx| {
+                // The nodes are expression indices
+                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_node_idx)));
+                try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .block => {
+            // Block contains statements that have been canonicalized
+            const nodes_idx = expr.payload.nodes;
+            try writer.writeAll("\n");
+            var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |block_item_idx| {
+                // Check what type of node this is
+                const node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(block_item_idx)));
+                const tag_value = @as(u8, @intFromEnum(node.tag));
+
+                // Check if it's a statement, expression, or pattern
+                if (tag_value >= CIR.FIRST_STMT_TAG and tag_value < CIR.FIRST_EXPR_TAG) {
+                    // It's a statement
+                    const stmt_idx = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
+                    try outputCIRStmtAsSExpr(writer, cir, env, stmt_idx, indent + 1);
+                } else if (tag_value >= CIR.FIRST_EXPR_TAG and tag_value < CIR.FIRST_PATT_TAG) {
+                    // It's an expression
+                    const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(block_item_idx)));
+                    try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+                } else {
+                    // Unknown or malformed
+                    for (0..indent + 1) |_| {
+                        try writer.writeAll("  ");
+                    }
+                    try writer.writeAll("(Expr.malformed)\n");
+                }
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .record_literal => {
+            // Record literals contain expressions
+            const nodes_idx = expr.payload.nodes;
+            try writer.writeAll("\n");
+            var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+            while (iter.next()) |field_idx| {
+                // Record fields are expressions
+                const e_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_idx)));
+                try outputCIRExprAsSExpr(writer, cir, env, e_idx, indent + 1);
+            }
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .lambda => {
+            // Lambda expressions after canonicalization might have different payloads
+            // The CIR mutates tags but not payloads, so we can't safely access body_then_args
+            // Just output a simple representation
+            try writer.writeAll(" (canonicalized)");
+        },
+        else => {},
+    }
+
+    try writer.writeAll(")\n");
+}
+
+/// Helper to output CIR statement as S-expression
+fn outputCIRStmtAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, stmt_idx: CIR.Stmt.Idx, indent: usize) anyerror!void {
+    const stmt = cir.getStmt(stmt_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output statement with details
+    try writer.print("(Stmt.{s}", .{@tagName(stmt.tag)});
+
+    // Add details based on statement type
+    switch (stmt.tag) {
+        .assign, .init_var, .reassign => {
+            // These have binop payloads with pattern and expression
+            const binop = cir.getBinOp(CIR.Stmt.Idx, stmt.payload.binop);
+            try writer.writeAll("\n");
+
+            // Output the pattern (left side)
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            try writer.writeAll("(pattern ");
+            const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            try outputCIRPattAsSExpr(writer, cir, env, patt_idx, 0);
+            try writer.writeAll(")\n");
+
+            // Output the expression (right side)
+            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+            try outputCIRExprAsSExpr(writer, cir, env, expr_idx, indent + 1);
+
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .standalone_type_anno => {
+            // Standalone type annotation uses binop payload with pattern and type
+            const binop = cir.getBinOp(CIR.Stmt.Idx, stmt.payload.binop);
+            try writer.writeAll("\n");
+
+            // Output the pattern (left side - the identifier being annotated)
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            try writer.writeAll("(pattern ");
+            const patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            try outputCIRPattAsSExpr(writer, cir, env, patt_idx, 0);
+            try writer.writeAll(")\n");
+
+            // Output the type (right side - the type annotation)
+            for (0..indent + 1) |_| {
+                try writer.writeAll("  ");
+            }
+            try writer.writeAll("(type ");
+            const type_idx = @as(CIR.Type.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+            try writer.print("type_{}", .{@intFromEnum(type_idx)});
+            try writer.writeAll(")\n");
+
+            for (0..indent) |_| {
+                try writer.writeAll("  ");
+            }
+        },
+        .assign_annotated => {
+            // TODO: Assignment with type annotation - not yet implemented in canonicalization
+            // When implemented, will need to handle the payload properly
+            try writer.writeAll(" (TODO: not yet implemented)");
+        },
+        .init_var_annotated => {
+            // TODO: Var initialization with type annotation - not yet implemented in canonicalization
+            // When implemented, will need to handle the payload properly
+            try writer.writeAll(" (TODO: not yet implemented)");
+        },
+        else => {},
+    }
+
+    try writer.writeAll(")\n");
+}
+
+/// Helper to output CIR pattern as S-expression
+fn outputCIRPattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.CommonEnv, patt_idx: CIR.Patt.Idx, indent: usize) anyerror!void {
+    const patt = cir.getPatt(patt_idx);
+
+    // Indent
+    for (0..indent) |_| {
+        try writer.writeAll("  ");
+    }
+
+    // Output pattern
+    try writer.print("(Patt.{s}", .{@tagName(patt.tag)});
+
+    // Add details based on pattern type
+    if (patt.tag == .ident or patt.tag == .var_ident) {
+        // Output the identifier name
+        // The payload is a union, we need to access the ident field directly
+        const ident_name = env.idents.getText(patt.payload.ident);
+        try writer.print(" \"{s}\"", .{ident_name});
+    }
+
+    if (patt.is_mutable) {
+        try writer.writeAll(" :mutable");
+    }
+    try writer.writeAll(")");
+}
+
+/// Output a type variable as an s-expression
+fn outputTypeVarAsSExpr(writer: anytype, store: *const types.Store, var_: types.Var, env: *const CommonEnv) !void {
+    const slot = @constCast(store).getSlot(var_);
+
+    switch (slot) {
+        .root => |desc_idx| {
+            const desc = @constCast(store).getDesc(desc_idx);
+            try outputTypeDescAsSExpr(writer, store, desc, @intFromEnum(var_), env);
+        },
+        .redirect => |target| {
+            // This is a redirected variable, show it points to another var
+            try writer.print("(var #{} -> #{})\n", .{ @intFromEnum(var_), @intFromEnum(target) });
+        },
+    }
+}
+
+/// Output a type descriptor as an s-expression
+fn outputTypeDescAsSExpr(writer: anytype, store: *const types.Store, desc: types.Descriptor, var_num: u32, env: *const CommonEnv) !void {
+    _ = store;
+
+    switch (desc.content) {
+        .structure => |flat| {
+            switch (flat) {
+                .str => try writer.print("(var #{} Str)\n", .{var_num}),
+                .num => |num_type| {
+                    switch (num_type) {
+                        .num_compact => |compact| {
+                            switch (compact) {
+                                .int => |precision| {
+                                    const type_name = switch (precision) {
+                                        .i8 => "I8",
+                                        .i16 => "I16",
+                                        .i32 => "I32",
+                                        .i64 => "I64",
+                                        .i128 => "I128",
+                                        .u8 => "U8",
+                                        .u16 => "U16",
+                                        .u32 => "U32",
+                                        .u64 => "U64",
+                                        .u128 => "U128",
+                                    };
+                                    try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                                },
+                                .frac => |precision| {
+                                    const type_name = switch (precision) {
+                                        .f32 => "F32",
+                                        .f64 => "F64",
+                                        .dec => "Dec",
+                                    };
+                                    try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                                },
+                            }
+                        },
+                        .int_precision => |precision| {
+                            const type_name = switch (precision) {
+                                .i8 => "I8",
+                                .i16 => "I16",
+                                .i32 => "I32",
+                                .i64 => "I64",
+                                .i128 => "I128",
+                                .u8 => "U8",
+                                .u16 => "U16",
+                                .u32 => "U32",
+                                .u64 => "U64",
+                                .u128 => "U128",
+                            };
+                            try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                        },
+                        .frac_precision => |precision| {
+                            const type_name = switch (precision) {
+                                .f32 => "F32",
+                                .f64 => "F64",
+                                .dec => "Dec",
+                            };
+                            try writer.print("(var #{} {s})\n", .{ var_num, type_name });
+                        },
+                        .num_unbound => try writer.print("(var #{} Num *)\n", .{var_num}),
+                        .int_unbound => try writer.print("(var #{} Int *)\n", .{var_num}),
+                        .frac_unbound => try writer.print("(var #{} Frac *)\n", .{var_num}),
+                        .num_poly => |poly| {
+                            try writer.print("(var #{} Num #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                        .int_poly => |poly| {
+                            try writer.print("(var #{} Int #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                        .frac_poly => |poly| {
+                            try writer.print("(var #{} Frac #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                        },
+                    }
+                },
+                .box => |elem_var| {
+                    try writer.print("(var #{} Box #{})\n", .{ var_num, @intFromEnum(elem_var) });
+                },
+                .list => |elem_var| {
+                    try writer.print("(var #{} List #{})\n", .{ var_num, @intFromEnum(elem_var) });
+                },
+                .list_unbound => try writer.print("(var #{} List *)\n", .{var_num}),
+                .record => try writer.print("(var #{} record)\n", .{var_num}),
+                .record_unbound => try writer.print("(var #{} record *)\n", .{var_num}),
+                .record_poly => |poly| {
+                    try writer.print("(var #{} record #{})\n", .{ var_num, @intFromEnum(poly.var_) });
+                },
+                .empty_record => try writer.print("(var #{} {{}})\n", .{var_num}),
+                .tag_union => try writer.print("(var #{} tag_union)\n", .{var_num}),
+                .empty_tag_union => try writer.print("(var #{} [])\n", .{var_num}),
+                .tuple => try writer.print("(var #{} tuple)\n", .{var_num}),
+                .nominal_type => try writer.print("(var #{} nominal_type)\n", .{var_num}),
+                .fn_pure => try writer.print("(var #{} fn_pure)\n", .{var_num}),
+                .fn_effectful => try writer.print("(var #{} fn_effectful)\n", .{var_num}),
+                .fn_unbound => try writer.print("(var #{} fn_unbound)\n", .{var_num}),
+            }
+        },
+        .flex_var => |maybe_name| {
+            if (maybe_name) |name| {
+                const flex_name = @constCast(env).idents.getText(name);
+                try writer.print("(var #{} _{s})\n", .{ var_num, flex_name });
+            } else {
+                try writer.print("(var #{} _)\n", .{var_num});
+            }
+        },
+        .rigid_var => |name| {
+            const rigid_name = @constCast(env).idents.getText(name);
+            try writer.print("(var #{} {s})\n", .{ var_num, rigid_name });
+        },
+        .alias => try writer.print("(var #{} alias)\n", .{var_num}),
+        .err => try writer.print("(var #{} <error>)\n", .{var_num}),
+    }
+}
+
+/// Generate SOLVED section showing internal type solving details
+fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    try output.begin_section("SOLVED");
+    try output.begin_code_block("clojure");
+
+    // Create a ModuleEnv for type checking with the CIR properly set
+    // This is needed because the type checker might call the interpreter
+    // which requires a ModuleEnv with a valid cir field
+    var module_env = try ModuleEnv.init(output.gpa, "");
+    defer module_env.deinit();
+    module_env.cir = @constCast(cir);
+
+    // First run type checking to generate constraints
+    var regions = Region.List{};
+    var checker = Check.initForCIR(output.gpa, @constCast(types_store), &regions) catch |err| {
+        try output.md_writer.print("; Type checker init failed: {}\n", .{err});
+        try output.end_code_block();
+        try output.end_section();
+        return;
+    };
+    defer checker.deinit();
+
+    // Run type checking on the expression if we have one
+    if (maybe_expr_idx) |expr_idx| {
+        _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch |err| {
+            try output.md_writer.print("; Type checking failed: {}\n", .{err});
+        };
+    } else {}
+
+    // Output complete type information as s-expressions
+    const var_count = types_store.len();
+    try output.md_writer.print("; Total type variables: {}\n", .{var_count});
+
+    // Output each type variable with its full details
+    var i: u32 = 0;
+    while (i < var_count) : (i += 1) {
+        const var_ = @as(types.Var, @enumFromInt(i));
+        try outputTypeVarAsSExpr(&output.md_writer, types_store, var_, env);
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate TYPES section with pretty-printed user-facing type annotations
+fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const CommonEnv, types_store: *const types.Store, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    try output.begin_section("TYPES");
+    try output.begin_code_block("roc");
+
+    // Create a ModuleEnv for type checking with the CIR properly set
+    var module_env = try ModuleEnv.init(output.gpa, "");
+    defer module_env.deinit();
+    module_env.cir = @constCast(cir);
+
+    // First run type checking to generate constraints (may have already been done in SOLVED section)
+    var regions = Region.List{};
+    var checker = Check.initForCIR(output.gpa, @constCast(types_store), &regions) catch {
+        try output.md_writer.writeAll("# Type checker initialization failed\n");
+        try output.end_code_block();
+        try output.end_section();
+        return;
+    };
+    defer checker.deinit();
+
+    // Run type checking on the expression if we have one
+    if (maybe_expr_idx) |expr_idx| {
+        _ = checker.checkCIRExpr(CIR, cir, expr_idx) catch {};
+    } else {}
+
+    // Look for all defined symbols in the CIR
+    // Walk through the symbol table to find all definitions
+    var symbol_iter = cir.scope_state.symbol_table.iterator();
+    while (symbol_iter.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const node_idx = entry.value_ptr.*;
+        const name = env.idents.getText(ident_idx);
+
+        // Check if this node has been converted to an expression
+        const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+        const tag_int = @intFromEnum(node.tag);
+
+        if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+            // It's an expression - we can get its type
+            const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+            const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Resolve the type variable to get the actual type
+            const resolved = @constCast(types_store).resolveVar(expr_var);
+
+            // Format the type using TypeWriter
+            var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                try output.md_writer.print("{s} : ?\n", .{name});
+                continue;
+            };
+            defer type_writer.deinit();
+
+            type_writer.write(resolved.var_) catch {
+                try output.md_writer.print("{s} : ?\n", .{name});
+                continue;
+            };
+
+            const type_str = type_writer.get();
+            try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+        }
+    }
+
+    // Don't try to process header exposed items separately - they're already in the symbol table
+    if (false and cir.ast.header != null) { // Disabled - symbol table already has all definitions
+        const header = cir.ast.header.?;
+        switch (header) {
+            .app => |app| {
+                // App headers expose functions - now stored in the platform binop
+                // Find the platform field in packages
+                var packages_iter = cir.ast.node_slices.nodes(&app.packages);
+                while (packages_iter.next()) |field_idx| {
+                    const field_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_idx))));
+                    if (field_node.tag == .binop_colon) {
+                        const field_binop = cir.ast.node_slices.binOp(field_node.payload.binop);
+                        const rhs_node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(field_binop.rhs))));
+                        if (rhs_node.tag == .binop_platform) {
+                            // This is the platform field with provides list
+                            const platform_binop = cir.ast.node_slices.binOp(rhs_node.payload.binop);
+                            const provides_block = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(platform_binop.rhs))));
+                            if (provides_block.tag == .block) {
+                                var provides_iter = cir.ast.node_slices.nodes(&provides_block.payload.nodes);
+                                while (provides_iter.next()) |node_idx| {
+                                    const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+                                    // After canonicalization, nodes might have been converted to expressions
+                                    // Check the tag to see what we have
+                                    const tag_int = @intFromEnum(node.tag);
+
+                                    // Check if this node has been canonicalized to an expression
+                                    if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+                                        // It's an expression - we can infer its type
+                                        const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+
+                                        // Get the identifier name from the node
+                                        const ident_idx = node.payload.ident;
+                                        const name = env.idents.getText(ident_idx);
+
+                                        // Get the type variable for this expression
+                                        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+                                        // Format the type
+                                        var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                                            try output.md_writer.print("{s} : ?\n", .{name});
+                                            continue;
+                                        };
+                                        defer type_writer.deinit();
+
+                                        type_writer.write(expr_var) catch {
+                                            try output.md_writer.print("{s} : ?\n", .{name});
+                                            continue;
+                                        };
+
+                                        const type_str = type_writer.get();
+                                        try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            .module => |mod| {
+                // Module headers expose values and types
+                var exposes_iter = cir.ast.node_slices.nodes(&mod.exposes);
+
+                while (exposes_iter.next()) |node_idx| {
+                    const node = cir.ast.nodes.get(@as(collections.SafeMultiList(AST.Node).Idx, @enumFromInt(@intFromEnum(node_idx))));
+                    const tag_int = @intFromEnum(node.tag);
+
+                    // Check if this node has been canonicalized to an expression
+                    if (tag_int >= @intFromEnum(CIR.ExprTag.lookup)) {
+                        // It's an expression - we can infer its type
+                        const expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+
+                        // Get the identifier name from the node
+                        const ident_idx = node.payload.ident;
+                        const name = env.idents.getText(ident_idx);
+
+                        // Get the type variable for this expression
+                        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+                        // Format the type
+                        var type_writer = types.TypeWriter.initFromParts(output.gpa, types_store, &env.idents) catch {
+                            try output.md_writer.print("{s} : ?\n", .{name});
+                            continue;
+                        };
+                        defer type_writer.deinit();
+
+                        type_writer.write(expr_var) catch {
+                            try output.md_writer.print("{s} : ?\n", .{name});
+                            continue;
+                        };
+
+                        const type_str = type_writer.get();
+                        try output.md_writer.print("{s} : {s}\n", .{ name, type_str });
+                    }
+                }
+            },
+            else => {
+                // Other header types
+                try output.md_writer.writeAll("# Header type not yet fully supported\n");
+            },
+        }
+    } else {
+        // No header to process
+    }
+
+    try output.end_code_block();
+    try output.end_section();
+}
+
 /// Generate HTML closing tags and JavaScript
 fn generateHtmlClosing(output: *DualOutput) !void {
     const writer = output.html_writer orelse return;
@@ -2308,14 +4090,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
     // Check our file starts with the metadata section
     if (!std.mem.startsWith(u8, file_content, "# META")) {
-        std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
-        std.log.err("snapshot files must start with '# META'", .{});
-        if (file_content.len > 0) {
-            const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
-            const first_line = file_content[0..first_line_end];
-            std.log.err("file starts with: '{s}'", .{first_line});
-        }
-        return false;
+        // Fail on invalid snapshot files
+        std.log.err("invalid snapshot file '{s}' (doesn't start with '# META')", .{snapshot_path});
+        return false; // Return false to indicate failure
     }
 
     // Parse the file to find section boundaries
@@ -2500,7 +4277,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+fn generateReplOutputSection(output: *DualOutput, _: []const u8, content: *const Content, config: *const Config) !bool {
     var success = true;
     // Parse REPL inputs from the source using » as delimiter
     var inputs = std.ArrayList([]const u8).init(output.gpa);
@@ -2594,20 +4371,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
                 // Verify the outputs match
                 if (actual_outputs.items.len != expected_outputs.items.len) {
-                    std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
-                        actual_outputs.items.len,
-                        expected_outputs.items.len,
-                        snapshot_path,
-                    });
+                    // Output count mismatch
                     success = success and !emit_error;
                 } else {
-                    for (actual_outputs.items, expected_outputs.items, 0..) |actual, expected_output, i| {
+                    for (actual_outputs.items, expected_outputs.items) |actual, expected_output| {
                         if (!std.mem.eql(u8, actual, expected_output)) {
                             success = success and !emit_error;
-                            std.debug.print(
-                                "REPL output mismatch at index {}: got '{s}', expected '{s}' in {s}\n",
-                                .{ i, actual, expected_output, snapshot_path },
-                            );
                         }
                     }
                 }
@@ -2693,10 +4462,17 @@ test "snapshot validation" {
 pub const SnapshotOps = struct {
     allocator: std.mem.Allocator,
     roc_ops: RocOps,
+    allocations: std.AutoHashMap(*anyopaque, AllocationInfo),
+
+    const AllocationInfo = struct {
+        size: usize,
+        alignment: u32,
+    };
 
     pub fn init(allocator: std.mem.Allocator) SnapshotOps {
         return SnapshotOps{
             .allocator = allocator,
+            .allocations = std.AutoHashMap(*anyopaque, AllocationInfo).init(allocator),
             .roc_ops = RocOps{
                 .env = undefined, // will be set below
                 .roc_alloc = snapshotRocAlloc,
@@ -2711,8 +4487,22 @@ pub const SnapshotOps = struct {
     }
 
     pub fn deinit(self: *SnapshotOps) void {
-        _ = self;
-        // nothing to do here?
+        // Free any remaining allocations
+        var iter = self.allocations.iterator();
+        while (iter.next()) |entry| {
+            const bytes: [*]u8 = @ptrCast(@alignCast(entry.key_ptr.*));
+            const slice = bytes[0..entry.value_ptr.size];
+            // Free with proper alignment
+            switch (entry.value_ptr.alignment) {
+                1 => self.allocator.free(slice),
+                2 => self.allocator.free(@as([]align(2) u8, @alignCast(slice))),
+                4 => self.allocator.free(@as([]align(4) u8, @alignCast(slice))),
+                8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
+                16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
+                else => {}, // Ignore unsupported alignments
+            }
+        }
+        self.allocations.deinit();
     }
 
     pub fn get_ops(self: *SnapshotOps) *RocOps {
@@ -2724,89 +4514,145 @@ pub const SnapshotOps = struct {
 fn snapshotRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = snapshot_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during snapshotRocAlloc", .{});
+    // Allocate with proper alignment
+    const ptr = switch (alloc_args.alignment) {
+        1 => snapshot_env.allocator.alignedAlloc(u8, 1, alloc_args.length),
+        2 => snapshot_env.allocator.alignedAlloc(u8, 2, alloc_args.length),
+        4 => snapshot_env.allocator.alignedAlloc(u8, 4, alloc_args.length),
+        8 => snapshot_env.allocator.alignedAlloc(u8, 8, alloc_args.length),
+        16 => snapshot_env.allocator.alignedAlloc(u8, 16, alloc_args.length),
+        else => @panic("Unsupported alignment in snapshot allocator"),
+    } catch {
+        @panic("Out of memory during snapshot test allocation");
     };
 
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
+    const result: *anyopaque = @ptrCast(ptr.ptr);
 
-    // Return pointer to the user data (after the size metadata)
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    // Track the allocation
+    snapshot_env.allocations.put(result, SnapshotOps.AllocationInfo{
+        .size = alloc_args.length,
+        .alignment = @intCast(alloc_args.alignment),
+    }) catch {
+        snapshot_env.allocator.free(ptr);
+        @panic("Failed to track snapshot allocation");
+    };
+
+    alloc_args.answer = result;
 }
 
 fn snapshotRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
-    const total_size = size_ptr.*;
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-
-    // Calculate alignment
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    snapshot_env.allocator.rawFree(slice, align_enum, @returnAddress());
+    if (snapshot_env.allocations.fetchRemove(dealloc_args.ptr)) |entry| {
+        const bytes: [*]u8 = @ptrCast(@alignCast(dealloc_args.ptr));
+        const slice = bytes[0..entry.value.size];
+        // Free with proper alignment
+        switch (entry.value.alignment) {
+            1 => snapshot_env.allocator.free(slice),
+            2 => snapshot_env.allocator.free(@as([]align(2) u8, @alignCast(slice))),
+            4 => snapshot_env.allocator.free(@as([]align(4) u8, @alignCast(slice))),
+            8 => snapshot_env.allocator.free(@as([]align(8) u8, @alignCast(slice))),
+            16 => snapshot_env.allocator.free(@as([]align(16) u8, @alignCast(slice))),
+            else => {}, // Ignore unsupported alignments
+        }
+    }
 }
 
 fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
 
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
+    // If answer is null, this is an initial allocation
+    if (@intFromPtr(realloc_args.answer) == 0) {
+        var alloc_args = RocAlloc{
+            .alignment = realloc_args.alignment,
+            .length = realloc_args.new_length,
+            .answer = undefined,
+        };
+        snapshotRocAlloc(&alloc_args, env);
+        realloc_args.answer = alloc_args.answer;
+        return;
+    }
 
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = snapshot_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during snapshotRocRealloc", .{});
+    // Look up the old allocation
+    const old_info = snapshot_env.allocations.get(realloc_args.answer) orelse {
+        // Not tracked - can't realloc
+        return;
     };
 
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
+    // Remove old tracking entry
+    _ = snapshot_env.allocations.remove(realloc_args.answer);
 
-    // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    // Get the old data
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
+    const old_slice = old_bytes[0..old_info.size];
+
+    // Allocate new memory
+    const new_ptr = switch (realloc_args.alignment) {
+        1 => snapshot_env.allocator.alignedAlloc(u8, 1, realloc_args.new_length),
+        2 => snapshot_env.allocator.alignedAlloc(u8, 2, realloc_args.new_length),
+        4 => snapshot_env.allocator.alignedAlloc(u8, 4, realloc_args.new_length),
+        8 => snapshot_env.allocator.alignedAlloc(u8, 8, realloc_args.new_length),
+        16 => snapshot_env.allocator.alignedAlloc(u8, 16, realloc_args.new_length),
+        else => @panic("Unsupported alignment in snapshot reallocator"),
+    } catch {
+        // Put the old entry back on failure
+        snapshot_env.allocations.put(realloc_args.answer, old_info) catch {};
+        return;
+    };
+
+    // Copy old data to new location
+    const copy_size = @min(old_info.size, realloc_args.new_length);
+    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
+
+    // Free old memory with proper alignment
+    switch (old_info.alignment) {
+        1 => snapshot_env.allocator.free(old_slice),
+        2 => snapshot_env.allocator.free(@as([]align(2) u8, @alignCast(old_slice))),
+        4 => snapshot_env.allocator.free(@as([]align(4) u8, @alignCast(old_slice))),
+        8 => snapshot_env.allocator.free(@as([]align(8) u8, @alignCast(old_slice))),
+        16 => snapshot_env.allocator.free(@as([]align(16) u8, @alignCast(old_slice))),
+        else => {}, // Ignore unsupported alignments
+    }
+
+    const result: *anyopaque = @ptrCast(new_ptr.ptr);
+
+    // Track the new allocation
+    snapshot_env.allocations.put(result, SnapshotOps.AllocationInfo{
+        .size = realloc_args.new_length,
+        .alignment = @intCast(realloc_args.alignment),
+    }) catch {
+        snapshot_env.allocator.free(new_ptr);
+        // Put the old entry back on failure
+        snapshot_env.allocations.put(realloc_args.answer, old_info) catch {};
+        return;
+    };
+
+    realloc_args.answer = result;
 }
 
 fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("snapshotRocDbg not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract debug output from RocDbg struct
+    const debug_output = dbg_args.utf8_bytes[0..dbg_args.len];
+
+    // For snapshot testing, debug output should be logged with appropriate prefix
+    std.log.info("[SNAPSHOT DBG] {s}", .{debug_output});
+
+    // Debug output in snapshot tests is informational only - don't exit
 }
 
 fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    @panic("snapshotRocExpectFailed not implemented yet");
+    _ = env; // Environment pointer not needed for this implementation
+
+    // Extract expect failure message from RocExpectFailed struct
+    const expect_output = expect_args.utf8_bytes[0..expect_args.len];
+
+    // For snapshot testing, expect failures are part of the test output that should be captured
+    std.log.err("[SNAPSHOT EXPECT FAILED] {s}", .{expect_output});
+
+    // In snapshot testing, expect failures are test results to be captured, not fatal errors
+    // Don't exit - let the snapshot tool handle the failure as part of test output
 }
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {

@@ -5,7 +5,7 @@ const parse = @import("parse");
 const base = @import("base");
 const types = @import("types");
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Can = @import("../Can.zig");
+const Can = @import("../mod.zig").Can;
 
 const Ident = base.Ident;
 const TypeVar = types.Var;
@@ -26,16 +26,14 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
-        defer can.deinit();
+        var can = Can.init(&ast, &env.types);
+        defer can.deinit(gpa);
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
 
         // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
+        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
         const resolved = env.types.resolveVar(expr_var);
 
         // Check that it's a record_unbound
@@ -63,16 +61,14 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
-        defer can.deinit();
+        var can = Can.init(&ast, &env.types);
+        defer can.deinit(gpa);
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source2, &env.common.idents);
 
         // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
+        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
         const resolved = env.types.resolveVar(expr_var);
 
         // Check that it's an empty_record
@@ -100,16 +96,14 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
-        defer can.deinit();
+        var can = Can.init(&ast, &env.types);
+        defer can.deinit(gpa);
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-            return error.CanonicalizeError;
-        };
+        const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source3, &env.common.idents);
 
         // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
+        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
         const resolved = env.types.resolveVar(expr_var);
 
         // Check that it's a record_unbound
@@ -144,16 +138,14 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
-    defer can.deinit();
+    var can = Can.init(&ast, &env.types);
+    defer can.deinit(gpa);
 
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeError;
-    };
+    const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
 
     // Get the type of the expression
-    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
+    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
     const resolved = env.types.resolveVar(expr_var);
 
     // Verify it starts as record_unbound
@@ -187,15 +179,13 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
-    defer can.deinit();
+    var can = Can.init(&ast, &env.types);
+    defer can.deinit(gpa);
 
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeError;
-    };
+    const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
 
-    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
+    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
     const resolved = env.types.resolveVar(expr_var);
 
     // Should be record_unbound

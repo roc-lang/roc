@@ -12,58 +12,73 @@ dbg "foo"
 
 foo = ...
 ~~~
-# EXPECTED
-INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
-# PROBLEMS
-**INVALID STATEMENT**
-The statement `dbg` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**dbg_stmt_not_permitted_top_level.md:4:1:4:10:**
-```roc
-dbg "foo"
-```
-^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-KwDbg(4:1-4:4),StringStart(4:5-4:6),StringPart(4:6-4:9),StringEnd(4:9-4:10),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),
-EndOfFile(7:1-7:1),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwDbg String BlankLine LowerIdent OpAssign TripleDot ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.10
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
-	(statements
-		(s-dbg @4.1-4.10
-			(e-string @4.5-4.10
-				(e-string-part @4.6-4.9 (raw "foo"))))
-		(s-decl @6.1-6.10
-			(p-ident @6.1-6.4 (raw "foo"))
-			(e-ellipsis))))
+(module-header
+  (exposes
+    (lc "foo")
+))
+(block
+  (malformed)
+  (str_literal_small "foo")
+  (binop_equals
+    (lc "foo")
+    (ellipsis)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [foo]
+
+# not permitted
+dbg 
+"foo"
+foo = ...
 ~~~
+# EXPECTED
+INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **dbg ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**dbg_stmt_not_permitted_top_level.md:4:1:4:5:**
+```roc
+dbg "foo"
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.4 (ident "foo"))
-		(e-not-implemented @1.1-1.1)))
+(Expr.block
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Stmt.assign
+    (pattern (Patt.ident "foo"))
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 10
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 Str)
+(var #4 -> #9)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.4 (type "_a")))
-	(expressions
-		(expr @1.1-1.1 (type "_a"))))
+~~~roc
+foo : _a
 ~~~

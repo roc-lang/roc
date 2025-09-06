@@ -485,6 +485,9 @@ pub const Document = struct {
 
         // Copy the line text to avoid memory safety issues
         const line_text_slice = region_info.calculateLineText(source, line_starts);
+
+        // Always include source region for error reporting, even for empty lines
+        // Empty lines are valid error locations (e.g., unexpected token at EOF or blank line)
         const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
 
         try self.elements.append(.{

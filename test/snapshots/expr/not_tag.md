@@ -7,48 +7,35 @@ type=expr
 ~~~roc
 !(C(2))
 ~~~
-# EXPECTED
-TYPE MISMATCH - not_tag.md:1:1:1:8
-# PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**not_tag.md:1:1:1:8:**
-```roc
-!(C(2))
-```
-^^^^^^^
-
-It has the type:
-    _Bool_
-
-But here it's being used as:
-    _[C(Num(_size))]_others_
-
 # TOKENS
-~~~zig
-OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),CloseRound(1:6-1:7),CloseRound(1:7-1:8),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpBang OpenRound UpperIdent OpenRound Int CloseRound CloseRound ~~~
 # PARSE
 ~~~clojure
-(unary "!"
-	(e-tuple @1.2-1.8
-		(e-apply @1.3-1.7
-			(e-tag @1.3-1.4 (raw "C"))
-			(e-int @1.5-1.6 (raw "2")))))
+(unary_not <unary_op>)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+!C(2)
 ~~~
+# EXPECTED
+TYPE MISMATCH - not_tag.md:1:1:1:8
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-unary-not @1.1-1.8
-	(e-tag @1.3-1.7 (name "C")
-		(args
-			(e-int @1.5-1.6 (value "2")))))
+(Expr.unary_not)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 -> #5)
+(var #2 Num *)
+(var #3 _)
+(var #4 -> #3)
+(var #5 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.8 (type "Error"))
+~~~roc
 ~~~

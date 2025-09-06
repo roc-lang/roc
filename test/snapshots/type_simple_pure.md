@@ -12,83 +12,120 @@ identity = |x| x
 
 main! = |_| {}
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar LowerIdent BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly CloseCurly ~~~
+# PARSE
+~~~clojure
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "identity")
+    (binop_arrow_call
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "identity")
+    (lambda
+      (body
+        (lc "x")
+      )
+      (args
+        (lc "x")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (record_literal)
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
+
+identity : Str -> Str
+identity = |x| x
+main! = |_| {}
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:9),OpColon(3:10-3:11),UpperIdent(3:12-3:15),OpArrow(3:16-3:18),UpperIdent(3:19-3:22),
-LowerIdent(4:1-4:9),OpAssign(4:10-4:11),OpBar(4:12-4:13),LowerIdent(4:13-4:14),OpBar(4:14-4:15),LowerIdent(4:16-4:17),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),
-EndOfFile(7:1-7:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-6.15
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.22 (name "identity")
-			(ty-fn @3.12-3.22
-				(ty @3.12-3.15 (name "Str"))
-				(ty @3.19-3.22 (name "Str"))))
-		(s-decl @4.1-4.17
-			(p-ident @4.1-4.9 (raw "identity"))
-			(e-lambda @4.12-4.17
-				(args
-					(p-ident @4.13-4.14 (raw "x")))
-				(e-ident @4.16-4.17 (raw "x"))))
-		(s-decl @6.1-6.15
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.15
-				(args
-					(p-underscore))
-				(e-record @6.13-6.15)))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.9 (ident "identity"))
-		(e-lambda @4.12-4.17
-			(args
-				(p-assign @4.13-4.14 (ident "x")))
-			(e-lookup-local @4.16-4.17
-				(p-assign @4.13-4.14 (ident "x"))))
-		(annotation @4.1-4.9
-			(declared-type
-				(ty-fn @3.12-3.22 (effectful false)
-					(ty @3.12-3.15 (name "Str"))
-					(ty @3.19-3.22 (name "Str"))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
-			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "identity"))
+    (type type_10)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "identity"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 28
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 -> #24)
+(var #13 _)
+(var #14 _)
+(var #15 -> #24)
+(var #16 _)
+(var #17 -> #27)
+(var #18 _)
+(var #19 -> #26)
+(var #20 -> #27)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 fn_pure)
+(var #25 _)
+(var #26 {})
+(var #27 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.9 (type "Str -> Str"))
-		(patt @6.1-6.6 (type "_arg -> {}")))
-	(expressions
-		(expr @4.12-4.17 (type "Str -> Str"))
-		(expr @6.9-6.15 (type "_arg -> {}"))))
+~~~roc
+x : _a
+identity : _arg -> _ret
+main : _arg -> {}
 ~~~

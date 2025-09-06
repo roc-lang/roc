@@ -7,6 +7,22 @@ type=expr
 ~~~roc
 { name, age, email, active }
 ~~~
+# TOKENS
+~~~text
+OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly ~~~
+# PARSE
+~~~clojure
+(record_literal
+  (lc "name")
+  (lc "age")
+  (lc "email")
+  (lc "active")
+)
+~~~
+# FORMATTED
+~~~roc
+{ name, age, email, active }
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_shorthand_fields.md:1:3:1:7
 UNDEFINED VARIABLE - record_shorthand_fields.md:1:9:1:12
@@ -14,8 +30,8 @@ UNDEFINED VARIABLE - record_shorthand_fields.md:1:14:1:19
 UNDEFINED VARIABLE - record_shorthand_fields.md:1:21:1:27
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **name** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **record_shorthand_fields.md:1:3:1:7:**
 ```roc
@@ -25,8 +41,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `age` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **age** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **record_shorthand_fields.md:1:9:1:12:**
 ```roc
@@ -36,8 +52,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `email` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **email** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **record_shorthand_fields.md:1:14:1:19:**
 ```roc
@@ -47,8 +63,8 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `active` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **active** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **record_shorthand_fields.md:1:21:1:27:**
 ```roc
@@ -57,37 +73,27 @@ Is there an `import` or `exposing` missing up-top?
                     ^^^^^^
 
 
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:27),CloseCurly(1:28-1:29),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-record @1.1-1.29
-	(field (field "name"))
-	(field (field "age"))
-	(field (field "email"))
-	(field (field "active")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.29
-	(fields
-		(field (name "name")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "age")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "email")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "active")
-			(e-runtime-error (tag "ident_not_in_scope")))))
+(Expr.record_literal
+  (Expr.lookup "name")
+  (Expr.lookup "age")
+  (Expr.lookup "email")
+  (Expr.lookup "active")
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 8
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 -> #7)
+(var #6 {})
+(var #7 record)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.29 (type "{ name: Error, age: Error, email: Error, active: Error }"))
+~~~roc
 ~~~

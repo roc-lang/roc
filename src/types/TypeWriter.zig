@@ -87,6 +87,7 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
     self.buf.clearRetainingCapacity();
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
+
     try self.writeVar(var_, var_);
 }
 

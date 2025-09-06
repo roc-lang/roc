@@ -7,32 +7,37 @@ type=expr
 ~~~roc
 Some(42)
 ~~~
+# TOKENS
+~~~text
+UpperIdent OpenRound Int CloseRound ~~~
+# PARSE
+~~~clojure
+(apply_uc
+  (uc "Some")
+  (num_literal_i32 42)
+)
+~~~
+# FORMATTED
+~~~roc
+Some(42)
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),CloseRound(1:8-1:9),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-apply @1.1-1.9
-	(e-tag @1.1-1.5 (raw "Some"))
-	(e-int @1.6-1.8 (raw "42")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.9 (name "Some")
-	(args
-		(e-int @1.6-1.8 (value "42"))))
+(Expr.tag_applied)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 -> #4)
+(var #2 Num *)
+(var #3 _)
+(var #4 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.9 (type "[Some(Num(_size))]_others"))
+~~~roc
 ~~~

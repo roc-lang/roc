@@ -147,6 +147,13 @@ pub const CacheStats = struct {
         self.misses += 1;
     }
 
+    /// Calculate the cache hit rate.
+    pub fn hitRate(self: Self) f64 {
+        const total = self.hits + self.misses;
+        if (total == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total));
+    }
+
     /// Record a cache invalidation.
     pub fn recordInvalidation(self: *Self) void {
         self.invalidations += 1;

@@ -13,102 +13,141 @@ addU8 = |a, b| a + b
 expect addU8(1, 2) == 3
 expect addU8(0, 10) == 10
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LowerIdent OpColon UpperIdent Comma UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent Comma LowerIdent OpBar LowerIdent OpPlus LowerIdent BlankLine KwExpect LowerIdent OpenRound Int Comma Int CloseRound OpEquals Int KwExpect LowerIdent OpenRound Int Comma Int CloseRound OpEquals Int ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (lc "addU8")
+))
+(block
+  (binop_colon
+    (lc "addU8")
+    (binop_arrow_call
+      (uc "U8")
+      (binop_arrow_call
+        (uc "U8")
+        (uc "U8")
+      )
+    )
+  )
+  (binop_equals
+    (lc "addU8")
+    (lambda
+      (body
+        (binop_plus
+          (lc "a")
+          (lc "b")
+        )
+      )
+      (args
+        (lc "a")
+        (lc "b")
+      )
+    )
+  )
+  (expect
+    (binop_double_equals
+      (apply_lc
+        (lc "addU8")
+        (tuple_literal
+          (num_literal_i32 1)
+          (num_literal_i32 2)
+        )
+      )
+      (num_literal_i32 3)
+    )
+  )
+  (expect
+    (binop_double_equals
+      (apply_lc
+        (lc "addU8")
+        (tuple_literal
+          (num_literal_i32 0)
+          (num_literal_i32 10)
+        )
+      )
+      (num_literal_i32 10)
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module [addU8]
+
+addU8 : U8 -> U8 -> U8
+addU8 = |a, b| a + b
+expect addU8((1, 2)) == 3
+expect addU8((0, 10)) == 10
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:14),CloseSquare(1:14-1:15),
-LowerIdent(3:1-3:6),OpColon(3:7-3:8),UpperIdent(3:9-3:11),Comma(3:11-3:12),UpperIdent(3:13-3:15),OpArrow(3:16-3:18),UpperIdent(3:19-3:21),
-LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:14),OpBar(4:14-4:15),LowerIdent(4:16-4:17),OpPlus(4:18-4:19),LowerIdent(4:20-4:21),
-KwExpect(6:1-6:7),LowerIdent(6:8-6:13),NoSpaceOpenRound(6:13-6:14),Int(6:14-6:15),Comma(6:15-6:16),Int(6:17-6:18),CloseRound(6:18-6:19),OpEquals(6:20-6:22),Int(6:23-6:24),
-KwExpect(7:1-7:7),LowerIdent(7:8-7:13),NoSpaceOpenRound(7:13-7:14),Int(7:14-7:15),Comma(7:15-7:16),Int(7:17-7:19),CloseRound(7:19-7:20),OpEquals(7:21-7:23),Int(7:24-7:26),
-EndOfFile(8:1-8:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-7.26
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.14
-				(text "addU8"))))
-	(statements
-		(s-type-anno @3.1-3.21 (name "addU8")
-			(ty-fn @3.9-3.21
-				(ty @3.9-3.11 (name "U8"))
-				(ty @3.13-3.15 (name "U8"))
-				(ty @3.19-3.21 (name "U8"))))
-		(s-decl @4.1-4.21
-			(p-ident @4.1-4.6 (raw "addU8"))
-			(e-lambda @4.9-4.21
-				(args
-					(p-ident @4.10-4.11 (raw "a"))
-					(p-ident @4.13-4.14 (raw "b")))
-				(e-binop @4.16-4.21 (op "+")
-					(e-ident @4.16-4.17 (raw "a"))
-					(e-ident @4.20-4.21 (raw "b")))))
-		(s-expect @6.1-6.24
-			(e-binop @6.8-6.24 (op "==")
-				(e-apply @6.8-6.19
-					(e-ident @6.8-6.13 (raw "addU8"))
-					(e-int @6.14-6.15 (raw "1"))
-					(e-int @6.17-6.18 (raw "2")))
-				(e-int @6.23-6.24 (raw "3"))))
-		(s-expect @7.1-7.26
-			(e-binop @7.8-7.26 (op "==")
-				(e-apply @7.8-7.20
-					(e-ident @7.8-7.13 (raw "addU8"))
-					(e-int @7.14-7.15 (raw "0"))
-					(e-int @7.17-7.19 (raw "10")))
-				(e-int @7.24-7.26 (raw "10"))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.6 (ident "addU8"))
-		(e-lambda @4.9-4.21
-			(args
-				(p-assign @4.10-4.11 (ident "a"))
-				(p-assign @4.13-4.14 (ident "b")))
-			(e-binop @4.16-4.21 (op "add")
-				(e-lookup-local @4.16-4.17
-					(p-assign @4.10-4.11 (ident "a")))
-				(e-lookup-local @4.20-4.21
-					(p-assign @4.13-4.14 (ident "b")))))
-		(annotation @4.1-4.6
-			(declared-type
-				(ty-fn @3.9-3.21 (effectful false)
-					(ty @3.9-3.11 (name "U8"))
-					(ty @3.13-3.15 (name "U8"))
-					(ty @3.19-3.21 (name "U8"))))))
-	(s-expect @6.1-6.24
-		(e-binop @6.8-6.24 (op "eq")
-			(e-call @6.8-6.19
-				(e-lookup-local @6.8-6.13
-					(p-assign @4.1-4.6 (ident "addU8")))
-				(e-int @6.14-6.15 (value "1"))
-				(e-int @6.17-6.18 (value "2")))
-			(e-int @6.23-6.24 (value "3"))))
-	(s-expect @7.1-7.26
-		(e-binop @7.8-7.26 (op "eq")
-			(e-call @7.8-7.20
-				(e-lookup-local @7.8-7.13
-					(p-assign @4.1-4.6 (ident "addU8")))
-				(e-int @7.14-7.15 (value "0"))
-				(e-int @7.17-7.19 (value "10")))
-			(e-int @7.24-7.26 (value "10")))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "addU8"))
+    (type type_7)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "addU8"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.expr)
+  (Stmt.expr)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 39
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 -> #36)
+(var #10 _)
+(var #11 _)
+(var #12 -> #13)
+(var #13 -> #14)
+(var #14 _)
+(var #15 -> #36)
+(var #16 _)
+(var #17 _)
+(var #18 Num *)
+(var #19 Num *)
+(var #20 _)
+(var #21 _)
+(var #22 Num *)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 Num *)
+(var #27 Num *)
+(var #28 _)
+(var #29 _)
+(var #30 Num *)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 fn_pure)
+(var #37 _)
+(var #38 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.6 (type "U8, U8 -> U8")))
-	(expressions
-		(expr @4.9-4.21 (type "U8, U8 -> U8"))))
+~~~roc
+addU8 : _arg, _arg2 -> _ret
+a : _c
+b : _c
 ~~~

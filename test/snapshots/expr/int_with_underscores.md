@@ -7,28 +7,43 @@ type=expr
 ~~~roc
 1_000_000
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-Int(1:1-1:10),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+Int Underscore Int Underscore Int ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.10 (raw "1_000_000"))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+_
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **_** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**int_with_underscores.md:1:2:1:3:**
+```roc
+1_000_000
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.10 (value "1000000"))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "Num(_size)"))
+~~~roc
 ~~~

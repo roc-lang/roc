@@ -27,151 +27,145 @@ main! = |_| {
     result
 }
 ~~~
-# EXPECTED
-UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
-UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
-# PROBLEMS
-**UNUSED VARIABLE**
-Variable `unused_var` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_unused_var` to suppress this warning.
-The unused variable is declared here:
-**unused_vars_block.md:5:5:5:15:**
-```roc
-    unused_var = 42
-```
-    ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `another_unused` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_another_unused` to suppress this warning.
-The unused variable is declared here:
-**unused_vars_block.md:11:5:11:19:**
-```roc
-    another_unused = "hello"
-```
-    ^^^^^^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:6),OpAssign(3:7-3:8),OpBar(3:9-3:10),Underscore(3:10-3:11),OpBar(3:11-3:12),OpenCurly(3:13-3:14),
-LowerIdent(5:5-5:15),OpAssign(5:16-5:17),Int(5:18-5:20),
-LowerIdent(8:5-8:13),OpAssign(8:14-8:15),Int(8:16-8:19),
-LowerIdent(11:5-11:19),OpAssign(11:20-11:21),StringStart(11:22-11:23),StringPart(11:23-11:28),StringEnd(11:28-11:29),
-NamedUnderscore(14:5-14:13),
-OpAssign(15:6-15:7),
-Int(16:7-16:10),
-LowerIdent(19:5-19:11),OpAssign(19:12-19:13),LowerIdent(19:14-19:22),OpPlus(19:23-19:24),Int(19:25-19:27),
-LowerIdent(20:5-20:11),
-CloseCurly(21:1-21:2),
-EndOfFile(22:1-22:1),
-~~~
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar OpenCurly LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign Int BlankLine LineComment LowerIdent OpAssign String BlankLine LineComment LowerIdent LineComment OpAssign LineComment Int LineComment BlankLine LineComment LowerIdent OpAssign LowerIdent OpPlus Int LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-21.2
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-decl @3.1-21.2
-			(p-ident @3.1-3.6 (raw "main!"))
-			(e-lambda @3.9-21.2
-				(args
-					(p-underscore))
-				(e-block @3.13-21.2
-					(statements
-						(s-decl @5.5-5.20
-							(p-ident @5.5-5.15 (raw "unused_var"))
-							(e-int @5.18-5.20 (raw "42")))
-						(s-decl @8.5-8.19
-							(p-ident @8.5-8.13 (raw "used_var"))
-							(e-int @8.16-8.19 (raw "100")))
-						(s-decl @11.5-11.29
-							(p-ident @11.5-11.19 (raw "another_unused"))
-							(e-string @11.22-11.29
-								(e-string-part @11.23-11.28 (raw "hello"))))
-						(s-decl @14.5-16.10
-							(p-ident @14.5-14.13 (raw "_ignored"))
-							(e-int @16.7-16.10 (raw "999")))
-						(s-decl @19.5-19.27
-							(p-ident @19.5-19.11 (raw "result"))
-							(e-binop @19.14-19.27 (op "+")
-								(e-ident @19.14-19.22 (raw "used_var"))
-								(e-int @19.25-19.27 (raw "10"))))
-						(e-ident @20.5-20.11 (raw "result"))))))))
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (block
+          (binop_equals
+            (lc "unused_var")
+            (num_literal_i32 42)
+          )
+          (binop_equals
+            (lc "used_var")
+            (num_literal_i32 100)
+          )
+          (binop_equals
+            (lc "another_unused")
+            (str_literal_big "hello")
+          )
+          (binop_equals
+            (lc "_ignored")
+            (num_literal_i32 999)
+          )
+          (binop_equals
+            (lc "result")
+            (binop_plus
+              (lc "used_var")
+              (num_literal_i32 10)
+            )
+          )
+          (binop_colon
+            (lc "result")
+            (lc "result")
+          )
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
 main! = |_| {
 	# Regular unused variable - should warn
 	unused_var = 42
-
 	# Regular used variable - should be fine
 	used_var = 100
-
 	# Another unused variable - should warn
 	another_unused = "hello"
-
 	# Underscore variable that is unused - should be fine
-	_ignored # Comment 1
-		= # Comment 2
-			999 # Comment 3
-
+	_ignored = # Comment 1
+	# Comment 2
+		999
+	# Comment 3
 	# Use only the used_var
 	result = used_var + 10
-	result
+	result : result
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
+UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.6 (ident "main!"))
-		(e-lambda @3.9-21.2
-			(args
-				(p-underscore @3.10-3.11))
-			(e-block @3.13-21.2
-				(s-let @5.5-5.20
-					(p-assign @5.5-5.15 (ident "unused_var"))
-					(e-int @5.18-5.20 (value "42")))
-				(s-let @8.5-8.19
-					(p-assign @8.5-8.13 (ident "used_var"))
-					(e-int @8.16-8.19 (value "100")))
-				(s-let @11.5-11.29
-					(p-assign @11.5-11.19 (ident "another_unused"))
-					(e-string @11.22-11.29
-						(e-literal @11.23-11.28 (string "hello"))))
-				(s-let @14.5-16.10
-					(p-assign @14.5-14.13 (ident "_ignored"))
-					(e-int @16.7-16.10 (value "999")))
-				(s-let @19.5-19.27
-					(p-assign @19.5-19.11 (ident "result"))
-					(e-binop @19.14-19.27 (op "add")
-						(e-lookup-local @19.14-19.22
-							(p-assign @8.5-8.13 (ident "used_var")))
-						(e-int @19.25-19.27 (value "10"))))
-				(e-lookup-local @20.5-20.11
-					(p-assign @19.5-19.11 (ident "result")))))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 34
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 -> #33)
+(var #8 _)
+(var #9 -> #10)
+(var #10 Num *)
+(var #11 _)
+(var #12 -> #13)
+(var #13 Num *)
+(var #14 _)
+(var #15 -> #16)
+(var #16 Str)
+(var #17 _)
+(var #18 -> #19)
+(var #19 Num *)
+(var #20 _)
+(var #21 -> #24)
+(var #22 -> #23)
+(var #23 -> #24)
+(var #24 Num *)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 -> #33)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.6 (type "_arg -> Num(_size)")))
-	(expressions
-		(expr @3.9-21.2 (type "_arg -> Num(_size)"))))
+~~~roc
+another_unused : Str
+_ignored : Num(_size)
+used_var : Num(_size)
+result : Num(_size)
+main : _arg -> _ret
+unused_var : Num(_size)
 ~~~

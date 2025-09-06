@@ -7,28 +7,31 @@ type=expr
 ~~~roc
 170141183460469231731687303715884105727
 ~~~
+# TOKENS
+~~~text
+Int ~~~
+# PARSE
+~~~clojure
+(num_literal_big big:<idx:40>)
+~~~
+# FORMATTED
+~~~roc
+170141183460469231731687303715884105727
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Int(1:1-1:40),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-int @1.1-1.40 (raw "170141183460469231731687303715884105727"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.40 (value "170141183460469231731687303715884105727"))
+(Expr.num_literal_big)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 Num *)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.40 (type "Num(_size)"))
+~~~roc
 ~~~

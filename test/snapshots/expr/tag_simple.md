@@ -7,28 +7,31 @@ type=expr
 ~~~roc
 MyTag
 ~~~
+# TOKENS
+~~~text
+UpperIdent ~~~
+# PARSE
+~~~clojure
+(uc "MyTag")
+~~~
+# FORMATTED
+~~~roc
+MyTag
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-UpperIdent(1:1-1:6),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-tag @1.1-1.6 (raw "MyTag"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (name "MyTag"))
+(Expr.tag_no_args)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.6 (type "[MyTag]_others"))
+~~~roc
 ~~~

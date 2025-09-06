@@ -624,10 +624,8 @@ pub const BuildEnv = struct {
         return self.ws.dottedToPath(root_dir, import_name) catch import_name;
     }
 
-    fn makeResolver(self: *BuildEnv) ImportResolver {
-        const ctx = self.gpa.create(ResolverCtx) catch {
-            @panic("Cannot continue without resolver context");
-        };
+    fn makeResolver(self: *BuildEnv) !ImportResolver {
+        const ctx = try self.gpa.create(ResolverCtx);
         ctx.* = .{ .ws = self };
         return .{
             .ctx = ctx,
@@ -740,8 +738,7 @@ pub const BuildEnv = struct {
         var ast = try parse.parse(&env.common, self.gpa);
         defer ast.deinit(self.gpa);
 
-        const file = ast.store.getFile();
-        const header = ast.store.getHeader(file.header);
+        const header = ast.header orelse return error.NoHeader;
 
         var info = HeaderInfo{ .kind = .package };
         errdefer info.deinit(self.gpa);
@@ -981,7 +978,7 @@ pub const BuildEnv = struct {
     };
 
     fn createSchedulers(self: *BuildEnv) !void {
-        const resolver = self.makeResolver();
+        const resolver = try self.makeResolver();
         // Track resolver ctx for cleanup (typed)
         try self.resolver_ctxs.append(@ptrCast(@alignCast(resolver.ctx)));
         var it = self.packages.iterator();

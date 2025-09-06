@@ -7,38 +7,40 @@ type=expr
 ~~~roc
 if True 1 else 2
 ~~~
+# TOKENS
+~~~text
+KwIf UpperIdent Int KwElse Int ~~~
+# PARSE
+~~~clojure
+(if_else
+  (condition     (uc "True")
+)
+  (then     (num_literal_i32 1)
+)
+  (else     (num_literal_i32 2)
+))
+~~~
+# FORMATTED
+~~~roc
+if True 1 else 2
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwIf(1:1-1:3),UpperIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-if-then-else @1.1-1.17
-	(e-tag @1.4-1.8 (raw "True"))
-	(e-int @1.9-1.10 (raw "1"))
-	(e-int @1.16-1.17 (raw "2")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.17
-	(if-branches
-		(if-branch
-			(e-nominal @1.4-1.8 (nominal "Bool")
-				(e-tag @1.4-1.8 (name "True")))
-			(e-int @1.9-1.10 (value "1"))))
-	(if-else
-		(e-int @1.16-1.17 (value "2"))))
+(Expr.if_else)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 Num *)
+(var #3 Num *)
+(var #4 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.17 (type "Num(_size)"))
+~~~roc
 ~~~

@@ -7,25 +7,52 @@ type=file
 ~~~roc
 module P]F
 ~~~
+# TOKENS
+~~~text
+KwModule UpperIdent CloseSquare UpperIdent ~~~
+# PARSE
+~~~clojure
+(module-header
+  (exposes
+    (uc "P")
+
+    (malformed)
+
+    (uc "F")
+))
+(block
+  (uc "P")
+  (malformed)
+  (uc "F")
+)
+~~~
+# FORMATTED
+~~~roc
+module [P, ], F]
+
+P
+]
+F
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_011.md:1:8:1:9
 PARSE ERROR - fuzz_crash_011.md:1:9:1:10
 PARSE ERROR - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `header_expected_open_square`
+A parsing error occurred: **header_expected_open_square**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_011.md:1:8:1:9:**
+**fuzz_crash_011.md:1:1:1:8:**
 ```roc
 module P]F
 ```
-       ^
+^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_011.md:1:9:1:10:**
 ```roc
@@ -34,53 +61,24 @@ module P]F
         ^
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_011.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),UpperIdent(1:8-1:9),CloseSquare(1:9-1:10),UpperIdent(1:10-1:11),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.11
-	(malformed-header @1.8-1.9 (tag "header_expected_open_square"))
-	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
-~~~
-# FORMATTED
-~~~roc
-
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.tag_no_args)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

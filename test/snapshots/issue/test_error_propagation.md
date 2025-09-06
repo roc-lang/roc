@@ -14,81 +14,99 @@ GoodAlias := BadBase
 value : GoodAlias
 value = "test"
 ~~~
-# EXPECTED
-UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
-# PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**test_error_propagation.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
-UpperIdent(5:1-5:10),OpColonEqual(5:11-5:13),UpperIdent(5:14-5:21),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:18),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),StringStart(8:9-8:10),StringPart(8:10-8:14),StringEnd(8:14-8:15),
-EndOfFile(9:1-9:1),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColonEqual Underscore BlankLine UpperIdent OpColonEqual UpperIdent BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign String ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.15
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.8 (name "BadBase")
-				(args))
-			(_))
-		(s-type-decl @5.1-5.21
-			(header @5.1-5.10 (name "GoodAlias")
-				(args))
-			(ty @5.14-5.21 (name "BadBase")))
-		(s-type-anno @7.1-7.18 (name "value")
-			(ty @7.9-7.18 (name "GoodAlias")))
-		(s-decl @8.1-8.15
-			(p-ident @8.1-8.6 (raw "value"))
-			(e-string @8.9-8.15
-				(e-string-part @8.10-8.14 (raw "test"))))))
+(module-header)
+(block
+  (binop_colon_equals
+    (uc "BadBase")
+    (underscore)
+  )
+  (binop_colon_equals
+    (uc "GoodAlias")
+    (uc "BadBase")
+  )
+  (binop_colon
+    (lc "value")
+    (uc "GoodAlias")
+  )
+  (binop_equals
+    (lc "value")
+    (str_literal_small "test")
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+BadBase := _
+GoodAlias := BadBase
+value : GoodAlias
+value = "test"
 ~~~
+# EXPECTED
+UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
+# PROBLEMS
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**test_error_propagation.md:3:9:3:11:**
+```roc
+BadBase := _
+```
+        ^^
+
+
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**test_error_propagation.md:5:11:5:13:**
+```roc
+GoodAlias := BadBase
+```
+          ^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @8.1-8.6 (ident "value"))
-		(e-string @8.9-8.15
-			(e-literal @8.10-8.14 (string "test")))
-		(annotation @8.1-8.6
-			(declared-type
-				(ty @7.9-7.18 (name "GoodAlias")))))
-	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadBase"))
-		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @5.1-5.21
-		(ty-header @5.1-5.10 (name "GoodAlias"))
-		(ty @5.14-5.21 (name "BadBase"))))
+(Expr.block
+  (Stmt.malformed)
+  (Stmt.malformed)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "value"))
+    (type type_8)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "value"))
+    (Expr.str_literal_small)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #11)
+(var #11 Str)
+(var #12 _)
+(var #13 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @8.1-8.6 (type "Error")))
-	(type_decls
-		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.21 (type "Error")
-			(ty-header @5.1-5.10 (name "GoodAlias"))))
-	(expressions
-		(expr @8.9-8.15 (type "Error"))))
+~~~roc
+value : Str
 ~~~

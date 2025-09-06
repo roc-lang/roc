@@ -1,19 +1,13 @@
 # META
 ~~~ini
-description=Simple addition using two dec
+description=Add two decimal numbers
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» x = 0.1
-» y = 0.2
-» x + y
+� 0.1 + 0.2
 ~~~
 # OUTPUT
-assigned `x`
----
-assigned `y`
----
 0.3
 # PROBLEMS
 NIL

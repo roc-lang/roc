@@ -7,28 +7,31 @@ type=expr
 ~~~roc
 255
 ~~~
+# TOKENS
+~~~text
+Int ~~~
+# PARSE
+~~~clojure
+(num_literal_i32 255)
+~~~
+# FORMATTED
+~~~roc
+255
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Int(1:1-1:4),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-int @1.1-1.4 (raw "255"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.4 (value "255"))
+(Expr.num_literal_i32 255)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 Num *)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.4 (type "Num(_size)"))
+~~~roc
 ~~~

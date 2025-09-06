@@ -7,39 +7,48 @@ type=expr
 ~~~roc
 |x| x + 1
 ~~~
+# TOKENS
+~~~text
+OpBar LowerIdent OpBar LowerIdent OpPlus Int ~~~
+# PARSE
+~~~clojure
+(lambda
+  (body
+    (binop_plus
+      (lc "x")
+      (num_literal_i32 1)
+    )
+  )
+  (args
+    (lc "x")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+|x| x + 1
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),LowerIdent(1:5-1:6),OpPlus(1:7-1:8),Int(1:9-1:10),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-lambda @1.1-1.10
-	(args
-		(p-ident @1.2-1.3 (raw "x")))
-	(e-binop @1.5-1.10 (op "+")
-		(e-ident @1.5-1.6 (raw "x"))
-		(e-int @1.9-1.10 (raw "1"))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.10
-	(args
-		(p-assign @1.2-1.3 (ident "x")))
-	(e-binop @1.5-1.10 (op "add")
-		(e-lookup-local @1.5-1.6
-			(p-assign @1.2-1.3 (ident "x")))
-		(e-int @1.9-1.10 (value "1"))))
+(Expr.lambda (canonicalized))
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 8
+(var #0 _)
+(var #1 _)
+(var #2 -> #3)
+(var #3 -> #4)
+(var #4 Num *)
+(var #5 -> #7)
+(var #6 _)
+(var #7 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "Num(_size) -> Num(_size2)"))
+~~~roc
+x : _a
 ~~~

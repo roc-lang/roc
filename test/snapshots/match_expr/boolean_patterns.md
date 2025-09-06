@@ -10,12 +10,37 @@ match isReady {
 	False => "not ready yet"
 }
 ~~~
+# TOKENS
+~~~text
+KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String CloseCurly ~~~
+# PARSE
+~~~clojure
+(match
+  (scrutinee     (lc "isReady")
+)
+  (branch1     (binop_thick_arrow
+      (uc "True")
+      (str_literal_big "ready to go!")
+    )
+)
+  (branch2     (binop_thick_arrow
+      (uc "False")
+      (str_literal_big "not ready yet")
+    )
+))
+~~~
+# FORMATTED
+~~~roc
+match isReady
+	True => "ready to go!"
+	False => "not ready yet"
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - boolean_patterns.md:1:7:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `isReady` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **isReady** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **boolean_patterns.md:1:7:1:14:**
 ```roc
@@ -24,57 +49,34 @@ match isReady {
       ^^^^^^^
 
 
-# TOKENS
-~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),
-UpperIdent(2:2-2:6),OpFatArrow(2:7-2:9),StringStart(2:10-2:11),StringPart(2:11-2:23),StringEnd(2:23-2:24),
-UpperIdent(3:2-3:7),OpFatArrow(3:8-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
-~~~
-# PARSE
-~~~clojure
-(e-match
-	(e-ident @1.7-1.14 (raw "isReady"))
-	(branches
-		(branch @2.2-2.24
-			(p-tag @2.2-2.6 (raw "True"))
-			(e-string @2.10-2.24
-				(e-string-part @2.11-2.23 (raw "ready to go!"))))
-		(branch @3.2-3.26
-			(p-tag @3.2-3.7 (raw "False"))
-			(e-string @3.11-3.26
-				(e-string-part @3.12-3.25 (raw "not ready yet"))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
+**UNSUPPORTED NODE**
+This syntax is not yet supported by the compiler.
+This might be a limitation in the current implementation that will be addressed in a future update.
+
+**boolean_patterns.md:2:2:2:24:**
+```roc
+	True => "ready to go!"
+```
+	^^^^^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-4.2
-	(match @1.1-4.2
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @2.2-2.6
-							(p-applied-tag @2.2-2.6))))
-				(value
-					(e-string @2.10-2.24
-						(e-literal @2.11-2.23 (string "ready to go!")))))
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-nominal @3.2-3.7
-							(p-applied-tag @3.2-3.7))))
-				(value
-					(e-string @3.11-3.26
-						(e-literal @3.12-3.25 (string "not ready yet"))))))))
+(Expr.match)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 9
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 Str)
+(var #7 _)
+(var #8 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-4.2 (type "Str"))
+~~~roc
 ~~~

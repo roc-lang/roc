@@ -13,76 +13,79 @@ hosted [
 a! : Str => Str
 b! : Str => Str
 ~~~
-# EXPECTED
-EXPOSED BUT NOT DEFINED - hosted.md:2:2:2:4
-EXPOSED BUT NOT DEFINED - hosted.md:3:2:3:4
-# PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `a!` is exposed, but it is not defined anywhere in this module.
-
-**hosted.md:2:2:2:4:**
-```roc
-	a!,
-```
-	^^
-You can fix this by either defining `a!` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `b!` is exposed, but it is not defined anywhere in this module.
-
-**hosted.md:3:2:3:4:**
-```roc
-	b!
-```
-	^^
-You can fix this by either defining `b!` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
-~~~zig
-KwHosted(1:1-1:7),OpenSquare(1:8-1:9),
-LowerIdent(2:2-2:4),Comma(2:4-2:5),
-LowerIdent(3:2-3:4),
-CloseSquare(4:1-4:2),
-LowerIdent(6:1-6:3),OpColon(6:4-6:5),UpperIdent(6:6-6:9),OpFatArrow(6:10-6:12),UpperIdent(6:13-6:16),
-LowerIdent(7:1-7:3),OpColon(7:4-7:5),UpperIdent(7:6-7:9),OpFatArrow(7:10-7:12),UpperIdent(7:13-7:16),
-EndOfFile(8:1-8:1),
-~~~
+~~~text
+KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare BlankLine LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.16
-	(hosted @1.1-4.2
-		(exposes @1.8-4.2
-			(exposed-lower-ident @2.2-2.4
-				(text "a!"))
-			(exposed-lower-ident @3.2-3.4
-				(text "b!"))))
-	(statements
-		(s-type-anno @6.1-6.16 (name "a!")
-			(ty-fn @6.6-6.16
-				(ty @6.6-6.9 (name "Str"))
-				(ty @6.13-6.16 (name "Str"))))
-		(s-type-anno @7.1-7.16 (name "b!")
-			(ty-fn @7.6-7.16
-				(ty @7.6-7.9 (name "Str"))
-				(ty @7.13-7.16 (name "Str"))))))
+(hosted-header
+  (exposes
+    (not_lc "a")
+
+    (not_lc "b")
+))
+(block
+  (binop_colon
+    (not_lc "a")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+  (binop_colon
+    (not_lc "b")
+    (binop_thick_arrow
+      (uc "Str")
+      (uc "Str")
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-hosted [
-	a!,
-	b!,
-]
+hosted [a!, b!]
 
 a! : Str => Str
 b! : Str => Str
 ~~~
+# EXPECTED
+EXPOSED BUT NOT DEFINED - hosted.md:2:2:2:4
+EXPOSED BUT NOT DEFINED - hosted.md:3:2:3:4
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "a"))
+    (type type_6)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "b"))
+    (type type_11)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+a : _c
+b : _c
 ~~~

@@ -9,7 +9,7 @@ const std = @import("std");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
-const Severity = @import("severity.zig").Severity;
+pub const Severity = @import("severity.zig").Severity;
 const Document = @import("document.zig").Document;
 const Annotation = @import("document.zig").Annotation;
 const RenderTarget = @import("renderer.zig").RenderTarget;

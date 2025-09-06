@@ -7,58 +7,62 @@ type=file
 ~~~roc
 0 (
 ~~~
+# TOKENS
+~~~text
+Int OpenRound ~~~
+# PARSE
+~~~clojure
+(block
+  (apply_anon
+    (num_literal_i32 0)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+0()
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_hang_001.md:1:1:1:2
 PARSE ERROR - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_hang_001.md:1:1:1:2:**
+**fuzz_hang_001.md:1:2:1:3:**
 ```roc
 0 (
 ```
-^
+ ^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: **expected_expr_apply_close_round**
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_hang_001.md:1:3:1:4:**
+**fuzz_hang_001.md:1:1:1:4:**
 ```roc
 0 (
 ```
-  ^
+^^^
 
 
-# TOKENS
-~~~zig
-Int(1:1-1:2),OpenRound(1:3-1:4),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-1.4
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.fn_call)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 -> #4)
+(var #2 _)
+(var #3 _)
+(var #4 <error>)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~
