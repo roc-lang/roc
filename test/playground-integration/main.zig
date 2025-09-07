@@ -282,8 +282,11 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     // Serialize message to JSON
     var message_json_buffer = std.array_list.Managed(u8).init(allocator);
     defer message_json_buffer.deinit();
-    try std.json.stringify(message, .{}, message_json_buffer.writer());
+    var buffer: [1024]u8 = undefined;
+    var json_writer = message_json_buffer.writer().adaptToNewApi(&buffer).new_interface;
+    try std.json.Stringify.value(message, .{}, &json_writer);
     const message_json = message_json_buffer.items;
+    try json_writer.flush();
 
     // Allocate a buffer in WASM for the message.
     // The WASM module's allocateMessageBuffer export handles this.
