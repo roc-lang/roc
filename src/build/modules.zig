@@ -99,6 +99,7 @@ pub const RocModules = struct {
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
+            .tokens = b.addModule("tokens", .{ .root_source_file = b.path("src/tokens/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
