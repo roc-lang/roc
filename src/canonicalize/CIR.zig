@@ -811,7 +811,7 @@ fn getNodeTagPtr(self: *CIR, idx: AST.Node.Idx) *AST.Node.Tag {
 }
 
 /// Internal helper to get an AST node.
-fn getAstNode(self: *const CIR, idx: AST.Node.Idx) AST.Node {
+pub fn getAstNode(self: *const CIR, idx: AST.Node.Idx) AST.Node {
     const node_int = @intFromEnum(idx);
     const nodes_len = self.ast.*.nodes.len();
     if (node_int >= nodes_len) {
@@ -874,6 +874,27 @@ pub fn getApplyNodes(self: *const CIR, expr_idx: Expr.Idx) ?collections.NodeSlic
     // Get the AST node to access the nodes
     const ast_node = self.getAstNode(@as(AST.Node.Idx, @enumFromInt(@intFromEnum(expr_idx))));
     return ast_node.payload.nodes;
+}
+
+/// Get byte slice content from ByteSlices (for big literals, strings, etc)
+pub fn getByteSlice(self: *const CIR, idx: ByteSlices.Idx) []const u8 {
+    return self.ast.byte_slices.slice(idx);
+}
+
+/// Get an iterator over AST node indices (for legacy compatibility)
+/// TODO: Eventually phase this out in favor of Expr.Idx everywhere
+pub fn getNodeIndices(self: *const CIR, nodes_idx: collections.NodeSlices(AST.Node.Idx).Idx) collections.NodeSlices(AST.Node.Idx).Iterator {
+    return self.ast.node_slices.nodes(&nodes_idx);
+}
+
+pub fn getNodeTag(self: *const CIR, idx: AST.Node.Idx) u8 {
+    const node = self.getAstNode(idx);
+    return @intFromEnum(node.tag);
+}
+
+/// Get binop structure for AST nodes (legacy)
+pub fn getNodeBinOp(self: *const CIR, binop_idx: collections.NodeSlices(AST.Node.Idx).Idx) collections.NodeSlices(AST.Node.Idx).BinOp {
+    return self.ast.node_slices.binOp(binop_idx);
 }
 
 /// Cast an AST node index to a Stmt index (same underlying value)
@@ -1796,6 +1817,7 @@ pub fn canonicalizeExpr(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         // Block - could be a single-field record or an actual block
         .block => {
             // Get the nodes in the block
+            // Note: If this node was already mutated but has wrong payload, handle gracefully
             const nodes_idx = node.payload.nodes;
             var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
@@ -2914,11 +2936,6 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                     // This is a lookup expression - extract the identifier
                     const ident = lhs_node.payload.ident;
 
-                    if (std.debug.runtime_safety) {
-                        const ident_text = idents.getText(ident);
-                        std.debug.print("DEBUG: LHS already converted to lookup for '{s}'\n", .{ident_text});
-                    }
-
                     // Check if this identifier already exists
                     if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {
                         // Check if this is the same definition we're processing
@@ -3328,7 +3345,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .import => {
             // Import statement: import module.name [exposing (...)]
             // Process the import and register it in scope
-            const nodes_idx = node.payload.import_nodes;
+            const nodes_idx = node.payload.nodes;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 
@@ -3338,6 +3355,14 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                 // In case 2, the entire import is a binop_exposing
                 if (iter.next()) |first_node_idx| {
                     const first_node = self.getAstNode(first_node_idx);
+
+                    // Check if this node has already been processed (mutated to CIR)
+                    const import_tag_value = @intFromEnum(first_node.tag);
+                    if (import_tag_value >= FIRST_STMT_TAG) {
+                        // Already processed, skip
+                        self.mutateToStmt(node_idx, .import);
+                        return asStmtIdx(node_idx);
+                    }
 
                     var module_name: []const u8 = "";
                     var exposed_items: ?[]const []const u8 = null;
@@ -3442,6 +3467,9 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
                         if (lhs_node.tag == .lc or lhs_node.tag == .uc) {
                             module_name = idents.getText(lhs_node.payload.ident);
                         }
+                    } else if (first_node.tag == .uc or first_node.tag == .lc) {
+                        // Simple import of just a module name like "import A"
+                        module_name = idents.getText(first_node.payload.ident);
                     }
 
                     // Register the import
@@ -3604,10 +3632,6 @@ fn canonicalizePattWithMutability(self: *CIR, allocator: Allocator, ast_param: *
         .lc => {
             // Lowercase identifier pattern
             const ident = node.payload.ident;
-
-            if (std.debug.runtime_safety) {
-                std.debug.print("DEBUG canonicalizePatt: processing .lc node {}\n", .{node_idx});
-            }
 
             // Check for shadowing BEFORE mutating or adding to scope
             if (self.scope_state.lookupIdent(ident)) |existing_patt_idx| {

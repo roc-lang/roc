@@ -70,9 +70,6 @@ test "Repl - string expressions" {
     const result = try repl.step("\"Hello, World!\"");
     defer std.testing.allocator.free(result);
 
-    // Debug output to see what we actually get
-    std.debug.print("\nString test - Got: '{s}' (len={d})\n", .{ result, result.len });
-
     try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 

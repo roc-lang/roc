@@ -513,6 +513,14 @@ pub const PackageEnv = struct {
         var czer = Can.init(&parse_ast, &env.types);
         const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
         _ = try czer.canonicalizeFileBlock(self.gpa, root_node_idx, env.common.source, &env.common.idents, &env.common, null);
+
+        // Transfer discovered imports from scope state to ModuleEnv
+        var import_iter = czer.scope_state.imported_modules.iterator();
+        while (import_iter.next()) |entry| {
+            const module_name = entry.key_ptr.*;
+            try env.imports.put(module_name, {});
+        }
+
         czer.deinit(self.gpa);
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {

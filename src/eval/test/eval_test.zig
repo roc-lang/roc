@@ -39,7 +39,7 @@ test "eval boolean literals" {
     try runExpectBool("True", true, .no_trace);
     try runExpectBool("False", false, .no_trace);
     // Bool.True and Bool.False may not be supported yet - need to check how they're parsed
-    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.True", true, .trace);
     try runExpectBool("Bool.False", false, .no_trace);
 }
 

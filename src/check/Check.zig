@@ -197,10 +197,10 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
         .record_access => {
             // Handle record field access like record.field
             const binop_idx = expr.payload.binop;
-            const binop = cir.ast.node_slices.binOp(binop_idx);
+            const binop = cir.getBinOp(CIRType.Expr.Idx, binop_idx);
 
             // Type-check the record expression (left side)
-            const record_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
+            const record_expr_idx = binop.lhs;
             const record_var = try self.checkCIRExpr(CIRType, cir, record_expr_idx);
 
             // For now, just propagate the record type and return a fresh variable for the field
@@ -219,7 +219,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             defer record_fields.deinit();
 
             if (!nodes_idx.isNil()) {
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
                 while (iter.next()) |field_node| {
                     const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node)));
                     const field_expr = cir.getExpr(field_expr_idx);
@@ -231,23 +231,34 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
                         // Get field name from left side (should be an identifier)
                         // Field names are expressions after canonicalization
                         const field_name_expr = cir.getExpr(@enumFromInt(@intFromEnum(field_binop.lhs)));
-                        if (field_name_expr.tag == .lookup) {
-                            const field_ident = field_name_expr.payload.ident;
+                        const field_ident = blk: {
+                            if (field_name_expr.tag == .lookup) {
+                                break :blk field_name_expr.payload.ident;
+                            } else if (field_name_expr.tag == .malformed) {
+                                // The field name was converted to a pattern during canonicalization
+                                // Extract the identifier from the pattern
+                                const field_patt_idx = @as(CIRType.Patt.Idx, @enumFromInt(@intFromEnum(field_binop.lhs)));
+                                const field_patt = cir.getPatt(field_patt_idx);
+                                if (field_patt.tag == .ident or field_patt.tag == .var_ident) {
+                                    break :blk field_patt.payload.ident;
+                                }
+                                // Can't extract field name - skip this field
+                                continue;
+                            } else {
+                                // Field name is not an identifier - skip this field
+                                continue;
+                            }
+                        };
 
-                            // Type-check the field value (right side)
-                            const field_value_var = try self.checkCIRExpr(CIRType, cir, field_binop.rhs);
+                        // Type-check the field value (right side)
+                        const field_value_var = try self.checkCIRExpr(CIRType, cir, field_binop.rhs);
 
-                            // Create the record field
-                            const record_field = RecordField{
-                                .name = field_ident,
-                                .var_ = field_value_var,
-                            };
-                            try record_fields.append(record_field);
-                        } else {
-                            // Field name is not an identifier - this shouldn't happen in well-formed code
-                            // For robustness, skip this field
-                            continue;
-                        }
+                        // Create the record field
+                        const record_field = RecordField{
+                            .name = field_ident,
+                            .var_ = field_value_var,
+                        };
+                        try record_fields.append(record_field);
                     } else if (field_expr.tag == .lookup) {
                         // Shorthand field: { x } means { x: x }
                         const field_ident = field_expr.payload.ident;
@@ -308,7 +319,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             var element_vars = std.ArrayList(Var).init(self.gpa);
             defer element_vars.deinit();
 
-            var iter = cir.ast.node_slices.nodes(&nodes_idx);
+            var iter = cir.getNodeIndices(nodes_idx);
             while (iter.next()) |element_node| {
                 const element_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(element_node)));
                 const element_var = try self.checkCIRExpr(CIRType, cir, element_expr_idx);
@@ -330,29 +341,25 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             const nodes_idx = expr.payload.nodes;
             if (!nodes_idx.isNil()) {
                 // Get the statements in the block
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
 
                 // Type check each statement in the block
-                while (iter.next()) |stmt_node_idx| {
-                    const stmt_node = cir.ast.nodes.get(@as(@TypeOf(cir.ast.nodes).Idx, @enumFromInt(@intFromEnum(stmt_node_idx))));
-
-                    // Check what kind of statement this is
-                    const stmt_tag_int = @intFromEnum(stmt_node.tag);
+                while (iter.next()) |node_idx| {
+                    // First check if this node is a statement or expression
+                    const node_tag_value = cir.getNodeTag(node_idx);
                     const stmt_first = @intFromEnum(CIRType.StmtTag.assign);
 
-                    if (stmt_tag_int >= stmt_first and stmt_tag_int < @intFromEnum(CIRType.ExprTag.lookup)) {
+                    if (node_tag_value >= stmt_first and node_tag_value < @intFromEnum(CIRType.ExprTag.lookup)) {
                         // It's a statement - handle it
-                        const stmt_tag: CIRType.StmtTag = @enumFromInt(stmt_tag_int);
+                        const stmt_idx = @as(CIRType.Stmt.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                        const stmt = cir.getStmt(stmt_idx);
+                        const stmt_tag: CIRType.StmtTag = @enumFromInt(node_tag_value);
 
                         switch (stmt_tag) {
                             .assign => {
-                                // Get the assignment statement
-                                const stmt_idx = @as(CIRType.Stmt.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
-                                const stmt = cir.getStmt(stmt_idx);
-
                                 // An assignment has a pattern and a value stored in a binop
                                 // The payload is a binop with pattern on left and value on right
-                                const binop = cir.ast.node_slices.binOp(stmt.payload.binop);
+                                const binop = cir.getNodeBinOp(stmt.payload.binop);
 
                                 // Get the pattern variable (left side)
                                 const patt_idx = @as(CIRType.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
@@ -367,17 +374,17 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
                             },
                             .expr => {
                                 // Expression statement - just check it
-                                const stmt_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
-                                _ = try self.checkCIRExpr(CIRType, cir, stmt_expr_idx);
+                                const expr_stmt_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                                _ = try self.checkCIRExpr(CIRType, cir, expr_stmt_idx);
                             },
                             else => {
                                 // Other statement types - skip for now
                             },
                         }
-                    } else if (stmt_tag_int >= @intFromEnum(CIRType.ExprTag.lookup)) {
+                    } else if (node_tag_value >= @intFromEnum(CIRType.ExprTag.lookup)) {
                         // It's an expression used as a statement - check it
-                        const stmt_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(stmt_node_idx)));
-                        _ = try self.checkCIRExpr(CIRType, cir, stmt_expr_idx);
+                        const stmt_as_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+                        _ = try self.checkCIRExpr(CIRType, cir, stmt_as_expr_idx);
                     }
                 }
             }
@@ -408,7 +415,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             // Parse the lambda structure: [body, param1, param2, ...]
             // Count parameters first
             var param_count: usize = 0;
-            var iter = cir.ast.node_slices.nodes(&body_then_args);
+            var iter = cir.getNodeIndices(body_then_args);
 
             // First node is the body
             const body_node_idx = iter.next() orelse return expr_var;
@@ -453,7 +460,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             // The operand is stored in the nodes payload
             const nodes_idx = expr.payload.nodes;
             if (!nodes_idx.isNil()) {
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
                 if (iter.next()) |operand_node| {
                     const operand_var = try self.checkCIRExpr(CIRType, cir, @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(operand_node))));
 
@@ -474,7 +481,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             const nodes_idx = cir.getApplyNodes(expr_idx) orelse return expr_var;
 
             if (!nodes_idx.isNil()) {
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
 
                 // First item is the function/tag being applied
                 const func_node_idx = iter.next() orelse return expr_var;

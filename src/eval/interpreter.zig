@@ -576,7 +576,18 @@ pub const Interpreter = struct {
         }
 
         // Ensure both stacks are empty at the end - if not, it's a bug!
+        if (self.work_stack.items.len != 0) {
+            std.debug.print("ERROR: Work stack not empty! {} items remaining\n", .{self.work_stack.items.len});
+        }
+        if (self.value_stack.items.len != 0) {
+            std.debug.print("ERROR: Value stack not empty! {} items remaining\n", .{self.value_stack.items.len});
+            for (self.value_stack.items, 0..) |val, i| {
+                std.debug.print("  [{}]: offset={}, layout={}\n", .{ i, val.offset, val.layout.tag });
+            }
+        }
         std.debug.assert(self.work_stack.items.len == 0);
+
+        // Stack balancing check - the value stack should be empty after a complete evaluation
         std.debug.assert(self.value_stack.items.len == 0);
 
         // Final check for crashes before returning
@@ -709,7 +720,7 @@ pub const Interpreter = struct {
                     .num_literal_big, .int_literal_big => blk: {
                         // Big literals are stored in ByteSlices
                         const byte_slice_idx = expr.payload.num_literal_big;
-                        const bytes = cir.ast.byte_slices.slice(byte_slice_idx);
+                        const bytes = cir.getByteSlice(byte_slice_idx);
 
                         // Parse the digits from the byte slice
                         // The bytes contain ASCII digits that need to be parsed
@@ -781,7 +792,7 @@ pub const Interpreter = struct {
                     .frac_literal_big => blk: {
                         // Big frac is stored as an index into ByteSlices
                         const byte_slice_idx = expr.payload.frac_literal_big;
-                        const bytes = cir.ast.byte_slices.slice(byte_slice_idx);
+                        const bytes = cir.getByteSlice(byte_slice_idx);
 
                         // Parse the fractional value from the byte slice
                         // Format: digits before decimal, then '.', then digits after
@@ -904,7 +915,7 @@ pub const Interpreter = struct {
                 // Get the if-else branches from the node payload
                 const if_branches_u32 = expr.payload.if_branches;
                 const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
-                var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
 
                 // Check if there's a condition to evaluate
                 if (iter.next()) |condition_idx| {
@@ -955,10 +966,53 @@ pub const Interpreter = struct {
 
                 // Look up the pattern index associated with this identifier
                 // The scope state should have a mapping from ident to pattern
-                const pattern_idx = self.lookupPatternForIdent(ident_idx) orelse {
-                    self.traceError("Identifier not found in scope: ident_idx={}", .{ident_idx});
-                    return error.PatternNotFound;
-                };
+                const pattern_idx_opt = self.lookupPatternForIdent(ident_idx);
+
+                // If we found a pattern index, use it
+                if (pattern_idx_opt) |pattern_idx| {
+                    self.traceInfo("Found pattern_idx {} for ident {}", .{ pattern_idx, ident_idx });
+                    // 1. First check local bindings
+                    if (self.lookupBinding(pattern_idx)) |binding_value| {
+                        self.traceInfo("Found binding for pattern_idx {}", .{pattern_idx});
+                        // Push a copy of the bound value
+                        const dest_value = try self.pushStackValue(binding_value.layout);
+                        binding_value.copyTo(dest_value, self.layout_cache);
+                        return;
+                    } else {
+                        self.traceInfo("No binding found for pattern_idx {}", .{pattern_idx});
+                    }
+                } else {
+                    // Pattern lookup failed - try searching bindings directly by identifier
+                    // This is needed for REPL where bindings are created dynamically
+                    self.traceInfo("Pattern lookup failed for ident {} ('{s}'), searching bindings directly", .{ ident_idx, ident_name });
+
+                    var found = false;
+                    var reversed = std.mem.reverseIterator(self.bindings_stack.items);
+                    while (reversed.next()) |binding| {
+                        const pattern = cir.getPatt(binding.pattern_idx);
+                        if (pattern.tag == .ident or pattern.tag == .var_ident) {
+                            if (pattern.payload.ident == ident_idx) {
+                                // Found the binding!
+                                self.traceInfo("Found binding for ident {}", .{ident_idx});
+
+                                // Copy the value to the stack
+                                const value_layout = binding.value.layout;
+                                var result_value = try self.pushStackValue(value_layout);
+                                binding.value.copyWithoutRefcount(result_value, self.layout_cache);
+                                result_value.is_initialized = true;
+                                found = true;
+                                return;
+                            }
+                        }
+                    }
+
+                    if (!found) {
+                        self.traceError("Identifier not found in scope: ident_idx={}", .{ident_idx});
+                        return error.PatternNotFound;
+                    }
+                }
+
+                const pattern_idx = pattern_idx_opt orelse unreachable; // We handle the null case above
 
                 // 1. First check local bindings
                 if (self.lookupBinding(pattern_idx)) |binding_value| {
@@ -999,7 +1053,7 @@ pub const Interpreter = struct {
                 const nodes_idx = apply_expr.payload.nodes;
 
                 // Get iterator over the function and argument nodes
-                var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                 // First node should be the function to call
                 const func_node_idx = nodes_iter.next() orelse {
@@ -1053,7 +1107,7 @@ pub const Interpreter = struct {
 
                 // Unary operations use the nodes payload to store the operand
                 const nodes_idx = unary_expr.payload.nodes;
-                var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                 // Should have exactly one operand
                 const operand_node_idx = nodes_iter.next() orelse {
@@ -1092,7 +1146,7 @@ pub const Interpreter = struct {
 
                 // Unary operations use the nodes payload to store the operand
                 const nodes_idx = not_expr.payload.nodes;
-                var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                 // Should have exactly one operand
                 const operand_node_idx = nodes_iter.next() orelse {
@@ -1135,14 +1189,28 @@ pub const Interpreter = struct {
 
                 self.traceInfo("Record access: record={}, field={}", .{ binop.lhs, binop.rhs });
 
-                // Get the field name from the canonicalized RHS expression
+                // Get the field name from the canonicalized RHS
+                // The RHS might be a pattern (.ident) rather than an expression
+                // because field names are structural metadata, not expressions
                 const field_expr = cir.getExpr(binop.rhs);
-                const field_name_idx = switch (field_expr.tag) {
-                    .lookup => field_expr.payload.ident,
-                    else => {
-                        self.traceError("Record field access: RHS is not a lookup, got {}", .{field_expr.tag});
+
+                // Try to extract the field name identifier
+                const field_name_idx = blk: {
+                    if (field_expr.tag == .lookup or field_expr.tag == .record_accessor) {
+                        break :blk field_expr.payload.ident;
+                    } else if (field_expr.tag == .malformed) {
+                        // The RHS was converted to a pattern - try to extract it
+                        const rhs_as_patt = @as(can.CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
+                        const patt = cir.getPatt(rhs_as_patt);
+                        if (patt.tag == .ident or patt.tag == .var_ident) {
+                            break :blk patt.payload.ident;
+                        }
+                        self.traceError("Record field access: malformed RHS is not an ident pattern", .{});
                         return error.InvalidFieldAccess;
-                    },
+                    } else {
+                        self.traceError("Record field access: RHS is not a field identifier, got {}", .{field_expr.tag});
+                        return error.InvalidFieldAccess;
+                    }
                 };
 
                 // Schedule the dot access work (executes after record is evaluated)
@@ -1189,7 +1257,7 @@ pub const Interpreter = struct {
                 // For big strings, the payload contains an index into the ByteSlices store
                 const str_expr = cir.getExpr(expr_idx);
                 const str_idx = str_expr.payload.str_literal_big;
-                const str_content = cir.ast.byte_slices.slice(str_idx);
+                const str_content = cir.getByteSlice(str_idx);
 
                 // Allocate stack space for RocStr
                 const str_layout = Layout.str();
@@ -1231,89 +1299,30 @@ pub const Interpreter = struct {
 
             .record_literal => {
                 // Handle record literals like {x: 42, y: 10}
-                const record_expr = cir.getExpr(expr_idx);
-                const nodes_idx = record_expr.payload.nodes;
+                // The handleRecordFields function will handle field evaluation iteratively
 
-                // Count fields
-                var field_count: u32 = 0;
-                var counter = cir.ast.node_slices.nodes(&nodes_idx);
-                while (counter.next()) |_| {
-                    field_count += 1;
-                }
-
-                // Schedule record field evaluation completion
+                // Schedule record field evaluation starting with field 0
+                // handleRecordFields will create the empty record and then
+                // iteratively evaluate and populate each field
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_record_fields,
                     .expr_idx = expr_idx,
                     .extra = .{ .current_field_idx = 0 },
                 });
-
-                // Schedule evaluation of each field value (in reverse order for stack)
-                var fields_iter = cir.ast.node_slices.nodes(&nodes_idx);
-                var field_exprs = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
-                defer field_exprs.deinit();
-
-                while (fields_iter.next()) |field_node| {
-                    // Each field is a record_field with field name on left, value on right
-                    const field_expr = cir.getExpr(@as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node))));
-                    if (field_expr.tag == .record_field) {
-                        const field_binop = cir.getBinOp(CIR.Expr.Idx, field_expr.payload.binop);
-                        // We only need to evaluate the value (rhs), not the field name (lhs)
-                        try field_exprs.append(field_binop.rhs);
-                    }
-                }
-
-                // Push in reverse order so they evaluate left-to-right
-                var i = field_exprs.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = field_exprs.items[i],
-                        .extra = .{ .nothing = {} },
-                    });
-                }
             },
 
             .tuple_literal => {
                 // Handle tuple literals like (10, 20)
-                const tuple_expr = cir.getExpr(expr_idx);
-                const nodes_idx = tuple_expr.payload.nodes;
+                // The evaluateTuple function will handle element evaluation iteratively
 
-                // Count elements
-                var element_count: u32 = 0;
-                var counter = cir.ast.node_slices.nodes(&nodes_idx);
-                while (counter.next()) |_| {
-                    element_count += 1;
-                }
-
-                // Schedule tuple evaluation completion
+                // Schedule tuple evaluation starting with element 0
+                // evaluateTuple will create the empty tuple and then
+                // iteratively evaluate and populate each element
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_tuple_elements,
                     .expr_idx = expr_idx,
                     .extra = .{ .current_element_idx = 0 },
                 });
-
-                // Schedule evaluation of each element (in reverse order for stack)
-                var elements = cir.ast.node_slices.nodes(&nodes_idx);
-                var element_exprs = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
-                defer element_exprs.deinit();
-
-                while (elements.next()) |element_node| {
-                    const element_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(element_node)));
-                    try element_exprs.append(element_expr_idx);
-                }
-
-                // Push in reverse order so they evaluate left-to-right
-                var i = element_exprs.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = element_exprs.items[i],
-                        .extra = .{ .nothing = {} },
-                    });
-                }
             },
 
             .lambda => {
@@ -1332,7 +1341,7 @@ pub const Interpreter = struct {
                 var body_idx: CIR.Expr.Idx = @enumFromInt(0);
 
                 if (!body_then_args.isNil()) {
-                    var iter = cir.ast.node_slices.nodes(&body_then_args);
+                    var iter = cir.getNodeIndices(body_then_args);
                     // First element is the body
                     if (iter.next()) |body_node| {
                         body_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(body_node)));
@@ -1375,21 +1384,31 @@ pub const Interpreter = struct {
 
             .module_access => {
                 // Handle module access like Bool.True
-                // Module access uses binop payload where lhs is module, rhs is member
+                // Module access expressions have a binop payload where lhs and rhs are the module and member expressions
+                // These have been marked as malformed during canonicalization, but the binop structure remains
                 const binop = cir.getBinOp(CIR.Expr.Idx, expr.payload.binop);
 
-                // Get module and member names from CIR nodes only
+                // Get the module and member expressions
                 const module_expr = cir.getExpr(binop.lhs);
-                const module_name = if (module_expr.tag == .lookup) blk: {
-                    const module_ident = module_expr.payload.ident;
-                    break :blk self.env.getIdent(module_ident);
-                } else "";
-
                 const member_expr = cir.getExpr(binop.rhs);
-                const member_name = if (member_expr.tag == .lookup) blk: {
-                    const member_ident = member_expr.payload.ident;
-                    break :blk self.env.getIdent(member_ident);
-                } else "";
+
+                // The expressions should be malformed but still have identifier payloads
+                // For Bool.True/False, we need to extract the identifiers
+                const module_name = if (module_expr.tag == .malformed and module_expr.payload.ident.idx != 0)
+                    self.env.getIdent(module_expr.payload.ident)
+                else if (module_expr.tag == .lookup)
+                    self.env.getIdent(module_expr.payload.ident)
+                else
+                    "";
+
+                const member_name = if (member_expr.tag == .malformed and member_expr.payload.ident.idx != 0)
+                    self.env.getIdent(member_expr.payload.ident)
+                else if (member_expr.tag == .lookup)
+                    self.env.getIdent(member_expr.payload.ident)
+                else
+                    "";
+
+                self.traceInfo("module_access: module='{s}', member='{s}'", .{ module_name, member_name });
 
                 // Handle Bool.True and Bool.False
                 if (std.mem.eql(u8, module_name, "Bool")) {
@@ -1403,6 +1422,7 @@ pub const Interpreter = struct {
                         result_value.is_initialized = true;
 
                         self.traceInfo("Bool.{s} = {}", .{ member_name, bool_ptr.* });
+                        return; // Successfully handled Bool.True/False
                     } else {
                         self.traceError("Unknown Bool member: {s}", .{member_name});
                         return error.NameNotFound;
@@ -1424,8 +1444,9 @@ pub const Interpreter = struct {
             .block => {
                 // Block expression - evaluate statements in order, return the last expression value
                 // Blocks have already been canonicalized with their bindings in scope
+                self.traceInfo("Evaluating block expression", .{});
                 const nodes_idx = expr.payload.nodes;
-                var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                 // Count nodes to find the last one
                 var node_count: usize = 0;
@@ -1444,7 +1465,7 @@ pub const Interpreter = struct {
                 }
 
                 // Reset iterator to evaluate nodes
-                nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                nodes_iter = cir.getNodeIndices(nodes_idx);
 
                 // Schedule block completion work
                 self.schedule_work(WorkItem{
@@ -1466,9 +1487,8 @@ pub const Interpreter = struct {
                 while (i > 0) {
                     i -= 1;
                     const n = nodes_to_eval.items[i];
-                    // Get the node directly from the AST (which has been mutated to a CIR node)
-                    const n_node = cir.ast.nodes.get(@enumFromInt(@intFromEnum(n)));
-                    const n_tag_value = @as(u8, @intFromEnum(n_node.tag));
+                    // Get the node's tag directly to check if it's a statement or expression
+                    const n_tag_value = cir.getNodeTag(n);
 
                     // Check if this is the last node (which should be an expression)
                     const is_last = (i == nodes_to_eval.items.len - 1);
@@ -1478,7 +1498,9 @@ pub const Interpreter = struct {
                         // Statements produce side effects but no values
                         if (n_tag_value == @intFromEnum(can.CIR.StmtTag.assign)) {
                             // Assignment statement - evaluate RHS and bind to pattern
-                            const binop = cir.ast.node_slices.binOp(n_node.payload.binop);
+                            const n_as_stmt = @as(CIR.Stmt.Idx, @enumFromInt(@intFromEnum(n)));
+                            const stmt = cir.getStmt(n_as_stmt);
+                            const binop = cir.getNodeBinOp(stmt.payload.binop);
 
                             // Schedule pattern binding work
                             self.schedule_work(WorkItem{
@@ -1507,12 +1529,14 @@ pub const Interpreter = struct {
                             });
                         } else {
                             // Not the last - evaluate but discard result
+                            // First schedule the discard (which will happen after evaluation)
                             self.schedule_work(WorkItem{
                                 .kind = .w_block_discard,
                                 .expr_idx = expr_idx_to_eval,
                                 .extra = .{ .nothing = {} },
                             });
 
+                            // Then schedule the evaluation (will be processed first due to stack order)
                             self.schedule_work(WorkItem{
                                 .kind = .w_eval_expr_structural,
                                 .expr_idx = expr_idx_to_eval,
@@ -2496,7 +2520,7 @@ pub const Interpreter = struct {
         const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
 
         // Get iterator over the branches: [condition, then_branch, else_branch]
-        var iter = cir.ast.*.node_slices.nodes(&nodes_idx);
+        var iter = cir.getNodeIndices(nodes_idx);
 
         // Skip condition (already evaluated)
         _ = iter.next().?;
@@ -2631,7 +2655,7 @@ pub const Interpreter = struct {
         defer param_patterns.deinit();
 
         if (!lambda_expr.payload.body_then_args.isNil()) {
-            var iter = cir.ast.node_slices.nodes(&lambda_expr.payload.body_then_args);
+            var iter = cir.getNodeIndices(lambda_expr.payload.body_then_args);
             // Skip the body (first element)
             _ = iter.next();
 
@@ -2808,7 +2832,7 @@ pub const Interpreter = struct {
             // The value for the previous field is now on top of the stack.
             const prev_field_value = try self.popStackValue();
 
-            // The record itself is the value *under* the field value we just popped.
+            // The record itself is now at the top of the stack (after popping the field value)
             const record_value_on_stack = try self.peekStackValue(1);
 
             // Use RecordAccessor for safe field access
@@ -2845,7 +2869,7 @@ pub const Interpreter = struct {
 
             // Access record fields through the nodes payload
             const nodes_idx = record_expr.payload.nodes;
-            var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+            var nodes_iter = cir.getNodeIndices(nodes_idx);
 
             // Find the field we're looking for by iterating through all record field expressions
             var value_expr_idx: ?CIR.Expr.Idx = null;
@@ -2862,13 +2886,25 @@ pub const Interpreter = struct {
                     // Field names are expressions after canonicalization
                     const field_name_expr = cir.getExpr(field_binop.lhs);
 
-                    if (field_name_expr.tag == .lookup) {
-                        const field_name_ident = field_name_expr.payload.ident;
-                        if (field_name_ident == current_field_name) {
-                            // Found our field! The value is on the right side of the colon
-                            value_expr_idx = field_binop.rhs;
-                            break;
+                    const field_name_ident = blk: {
+                        if (field_name_expr.tag == .lookup) {
+                            break :blk field_name_expr.payload.ident;
+                        } else if (field_name_expr.tag == .malformed) {
+                            // The field name was converted to a pattern during canonicalization
+                            const field_patt_idx = @as(can.CIR.Patt.Idx, @enumFromInt(@intFromEnum(field_binop.lhs)));
+                            const field_patt = cir.getPatt(field_patt_idx);
+                            if (field_patt.tag == .ident or field_patt.tag == .var_ident) {
+                                break :blk field_patt.payload.ident;
+                            }
                         }
+                        // Could not extract field name
+                        continue;
+                    };
+
+                    if (field_name_ident == current_field_name) {
+                        // Found our field! The value is on the right side of the colon
+                        value_expr_idx = field_binop.rhs;
+                        break;
                     }
                 } else if (field_expr.tag == .lookup) {
                     // Shorthand field: { x } means { x: x }
@@ -3162,8 +3198,10 @@ pub const Interpreter = struct {
                 };
                 // Get the identifier from the payload
                 const ident_idx = pattern.payload.ident;
-                self.traceInfo("Binding ident {} (pattern_idx={})", .{
+                const ident_name = self.env.getIdent(ident_idx);
+                self.traceInfo("Binding ident {} ('{s}') to pattern_idx={}", .{
                     ident_idx,
+                    ident_name,
                     @intFromEnum(pattern_idx),
                 });
                 try self.traceValue("value", value);
@@ -3406,7 +3444,7 @@ pub const Interpreter = struct {
 
                 // Get the branches from the payload
                 const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_expr.payload.if_branches));
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
 
                 // Skip the condition (already evaluated)
                 _ = iter.next();
@@ -3951,19 +3989,19 @@ pub const Interpreter = struct {
                 .block => {
                     // Process block statements and track local bindings
                     const nodes_idx = expr.payload.nodes;
-                    var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                    var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                     while (nodes_iter.next()) |node_idx| {
                         const node = cir.getNode(@enumFromInt(@intFromEnum(node_idx)));
 
                         // Check for local bindings
                         if (node.tag == .binop_equals) {
-                            const binop = cir.ast.node_slices.binOp(&node.payload.binop);
-                            const lhs_node = cir.ast.getNode(@enumFromInt(@intFromEnum(binop.lhs)));
+                            const binop = cir.getNodeBinOp(node.payload.binop);
+                            const lhs_expr = cir.getExpr(@as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs))));
 
-                            if (lhs_node.tag == .lc or lhs_node.tag == .var_lc) {
+                            if (lhs_expr.tag == .lookup or lhs_expr.tag == .neg_lookup) {
                                 // This is a local binding - add to set
-                                try local_bindings.put(lhs_node.payload.ident, {});
+                                try local_bindings.put(lhs_expr.payload.ident, {});
                             }
                         }
 
@@ -3992,7 +4030,7 @@ pub const Interpreter = struct {
                 .binop_plus, .binop_minus, .binop_star, .binop_slash, .binop_double_equals, .binop_not_equals, .binop_gt, .binop_gte, .binop_lt, .binop_lte, .binop_and, .binop_or => {
                     // Traverse binary operation operands
                     const binop_idx = expr.payload.binop;
-                    const binop = cir.ast.node_slices.binOp(binop_idx);
+                    const binop = cir.getExprBinOp(binop_idx);
 
                     const lhs_expr = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.lhs)));
                     const rhs_expr = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
@@ -4003,7 +4041,7 @@ pub const Interpreter = struct {
                 .fn_call, .apply_anon => {
                     // Traverse function and arguments
                     const nodes_idx = expr.payload.nodes;
-                    var nodes_iter = cir.ast.node_slices.nodes(&nodes_idx);
+                    var nodes_iter = cir.getNodeIndices(nodes_idx);
 
                     while (nodes_iter.next()) |node_idx| {
                         const sub_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
@@ -4686,7 +4724,7 @@ pub const Interpreter = struct {
             // Get tuple elements from the nodes payload
             const nodes_idx = tuple_expr.payload.nodes;
             if (!nodes_idx.isNil()) {
-                var iter = cir.ast.node_slices.nodes(&nodes_idx);
+                var iter = cir.getNodeIndices(nodes_idx);
                 var element_idx: usize = 0;
 
                 // Skip to the current element
@@ -4829,7 +4867,7 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: CIR.Expr.Idx
     const body_then_args = expr.payload.body_then_args;
 
     // Get the slice iterator - skip first element (body), rest are patterns
-    var iter = cir.ast.node_slices.nodes(&body_then_args);
+    var iter = cir.getNodeIndices(body_then_args);
     _ = iter.next(); // Skip the body expression
 
     // Collect the parameter patterns
