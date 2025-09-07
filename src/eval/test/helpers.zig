@@ -415,7 +415,14 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     checker.* = try Check.initForCIR(allocator, &module_env.types, &module_env.store.regions);
 
     // Type check the expression
-    _ = try checker.checkCIRExpr(Can, czer, canonical_expr_idx);
+    const checked_var = try checker.checkCIRExpr(Can, czer, canonical_expr_idx);
+
+    // Debug: Check if the type is an error
+    const resolved = module_env.types.resolveVar(checked_var);
+    if (resolved.desc.content == .err) {
+        std.debug.print("WARNING: Expression type check resulted in error type for expr: {}\n", .{canonical_expr_idx});
+        // Continue anyway for debugging
+    }
 
     return .{
         .module_env = module_env,

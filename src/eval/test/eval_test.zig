@@ -402,7 +402,7 @@ test "simple lambdas" {
 }
 
 test "multi-parameter lambdas" {
-    try runExpectInt("(|x, y| x + y)(3, 4)", 7, .no_trace);
+    try runExpectInt("(|x, y| x + y)(3, 4)", 7, .trace);
     try runExpectInt("(|x, y| x * y)(10, 20)", 200, .no_trace);
     try runExpectInt("(|a, b, c| a + b + c)(1, 2, 3)", 6, .no_trace);
 }

@@ -10,7 +10,6 @@ const std = @import("std");
 pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
-pub const infer_cir2 = @import("infer_cir.zig");
 
 pub const TypeWriter = @import("TypeWriter.zig");
 

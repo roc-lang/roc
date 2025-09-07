@@ -1960,9 +1960,6 @@ pub const Interpreter = struct {
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
         const lambda_resolved = self.env.types.resolveVar(lambda_var);
 
-        self.traceInfo("buildTypeScopeForCall: lambda_var={}, lambda_expr_idx={}", .{ lambda_var, closure.lambda_expr_idx });
-        self.traceInfo("  lambda type content: {s}", .{@tagName(lambda_resolved.desc.content)});
-
         // Handle polymorphic functions with unresolved type variables
         if (lambda_resolved.desc.content == .flex_var) {
             // Polymorphic functions may have unresolved type variables
@@ -1978,11 +1975,12 @@ pub const Interpreter = struct {
                 .fn_unbound => |func| func,
                 else => {
                     self.traceError("Unexpected structure type: {s}", .{@tagName(structure)});
+                    self.traceError("  Full content: {any}", .{lambda_resolved.desc.content});
                     return error.TypeMismatch;
                 },
             },
             else => {
-                self.traceError("Unexpected content type: {s}", .{@tagName(lambda_resolved.desc.content)});
+                // Unexpected type content - can't build type scope
                 return error.TypeMismatch;
             },
         };

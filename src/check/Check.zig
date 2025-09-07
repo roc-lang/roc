@@ -115,7 +115,13 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
     const resolved = self.types.resolveVar(expr_var);
     if (resolved.desc.content != .flex_var) {
         // Already has a concrete type, don't re-check
-        return expr_var;
+        // However, if it has an error type, that might mean it was created but never properly typed
+        if (resolved.desc.content == .err) {
+            // This shouldn't happen in normal flow - error types should only come from unification failures
+            // For now, continue to type-check this expression
+        } else {
+            return expr_var;
+        }
     }
 
     switch (expr.tag) {
