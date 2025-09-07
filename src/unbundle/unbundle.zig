@@ -425,9 +425,7 @@ pub fn unbundleStream(
     };
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
-        .window_buffer = &window_buffer,
-    });
+    var zstd_stream = std.compress.zstd.Decompress.init(hashing_reader.reader(), &window_buffer, .{});
     const decompressed_reader = zstd_stream.reader();
 
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
