@@ -210,7 +210,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
         return error.ParsingFailed;
     }
 
-    try formatAst(parse_ast, std.io.getStdOut().writer().any());
+    try formatAst(parse_ast, std.fs.File.stdout().deprecatedWriter().any());
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {

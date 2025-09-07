@@ -32,7 +32,7 @@ pub export fn main() u8 {
 }
 
 fn run_tests() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     try stdout.print("Warning: Timer seems to step in units of 41ns\n\n", .{});
     timer = try Timer.start();
 
@@ -129,7 +129,7 @@ fn run_tests() !void {
 }
 
 fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     const warmups = 10000;
     const repeats = 10000;

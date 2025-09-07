@@ -93,7 +93,7 @@ pub export fn main() void {
     };
     defer host_env.arena.deinit(); // Clean up all allocations on exit
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Create the RocOps struct
     var roc_ops = RocOps{

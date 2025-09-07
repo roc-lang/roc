@@ -375,7 +375,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
 
     const parsed_args = try cli_args.parse(gpa, args[1..]);
@@ -1121,7 +1121,7 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
 
     // Use arena allocator for all bundle operations
@@ -1281,7 +1281,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
 }
 
 fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
     const cwd = std.fs.cwd();
 
@@ -1511,7 +1511,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Start timing
     const start_time = std.time.nanoTimestamp();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
 
     // Read the Roc file
@@ -1718,7 +1718,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     if (args.stdin) {
         fmt.formatStdin(gpa) catch std.process.exit(1);
         return;
@@ -1744,17 +1744,17 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
 
         elapsed = timer.read();
         if (unformatted_files.items.len > 0) {
-            try stdout.writer().print("The following file(s) failed `roc format --check`:\n", .{});
+            try stdout.print("The following file(s) failed `roc format --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.writer().print("    {s}\n", .{file_name});
+                try stdout.print("    {s}\n", .{file_name});
             }
-            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            try stdout.print("You can fix this with `roc format FILENAME.roc`.\n", .{});
             exit_code = 1;
         } else {
-            try stdout.writer().print("All formatting valid\n", .{});
+            try stdout.print("All formatting valid\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to check {} files.\n", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             exit_code = 1;
         }
     } else {
@@ -1765,16 +1765,16 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
             failure_count += result.failure;
         }
         elapsed = timer.read();
-        try stdout.writer().print("Successfully formatted {} files\n", .{success_count});
+        try stdout.print("Successfully formatted {} files\n", .{success_count});
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to format {} files.\n", .{failure_count});
+            try stdout.print("Failed to format {} files.\n", .{failure_count});
             exit_code = 1;
         }
     }
 
-    try stdout.writer().print("Took ", .{});
-    try formatElapsedTime(stdout.writer(), elapsed);
-    try stdout.writer().print(".\n", .{});
+    try stdout.print("Took ", .{});
+    try formatElapsedTime(stdout, elapsed);
+    try stdout.print(".\n", .{});
 
     std.process.exit(exit_code);
 }
@@ -1939,7 +1939,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
     const stderr_writer = stderr.any();
 

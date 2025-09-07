@@ -18,7 +18,7 @@ const DEBUG: bool = false;
 export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     if (DEBUG) {
         const ptr = malloc(size);
-        const stdout = std.io.getStdOut().writer();
+        const stdout = std.fs.File.stdout().deprecatedWriter();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
     } else {
@@ -28,7 +28,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
 
 export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
+        const stdout = std.fs.File.stdout().deprecatedWriter();
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
@@ -37,7 +37,7 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.c) void {
     if (DEBUG) {
-        const stdout = std.io.getStdOut().writer();
+        const stdout = std.fs.File.stdout().deprecatedWriter();
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
@@ -107,7 +107,7 @@ extern fn roc__main_for_host_1_exposed_generic(*RocStr) void;
 const Unit = extern struct {};
 
 pub export fn main() u8 {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     const stderr = std.io.getStdErr().writer();
 
     var timer = std.time.Timer.start() catch unreachable;

@@ -92,7 +92,7 @@ comptime {
 const Unit = extern struct {};
 
 pub export fn main() i32 {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();

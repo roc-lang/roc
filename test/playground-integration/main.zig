@@ -889,7 +889,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);
@@ -902,16 +902,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: playground-test [options] [wasm-path]\n", .{});
-            try stdout.writer().print("Options:\n", .{});
-            try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.writer().print("  --help              Display this help message\n", .{});
+            try stdout.print("Usage: playground-test [options] [wasm-path]\n", .{});
+            try stdout.print("Options:\n", .{});
+            try stdout.print("  --verbose           Enable verbose mode\n", .{});
+            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            try stdout.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.writer().print("Error: --wasm-path requires a path argument\n", .{});
+                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];
