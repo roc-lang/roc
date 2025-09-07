@@ -5737,7 +5737,7 @@ const CanonicalizedStatement = struct {
 /// A statement type annotation
 pub const StmtTypeAnno = struct {
     anno_idx: Statement.Idx,
-    anno: std.meta.FieldType(Statement, .s_type_anno),
+    anno: @FieldType(Statement, "s_type_anno"),
 };
 
 // The result of canonicalizing a statement
@@ -6065,7 +6065,7 @@ pub fn canonicalizeStatement(
             } else null;
 
             // Create a type annotation statement
-            const type_anno_stmt: std.meta.FieldType(Statement, .s_type_anno) = .{
+            const type_anno_stmt: @FieldType(Statement, "s_type_anno") = .{
                 .name = name_ident,
                 .anno = type_anno_idx,
                 .where = where_clauses,

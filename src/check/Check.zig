@@ -1620,7 +1620,7 @@ fn unifyFunctionCall(
 fn checkLambdaForClosure(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
-    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    lambda: @FieldType(CIR.Expr, "e_lambda"),
     anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -1693,7 +1693,7 @@ fn checkLambdaWithAnno(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
     _: Region,
-    lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
+    lambda: @FieldType(CIR.Expr, "e_lambda"),
     anno_type: ?Var,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -2059,7 +2059,7 @@ fn checkIfElseExpr(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
-    if_: std.meta.FieldType(CIR.Expr, .e_if),
+    if_: @FieldType(CIR.Expr, "e_if"),
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
