@@ -353,8 +353,9 @@ fn addMainExe(
     });
 
     // Create test platform host static library (str)
-    const test_platform_host_lib = b.addStaticLibrary(.{
+    const test_platform_host_lib = b.addLibrary(.{
         .name = "test_platform_str_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
@@ -375,8 +376,9 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int)
-    const test_platform_int_host_lib = b.addStaticLibrary(.{
+    const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/int/platform/host.zig"),
             .target = target,
@@ -395,8 +397,9 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_lib = b.addStaticLibrary(.{
+    const builtins_lib = b.addLibrary(.{
         .name = "roc_builtins",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
             .target = target,
@@ -411,8 +414,9 @@ fn addMainExe(
     builtins_lib.bundle_compiler_rt = true;
 
     // Create shim static library at build time
-    const shim_lib = b.addStaticLibrary(.{
+    const shim_lib = b.addLibrary(.{
         .name = "roc_shim",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
