@@ -118,7 +118,7 @@ process = |_, _| ...
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 38
+; Total type variables: 39
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -146,19 +146,20 @@ process = |_, _| ...
 (var #24 _)
 (var #25 _)
 (var #26 _)
-(var #27 -> #37)
+(var #27 -> #38)
 (var #28 _)
 (var #29 _)
 (var #30 _)
-(var #31 -> #37)
+(var #31 -> #38)
 (var #32 _)
 (var #33 _)
 (var #34 _)
 (var #35 _)
 (var #36 _)
 (var #37 fn_pure)
+(var #38 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-process : _arg, _arg2 -> _ret
+process : _arg -> _arg2 -> _ret
 ~~~

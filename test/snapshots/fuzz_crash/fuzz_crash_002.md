@@ -227,7 +227,7 @@ modu:;::::::::::::::le[%
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 22
+; Total type variables: 24
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -248,8 +248,10 @@ modu:;::::::::::::::le[%
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 _)
+(var #20 -> #23)
 (var #21 _)
+(var #22 _)
+(var #23 List #22)
 ~~~
 # TYPES
 ~~~roc

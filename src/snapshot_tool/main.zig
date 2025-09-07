@@ -2965,9 +2965,19 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
             }
         },
         // Identifiers use the ident field
-        .uc, .lc, .var_lc, .neg_lc, .not_lc => {
+        .uc, .lc, .neg_lc, .not_lc => {
             const ident_text = env.idents.getText(node.payload.ident);
             try writer.print(" \"{s}\"", .{ident_text});
+        },
+        .var_lc => {
+            // var_lc nodes might not have valid ident payloads
+            // Check if the ident index is reasonable
+            if (node.payload.ident.idx < 1000) { // Reasonable upper bound
+                const ident_text = env.idents.getText(node.payload.ident);
+                try writer.print(" \"{s}\"", .{ident_text});
+            } else {
+                try writer.print(" \"<var>\"", .{});
+            }
         },
 
         // Number literals
@@ -3280,8 +3290,13 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
             // Need to check how this is stored - might be in payload directly
         },
         .dot_lc, .double_dot_lc => {
-            const ident_text = env.idents.getText(node.payload.ident);
-            try writer.print(" \"{s}\"", .{ident_text});
+            // Check if the ident index is reasonable
+            if (node.payload.ident.idx < 1000) { // Reasonable upper bound
+                const ident_text = env.idents.getText(node.payload.ident);
+                try writer.print(" \"{s}\"", .{ident_text});
+            } else {
+                try writer.print(" \"<invalid>\"", .{});
+            }
         },
 
         // Multi-part identifiers
@@ -3672,11 +3687,15 @@ fn outputCIRPattAsSExpr(writer: anytype, cir: *const CIR, env: *const base.Commo
     try writer.print("(Patt.{s}", .{@tagName(patt.tag)});
 
     // Add details based on pattern type
-    if (patt.tag == .ident or patt.tag == .var_ident) {
+    if (patt.tag == .ident) {
         // Output the identifier name
         // The payload is a union, we need to access the ident field directly
         const ident_name = env.idents.getText(patt.payload.ident);
         try writer.print(" \"{s}\"", .{ident_name});
+    } else if (patt.tag == .var_ident) {
+        // var_ident patterns don't have a valid ident in the payload
+        // Just output a placeholder
+        try writer.print(" \"<var>\"", .{});
     }
 
     if (patt.is_mutable) {

@@ -475,7 +475,7 @@ transform = |_, b| b
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 126
+; Total type variables: 130
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -566,11 +566,11 @@ transform = |_, b| b
 (var #87 _)
 (var #88 _)
 (var #89 _)
-(var #90 -> #122)
+(var #90 -> #125)
 (var #91 _)
 (var #92 _)
-(var #93 _)
-(var #94 -> #122)
+(var #93 -> #123)
+(var #94 -> #125)
 (var #95 _)
 (var #96 _)
 (var #97 _)
@@ -579,11 +579,11 @@ transform = |_, b| b
 (var #100 _)
 (var #101 _)
 (var #102 _)
-(var #103 -> #125)
+(var #103 -> #129)
 (var #104 _)
 (var #105 _)
 (var #106 _)
-(var #107 -> #125)
+(var #107 -> #129)
 (var #108 _)
 (var #109 _)
 (var #110 _)
@@ -598,10 +598,14 @@ transform = |_, b| b
 (var #119 fn_pure)
 (var #120 _)
 (var #121 _)
-(var #122 fn_pure)
-(var #123 _)
-(var #124 _)
+(var #122 _)
+(var #123 List #122)
+(var #124 fn_pure)
 (var #125 fn_pure)
+(var #126 _)
+(var #127 _)
+(var #128 fn_pure)
+(var #129 fn_pure)
 ~~~
 # TYPES
 ~~~roc
@@ -616,6 +620,6 @@ b : _c
 x : _c
 main : _arg -> _ret
 result : _c
-transform : _arg, _arg2 -> _ret
-map : _arg, _arg2 -> _ret
+transform : _arg -> _arg2 -> _ret
+map : _arg -> _arg2 -> List(_elem)
 ~~~

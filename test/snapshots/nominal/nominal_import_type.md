@@ -81,7 +81,7 @@ red = Color.RGB.Red
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 17
+; Total type variables: 18
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -94,11 +94,12 @@ red = Color.RGB.Red
 (var #9 -> #14)
 (var #10 _)
 (var #11 _)
-(var #12 _)
+(var #12 -> #17)
 (var #13 _)
 (var #14 _)
 (var #15 _)
 (var #16 _)
+(var #17 _)
 ~~~
 # TYPES
 ~~~roc

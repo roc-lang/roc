@@ -145,7 +145,7 @@ main = |_, _| helper(5)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 41
+; Total type variables: 42
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -172,13 +172,13 @@ main = |_, _| helper(5)
 (var #23 _)
 (var #24 _)
 (var #25 _)
-(var #26 -> #40)
+(var #26 -> #41)
 (var #27 _)
 (var #28 _)
 (var #29 -> #39)
 (var #30 Num *)
 (var #31 _)
-(var #32 -> #40)
+(var #32 -> #41)
 (var #33 _)
 (var #34 _)
 (var #35 _)
@@ -187,10 +187,11 @@ main = |_, _| helper(5)
 (var #38 _)
 (var #39 fn_pure)
 (var #40 fn_pure)
+(var #41 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 helper : _arg -> Num(_size)
 n : _a
-main : _arg, _arg2 -> _ret
+main : _arg -> _arg2 -> _ret
 ~~~

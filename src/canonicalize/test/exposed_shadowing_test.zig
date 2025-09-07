@@ -417,8 +417,13 @@ test "exposed_items handles identifiers with different attributes" {
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
     _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
     // Both should be in exposed_items as separate entries
+    // Note: The effectful identifier is stored as "foo" with effectful attribute, not "foo!"
     const foo_idx = env.common.idents.findByString("foo").?;
-    const foo_effectful_idx = env.common.idents.findByString("foo!").?;
+    // For the effectful version, we need to find "foo" and set the effectful attribute
+    const foo_effectful_idx = base.Ident.Idx{
+        .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
+        .idx = foo_idx.idx,
+    };
     try testing.expect(env.common.exposed_items.containsById(env.gpa, @bitCast(foo_idx)));
     try testing.expect(env.common.exposed_items.containsById(env.gpa, @bitCast(foo_effectful_idx)));
     // Should have exactly 2 entries - if we only used u29 without attributes, they might incorrectly merge

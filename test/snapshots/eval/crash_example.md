@@ -43,13 +43,14 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 6
+; Total type variables: 7
 (var #0 _)
 (var #1 Str)
-(var #2 _)
-(var #3 -> #5)
+(var #2 -> #5)
+(var #3 -> #6)
 (var #4 _)
-(var #5 {})
+(var #5 <error>)
+(var #6 {})
 ~~~
 # TYPES
 ~~~roc

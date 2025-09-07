@@ -127,7 +127,7 @@ processList = |list| list.len()
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 39
+; Total type variables: 40
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -150,23 +150,24 @@ processList = |list| list.len()
 (var #19 _)
 (var #20 -> #35)
 (var #21 _)
-(var #22 -> #38)
+(var #22 -> #39)
 (var #23 _)
-(var #24 -> #37)
+(var #24 -> #38)
 (var #25 Str)
-(var #26 Str)
-(var #27 Str)
-(var #28 _)
+(var #26 -> #25)
+(var #27 -> #25)
+(var #28 -> #37)
 (var #29 _)
-(var #30 -> #38)
+(var #30 -> #39)
 (var #31 _)
 (var #32 _)
 (var #33 _)
 (var #34 fn_pure)
 (var #35 fn_pure)
 (var #36 _)
-(var #37 fn_pure)
+(var #37 List #25)
 (var #38 fn_pure)
+(var #39 fn_pure)
 ~~~
 # TYPES
 ~~~roc

@@ -62,16 +62,17 @@ import json.Json [foo, BAR]
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 9
+; Total type variables: 10
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
 (var #4 _)
 (var #5 _)
-(var #6 _)
-(var #7 _)
+(var #6 -> #5)
+(var #7 -> #9)
 (var #8 _)
+(var #9 List #5)
 ~~~
 # TYPES
 ~~~roc

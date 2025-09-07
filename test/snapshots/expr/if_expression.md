@@ -47,14 +47,15 @@ if x > 5 "big" else "small"
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
-(var #1 _)
-(var #2 Num *)
-(var #3 _)
-(var #4 Str)
+(var #1 -> #2)
+(var #2 -> #3)
+(var #3 -> #7)
+(var #4 -> #5)
 (var #5 Str)
-(var #6 _)
+(var #6 -> #5)
+(var #7 Num *)
 ~~~
 # TYPES
 ~~~roc

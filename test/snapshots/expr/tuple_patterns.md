@@ -236,7 +236,7 @@ This might be a limitation in the current implementation that will be addressed 
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 59
+; Total type variables: 60
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -284,18 +284,19 @@ This might be a limitation in the current implementation that will be addressed 
 (var #44 _)
 (var #45 _)
 (var #46 _)
-(var #47 -> #57)
+(var #47 -> #58)
 (var #48 Num *)
-(var #49 Num *)
-(var #50 Num *)
-(var #51 _)
+(var #49 -> #48)
+(var #50 -> #48)
+(var #51 -> #57)
 (var #52 Str)
-(var #53 -> #57)
+(var #53 -> #58)
 (var #54 _)
-(var #55 -> #58)
+(var #55 -> #59)
 (var #56 _)
-(var #57 tuple)
-(var #58 {})
+(var #57 List #48)
+(var #58 tuple)
+(var #59 {})
 ~~~
 # TYPES
 ~~~roc

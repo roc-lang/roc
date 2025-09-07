@@ -279,7 +279,7 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 84
+; Total type variables: 85
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -319,7 +319,7 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 (var #36 _)
 (var #37 _)
 (var #38 _)
-(var #39 -> #77)
+(var #39 -> #78)
 (var #40 _)
 (var #41 _)
 (var #42 -> #76)
@@ -327,25 +327,25 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 (var #44 _)
 (var #45 _)
 (var #46 _)
-(var #47 -> #77)
+(var #47 -> #78)
 (var #48 _)
 (var #49 _)
 (var #50 _)
 (var #51 _)
 (var #52 _)
 (var #53 _)
-(var #54 -> #83)
+(var #54 -> #84)
 (var #55 _)
-(var #56 -> #82)
+(var #56 -> #83)
 (var #57 _)
 (var #58 -> #59)
 (var #59 -> #60)
 (var #60 Num *)
 (var #61 _)
-(var #62 -> #80)
-(var #63 -> #81)
+(var #62 -> #81)
+(var #63 -> #82)
 (var #64 _)
-(var #65 -> #83)
+(var #65 -> #84)
 (var #66 _)
 (var #67 _)
 (var #68 _)
@@ -358,19 +358,20 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 (var #75 fn_pure)
 (var #76 fn_pure)
 (var #77 fn_pure)
-(var #78 _)
+(var #78 fn_pure)
 (var #79 _)
-(var #80 tuple)
-(var #81 fn_pure)
+(var #80 _)
+(var #81 tuple)
 (var #82 fn_pure)
 (var #83 fn_pure)
+(var #84 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 y : _b
 curriedAdd : _b
 addThreeTwice : _arg -> _ret
-applyTwice : _arg, _arg2 -> _ret
+applyTwice : _arg -> _arg2 -> _ret
 f : _b
 n : _b
 makeAdder : _arg -> _arg2 -> _ret

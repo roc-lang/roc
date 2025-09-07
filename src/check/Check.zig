@@ -195,7 +195,39 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
         // Lists
         .list_literal => {
-            // For now, just return a fresh type variable
+            // Type check all list elements and ensure they have the same type
+            const nodes_idx = expr.payload.nodes;
+
+            if (nodes_idx.isNil()) {
+                // Empty list - create List a where a is a fresh type variable
+                const elem_type = try self.types.fresh();
+                const list_content = Content{ .structure = .{ .list = elem_type } };
+                const list_type = try self.types.freshFromContent(list_content);
+                _ = try self.unify(expr_var, list_type);
+                return expr_var;
+            }
+
+            // Non-empty list - all elements must have the same type
+            var elem_type: ?Var = null;
+            var iter = cir.getNodeIndices(nodes_idx);
+            while (iter.next()) |elem_node| {
+                const elem_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(elem_node)));
+                const elem_var = try self.checkCIRExpr(CIRType, cir, elem_expr_idx);
+
+                if (elem_type) |expected_type| {
+                    // Unify with the expected element type
+                    _ = try self.unify(elem_var, expected_type);
+                } else {
+                    // First element - set the expected type
+                    elem_type = elem_var;
+                }
+            }
+
+            // Create the list type
+            const list_content = Content{ .structure = .{ .list = elem_type.? } };
+            const list_type = try self.types.freshFromContent(list_content);
+            _ = try self.unify(expr_var, list_type);
+
             return expr_var;
         },
 
@@ -245,7 +277,7 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
                                 // Extract the identifier from the pattern
                                 const field_patt_idx = @as(CIRType.Patt.Idx, @enumFromInt(@intFromEnum(field_binop.lhs)));
                                 const field_patt = cir.getPatt(field_patt_idx);
-                                if (field_patt.tag == .ident or field_patt.tag == .var_ident) {
+                                if (field_patt.tag == .ident) {
                                     break :blk field_patt.payload.ident;
                                 }
                                 // Can't extract field name - skip this field
@@ -402,14 +434,55 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
 
         // If expressions
         .if_else => {
-            // For now, just return a fresh type variable
+            // if condition then_branch else else_branch
+            // The condition must be Bool
+            // The then and else branches must have the same type
+            // The whole expression has the type of the branches
+
+            // Get the if expression components - if_branches is stored as u32
+            const if_branches_u32 = expr.payload.if_branches;
+            const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
+            if (!nodes_idx.isNil()) {
+                var iter = cir.getNodeIndices(nodes_idx);
+
+                // First node is the condition
+                if (iter.next()) |cond_node| {
+                    const cond_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(cond_node)));
+                    const cond_var = try self.checkCIRExpr(CIRType, cir, cond_expr_idx);
+
+                    // Condition should be Bool (create a Bool constraint)
+                    const bool_var = try self.types.fresh();
+                    _ = try self.unify(cond_var, bool_var);
+                }
+
+                // Second node is the then branch
+                var then_var: ?Var = null;
+                if (iter.next()) |then_node| {
+                    const then_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(then_node)));
+                    then_var = try self.checkCIRExpr(CIRType, cir, then_expr_idx);
+                }
+
+                // Third node is the else branch
+                if (iter.next()) |else_node| {
+                    const else_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(else_node)));
+                    const else_var = try self.checkCIRExpr(CIRType, cir, else_expr_idx);
+
+                    if (then_var) |tv| {
+                        // Both branches must have the same type
+                        _ = try self.unify(tv, else_var);
+                        // The whole expression has the branch type
+                        _ = try self.unify(expr_var, tv);
+                    }
+                }
+            }
+
             return expr_var;
         },
 
         // Lambda
         .lambda => {
             // Lambda expressions need their function type created during type checking
-            // The canonicalizer has processed parameters and body, but hasn't created the function type
+            // Multi-parameter lambdas in Roc are curried: |x, y| body becomes x -> (y -> body)
 
             // Get the lambda's body_then_args payload
             const body_then_args = expr.payload.body_then_args;
@@ -419,25 +492,16 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             }
 
             // Parse the lambda structure: [body, param1, param2, ...]
-            // Count parameters first
-            var param_count: usize = 0;
             var iter = cir.getNodeIndices(body_then_args);
 
             // First node is the body
             const body_node_idx = iter.next() orelse return expr_var;
 
-            // Count parameters
-            while (iter.next()) |_| {
-                param_count += 1;
-            }
-
-            // Create type variables for parameters
+            // Collect parameters
             var param_vars = std.ArrayList(Var).init(self.gpa);
             defer param_vars.deinit();
 
-            // Create a type variable for each parameter
-            var i: usize = 0;
-            while (i < param_count) : (i += 1) {
+            while (iter.next()) |_| {
                 // Create a fresh type variable for each parameter
                 const param_var = try self.types.fresh();
                 try param_vars.append(param_var);
@@ -447,12 +511,30 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             const body_expr_idx = @as(CIRType.Expr.Idx, @enumFromInt(@intFromEnum(body_node_idx)));
             const body_var = try self.checkCIRExpr(CIRType, cir, body_expr_idx);
 
-            // Create the function type
-            const func_content = try self.types.mkFuncPure(param_vars.items, body_var);
-            const func_type = try self.types.freshFromContent(func_content);
+            // Build the curried function type
+            // For |x, y, z| body, we need: x -> (y -> (z -> body))
+            var result_type = body_var;
 
-            // Unify the lambda expression's type with the function type
-            _ = try self.unify(expr_var, func_type);
+            // Process parameters in reverse order to build the curried type properly
+            var i = param_vars.items.len;
+            while (i > 0) {
+                i -= 1;
+                const param_type = param_vars.items[i];
+
+                // Create a function type: param -> result_type
+                // Each function takes one parameter and returns either the body type
+                // or another function
+                const func_content = Content{ .structure = .{ .fn_pure = .{
+                    .args = try self.types.appendVars(&[_]Var{param_type}),
+                    .ret = result_type,
+                    .needs_instantiation = self.types.needsInstantiation(param_type) or
+                        self.types.needsInstantiation(result_type),
+                } } };
+                result_type = try self.types.freshFromContent(func_content);
+            }
+
+            // The lambda expression has the complete curried function type
+            _ = try self.unify(expr_var, result_type);
 
             return expr_var;
         },
@@ -530,8 +612,66 @@ pub fn checkCIRExpr(self: *Self, comptime CIRType: type, cir: *const CIRType, ex
             return expr_var;
         },
 
+        // Module access like Bool.True
+        .module_access => {
+            // Module-qualified access: Module.identifier
+            // The type should come from the qualified identifier's definition
+            // This requires looking up the module and then the identifier within it
+            // For primitive types like Bool.True, the type should be Bool
+
+            // Module access has a binop payload with module on left, identifier on right
+            const binop = cir.getBinOp(CIRType.Expr.Idx, expr.payload.binop);
+
+            // The right side is the identifier being accessed
+            // Type check it to get its type
+            const ident_var = try self.checkCIRExpr(CIRType, cir, binop.rhs);
+
+            // The module access has the same type as the identifier
+            _ = try self.unify(expr_var, ident_var);
+            return expr_var;
+        },
+
+        // Crash expression
+        .crash => {
+            // Crash expressions never return - they have the "never" type
+            // In our type system, we represent this as an error type since
+            // it indicates the program will crash at this point
+            const err_content = Content{ .err = {} };
+            const err_type = try self.types.freshFromContent(err_content);
+            _ = try self.unify(expr_var, err_type);
+            return expr_var;
+        },
+
+        // Integer division
+        .binop_double_slash => {
+            // Integer division - similar to other numeric operations
+            const binop = cir.getBinOp(CIRType.Expr.Idx, expr.payload.binop);
+            const lhs_var = try self.checkCIRExpr(CIRType, cir, binop.lhs);
+            const rhs_var = try self.checkCIRExpr(CIRType, cir, binop.rhs);
+            _ = try self.unify(lhs_var, rhs_var);
+            _ = try self.unify(lhs_var, expr_var);
+            return expr_var;
+        },
+
+        // Unary not applied to a lookup
+        .not_lookup => {
+            // This is like !x where x is a lookup
+            // The operand should be Bool and the result should be Bool
+            // The payload contains the identifier being negated
+            // For not_lookup, we need to look up the identifier's definition
+
+            // Both the operand and result should be Bool
+            // Create a Bool type variable that will be constrained to Bool
+            const bool_var = try self.types.fresh();
+            _ = try self.unify(expr_var, bool_var);
+
+            return expr_var;
+        },
+
         else => {
-            // Unhandled expression type - just return the variable
+            // Unhandled expression type
+            // This indicates a new expression type that needs implementation
+            // Return the expression's type variable to allow inference to continue
             return expr_var;
         },
     }

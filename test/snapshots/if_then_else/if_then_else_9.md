@@ -76,18 +76,20 @@ if bool {
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 11
+; Total type variables: 13
 (var #0 _)
-(var #1 _)
+(var #1 -> #11)
 (var #2 Num *)
-(var #3 _)
-(var #4 Num *)
+(var #3 -> #8)
+(var #4 -> #12)
 (var #5 _)
-(var #6 _)
+(var #6 -> #8)
 (var #7 Num *)
 (var #8 _)
-(var #9 _)
-(var #10 _)
+(var #9 -> #8)
+(var #10 -> #8)
+(var #11 _)
+(var #12 Num *)
 ~~~
 # TYPES
 ~~~roc

@@ -73,7 +73,7 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 30
+; Total type variables: 32
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -91,19 +91,21 @@ This is an unexpected parsing error. Please check your syntax.
 (var #14 Num *)
 (var #15 Num *)
 (var #16 Num *)
-(var #17 -> #27)
-(var #18 -> #29)
+(var #17 -> #29)
+(var #18 -> #31)
 (var #19 Num *)
-(var #20 _)
-(var #21 _)
-(var #22 _)
+(var #20 fn_pure)
+(var #21 -> #29)
+(var #22 -> #19)
 (var #23 _)
 (var #24 _)
 (var #25 fn_pure)
-(var #26 fn_pure)
-(var #27 tuple)
-(var #28 <error>)
-(var #29 fn_pure)
+(var #26 -> #20)
+(var #27 -> #18)
+(var #28 -> #30)
+(var #29 tuple)
+(var #30 fn_pure)
+(var #31 fn_pure)
 ~~~
 # TYPES
 ~~~roc

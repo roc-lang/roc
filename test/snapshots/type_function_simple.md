@@ -124,7 +124,7 @@ apply = |fn, x| fn(x)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 37
+; Total type variables: 38
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -141,32 +141,33 @@ apply = |fn, x| fn(x)
 (var #13 _)
 (var #14 _)
 (var #15 _)
-(var #16 -> #33)
+(var #16 -> #34)
 (var #17 _)
 (var #18 _)
 (var #19 -> #32)
 (var #20 _)
 (var #21 _)
-(var #22 -> #33)
+(var #22 -> #34)
 (var #23 _)
-(var #24 -> #36)
+(var #24 -> #37)
 (var #25 _)
-(var #26 -> #35)
-(var #27 -> #36)
+(var #26 -> #36)
+(var #27 -> #37)
 (var #28 _)
 (var #29 _)
 (var #30 _)
 (var #31 _)
 (var #32 fn_pure)
 (var #33 fn_pure)
-(var #34 _)
-(var #35 {})
-(var #36 fn_pure)
+(var #34 fn_pure)
+(var #35 _)
+(var #36 {})
+(var #37 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 x : _a
-apply : _arg, _arg2 -> _ret
+apply : _arg -> _arg2 -> _ret
 main : _arg -> {}
 fn : _a
 ~~~

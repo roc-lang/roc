@@ -258,7 +258,7 @@ This definition shadows an existing one.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 91
+; Total type variables: 93
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -296,7 +296,7 @@ This definition shadows an existing one.
 (var #34 _)
 (var #35 _)
 (var #36 _)
-(var #37 -> #83)
+(var #37 -> #85)
 (var #38 _)
 (var #39 _)
 (var #40 _)
@@ -306,35 +306,35 @@ This definition shadows an existing one.
 (var #44 _)
 (var #45 _)
 (var #46 -> #82)
-(var #47 -> #83)
+(var #47 -> #85)
 (var #48 _)
 (var #49 _)
 (var #50 _)
 (var #51 _)
 (var #52 _)
 (var #53 _)
-(var #54 -> #85)
+(var #54 -> #87)
 (var #55 _)
 (var #56 _)
 (var #57 _)
 (var #58 _)
-(var #59 -> #85)
+(var #59 -> #87)
 (var #60 _)
-(var #61 -> #90)
+(var #61 -> #92)
 (var #62 _)
 (var #63 -> #69)
-(var #64 -> #88)
+(var #64 -> #90)
 (var #65 Num *)
 (var #66 Str)
 (var #67 Num *)
-(var #68 -> #87)
+(var #68 -> #89)
 (var #69 _)
 (var #70 _)
-(var #71 -> #89)
+(var #71 -> #91)
 (var #72 _)
 (var #73 _)
 (var #74 _)
-(var #75 -> #90)
+(var #75 -> #92)
 (var #76 _)
 (var #77 _)
 (var #78 _)
@@ -343,19 +343,21 @@ This definition shadows an existing one.
 (var #81 {})
 (var #82 record)
 (var #83 fn_pure)
-(var #84 _)
+(var #84 fn_pure)
 (var #85 fn_pure)
 (var #86 _)
-(var #87 tuple)
-(var #88 fn_pure)
-(var #89 fn_pure)
+(var #87 fn_pure)
+(var #88 _)
+(var #89 tuple)
 (var #90 fn_pure)
+(var #91 fn_pure)
+(var #92 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 user : _a
 age : _a
-create_user : _arg, _arg2, _arg3 -> { id: _field, name: _field2, age: _field3 }
+create_user : _arg -> _arg2 -> _arg3 -> { id: _field, name: _field2, age: _field3 }
 main : _arg -> _ret
 get_user_name : _arg -> _ret
 id : _a

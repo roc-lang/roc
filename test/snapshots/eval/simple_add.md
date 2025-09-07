@@ -113,7 +113,7 @@ addU8 = |a, b| a + b
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 39
+; Total type variables: 40
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -123,13 +123,13 @@ addU8 = |a, b| a + b
 (var #6 _)
 (var #7 _)
 (var #8 _)
-(var #9 -> #36)
+(var #9 -> #37)
 (var #10 _)
 (var #11 _)
 (var #12 -> #13)
 (var #13 -> #14)
 (var #14 _)
-(var #15 -> #36)
+(var #15 -> #37)
 (var #16 _)
 (var #17 _)
 (var #18 Num *)
@@ -151,12 +151,13 @@ addU8 = |a, b| a + b
 (var #34 _)
 (var #35 _)
 (var #36 fn_pure)
-(var #37 _)
+(var #37 fn_pure)
 (var #38 _)
+(var #39 _)
 ~~~
 # TYPES
 ~~~roc
-addU8 : _arg, _arg2 -> _ret
+addU8 : _arg -> _arg2 -> _ret
 a : _c
 b : _c
 ~~~

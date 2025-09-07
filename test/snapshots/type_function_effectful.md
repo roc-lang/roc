@@ -123,7 +123,7 @@ runEffect! = |fn!, x| fn!(x)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 37
+; Total type variables: 39
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -140,32 +140,34 @@ runEffect! = |fn!, x| fn!(x)
 (var #13 _)
 (var #14 _)
 (var #15 _)
-(var #16 -> #33)
+(var #16 -> #35)
 (var #17 _)
 (var #18 _)
 (var #19 -> #32)
 (var #20 _)
 (var #21 _)
-(var #22 -> #33)
+(var #22 -> #35)
 (var #23 _)
-(var #24 -> #36)
+(var #24 -> #38)
 (var #25 _)
-(var #26 -> #35)
-(var #27 -> #36)
+(var #26 -> #37)
+(var #27 -> #38)
 (var #28 _)
 (var #29 _)
 (var #30 _)
 (var #31 _)
-(var #32 fn_pure)
+(var #32 -> #33)
 (var #33 fn_pure)
-(var #34 _)
-(var #35 {})
-(var #36 fn_pure)
+(var #34 fn_pure)
+(var #35 fn_pure)
+(var #36 _)
+(var #37 {})
+(var #38 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 fn : _a
 x : _a
-runEffect : _arg, _arg2 -> _ret
+runEffect : _arg -> _arg2 -> _ret
 main : _arg -> {}
 ~~~

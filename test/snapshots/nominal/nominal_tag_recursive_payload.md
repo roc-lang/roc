@@ -101,7 +101,7 @@ This value is exposed in the module header but not defined in the module.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 25
+; Total type variables: 26
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -121,12 +121,13 @@ This value is exposed in the module header but not defined in the module.
 (var #16 _)
 (var #17 _)
 (var #18 _)
-(var #19 -> #22)
+(var #19 -> #25)
 (var #20 _)
 (var #21 _)
-(var #22 _)
+(var #22 -> #25)
 (var #23 _)
 (var #24 _)
+(var #25 _)
 ~~~
 # TYPES
 ~~~roc

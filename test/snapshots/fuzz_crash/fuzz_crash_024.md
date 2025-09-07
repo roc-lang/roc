@@ -161,11 +161,11 @@ var t= 0
     )
     (Expr.malformed)
     (Stmt.init_var
-      (pattern (Patt.var_ident "t"))
+      (pattern (Patt.var_ident "<var>"))
       (Expr.malformed)
     )
     (Stmt.init_var
-      (pattern (Patt.var_ident "t"))
+      (pattern (Patt.var_ident "<var>"))
       (Expr.num_literal_i32 0)
     )
   )

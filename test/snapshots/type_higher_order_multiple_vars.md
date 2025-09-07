@@ -144,7 +144,7 @@ compose = |f, g| |x| f(g(x))
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 48
+; Total type variables: 49
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -165,7 +165,7 @@ compose = |f, g| |x| f(g(x))
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 -> #44)
+(var #20 -> #45)
 (var #21 _)
 (var #22 _)
 (var #23 _)
@@ -175,12 +175,12 @@ compose = |f, g| |x| f(g(x))
 (var #27 _)
 (var #28 _)
 (var #29 -> #43)
-(var #30 -> #44)
+(var #30 -> #45)
 (var #31 _)
-(var #32 -> #47)
+(var #32 -> #48)
 (var #33 _)
-(var #34 -> #46)
-(var #35 -> #47)
+(var #34 -> #47)
+(var #35 -> #48)
 (var #36 _)
 (var #37 _)
 (var #38 _)
@@ -190,14 +190,15 @@ compose = |f, g| |x| f(g(x))
 (var #42 fn_pure)
 (var #43 fn_pure)
 (var #44 fn_pure)
-(var #45 _)
-(var #46 {})
-(var #47 fn_pure)
+(var #45 fn_pure)
+(var #46 _)
+(var #47 {})
+(var #48 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 g : _a
-compose : _arg, _arg2 -> _arg3 -> _ret
+compose : _arg -> _arg2 -> _arg3 -> _ret
 main : _arg -> {}
 x : _a
 f : _a

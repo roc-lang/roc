@@ -132,7 +132,7 @@ getUser = |id| if (id > 10) "big" else "small"
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 38
+; Total type variables: 39
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -148,33 +148,34 @@ getUser = |id| if (id > 10) "big" else "small"
 (var #12 _)
 (var #13 _)
 (var #14 _)
-(var #15 -> #34)
+(var #15 -> #35)
 (var #16 _)
-(var #17 _)
-(var #18 Num *)
-(var #19 _)
-(var #20 Str)
+(var #17 -> #18)
+(var #18 -> #19)
+(var #19 -> #34)
+(var #20 -> #21)
 (var #21 Str)
-(var #22 _)
-(var #23 -> #34)
+(var #22 -> #21)
+(var #23 -> #35)
 (var #24 _)
-(var #25 -> #37)
+(var #25 -> #38)
 (var #26 _)
-(var #27 -> #36)
+(var #27 -> #37)
 (var #28 Num *)
 (var #29 _)
-(var #30 -> #37)
+(var #30 -> #38)
 (var #31 _)
 (var #32 _)
 (var #33 _)
-(var #34 fn_pure)
-(var #35 _)
-(var #36 fn_pure)
+(var #34 Num *)
+(var #35 fn_pure)
+(var #36 _)
 (var #37 fn_pure)
+(var #38 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 main : _arg -> _ret
-getUser : _arg -> _ret
+getUser : _arg -> Str
 id : _a
 ~~~

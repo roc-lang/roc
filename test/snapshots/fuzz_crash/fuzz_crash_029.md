@@ -570,7 +570,7 @@ ar,
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 46
+; Total type variables: 50
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -586,7 +586,7 @@ ar,
 (var #12 _)
 (var #13 _)
 (var #14 _)
-(var #15 _)
+(var #15 -> #41)
 (var #16 _)
 (var #17 _)
 (var #18 _)
@@ -594,13 +594,13 @@ ar,
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 -> #42)
+(var #23 -> #44)
 (var #24 _)
-(var #25 _)
+(var #25 -> #46)
 (var #26 _)
 (var #27 _)
-(var #28 _)
-(var #29 _)
+(var #28 -> #27)
+(var #29 -> #47)
 (var #30 _)
 (var #31 _)
 (var #32 _)
@@ -612,11 +612,15 @@ ar,
 (var #38 _)
 (var #39 _)
 (var #40 _)
-(var #41 {})
-(var #42 record)
-(var #43 _)
-(var #44 _)
+(var #41 List #40)
+(var #42 _)
+(var #43 {})
+(var #44 record)
 (var #45 _)
+(var #46 fn_pure)
+(var #47 List #27)
+(var #48 _)
+(var #49 _)
 ~~~
 # TYPES
 ~~~roc

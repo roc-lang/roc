@@ -805,7 +805,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 229
+; Total type variables: 232
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -937,19 +937,19 @@ Is there an **import** or **exposing** missing up-top?
 (var #128 _)
 (var #129 _)
 (var #130 _)
-(var #131 -> #221)
+(var #131 -> #223)
 (var #132 _)
 (var #133 _)
 (var #134 _)
 (var #135 _)
-(var #136 _)
+(var #136 -> #219)
 (var #137 _)
-(var #138 -> #220)
+(var #138 -> #221)
 (var #139 _)
 (var #140 _)
-(var #141 -> #219)
+(var #141 -> #220)
 (var #142 _)
-(var #143 -> #221)
+(var #143 -> #223)
 (var #144 _)
 (var #145 _)
 (var #146 _)
@@ -972,7 +972,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #163 _)
 (var #164 _)
 (var #165 _)
-(var #166 -> #224)
+(var #166 -> #227)
 (var #167 _)
 (var #168 _)
 (var #169 _)
@@ -998,13 +998,13 @@ Is there an **import** or **exposing** missing up-top?
 (var #189 _)
 (var #190 _)
 (var #191 _)
-(var #192 -> #224)
+(var #192 -> #227)
 (var #193 _)
-(var #194 -> #225)
+(var #194 -> #228)
 (var #195 _)
 (var #196 _)
 (var #197 _)
-(var #198 -> #227)
+(var #198 -> #230)
 (var #199 _)
 (var #200 _)
 (var #201 _)
@@ -1025,16 +1025,19 @@ Is there an **import** or **exposing** missing up-top?
 (var #216 _)
 (var #217 _)
 (var #218 _)
-(var #219 tuple)
-(var #220 fn_pure)
+(var #219 _)
+(var #220 tuple)
 (var #221 fn_pure)
-(var #222 _)
-(var #223 _)
-(var #224 fn_pure)
-(var #225 fn_pure)
-(var #226 _)
+(var #222 fn_pure)
+(var #223 fn_pure)
+(var #224 _)
+(var #225 _)
+(var #226 fn_pure)
 (var #227 fn_pure)
-(var #228 _)
+(var #228 fn_pure)
+(var #229 _)
+(var #230 fn_pure)
+(var #231 _)
 ~~~
 # TYPES
 ~~~roc
@@ -1042,12 +1045,12 @@ parserConfig : _c
 processRequest : _arg -> _ret
 config : _c
 parseJson : _arg -> _ret
-combineResults : _arg, _arg2 -> _ret
+combineResults : _arg -> _arg2 -> _ret
 req : _c
 result2 : _c
 result1 : _c
 handleApi : _arg -> _ret
-advancedParser : _arg, _arg2 -> _ret
+advancedParser : _arg -> _arg2 -> _ret
 value1 : _c
 data : _c
 request : _c

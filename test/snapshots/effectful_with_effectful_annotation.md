@@ -137,7 +137,7 @@ print_msg! = |msg| Stdout.line!(msg)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 35
+; Total type variables: 36
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -172,7 +172,8 @@ print_msg! = |msg| Stdout.line!(msg)
 (var #31 _)
 (var #32 fn_pure)
 (var #33 fn_pure)
-(var #34 fn_pure)
+(var #34 -> #35)
+(var #35 fn_pure)
 ~~~
 # TYPES
 ~~~roc

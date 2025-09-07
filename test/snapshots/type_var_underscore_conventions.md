@@ -386,7 +386,7 @@ main = |x| "done"
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 86
+; Total type variables: 87
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -449,16 +449,16 @@ main = |x| "done"
 (var #59 _)
 (var #60 _)
 (var #61 _)
-(var #62 -> #83)
+(var #62 -> #84)
 (var #63 _)
 (var #64 _)
-(var #65 _)
-(var #66 -> #83)
+(var #65 -> #83)
+(var #66 -> #84)
 (var #67 _)
-(var #68 -> #85)
+(var #68 -> #86)
 (var #69 _)
 (var #70 Str)
-(var #71 -> #85)
+(var #71 -> #86)
 (var #72 _)
 (var #73 _)
 (var #74 _)
@@ -470,15 +470,16 @@ main = |x| "done"
 (var #80 _)
 (var #81 fn_pure)
 (var #82 _)
-(var #83 fn_pure)
-(var #84 _)
-(var #85 fn_pure)
+(var #83 List #64)
+(var #84 fn_pure)
+(var #85 _)
+(var #86 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 list : _a
 ending_underscore : _arg -> Str
-valid_multi : _arg -> _ret
+valid_multi : _arg -> List(_elem2)
 valid_single : _arg -> Str
 x : _a
 single_use : _arg -> Str

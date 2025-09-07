@@ -68,14 +68,15 @@ foo = if tru 0
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
 (var #1 -> #4)
-(var #2 _)
+(var #2 -> #7)
 (var #3 Num *)
 (var #4 _)
 (var #5 _)
 (var #6 _)
+(var #7 _)
 ~~~
 # TYPES
 ~~~roc

@@ -5435,7 +5435,12 @@ fn extractModuleHeader(self: *CIR, allocator: Allocator, idents: *const Ident.St
                     const ident_idx: ?Ident.Idx = switch (node.tag) {
                         .lc => node.payload.ident,
                         .uc => node.payload.ident,
-                        .not_lc => node.payload.ident, // For effectful identifiers like foo!
+                        .not_lc => blk: {
+                            // For effectful identifiers like foo!, we need to set the effectful attribute
+                            var effectful_idx = node.payload.ident;
+                            effectful_idx.attributes.effectful = true;
+                            break :blk effectful_idx;
+                        },
                         else => null,
                     };
 
@@ -5466,7 +5471,12 @@ fn extractModuleHeader(self: *CIR, allocator: Allocator, idents: *const Ident.St
                     const ident_idx: ?Ident.Idx = switch (node.tag) {
                         .lc => node.payload.ident,
                         .uc => node.payload.ident,
-                        .not_lc => node.payload.ident,
+                        .not_lc => blk: {
+                            // For effectful identifiers like foo!, we need to set the effectful attribute
+                            var effectful_idx = node.payload.ident;
+                            effectful_idx.attributes.effectful = true;
+                            break :blk effectful_idx;
+                        },
                         else => null,
                     };
 

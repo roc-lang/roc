@@ -677,7 +677,7 @@ h = |x, y| {
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 218
+; Total type variables: 220
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -800,7 +800,7 @@ h = |x, y| {
 (var #119 _)
 (var #120 _)
 (var #121 _)
-(var #122 -> #217)
+(var #122 -> #219)
 (var #123 _)
 (var #124 _)
 (var #125 -> #211)
@@ -835,15 +835,15 @@ h = |x, y| {
 (var #154 -> #214)
 (var #155 _)
 (var #156 _)
-(var #157 -> #160)
+(var #157 -> #216)
 (var #158 _)
-(var #159 _)
-(var #160 _)
+(var #159 -> #158)
+(var #160 -> #216)
 (var #161 _)
-(var #162 -> #216)
+(var #162 -> #217)
 (var #163 _)
 (var #164 _)
-(var #165 -> #216)
+(var #165 -> #217)
 (var #166 _)
 (var #167 _)
 (var #168 _)
@@ -877,7 +877,7 @@ h = |x, y| {
 (var #196 _)
 (var #197 _)
 (var #198 _)
-(var #199 -> #217)
+(var #199 -> #219)
 (var #200 _)
 (var #201 _)
 (var #202 _)
@@ -894,8 +894,10 @@ h = |x, y| {
 (var #213 fn_pure)
 (var #214 tuple)
 (var #215 fn_pure)
-(var #216 tuple)
-(var #217 fn_pure)
+(var #216 List #158)
+(var #217 tuple)
+(var #218 fn_pure)
+(var #219 fn_pure)
 ~~~
 # TYPES
 ~~~roc
@@ -903,6 +905,6 @@ b : _c
 x : _c
 y : _c
 g : _c
-h : _arg, _arg2 -> _ret
+h : _arg -> _arg2 -> _ret
 a : _c
 ~~~

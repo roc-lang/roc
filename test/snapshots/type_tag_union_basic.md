@@ -404,7 +404,7 @@ Patterns can only appear in specific contexts like function parameters, destruct
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 99
+; Total type variables: 100
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -483,12 +483,12 @@ Patterns can only appear in specific contexts like function parameters, destruct
 (var #75 _)
 (var #76 _)
 (var #77 _)
-(var #78 _)
+(var #78 -> #95)
 (var #79 _)
-(var #80 -> #98)
+(var #80 -> #99)
 (var #81 _)
-(var #82 -> #97)
-(var #83 -> #98)
+(var #82 -> #98)
+(var #83 -> #99)
 (var #84 _)
 (var #85 _)
 (var #86 _)
@@ -502,8 +502,9 @@ Patterns can only appear in specific contexts like function parameters, destruct
 (var #94 _)
 (var #95 _)
 (var #96 _)
-(var #97 {})
-(var #98 fn_pure)
+(var #97 _)
+(var #98 {})
+(var #99 fn_pure)
 ~~~
 # TYPES
 ~~~roc

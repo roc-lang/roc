@@ -98,7 +98,7 @@ blue = CC.Color.RGB(0,0,255)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 28
+; Total type variables: 29
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -115,18 +115,19 @@ blue = CC.Color.RGB(0,0,255)
 (var #13 -> #23)
 (var #14 _)
 (var #15 _)
-(var #16 _)
+(var #16 -> #26)
 (var #17 _)
-(var #18 -> #27)
+(var #18 -> #28)
 (var #19 Num *)
 (var #20 Num *)
 (var #21 Num *)
-(var #22 -> #26)
+(var #22 -> #27)
 (var #23 _)
 (var #24 _)
 (var #25 _)
-(var #26 tuple)
-(var #27 fn_pure)
+(var #26 _)
+(var #27 tuple)
+(var #28 fn_pure)
 ~~~
 # TYPES
 ~~~roc

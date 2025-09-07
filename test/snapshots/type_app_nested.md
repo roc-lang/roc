@@ -130,7 +130,7 @@ processNested = |_list| ["one","two"]
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 40
+; Total type variables: 43
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -151,30 +151,33 @@ processNested = |_list| ["one","two"]
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 -> #36)
+(var #20 -> #37)
 (var #21 _)
 (var #22 Str)
-(var #23 Str)
-(var #24 _)
-(var #25 -> #36)
+(var #23 -> #22)
+(var #24 -> #36)
+(var #25 -> #37)
 (var #26 _)
-(var #27 -> #39)
+(var #27 -> #42)
 (var #28 _)
-(var #29 -> #38)
-(var #30 _)
+(var #29 -> #41)
+(var #30 -> #40)
 (var #31 _)
-(var #32 -> #39)
+(var #32 -> #42)
 (var #33 _)
 (var #34 _)
 (var #35 _)
-(var #36 fn_pure)
-(var #37 _)
-(var #38 fn_pure)
-(var #39 fn_pure)
+(var #36 List #22)
+(var #37 fn_pure)
+(var #38 _)
+(var #39 _)
+(var #40 List #39)
+(var #41 fn_pure)
+(var #42 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-processNested : _arg -> _ret
+processNested : _arg -> List(Str)
 _list : _a
 main : _arg -> _ret
 ~~~

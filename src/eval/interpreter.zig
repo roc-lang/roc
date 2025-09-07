@@ -462,8 +462,10 @@ pub const Interpreter = struct {
                 ),
                 .w_crash => {
                     const msg = self.env.getString(work.extra.crash_msg);
-                    roc_ops.crash(msg);
-                    // The crash function will set has_crashed = true
+                    self.traceInfo("Processing crash work item with message: {s}", .{msg});
+                    // Set the crash flag and message
+                    self.has_crashed = true;
+                    self.crash_message = msg;
                     // Clear the work stack to prevent further evaluation
                     self.work_stack.clearRetainingCapacity();
                     // The eval loop will check this and return EvalError.Crash
@@ -986,7 +988,7 @@ pub const Interpreter = struct {
                     var reversed = std.mem.reverseIterator(self.bindings_stack.items);
                     while (reversed.next()) |binding| {
                         const pattern = cir.getPatt(binding.pattern_idx);
-                        if (pattern.tag == .ident or pattern.tag == .var_ident) {
+                        if (pattern.tag == .ident) {
                             if (pattern.payload.ident == ident_idx) {
                                 // Found the binding!
                                 self.traceInfo("Found binding for ident {}", .{ident_idx});
@@ -1198,7 +1200,7 @@ pub const Interpreter = struct {
                         // The RHS was converted to a pattern - try to extract it
                         const rhs_as_patt = @as(can.CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.rhs)));
                         const patt = cir.getPatt(rhs_as_patt);
-                        if (patt.tag == .ident or patt.tag == .var_ident) {
+                        if (patt.tag == .ident) {
                             break :blk patt.payload.ident;
                         }
                         self.traceError("Record field access: malformed RHS is not an ident pattern", .{});
@@ -1489,25 +1491,66 @@ pub const Interpreter = struct {
                     const stmt_idx = statements.items[i];
                     const stmt = cir.getStmt(stmt_idx);
 
-                    if (stmt.tag == .assign) {
-                        // Assignment statement - evaluate RHS and bind to pattern
-                        const binop = cir.getNodeBinOp(stmt.payload.binop);
+                    switch (stmt.tag) {
+                        .assign => {
+                            // Assignment statement - evaluate RHS and bind to pattern
+                            const binop = cir.getNodeBinOp(stmt.payload.binop);
 
-                        // Schedule pattern binding work
-                        self.schedule_work(WorkItem{
-                            .kind = .w_let_bind,
-                            .expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs))),
-                            .extra = .{ .decl_pattern_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs))) },
-                        });
+                            // Schedule pattern binding work
+                            self.schedule_work(WorkItem{
+                                .kind = .w_let_bind,
+                                .expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs))),
+                                .extra = .{ .decl_pattern_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(binop.lhs))) },
+                            });
 
-                        // Schedule RHS evaluation
-                        self.schedule_work(WorkItem{
-                            .kind = .w_eval_expr_structural,
-                            .expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs))),
-                            .extra = .{ .nothing = {} },
-                        });
+                            // Schedule RHS evaluation
+                            self.schedule_work(WorkItem{
+                                .kind = .w_eval_expr_structural,
+                                .expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(binop.rhs))),
+                                .extra = .{ .nothing = {} },
+                            });
+                        },
+                        .crash => {
+                            // Crash statement - schedule a crash to happen during execution
+                            // For now, just schedule the crash with a default message
+                            // TODO: Properly evaluate the crash message expression
+                            const msg_idx = @as(base.StringLiteral.Idx, @enumFromInt(0));
+
+                            self.traceInfo("Scheduling crash work item for expr {}", .{expr_idx});
+
+                            // Schedule the crash work item that will execute during evaluation
+                            self.schedule_work(WorkItem{
+                                .kind = .w_crash,
+                                .expr_idx = expr_idx,
+                                .extra = .{ .crash_msg = msg_idx },
+                            });
+                        },
+                        .expr => {
+                            // Standalone expression statement - the statement IS the expression
+                            // The statement index can be cast to an expression index
+                            const expr_stmt_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(stmt_idx)));
+
+                            // Schedule the expression evaluation
+                            self.schedule_work(WorkItem{
+                                .kind = .w_eval_expr_structural,
+                                .expr_idx = expr_stmt_idx,
+                                .extra = .{ .nothing = {} },
+                            });
+
+                            // If this isn't the last statement, discard its value
+                            if (i > 0) {
+                                self.schedule_work(WorkItem{
+                                    .kind = .w_block_discard,
+                                    .expr_idx = expr_idx,
+                                    .extra = .{ .nothing = {} },
+                                });
+                            }
+                        },
+                        else => {
+                            // Other statement types not yet handled
+                            self.traceInfo("Unhandled statement type in block: {}", .{stmt.tag});
+                        },
                     }
-                    // Handle other statement types as needed
                 }
             },
 
@@ -2220,256 +2263,60 @@ pub const Interpreter = struct {
         }
     }
 
-    fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure) EvalError!Layout {
+    fn getClosureReturnLayout(self: *Interpreter, closure: *const Closure, applied_arg_count: u32) EvalError!Layout {
         // Get the type Var for the lambda expression
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
 
         // Resolve the lambda's type to get the function type
-        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+        var current_resolved = self.env.types.resolveVar(lambda_var);
 
-        // Extract the return type from the function
-        switch (lambda_resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => |func| {
-                    // First check if the return type is mapped in our TypeScope
-                    var return_type_var = func.ret;
-                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
-                        // Use the mapped type instead of the polymorphic one
-                        return_type_var = mapped_var;
-                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
-                    }
-
-                    // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
-
-                    // Check if it's still unresolved (flex_var/rigid_var)
-                    switch (ret_resolved.desc.content) {
-                        .flex_var, .rigid_var => {
-                            self.traceInfo("Lambda return type is unresolved, inferring from body", .{});
-                            self.traceInfo("  Original var: {}", .{func.ret});
-                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
-
-                            // Infer the return type by analyzing the lambda body
-                            const body_type_var = try self.inferLambdaBodyType(closure.body_idx);
-                            const body_resolved = self.env.types.resolveVar(body_type_var);
-
-                            // Try to get layout from the inferred body type
-                            switch (body_resolved.desc.content) {
-                                .structure => |s| {
-                                    // Successfully inferred a concrete type from body
-                                    _ = s;
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for inferred body type: {}", .{err});
-                                        // Fall back to unit type for uninferable cases
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    const inferred_layout = self.layout_cache.getLayout(body_layout_idx);
-                                    self.traceInfo("Successfully inferred return type from body: {}", .{inferred_layout});
-                                    return inferred_layout;
-                                },
-                                .flex_var, .rigid_var => {
-                                    // Body type is also unresolved - use unit type as safe default
-                                    self.traceInfo("Body type also unresolved, using unit type", .{});
-                                    return blk: {
-                                        const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                        break :blk self.layout_cache.getLayout(idx);
-                                    };
-                                },
-                                else => {
-                                    // Use the body's resolved type
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for body type: {}", .{err});
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    return self.layout_cache.getLayout(body_layout_idx);
-                                },
-                            }
-                        },
-                        else => {
-                            // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
-                                self.traceError("Failed to get layout for closure return type: {}", .{err});
-                                return error.TypeMismatch;
-                            };
-                            return self.layout_cache.getLayout(ret_layout_idx);
-                        },
-                    }
-                },
-                .fn_effectful => |func| {
-                    // First check if the return type is mapped in our TypeScope
-                    var return_type_var = func.ret;
-                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
-                        // Use the mapped type instead of the polymorphic one
-                        return_type_var = mapped_var;
-                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
-                    }
-
-                    // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
-
-                    // Check if it's still unresolved (flex_var/rigid_var)
-                    switch (ret_resolved.desc.content) {
-                        .flex_var, .rigid_var => {
-                            self.traceInfo("Lambda return type is unresolved, inferring from body", .{});
-                            self.traceInfo("  Original var: {}", .{func.ret});
-                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
-
-                            // Infer the return type by analyzing the lambda body
-                            const body_type_var = try self.inferLambdaBodyType(closure.body_idx);
-                            const body_resolved = self.env.types.resolveVar(body_type_var);
-
-                            // Try to get layout from the inferred body type
-                            switch (body_resolved.desc.content) {
-                                .structure => |s| {
-                                    // Successfully inferred a concrete type from body
-                                    _ = s;
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for inferred body type: {}", .{err});
-                                        // Fall back to unit type for uninferable cases
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    const inferred_layout = self.layout_cache.getLayout(body_layout_idx);
-                                    self.traceInfo("Successfully inferred return type from body: {}", .{inferred_layout});
-                                    return inferred_layout;
-                                },
-                                .flex_var, .rigid_var => {
-                                    // Body type is also unresolved - use unit type as safe default
-                                    self.traceInfo("Body type also unresolved, using unit type", .{});
-                                    return blk: {
-                                        const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                        break :blk self.layout_cache.getLayout(idx);
-                                    };
-                                },
-                                else => {
-                                    // Use the body's resolved type
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for body type: {}", .{err});
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    return self.layout_cache.getLayout(body_layout_idx);
-                                },
-                            }
-                        },
-                        else => {
-                            // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
-                                self.traceError("Failed to get layout for closure return type: {}", .{err});
-                                return error.TypeMismatch;
-                            };
-                            return self.layout_cache.getLayout(ret_layout_idx);
-                        },
-                    }
-                },
-                .fn_unbound => |func| {
-                    // First check if the return type is mapped in our TypeScope
-                    var return_type_var = func.ret;
-                    if (self.type_scope.lookup(func.ret)) |mapped_var| {
-                        // Use the mapped type instead of the polymorphic one
-                        return_type_var = mapped_var;
-                        self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
-                    } else {
-                        self.traceInfo("No TypeScope mapping found for return type var: {}", .{func.ret});
-                        self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
-                        for (self.type_scope.scopes.items, 0..) |scope, i| {
-                            self.traceInfo("    Scope {}: {} mappings", .{ i, scope.count() });
-                        }
-                    }
-
-                    // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
-
-                    // Check if it's still unresolved (flex_var/rigid_var)
-                    switch (ret_resolved.desc.content) {
-                        .flex_var, .rigid_var => {
-                            self.traceInfo("Lambda return type is unresolved, inferring from body", .{});
-                            self.traceInfo("  Original var: {}", .{func.ret});
-                            self.traceInfo("  After TypeScope: {}", .{return_type_var});
-
-                            // Infer the return type by analyzing the lambda body
-                            const body_type_var = try self.inferLambdaBodyType(closure.body_idx);
-                            const body_resolved = self.env.types.resolveVar(body_type_var);
-
-                            // Try to get layout from the inferred body type
-                            switch (body_resolved.desc.content) {
-                                .structure => |s| {
-                                    // Successfully inferred a concrete type from body
-                                    _ = s;
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for inferred body type: {}", .{err});
-                                        // Fall back to unit type for uninferable cases
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    const inferred_layout = self.layout_cache.getLayout(body_layout_idx);
-                                    self.traceInfo("Successfully inferred return type from body: {}", .{inferred_layout});
-                                    return inferred_layout;
-                                },
-                                .flex_var, .rigid_var => {
-                                    // Body type is also unresolved - use unit type as safe default
-                                    self.traceInfo("Body type also unresolved, using unit type", .{});
-                                    return blk: {
-                                        const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                        break :blk self.layout_cache.getLayout(idx);
-                                    };
-                                },
-                                else => {
-                                    // Use the body's resolved type
-                                    const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch |err| {
-                                        self.traceError("Failed to get layout for body type: {}", .{err});
-                                        return blk: {
-                                            const idx = self.layout_cache.getEmptyRecordLayout() catch break :blk error.LayoutError;
-                                            break :blk self.layout_cache.getLayout(idx);
-                                        };
-                                    };
-                                    return self.layout_cache.getLayout(body_layout_idx);
-                                },
-                            }
-                        },
-                        else => {
-                            // Type is resolved to a concrete type, use layout cache
-                            const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
-                                self.traceError("Failed to get layout for closure return type: {}", .{err});
-                                return error.TypeMismatch;
-                            };
-                            return self.layout_cache.getLayout(ret_layout_idx);
-                        },
-                    }
+        // Traverse the curried function type chain based on the number of applied arguments
+        // For example, if we have `a -> (b -> c)` and apply 2 arguments, we get `c`
+        var args_to_apply = applied_arg_count;
+        while (args_to_apply > 0) : (args_to_apply -= 1) {
+            switch (current_resolved.desc.content) {
+                .structure => |structure| switch (structure) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        // Apply one argument - move to the return type
+                        current_resolved = self.env.types.resolveVar(func.ret);
+                    },
+                    else => {
+                        self.traceError("Expected function type but got structure: {s}", .{@tagName(structure)});
+                        return error.TypeMismatch;
+                    },
                 },
                 else => {
-                    self.traceError("Closure lambda is not a function type: {}", .{structure});
+                    self.traceError("Expected function type but got: {s}", .{@tagName(current_resolved.desc.content)});
                     return error.TypeMismatch;
                 },
-            },
-            .flex_var => {
-                // Polymorphic function - try to infer return type from body
-                self.traceInfo("Lambda has flex_var type, inferring from body", .{});
-                _ = try self.inferLambdaBodyType(closure.body_idx);
-
-                // Try to get layout from the inferred body type
-                // First, we need to convert the type to a layout
-                // This is a placeholder - the proper solution would be to use the type-to-layout conversion
-                // For now, return a default layout
-                return Layout.int(.i64);
-            },
-            else => {
-                self.traceError("Closure lambda type is not a structure: {}", .{lambda_resolved.desc.content});
-                return error.TypeMismatch;
-            },
+            }
         }
+
+        // Now current_resolved is the final return type after applying all arguments
+        // Convert it to a layout
+        const final_type_var = current_resolved.var_;
+
+        // Check if TypeScope has a mapping for this type
+        var resolved_type_var = final_type_var;
+        if (self.type_scope.lookup(final_type_var)) |mapped_var| {
+            resolved_type_var = mapped_var;
+            self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ final_type_var, mapped_var });
+        }
+
+        // Try to get the layout for the resolved type
+        const layout_idx = self.layout_cache.addTypeVar(resolved_type_var, &self.type_scope) catch |err| {
+            self.traceError("Failed to get layout for return type: {}", .{err});
+            // Fall back to inferring from body
+            const body_type_var = try self.inferLambdaBodyType(closure.body_idx);
+            const body_layout_idx = self.layout_cache.addTypeVar(body_type_var, &self.type_scope) catch {
+                // Last resort: use empty record (unit type)
+                const empty_idx = self.layout_cache.getEmptyRecordLayout() catch return error.LayoutError;
+                return self.layout_cache.getLayout(empty_idx);
+            };
+            return self.layout_cache.getLayout(body_layout_idx);
+        };
+
+        return self.layout_cache.getLayout(layout_idx);
     }
 
     fn checkIfCondition(self: *Interpreter, expr_idx: CIR.Expr.Idx, branch_index: u16) EvalError!void {
@@ -2591,8 +2438,34 @@ pub const Interpreter = struct {
             }
         }
 
+        // Extract parameters from the lambda expression
+        const lambda_expr = cir.getExpr(closure.lambda_expr_idx);
+
+        // Lambda expressions have body_then_args payload: [body, param1, param2, ...]
+        var param_patterns = std.ArrayList(CIR.Patt.Idx).init(self.allocator);
+        defer param_patterns.deinit();
+
+        // Check if this is actually a lambda expression
+        if (lambda_expr.tag == .lambda and !lambda_expr.payload.body_then_args.isNil()) {
+            var iter = cir.getExprIndices(lambda_expr.payload.body_then_args);
+            // Skip the body (first element)
+            _ = iter.next();
+
+            // Collect parameter patterns
+            while (iter.next()) |param_node| {
+                // Each parameter is a pattern node
+                const param_patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(param_node)));
+                try param_patterns.append(param_patt_idx);
+            }
+        }
+
         // Pre-allocate return slot with the correct return type layout using the new TypeScope
-        const return_layout = try self.getClosureReturnLayout(closure);
+        // If we destructured a tuple, we applied multiple arguments at once
+        const applied_arg_count: u32 = if (param_patterns.items.len > 1 and arg_count == 1)
+            @intCast(param_patterns.items.len) // We destructured a tuple
+        else
+            arg_count; // Normal application
+        const return_layout = try self.getClosureReturnLayout(closure, applied_arg_count);
         self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
         const return_layout_idx = try self.layout_cache.insertLayout(return_layout);
         const return_slot_offset = self.stack_memory.used;
@@ -2634,46 +2507,57 @@ pub const Interpreter = struct {
         });
 
         // 2. Bind the explicit parameters to their arguments.
-        // Extract parameters from the lambda expression (cir already declared above)
-        const lambda_expr = cir.getExpr(closure.lambda_expr_idx);
+        // Handle parameter binding
+        // Special case: if lambda has multiple parameters but receives a single tuple argument,
+        // destructure the tuple and bind each element to the corresponding parameter
+        if (param_patterns.items.len > 1 and arg_count == 1) {
+            // Check if the single argument is a tuple
+            const single_arg = try self.peekStackValue(4); // arg is at peek(3 + 1)
 
-        // Lambda expressions have body_then_args payload: [body, param1, param2, ...]
-        var param_patterns = std.ArrayList(CIR.Patt.Idx).init(self.allocator);
-        defer param_patterns.deinit();
+            if (single_arg.layout.tag == .tuple) {
+                // Get the tuple accessor to check element count
+                const accessor = try single_arg.asTuple(self.layout_cache);
+                const tuple_elem_count = accessor.getElementCount();
 
-        // Check if this is actually a lambda expression
-        if (lambda_expr.tag == .lambda and !lambda_expr.payload.body_then_args.isNil()) {
-            var iter = cir.getExprIndices(lambda_expr.payload.body_then_args);
-            // Skip the body (first element)
-            _ = iter.next();
+                if (tuple_elem_count == param_patterns.items.len) {
+                    // Tuple has the right number of elements - destructure it
+                    self.traceInfo("Destructuring tuple argument with {} elements for lambda with {} parameters", .{ tuple_elem_count, param_patterns.items.len });
 
-            // Collect parameter patterns
-            while (iter.next()) |param_node| {
-                // Each parameter is a pattern node
-                const param_patt_idx = @as(CIR.Patt.Idx, @enumFromInt(@intFromEnum(param_node)));
-                try param_patterns.append(param_patt_idx);
+                    // Bind each tuple element to the corresponding parameter
+                    for (param_patterns.items, 0..) |param_idx, i| {
+                        // Get the element at index i
+                        const tuple_elem = try accessor.getElement(@intCast(i));
+
+                        try self.bindPattern(param_idx, tuple_elem, roc_ops);
+                    }
+                } else {
+                    self.traceError("Tuple argument has {} elements but lambda expects {} parameters", .{ tuple_elem_count, param_patterns.items.len });
+                    return error.InvalidStackState;
+                }
+            } else {
+                self.traceError("Lambda expects {} parameters but got 1 non-tuple argument", .{param_patterns.items.len});
+                return error.InvalidStackState;
             }
-        }
-
-        // Verify we have the expected number of parameters
-        if (param_patterns.items.len != arg_count) {
+        } else if (param_patterns.items.len != arg_count) {
+            // Normal case: parameter count must match argument count
             self.traceError("Parameter count mismatch: expected {}, got {}", .{ param_patterns.items.len, arg_count });
             return error.InvalidStackState;
-        }
+        } else {
+            // Normal case: bind each argument to its parameter
+            // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
+            // peek(1) is captures_view
+            // peek(2) is return_slot
+            // peek(3) is closure
+            // peek(4) is argN (last argument)
+            // peek(3 + arg_count) is arg1 (first argument)
+            for (param_patterns.items, 0..) |param_idx, i| {
+                // For parameter i, we want argument i (0-indexed)
+                // arg0 is at peek(3 + arg_count), arg1 is at peek(3 + arg_count - 1), etc.
+                const arg_index_from_top = 3 + arg_count - i;
+                const arg = try self.peekStackValue(arg_index_from_top);
 
-        // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
-        // peek(1) is captures_view
-        // peek(2) is return_slot
-        // peek(3) is closure
-        // peek(4) is argN (last argument)
-        // peek(3 + arg_count) is arg1 (first argument)
-        for (param_patterns.items, 0..) |param_idx, i| {
-            // For parameter i, we want argument i (0-indexed)
-            // arg0 is at peek(3 + arg_count), arg1 is at peek(3 + arg_count - 1), etc.
-            const arg_index_from_top = 3 + arg_count - i;
-            const arg = try self.peekStackValue(arg_index_from_top);
-
-            try self.bindPattern(param_idx, arg, roc_ops);
+                try self.bindPattern(param_idx, arg, roc_ops);
+            }
         }
 
         // 4. Schedule the work to copy the return value and break down the stack frame.
@@ -2879,7 +2763,7 @@ pub const Interpreter = struct {
                             // The field name was converted to a pattern during canonicalization
                             const field_patt_idx = @as(can.CIR.Patt.Idx, @enumFromInt(@intFromEnum(field_binop.lhs)));
                             const field_patt = cir.getPatt(field_patt_idx);
-                            if (field_patt.tag == .ident or field_patt.tag == .var_ident) {
+                            if (field_patt.tag == .ident) {
                                 break :blk field_patt.payload.ident;
                             }
                         }

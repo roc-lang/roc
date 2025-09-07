@@ -82,7 +82,7 @@ value = MyType.TagA
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 16
+; Total type variables: 17
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -93,12 +93,13 @@ value = MyType.TagA
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 -> #13)
+(var #10 -> #16)
 (var #11 _)
 (var #12 _)
-(var #13 _)
+(var #13 -> #16)
 (var #14 _)
 (var #15 _)
+(var #16 _)
 ~~~
 # TYPES
 ~~~roc

@@ -188,7 +188,7 @@ result = multi_arg_fn(
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 70
+; Total type variables: 78
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -214,7 +214,7 @@ result = multi_arg_fn(
 (var #22 _)
 (var #23 _)
 (var #24 _)
-(var #25 -> #67)
+(var #25 -> #74)
 (var #26 _)
 (var #27 _)
 (var #28 _)
@@ -229,21 +229,21 @@ result = multi_arg_fn(
 (var #37 _)
 (var #38 _)
 (var #39 -> #66)
-(var #40 -> #67)
+(var #40 -> #74)
 (var #41 _)
 (var #42 -> #55)
-(var #43 -> #69)
+(var #43 -> #77)
 (var #44 Num *)
 (var #45 Str)
 (var #46 Str)
 (var #47 F64)
 (var #48 F64)
 (var #49 Num *)
-(var #50 Num *)
-(var #51 _)
+(var #50 -> #49)
+(var #51 -> #75)
 (var #52 _)
 (var #53 Str)
-(var #54 -> #68)
+(var #54 -> #76)
 (var #55 _)
 (var #56 _)
 (var #57 _)
@@ -257,8 +257,16 @@ result = multi_arg_fn(
 (var #65 _)
 (var #66 tuple)
 (var #67 fn_pure)
-(var #68 tuple)
+(var #68 fn_pure)
 (var #69 fn_pure)
+(var #70 fn_pure)
+(var #71 fn_pure)
+(var #72 fn_pure)
+(var #73 fn_pure)
+(var #74 fn_pure)
+(var #75 List #49)
+(var #76 tuple)
+(var #77 fn_pure)
 ~~~
 # TYPES
 ~~~roc
@@ -269,7 +277,7 @@ x4 : _f
 x3 : _f
 x8 : _f
 x6 : _f
-multi_arg_fn : _arg, _arg2, _arg3, _arg4, _arg5, _arg6, _arg7, _arg8 -> (_field, _field2, _field3, _field4, _field5)
+multi_arg_fn : _arg -> _arg2 -> _arg3 -> _arg4 -> _arg5 -> _arg6 -> _arg7 -> _arg8 -> (_field, _field2, _field3, _field4, _field5)
 x7 : _f
 result : _f
 ~~~

@@ -164,7 +164,7 @@ identity = |x| x
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 50
+; Total type variables: 51
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -182,7 +182,7 @@ identity = |x| x
 (var #14 _)
 (var #15 -> #43)
 (var #16 _)
-(var #17 -> #49)
+(var #17 -> #50)
 (var #18 _)
 (var #19 -> #22)
 (var #20 -> #45)
@@ -195,16 +195,16 @@ identity = |x| x
 (var #27 _)
 (var #28 _)
 (var #29 -> #35)
-(var #30 -> #47)
+(var #30 -> #48)
 (var #31 Num *)
-(var #32 Num *)
-(var #33 Num *)
-(var #34 _)
+(var #32 -> #31)
+(var #33 -> #31)
+(var #34 -> #47)
 (var #35 _)
 (var #36 _)
-(var #37 -> #48)
+(var #37 -> #49)
 (var #38 _)
-(var #39 -> #49)
+(var #39 -> #50)
 (var #40 _)
 (var #41 _)
 (var #42 _)
@@ -212,9 +212,10 @@ identity = |x| x
 (var #44 _)
 (var #45 fn_pure)
 (var #46 fn_pure)
-(var #47 fn_pure)
-(var #48 {})
-(var #49 fn_pure)
+(var #47 List #31)
+(var #48 fn_pure)
+(var #49 {})
+(var #50 fn_pure)
 ~~~
 # TYPES
 ~~~roc

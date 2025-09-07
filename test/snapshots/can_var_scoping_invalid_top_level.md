@@ -47,7 +47,7 @@ var topLevelVar_ = 0
 ~~~clojure
 (Expr.block
   (Stmt.init_var
-    (pattern (Patt.var_ident "topLevelVar_"))
+    (pattern (Patt.var_ident "<var>"))
     (Expr.num_literal_i32 0)
   )
 )

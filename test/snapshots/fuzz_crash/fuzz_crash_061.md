@@ -197,7 +197,7 @@ requires{}{n:0[import S	exposing[
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 11
+; Total type variables: 13
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -207,8 +207,10 @@ requires{}{n:0[import S	exposing[
 (var #6 _)
 (var #7 _)
 (var #8 _)
-(var #9 _)
+(var #9 -> #12)
 (var #10 _)
+(var #11 _)
+(var #12 List #11)
 ~~~
 # TYPES
 ~~~roc

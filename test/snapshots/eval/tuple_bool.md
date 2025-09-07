@@ -70,16 +70,16 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 23
+; Total type variables: 25
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
 (var #4 _)
-(var #5 _)
+(var #5 -> #22)
 (var #6 _)
 (var #7 _)
-(var #8 _)
+(var #8 -> #23)
 (var #9 _)
 (var #10 -> #9)
 (var #11 _)
@@ -92,8 +92,10 @@ NIL
 (var #18 -> #20)
 (var #19 -> #18)
 (var #20 _)
-(var #21 -> #22)
-(var #22 tuple)
+(var #21 -> #24)
+(var #22 _)
+(var #23 _)
+(var #24 tuple)
 ~~~
 # TYPES
 ~~~roc

@@ -140,7 +140,7 @@ mapList = |list, fn| list.map(fn)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 50
+; Total type variables: 52
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -161,7 +161,7 @@ mapList = |list, fn| list.map(fn)
 (var #17 _)
 (var #18 _)
 (var #19 _)
-(var #20 -> #46)
+(var #20 -> #47)
 (var #21 _)
 (var #22 _)
 (var #23 _)
@@ -169,32 +169,34 @@ mapList = |list, fn| list.map(fn)
 (var #25 -> #45)
 (var #26 _)
 (var #27 _)
-(var #28 -> #46)
+(var #28 -> #47)
 (var #29 _)
-(var #30 -> #49)
+(var #30 -> #51)
 (var #31 _)
-(var #32 -> #48)
+(var #32 -> #50)
 (var #33 Num *)
-(var #34 Num *)
-(var #35 Num *)
-(var #36 Num *)
-(var #37 Num *)
-(var #38 _)
+(var #34 -> #33)
+(var #35 -> #33)
+(var #36 -> #33)
+(var #37 -> #33)
+(var #38 -> #49)
 (var #39 _)
-(var #40 -> #49)
+(var #40 -> #51)
 (var #41 _)
 (var #42 _)
 (var #43 _)
 (var #44 _)
 (var #45 fn_pure)
 (var #46 fn_pure)
-(var #47 _)
-(var #48 fn_pure)
-(var #49 fn_pure)
+(var #47 fn_pure)
+(var #48 _)
+(var #49 List #33)
+(var #50 fn_pure)
+(var #51 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-mapList : _arg, _arg2 -> _ret
+mapList : _arg -> _arg2 -> _ret
 fn : _c
 main : _arg -> _ret
 list : _c

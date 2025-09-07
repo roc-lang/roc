@@ -63,14 +63,15 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 8
 (var #0 _)
-(var #1 _)
+(var #1 -> #7)
 (var #2 Num *)
-(var #3 _)
+(var #3 -> #5)
 (var #4 Num *)
 (var #5 _)
-(var #6 _)
+(var #6 -> #5)
+(var #7 _)
 ~~~
 # TYPES
 ~~~roc

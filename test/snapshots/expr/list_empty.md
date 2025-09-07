@@ -28,9 +28,11 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 2
+; Total type variables: 4
 (var #0 _)
-(var #1 _)
+(var #1 -> #3)
+(var #2 _)
+(var #3 List #2)
 ~~~
 # TYPES
 ~~~roc
