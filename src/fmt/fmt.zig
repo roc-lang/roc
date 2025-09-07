@@ -1394,7 +1394,7 @@ const Formatter = struct {
                 }
 
                 var platform_field: ?AST.RecordField.Idx = null;
-                var package_fields_list = try std.ArrayListUnmanaged(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
+                var package_fields_list = try std.ArrayList(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
                     if (package_idx == a.platform_idx) {

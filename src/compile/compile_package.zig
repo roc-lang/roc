@@ -94,11 +94,11 @@ const ModuleState = struct {
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: std.ArrayListUnmanaged(ModuleId) = .{},
+    imports: std.ArrayList(ModuleId) = .{},
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
-    external_imports: std.ArrayListUnmanaged([]const u8) = .{},
-    dependents: std.ArrayListUnmanaged(ModuleId) = .{},
-    reports: std.ArrayListUnmanaged(Report) = .{},
+    external_imports: std.ArrayList([]const u8) = .{},
+    dependents: std.ArrayList(ModuleId) = .{},
+    reports: std.ArrayList(Report) = .{},
     depth: u32 = std.math.maxInt(u32), // min depth from root
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
@@ -137,10 +137,10 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: std.ArrayListUnmanaged(Task) = .{},
+    injector: std.ArrayList(Task) = .{},
 
     // Module storage
-    modules: std.ArrayListUnmanaged(ModuleState) = .{},
+    modules: std.ArrayList(ModuleState) = .{},
     // String intern table: module name -> module ID
     module_names: std.StringHashMapUnmanaged(ModuleId) = .{},
 
@@ -148,7 +148,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Track module discovery order and which modules have had their reports emitted
-    discovered: std.ArrayListUnmanaged(ModuleId) = .{},
+    discovered: std.ArrayList(ModuleId) = .{},
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     // Timing collection (accumulated across all modules)
