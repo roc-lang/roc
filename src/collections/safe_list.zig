@@ -819,7 +819,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     const file_size = try file.getEndPos();
     const serialized_size = @sizeOf(SafeList(u64).Serialized);
     const serialized_align = @alignOf(SafeList(u64).Serialized);
-    const buffer = try gpa.alignedAlloc(u8, serialized_align, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -982,7 +982,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     // Step 5: Read file into 16-byte aligned buffer
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(u32)), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);

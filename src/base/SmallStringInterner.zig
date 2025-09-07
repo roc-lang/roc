@@ -290,7 +290,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -360,7 +360,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -433,7 +433,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -501,7 +501,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -572,7 +572,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -662,7 +662,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+//     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
 //     defer gpa.free(buffer);
 
 //     _ = try file.read(buffer);

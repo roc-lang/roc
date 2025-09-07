@@ -896,7 +896,7 @@ pub const Watcher = struct {
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
-        const buffer = try self.allocator.alignedAlloc(u8, @alignOf(std.os.windows.FILE_NOTIFY_INFORMATION), buffer_size);
+        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)), buffer_size);
 
         // Create overlapped data
         var overlapped_data = WindowsData.OverlappedData{

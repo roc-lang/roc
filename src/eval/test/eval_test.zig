@@ -803,7 +803,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Read back from file
         const file_size = try tmp_file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
+        const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
         _ = try tmp_file.pread(buffer, 0);
 
