@@ -172,7 +172,7 @@ pub const RocDec = extern struct {
 
         // Format the backing i128 into an array of digit (ascii) characters (u8s)
         var digit_bytes_storage: [max_digits + 1]u8 = undefined;
-        var num_digits = std.fmt.formatIntBuf(digit_bytes_storage[0..], num, 10, .lower, .{});
+        var num_digits = std.fmt.printInt(digit_bytes_storage[0..], num, 10, .lower, .{});
         var digit_bytes: [*]u8 = digit_bytes_storage[0..];
 
         // space where we assemble all the characters that make up the final string
