@@ -95,6 +95,21 @@ identity = |a| a
 ^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_basic.md:7:1:7:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -147,6 +162,6 @@ identity = |a| a
 # TYPES
 ~~~roc
 identity : _arg -> _ret
-a : _b
 main : _arg -> {}
+a : _b
 ~~~

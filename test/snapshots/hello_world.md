@@ -76,6 +76,21 @@ main! = |_| Stdout.line!("Hello, world!")
                   ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**hello_world.md:5:1:5:6:**
+```roc
+main! = |_| Stdout.line!("Hello, world!")
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

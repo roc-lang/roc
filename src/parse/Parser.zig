@@ -246,10 +246,11 @@ pub fn parseAndCollectTokens(
     const getNextNonComment = struct {
         fn next(iter: *tokenize_iter.TokenIterator, alloc: std.mem.Allocator, token_list: *std.ArrayList(Token)) !?Token {
             while (true) {
-                const token = try iter.next(alloc) orelse return null;
+                const token = try iter.next(alloc);
                 try token_list.append(token);
 
                 switch (token.tag) {
+                    .EndOfFile => return null,
                     .LineComment, .DocComment, .BlankLine => continue, // Skip comments and blank lines for parsing
                     else => return token,
                 }
@@ -3457,13 +3458,14 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
         // Get first two non-comment tokens to start
         var first: ?Token = null;
         while (true) {
-            const token = try token_iter.?.next(self.gpa) orelse {
-                // No tokens at all - empty file
-                if (token_iter) |*t| t.deinit(self.gpa);
-                return null;
-            };
+            const token = try token_iter.?.next(self.gpa);
             // Skip comments and blank lines
             switch (token.tag) {
+                .EndOfFile => {
+                    // No tokens at all - empty file
+                    if (token_iter) |*t| t.deinit(self.gpa);
+                    return null;
+                },
                 .LineComment, .DocComment, .BlankLine => continue,
                 else => {
                     first = token;
@@ -3476,9 +3478,9 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
         var second: ?Token = null;
         while (true) {
             const token = try token_iter.?.next(self.gpa);
-            if (token == null) break;
             // Skip comments and blank lines
-            switch (token.?.tag) {
+            switch (token.tag) {
+                .EndOfFile => break,
                 .LineComment, .DocComment, .BlankLine => continue,
                 else => {
                     second = token;
@@ -3583,11 +3585,12 @@ pub fn parseHeader(self: *Parser) Error!void {
     // Get first two non-comment tokens to start
     var first: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa) orelse {
-            // No tokens at all - no header
-            return;
-        };
+        const token = try token_iter.next(self.gpa);
         switch (token.tag) {
+            .EndOfFile => {
+                // No tokens at all - no header
+                return;
+            },
             .LineComment, .DocComment, .BlankLine => continue,
             else => {
                 first = token;
@@ -3599,8 +3602,8 @@ pub fn parseHeader(self: *Parser) Error!void {
     var second: ?Token = null;
     while (true) {
         const token = try token_iter.next(self.gpa);
-        if (token == null) break;
-        switch (token.?.tag) {
+        switch (token.tag) {
+            .EndOfFile => break,
             .LineComment, .DocComment, .BlankLine => continue,
             else => {
                 second = token;
@@ -4590,13 +4593,14 @@ pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) 
     // Get first two non-comment tokens to start
     var first: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa) orelse {
-            // No tokens found - create a malformed node instead of returning dummy index
-            const empty_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } };
-            try self.pushDiagnostic(.expr_unexpected_token, empty_region.start, empty_region.end);
-            return try self.ast.appendNode(self.gpa, empty_region, .malformed, .{ .malformed = .expr_unexpected_token });
-        };
+        const token = try token_iter.next(self.gpa);
         switch (token.tag) {
+            .EndOfFile => {
+                // No tokens found - create a malformed node instead of returning dummy index
+                const empty_region = Region{ .start = Position{ .offset = 0 }, .end = Position{ .offset = 0 } };
+                try self.pushDiagnostic(.expr_unexpected_token, empty_region.start, empty_region.end);
+                return try self.ast.appendNode(self.gpa, empty_region, .malformed, .{ .malformed = .expr_unexpected_token });
+            },
             .LineComment, .DocComment, .BlankLine => continue,
             else => {
                 first = token;
@@ -4608,8 +4612,8 @@ pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) 
     var second: ?Token = null;
     while (true) {
         const token = try token_iter.next(self.gpa);
-        if (token == null) break;
-        switch (token.?.tag) {
+        switch (token.tag) {
+            .EndOfFile => break,
             .LineComment, .DocComment, .BlankLine => continue,
             else => {
                 second = token;
@@ -5216,6 +5220,38 @@ fn parsePrimaryExpr(self: *Parser) Error!Node.Idx {
             }
         },
         .Int, .Float, .IntBase => return self.parseNumLiteral(),
+        .DotInt, .NoSpaceDotInt => {
+            // Handle fractional literals like .456
+            // DotInt is tokenized for things like ".456" at the start of an expression
+            // We need to convert this to a fractional literal
+            const region = self.currentRegion();
+            const extra = self.currentExtra();
+            self.advance();
+
+            // The tokenizer stores the integer part in the extra field
+            // We need to create a fractional literal from it
+            // For .456, we want numerator=456, denominator_power_of_ten=3
+            const int_value = switch (extra) {
+                .num_literal_i32 => |val| val,
+                else => 0,
+            };
+
+            // Count digits to determine the power of ten
+            var power: u8 = 0;
+            var temp = @abs(int_value);
+            if (temp == 0) {
+                power = 1;
+            } else {
+                while (temp > 0) : (temp /= 10) {
+                    power += 1;
+                }
+            }
+
+            return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = .{
+                .numerator = @intCast(int_value),
+                .denominator_power_of_ten = power,
+            } });
+        },
         .String, .MultilineString, .SingleQuote => return self.parseStoredStringExpr(),
         .OpenSquare => return self.parseListLiteral(),
         .OpenCurly => return self.parseBlockOrRecord(),

@@ -199,6 +199,21 @@ swap = |pair| {
 ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**rigid_var_no_instantiation_error.md:11:1:11:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -302,6 +317,6 @@ swap = |pair| {
 y : _c
 x : _c
 swap : _arg -> _ret
-pair : _c
 main : _arg -> _ret
+pair : _c
 ~~~

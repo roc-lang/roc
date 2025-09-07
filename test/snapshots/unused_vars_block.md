@@ -109,7 +109,21 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_block.md:3:1:3:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

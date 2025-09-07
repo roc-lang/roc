@@ -117,6 +117,21 @@ print_msg! = |msg| Stdout.line!(msg)
 ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**effectful_with_effectful_annotation.md:9:1:9:6:**
+```roc
+main! = print_msg!("Hello, world!")
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

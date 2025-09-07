@@ -362,6 +362,21 @@ Patterns can only appear in specific contexts like function parameters, destruct
         ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:18:1:18:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -509,9 +524,9 @@ Patterns can only appear in specific contexts like function parameters, destruct
 # TYPES
 ~~~roc
 is_ok_ret_unqualified_bool : _arg -> _ret
-process : _arg -> Str
-maybe : _a
-main : _arg -> {}
 is_ok_ret_bool : _arg -> _ret
+process : _arg -> Str
+main : _arg -> {}
+maybe : _a
 result : _a
 ~~~

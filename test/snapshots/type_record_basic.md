@@ -114,6 +114,21 @@ getName = |_person| "hello"
 ^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_basic.md:6:1:6:6:**
+```roc
+main! = |_| getName({name: "luke", age:21})
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -182,6 +197,6 @@ getName = |_person| "hello"
 # TYPES
 ~~~roc
 getName : _arg -> Str
-_person : _a
 main : _arg -> _ret
+_person : _a
 ~~~

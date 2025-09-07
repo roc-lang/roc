@@ -66,6 +66,21 @@ hello! = Stdout.line!("Hello")
                ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_module_no_blanks.md:3:1:3:7:**
+```roc
+hello! = Stdout.line!("Hello")
+```
+^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

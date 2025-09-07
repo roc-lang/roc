@@ -247,6 +247,21 @@ getNumber = |_opt| 0
 ^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:20:1:20:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -370,10 +385,10 @@ getNumber = |_opt| 0
 ~~~
 # TYPES
 ~~~roc
-getString : _arg -> Str
-main : _arg -> {}
 _opt : _b
 process : _arg -> Str
-getNumber : _arg -> Num(_size)
 _result : _b
+getString : _arg -> Str
+main : _arg -> {}
+getNumber : _arg -> Num(_size)
 ~~~

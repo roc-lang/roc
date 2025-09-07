@@ -173,6 +173,21 @@ process! = |x| print_number!(multiply(x, 2))
 ^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**function_no_annotation.md:14:1:14:6:**
+```roc
+main! = process!(42)
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

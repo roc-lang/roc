@@ -107,6 +107,21 @@ processList = |list| list.len()
 ^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_single_arg.md:6:1:6:6:**
+```roc
+main! = |_| processList(["one","two"])
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

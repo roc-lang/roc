@@ -96,6 +96,21 @@ Is there an **import** or **exposing** missing up-top?
 	      ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**hello_world_with_block.md:8:1:8:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

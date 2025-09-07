@@ -145,6 +145,21 @@ identity = |x| x
 ^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**rigid_var_instantiation.md:8:1:8:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -219,7 +234,7 @@ identity = |x| x
 ~~~
 # TYPES
 ~~~roc
-identity : _arg -> _ret
 x : _b
+identity : _arg -> _ret
 main : _arg -> _ret
 ~~~

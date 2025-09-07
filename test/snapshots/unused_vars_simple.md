@@ -209,6 +209,21 @@ used_regular = |number| number + 1
 ^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_simple.md:15:1:15:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

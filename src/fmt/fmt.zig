@@ -3631,9 +3631,12 @@ pub fn formatAst(
     defer token_iter.deinit(scratch);
 
     // Collect all tokens
-    while (try token_iter.next(scratch)) |token| {
-        try tokens.append(token);
-        if (token.tag == .EndOfFile) break;
+    while (true) {
+        const token = try token_iter.next(scratch);
+        switch (token.tag) {
+            .EndOfFile => break,
+            else => try tokens.append(token),
+        }
     }
 
     // Now format using the collected tokens

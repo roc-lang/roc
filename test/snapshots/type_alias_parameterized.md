@@ -133,6 +133,21 @@ swapPair = |(x, y)| (y, x)
 ^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_parameterized.md:8:1:8:6:**
+```roc
+main! = |_| swapPair(1, 2)
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -213,7 +228,7 @@ swapPair = |(x, y)| (y, x)
 # TYPES
 ~~~roc
 y : _c
-x : _c
-swapPair : _arg -> (_field, _field2)
 main : _arg -> _ret
+swapPair : _arg -> (_field, _field2)
+x : _c
 ~~~

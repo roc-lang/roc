@@ -269,6 +269,21 @@ deepNested = |_| {
 ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_complex_nested.md:20:1:20:6:**
+```roc
+main! = |_| processComplex(Ok([Some(42), None]))
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

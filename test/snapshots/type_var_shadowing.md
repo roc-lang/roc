@@ -140,6 +140,21 @@ outer = |x| {
 ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_shadowing.md:13:1:13:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -209,7 +224,7 @@ outer = |x| {
 ~~~roc
 y : _b
 outer : _arg -> _ret
+main : _arg -> {}
 x : _b
 inner : _arg -> _ret
-main : _arg -> {}
 ~~~

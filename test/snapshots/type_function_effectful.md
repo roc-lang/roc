@@ -104,6 +104,21 @@ runEffect! = |fn!, x| fn!(x)
 ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_effectful.md:6:1:6:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

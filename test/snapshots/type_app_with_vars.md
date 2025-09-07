@@ -121,6 +121,21 @@ mapList = |list, fn| list.map(fn)
 ^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_with_vars.md:6:1:6:6:**
+```roc
+main! = |_| mapList([1,2,3,4,5])
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -197,7 +212,7 @@ mapList = |list, fn| list.map(fn)
 # TYPES
 ~~~roc
 mapList : _arg -> _arg2 -> _ret
-fn : _c
 main : _arg -> _ret
+fn : _c
 list : _c
 ~~~

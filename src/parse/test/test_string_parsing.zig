@@ -26,9 +26,11 @@ test "parse simple string literal" {
     defer tokenizer.deinit(allocator);
 
     var found_string = false;
-    while (try tokenizer.next(allocator)) |token| {
-        if (token.tag == .String) {
-            switch (token.extra) {
+    while (true) {
+        const token = try tokenizer.next(allocator);
+        switch (token.tag) {
+            .EndOfFile => break,
+            .String => switch (token.extra) {
                 .bytes_idx => |idx| {
                     const content = byte_slices.slice(idx);
                     // std.debug.print("\nTokenized string: '{s}'\n", .{content});
@@ -36,9 +38,9 @@ test "parse simple string literal" {
                     found_string = true;
                 },
                 else => {},
-            }
+            },
+            else => {},
         }
-        if (token.tag == .EndOfFile) break;
     }
     try testing.expect(found_string);
 

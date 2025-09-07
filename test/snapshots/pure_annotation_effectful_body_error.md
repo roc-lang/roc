@@ -117,6 +117,21 @@ bad_function = |msg| Stdout.line!(msg)
 ^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_annotation_effectful_body_error.md:9:1:9:6:**
+```roc
+main! = bad_function("This should fail")
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

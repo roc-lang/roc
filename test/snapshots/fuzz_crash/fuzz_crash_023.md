@@ -2204,6 +2204,16 @@ Is there an **import** or **exposing** missing up-top?
 	^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_023.md:143:1:143:6:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **world** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2585,6 +2595,11 @@ This definition shadows an existing one.
 tuple : Value((a, b, c))
 ```
 ^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE

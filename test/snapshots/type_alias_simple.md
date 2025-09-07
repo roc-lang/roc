@@ -112,6 +112,21 @@ getUser = |id| if (id > 10) "big" else "small"
 ^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:8:1:8:6:**
+```roc
+main! = |_| getUser(100)
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

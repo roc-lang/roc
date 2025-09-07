@@ -732,6 +732,21 @@ finalIdentity = |param| param
 ^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:55:1:55:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -1088,8 +1103,8 @@ w : Num(_size)
 z : Num(_size)
 combine : _arg2 -> _arg3 -> (_field, _field2)
 h : Num(_size)
-param : _ac
 main : _arg2 -> _ret
+param : _ac
 m : Num(_size)
 yetAnotherIdentity : _arg2 -> _ret
 v : Num(_size)

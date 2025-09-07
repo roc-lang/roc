@@ -111,6 +111,21 @@ processNested = |_list| ["one","two"]
 ^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:6:1:6:6:**
+```roc
+main! = |_| processNested([])
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -178,6 +193,6 @@ processNested = |_list| ["one","two"]
 # TYPES
 ~~~roc
 processNested : _arg -> List(Str)
-_list : _a
 main : _arg -> _ret
+_list : _a
 ~~~

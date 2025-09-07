@@ -252,6 +252,21 @@ addOne = |n| n + 1
 ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:15:1:15:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -383,11 +398,11 @@ addOne = |n| n + 1
 # TYPES
 ~~~roc
 combine : _arg -> _arg2 -> (_field, _field2)
+identity : _arg -> _ret
+first : _c
 addOne : _arg -> Num(_size)
 x : _c
 second : _c
 n : _c
-identity : _arg -> _ret
 main : _arg -> _ret
-first : _c
 ~~~

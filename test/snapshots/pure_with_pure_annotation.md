@@ -171,6 +171,21 @@ double = |x| add(x, x)
 ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:11:1:11:6:**
+```roc
+main! = add(1, 2)
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -265,8 +280,8 @@ double = |x| add(x, x)
 # TYPES
 ~~~roc
 add : _arg -> _arg2 -> _ret
-x : _a
-y : _a
-double : _arg -> _ret
 main : _a
+x : _a
+double : _arg -> _ret
+y : _a
 ~~~

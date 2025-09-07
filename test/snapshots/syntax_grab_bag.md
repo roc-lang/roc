@@ -2156,6 +2156,16 @@ Is there an **import** or **exposing** missing up-top?
 	^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:143:1:143:6:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **world** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2549,6 +2559,11 @@ This definition shadows an existing one.
 tuple : Value((a, b, c))
 ```
 ^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE
@@ -3418,8 +3433,8 @@ rest : _d
 match_time : _arg -> _arg2 -> _ret
 dude : _d
 bin_op_result : Num(_size)
-record : { foo: Num(_size), bar: Str, baz: _field, qux: _field2, punned: _field3 }
 multiline_tuple : (Num(_size), Str, _field, _field2, (_field3, _field4), List(Num(_size2)))
+record : { foo: Num(_size), bar: Str, baz: _field, qux: _field2, punned: _field3 }
 tag_with_payload : _d
 tuple : _d
 list : List(_elem)

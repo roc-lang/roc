@@ -1259,6 +1259,16 @@ Is there an **import** or **exposing** missing up-top?
 	^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_019.md:74:1:74:6:**
+```roc
+main! : Listlt({}, _)
+```
+^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **blaue** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1559,6 +1569,11 @@ Is there an **import** or **exposing** missing up-top?
 h == foo
 ```
      ^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE

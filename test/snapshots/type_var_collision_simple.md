@@ -226,6 +226,21 @@ pair = |first, second| (first, second)
 ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:17:1:17:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

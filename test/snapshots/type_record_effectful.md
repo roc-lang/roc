@@ -143,6 +143,21 @@ printName = |person| {
 ^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_effectful.md:10:1:10:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

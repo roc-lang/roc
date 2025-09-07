@@ -166,6 +166,21 @@ process = |list| {
 ^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_namespace.md:16:1:16:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -242,7 +257,7 @@ process = |list| {
 # TYPES
 ~~~roc
 process : _arg -> _ret
-list : _a
 main : _arg -> {}
+list : _a
 result : _a
 ~~~

@@ -1514,9 +1514,12 @@ fn processSnapshotContent(
     defer token_iter.deinit(allocator);
 
     // Collect all tokens (including comments for formatter)
-    while (try token_iter.next(allocator)) |token| {
-        try tokens.append(token);
-        if (token.tag == .EndOfFile) break;
+    while (true) {
+        const token = try token_iter.next(allocator);
+        switch (token.tag) {
+            .EndOfFile => break,
+            else => try tokens.append(token),
+        }
     }
 
     // Create Parser
@@ -2667,10 +2670,12 @@ fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *
     );
 
     // Iterate through tokens and output them
-    while (try token_iter.next(parser.gpa)) |token| {
-        if (token.tag == .EndOfFile) break;
-
-        try output.md_writer.print("{s} ", .{@tagName(token.tag)});
+    while (true) {
+        const token = try token_iter.next(parser.gpa);
+        switch (token.tag) {
+            .EndOfFile => break,
+            else => try output.md_writer.print("{s} ", .{@tagName(token.tag)}),
+        }
     }
 
     try output.end_code_block();

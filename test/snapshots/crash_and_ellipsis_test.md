@@ -238,6 +238,21 @@ testCrashSimple = |_| {
 ^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:19:1:19:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

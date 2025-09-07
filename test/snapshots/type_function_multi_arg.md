@@ -129,6 +129,21 @@ curry = |fn| |x| |y| fn(x, y)
 ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_multi_arg.md:6:1:6:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -204,7 +219,7 @@ curry = |fn| |x| |y| fn(x, y)
 ~~~roc
 fn : _a
 curry : _arg -> _arg2 -> _arg3 -> _ret
+main : _arg -> {}
 x : _a
 y : _a
-main : _arg -> {}
 ~~~

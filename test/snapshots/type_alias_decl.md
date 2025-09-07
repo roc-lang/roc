@@ -282,6 +282,21 @@ This definition shadows an existing one.
     ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_decl.md:27:1:27:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -421,7 +436,7 @@ This definition shadows an existing one.
 # TYPES
 ~~~roc
 color : _c
-person : { name: Str, age: Num(_size2) }
 main : _arg -> _ret
+person : { name: Str, age: Num(_size2) }
 userId : Num(_size2)
 ~~~

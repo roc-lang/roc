@@ -288,6 +288,21 @@ double = |value| value * 2
 ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:19:1:19:6:**
+```roc
+main! = |_| {
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

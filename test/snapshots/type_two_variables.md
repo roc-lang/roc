@@ -105,6 +105,21 @@ swap = |(x, y)| (y, x)
 ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_two_variables.md:6:1:6:6:**
+```roc
+main! = |_| {}
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -166,7 +181,7 @@ swap = |(x, y)| (y, x)
 # TYPES
 ~~~roc
 swap : _arg -> (_field, _field2)
+main : _arg -> {}
 x : _c
 y : _c
-main : _arg -> {}
 ~~~
