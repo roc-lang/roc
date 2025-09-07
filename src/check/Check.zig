@@ -1823,6 +1823,11 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, bino
             var does_fx = try self.checkExpr(binop.lhs);
             does_fx = try self.checkExpr(binop.rhs) or does_fx;
 
+            // For equality/comparison, operands must be the same type
+            const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
+            const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
+            _ = try self.unify(lhs_var, rhs_var);
+
             // Comparison operators always return Bool
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const fresh_bool = try self.instantiateVarAnon(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL_TYPE), .{ .explicit = expr_region });

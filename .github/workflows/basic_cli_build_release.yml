@@ -14,7 +14,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.19.0
+  RELEASE_TAG: 0.20.0
 
 jobs:
   prepare:
@@ -41,10 +41,6 @@ jobs:
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
@@ -211,7 +207,7 @@ jobs:
     needs: [create-release-archive]
     strategy:
       matrix:
-        os: [ubuntu-22.04, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Download the previously uploaded files
@@ -220,7 +216,9 @@ jobs:
       - name: Set OS-specific variables
         id: vars
         run: |
-          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+          if [[ "${{ matrix.os }}" =~ ^ubuntu-.*-arm$ ]]; then
+            echo "os_pattern=linux_arm64" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
             echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" = "macos-13" ]; then
             echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
@@ -252,14 +250,14 @@ jobs:
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
-          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
-          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+          sudo apt install -y expect ncat ripgrep
 
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
           brew install expect
           brew install nmap  # includes ncat
+          brew install ripgrep
 
       - name: prepare testing
         run: |
@@ -277,12 +275,21 @@ jobs:
           cd basic-cli
           git checkout ${{ env.RELEASE_TAG }}
           cp -r examples ../..
+          cp -r tests ../..
           cp -r ci ../..
+          cp -r Cargo.toml ../..
           # LICENSE is necessary for command test
           cp -r LICENSE ../..
 
+      - name: Remove things that dont work on musl
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          rm basic-cli-platform/examples/file-accessed-modified-created-time.roc
+          sed -i.bak -e '/time_accessed!,$/d' -e '/time_modified!,$/d' -e '/time_created!,$/d' -e '/^time_accessed!/,/^$/d' -e '/^time_modified!/,/^$/d' -e '/^time_created!/,/^$/d' -e '/^import Utc exposing \[Utc\]$/d' basic-cli-platform/platform/File.roc
+          rm basic-cli-platform/platform/File.roc.bak
+
       - name: run tests
         run: |
-          cd basic-cli-platform
           # no need to build platform anymore
+          cd basic-cli-platform
           NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
