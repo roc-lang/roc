@@ -1178,7 +1178,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     defer writer.deinit(gpa);
 
     // Track offsets as we go
-    var offsets = std.ArrayList(usize).init(gpa);
+    var offsets = std.array_list.Managed(usize).init(gpa);
     defer offsets.deinit();
 
     // Create temp file

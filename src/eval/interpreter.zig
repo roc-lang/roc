@@ -269,16 +269,16 @@ pub const Interpreter = struct {
     /// Type scope for resolving polymorphic type variables
     type_scope: types.TypeScope,
     /// Work queue for iterative expression evaluation (LIFO stack)
-    work_stack: std.ArrayList(WorkItem),
+    work_stack: std.array_list.Managed(WorkItem),
     /// Parallel stack tracking type layouts of values in `stack_memory`
     ///
     /// There's one value per logical value in the layout stack, but that value
     /// will consume an arbitrary amount of space in the `stack_memory`
-    value_stack: std.ArrayList(InternalStackValue),
+    value_stack: std.array_list.Managed(InternalStackValue),
     /// Active parameter or local bindings
-    bindings_stack: std.ArrayList(Binding),
+    bindings_stack: std.array_list.Managed(Binding),
     /// Function stack
-    frame_stack: std.ArrayList(CallFrame),
+    frame_stack: std.array_list.Managed(CallFrame),
 
     // Debug tracing state
     /// Indentation level for nested debug output
@@ -305,10 +305,10 @@ pub const Interpreter = struct {
             .layout_cache = layout_cache,
             .type_store = type_store,
             .type_scope = types.TypeScope.init(allocator),
-            .work_stack = try std.ArrayList(WorkItem).initCapacity(allocator, 128),
-            .value_stack = try std.ArrayList(InternalStackValue).initCapacity(allocator, 128),
-            .bindings_stack = try std.ArrayList(Binding).initCapacity(allocator, 128),
-            .frame_stack = try std.ArrayList(CallFrame).initCapacity(allocator, 128),
+            .work_stack = try std.array_list.Managed(WorkItem).initCapacity(allocator, 128),
+            .value_stack = try std.array_list.Managed(InternalStackValue).initCapacity(allocator, 128),
+            .bindings_stack = try std.array_list.Managed(Binding).initCapacity(allocator, 128),
+            .frame_stack = try std.array_list.Managed(CallFrame).initCapacity(allocator, 128),
             .trace_indent = 0,
             .trace_writer = null,
             .has_crashed = false,
@@ -2551,7 +2551,7 @@ pub const Interpreter = struct {
             self.printTraceIndent();
 
             // Build visual representation
-            var stack_repr = std.ArrayList([]const u8).init(self.allocator);
+            var stack_repr = std.array_list.Managed([]const u8).init(self.allocator);
             defer stack_repr.deinit();
 
             for (self.value_stack.items) |v| {
@@ -2999,7 +2999,7 @@ pub const Interpreter = struct {
         }
 
         // Multiple segments: collect all evaluated string segments
-        var segment_strings = std.ArrayList(builtins.str.RocStr).init(self.allocator);
+        var segment_strings = std.array_list.Managed(builtins.str.RocStr).init(self.allocator);
         defer {
             // Clean up all segment strings
             for (segment_strings.items) |*segment_str| {
@@ -3087,7 +3087,7 @@ pub const Interpreter = struct {
 
         // General case: multiple segments or non-string single segment
         // List to collect all evaluated string segments
-        var segment_strings = std.ArrayList(builtins.str.RocStr).init(self.allocator);
+        var segment_strings = std.array_list.Managed(builtins.str.RocStr).init(self.allocator);
         defer {
             // Clean up all segment strings
             for (segment_strings.items) |*segment_str| {
@@ -3180,7 +3180,7 @@ pub const Interpreter = struct {
         };
 
         // Collect and filter captures
-        var final_captures = std.ArrayList(CIR.Expr.Capture).init(self.allocator);
+        var final_captures = std.array_list.Managed(CIR.Expr.Capture).init(self.allocator);
         defer final_captures.deinit();
 
         try self.collectAndFilterCaptures(closure_expr, &final_captures);
@@ -3238,7 +3238,7 @@ pub const Interpreter = struct {
     fn collectAndFilterCaptures(
         self: *Interpreter,
         closure_expr: CIR.Expr.Closure,
-        final_captures: *std.ArrayList(CIR.Expr.Capture),
+        final_captures: *std.array_list.Managed(CIR.Expr.Capture),
     ) EvalError!void {
         // The canonicalization step now provides the definitive list of captures.
         const captures = self.env.store.sliceCaptures(closure_expr.captures);
@@ -3282,7 +3282,7 @@ pub const Interpreter = struct {
         captures: []const CIR.Expr.Capture,
         layout_idx: layout.Idx,
 
-        pub fn init(allocator: std.mem.Allocator, captures: *const std.ArrayList(CIR.Expr.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
+        pub fn init(allocator: std.mem.Allocator, captures: *const std.array_list.Managed(CIR.Expr.Capture), layout_idx: layout.Idx) !CaptureBindingInfo {
             const captures_copy = try allocator.dupe(CIR.Expr.Capture, captures.items);
             return CaptureBindingInfo{
                 .captures = captures_copy,
@@ -3451,7 +3451,7 @@ pub const Interpreter = struct {
     fn copyCapturesToClosure(
         self: *Interpreter,
         closure_ptr: *anyopaque,
-        captures: *const std.ArrayList(CIR.Expr.Capture),
+        captures: *const std.array_list.Managed(CIR.Expr.Capture),
         captures_record_layout: Layout,
     ) EvalError!void {
         // Calculate properly aligned offset for captures after Closure header

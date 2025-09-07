@@ -6502,7 +6502,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
     const UnusedVar = struct { ident: base.Ident.Idx, region: Region };
 
     // Collect all unused variables first so we can sort them
-    var unused_vars = std.ArrayList(UnusedVar).init(self.env.gpa);
+    var unused_vars = std.array_list.Managed(UnusedVar).init(self.env.gpa);
     defer unused_vars.deinit();
 
     // Iterate through all identifiers in this scope

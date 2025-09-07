@@ -144,7 +144,7 @@ pub const Instantiate = struct {
     }
 
     fn instantiateAlias(self: *Self, alias: Alias, ctx: *Ctx) std.mem.Allocator.Error!Alias {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         const backing_var = self.store.getAliasBackingVar(alias);
@@ -190,7 +190,7 @@ pub const Instantiate = struct {
     }
 
     fn instantiateNominalType(self: *Self, nominal: NominalType, ctx: *Ctx) std.mem.Allocator.Error!NominalType {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         const backing_var = self.store.getNominalBackingVar(nominal);
@@ -213,7 +213,7 @@ pub const Instantiate = struct {
 
     fn instantiateTuple(self: *Self, tuple: Tuple, ctx: *Ctx) std.mem.Allocator.Error!Tuple {
         const elems_slice = self.store.sliceVars(tuple.elems);
-        var fresh_elems = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_elems = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_elems.deinit();
 
         for (elems_slice) |elem_var| {
@@ -242,7 +242,7 @@ pub const Instantiate = struct {
 
     fn instantiateFunc(self: *Self, func: Func, ctx: *Ctx) std.mem.Allocator.Error!Func {
         const args_slice = self.store.sliceVars(func.args);
-        var fresh_args = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_args = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_args.deinit();
 
         for (args_slice) |arg_var| {
@@ -262,7 +262,7 @@ pub const Instantiate = struct {
     fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range, ctx: *Ctx) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
         const fields_slice = self.store.getRecordFieldsSlice(fields);
 
-        var fresh_fields = std.ArrayList(RecordField).init(self.store.gpa);
+        var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
@@ -279,7 +279,7 @@ pub const Instantiate = struct {
     fn instantiateRecord(self: *Self, record: Record, ctx: *Ctx) std.mem.Allocator.Error!Record {
         const fields_slice = self.store.getRecordFieldsSlice(record.fields);
 
-        var fresh_fields = std.ArrayList(RecordField).init(self.store.gpa);
+        var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
@@ -300,11 +300,11 @@ pub const Instantiate = struct {
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion, ctx: *Ctx) std.mem.Allocator.Error!TagUnion {
         const tags_slice = self.store.getTagsSlice(tag_union.tags);
 
-        var fresh_tags = std.ArrayList(Tag).init(self.store.gpa);
+        var fresh_tags = std.array_list.Managed(Tag).init(self.store.gpa);
         defer fresh_tags.deinit();
 
         for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
-            var fresh_args = std.ArrayList(Var).init(self.store.gpa);
+            var fresh_args = std.array_list.Managed(Var).init(self.store.gpa);
             defer fresh_args.deinit();
 
             const args_slice = self.store.sliceVars(tag_args);

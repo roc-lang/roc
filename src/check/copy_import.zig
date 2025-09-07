@@ -92,7 +92,7 @@ fn copyAlias(
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
-    var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
     defer dest_args.deinit();
 
     const origin_backing = source_store.getAliasBackingVar(source_alias);
@@ -157,7 +157,7 @@ fn copyTuple(
 ) std.mem.Allocator.Error!types_mod.Tuple {
     const elems_slice = source_store.sliceVars(tuple.elems);
 
-    var dest_elems = std.ArrayList(Var).init(dest_store.gpa);
+    var dest_elems = std.array_list.Managed(Var).init(dest_store.gpa);
     defer dest_elems.deinit();
 
     for (elems_slice) |elem_var| {
@@ -202,7 +202,7 @@ fn copyFunc(
 ) std.mem.Allocator.Error!Func {
     const args_slice = source_store.sliceVars(func.args);
 
-    var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
     defer dest_args.deinit();
 
     for (args_slice) |arg_var| {
@@ -231,7 +231,7 @@ fn copyRecordFields(
 ) std.mem.Allocator.Error!types_mod.RecordField.SafeMultiList.Range {
     const source_fields = source_store.getRecordFieldsSlice(fields_range);
 
-    var fresh_fields = std.ArrayList(RecordField).init(allocator);
+    var fresh_fields = std.array_list.Managed(RecordField).init(allocator);
     defer fresh_fields.deinit();
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
@@ -282,13 +282,13 @@ fn copyTagUnion(
 ) std.mem.Allocator.Error!TagUnion {
     const tags_slice = source_store.getTagsSlice(tag_union.tags);
 
-    var fresh_tags = std.ArrayList(Tag).init(allocator);
+    var fresh_tags = std.array_list.Managed(Tag).init(allocator);
     defer fresh_tags.deinit();
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |name, args_range| {
         const args_slice = source_store.sliceVars(args_range);
 
-        var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+        var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
         defer dest_args.deinit();
 
         for (args_slice) |arg_var| {
@@ -332,7 +332,7 @@ fn copyNominalType(
     const origin_str = source_idents.getText(source_nominal.origin_module);
     const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
-    var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
     defer dest_args.deinit();
 
     const origin_backing = source_store.getNominalBackingVar(source_nominal);

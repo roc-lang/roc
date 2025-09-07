@@ -621,7 +621,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
     };
 
-    var indices = std.ArrayList(Ident.Idx).init(gpa);
+    var indices = std.array_list.Managed(Ident.Idx).init(gpa);
     defer indices.deinit();
 
     for (test_idents) |test_ident| {

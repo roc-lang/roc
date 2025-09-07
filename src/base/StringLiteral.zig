@@ -280,7 +280,7 @@ test "Store comprehensive CompactWriter roundtrip" {
         "very long string " ** 50, // long string
     };
 
-    var indices = std.ArrayList(Idx).init(gpa);
+    var indices = std.array_list.Managed(Idx).init(gpa);
     defer indices.deinit();
 
     for (test_strings) |str| {

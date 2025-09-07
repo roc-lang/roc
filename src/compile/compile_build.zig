@@ -67,10 +67,10 @@ const GlobalQueue = struct {
     };
 
     gpa: Allocator,
-    tasks: std.ArrayList(Task),
+    tasks: std.array_list.Managed(Task),
     lock: Mutex = .{},
     cond: ThreadCondition = .{},
-    workers: std.ArrayList(Thread),
+    workers: std.array_list.Managed(Thread),
     running: bool = false,
     sink_ptr: ?*OrderedSink = null,
     // Pointer back to BuildEnv for dispatch
@@ -81,8 +81,8 @@ const GlobalQueue = struct {
     pub fn init(gpa: Allocator) GlobalQueue {
         return .{
             .gpa = gpa,
-            .tasks = std.ArrayList(Task).init(gpa),
-            .workers = std.ArrayList(std.Thread).init(gpa),
+            .tasks = std.array_list.Managed(Task).init(gpa),
+            .workers = std.array_list.Managed(std.Thread).init(gpa),
         };
     }
 
@@ -342,7 +342,7 @@ pub const BuildEnv = struct {
     compiler_version: []const u8 = build_options.compiler_version,
 
     // Workspace roots for sandboxing (absolute, canonical)
-    workspace_roots: std.ArrayList([]const u8),
+    workspace_roots: std.array_list.Managed([]const u8),
 
     // Map of package name (alias) -> Package
     packages: std.StringHashMapUnmanaged(Package) = .{},
@@ -359,23 +359,23 @@ pub const BuildEnv = struct {
     cache_manager: ?*CacheManager = null,
 
     // Owned resolver ctx pointers for cleanup (typed)
-    resolver_ctxs: std.ArrayList(*ResolverCtx),
+    resolver_ctxs: std.array_list.Managed(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
-    pkg_sink_ctxs: std.ArrayList(*PkgSinkCtx),
+    pkg_sink_ctxs: std.array_list.Managed(*PkgSinkCtx),
     // Owned schedule ctxs for pre-registration (one per package)
-    schedule_ctxs: std.ArrayList(*ScheduleCtx),
+    schedule_ctxs: std.array_list.Managed(*ScheduleCtx),
 
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) BuildEnv {
         return .{
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
-            .workspace_roots = std.ArrayList([]const u8).init(gpa),
+            .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
-            .resolver_ctxs = std.ArrayList(*ResolverCtx).init(gpa),
-            .pkg_sink_ctxs = std.ArrayList(*PkgSinkCtx).init(gpa),
-            .schedule_ctxs = std.ArrayList(*ScheduleCtx).init(gpa),
+            .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
+            .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
+            .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
         };
     }
 
@@ -693,7 +693,7 @@ pub const BuildEnv = struct {
         // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
         if (std.mem.eql(u8, from_pkg, to_pkg)) return true;
 
-        var stack = std.ArrayList([]const u8).init(self.gpa);
+        var stack = std.array_list.Managed([]const u8).init(self.gpa);
         defer stack.deinit();
         stack.append(to_pkg) catch {
             return false;
@@ -875,7 +875,7 @@ pub const BuildEnv = struct {
         const e = ast.store.getExpr(expr_idx);
         return switch (e) {
             .string => |s| blk: {
-                var buf = std.ArrayList(u8).init(self.gpa);
+                var buf = std.array_list.Managed(u8).init(self.gpa);
                 errdefer buf.deinit();
 
                 // Use exprSlice to properly iterate through string parts
@@ -913,7 +913,7 @@ pub const BuildEnv = struct {
 
     fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) ![]const u8 {
         var parts = std.mem.splitScalar(u8, dotted, '.');
-        var segs = std.ArrayList([]const u8).init(self.gpa);
+        var segs = std.array_list.Managed([]const u8).init(self.gpa);
         defer segs.deinit();
 
         try segs.append(root_dir);
@@ -1109,11 +1109,11 @@ pub const BuildEnv = struct {
     // sort by (min dependency depth from root app, then package and module names).
     fn emitDeterministic(self: *BuildEnv) !void {
         // Build arrays of package names, module names, and depths
-        var pkg_names = std.ArrayList([]const u8).init(self.gpa);
+        var pkg_names = std.array_list.Managed([]const u8).init(self.gpa);
         defer pkg_names.deinit();
-        var module_names = std.ArrayList([]const u8).init(self.gpa);
+        var module_names = std.array_list.Managed([]const u8).init(self.gpa);
         defer module_names.deinit();
-        var depths = std.ArrayList(u32).init(self.gpa);
+        var depths = std.array_list.Managed(u32).init(self.gpa);
         defer depths.deinit();
 
         var it = self.schedulers.iterator();
@@ -1232,7 +1232,7 @@ pub const OrderedSink = struct {
         pkg_name: []const u8, // borrowed from BuildEnv.packages
         module_name: []const u8, // borrowed from ModuleBuild
         depth: u32, // min dependency depth
-        reports: std.ArrayList(Report), // zero or more reports for this module
+        reports: std.array_list.Managed(Report), // zero or more reports for this module
         ready: bool,
         emitted: bool,
     };
@@ -1242,9 +1242,9 @@ pub const OrderedSink = struct {
     cond: ThreadCondition = .{},
 
     // Ordered buffer and index
-    entries: std.ArrayList(Entry),
+    entries: std.array_list.Managed(Entry),
     // Precomputed global order - indices into entries array
-    order: std.ArrayList(usize),
+    order: std.array_list.Managed(usize),
     // Map (pkg, module) -> index in entries
     index: std.HashMap(ModuleKey, usize, ModuleKeyContext, 80),
     // Drain cursor into order[] for emitted entries
@@ -1259,8 +1259,8 @@ pub const OrderedSink = struct {
     pub fn init(gpa: Allocator) OrderedSink {
         return .{
             .gpa = gpa,
-            .entries = std.ArrayList(Entry).init(gpa),
-            .order = std.ArrayList(usize).init(gpa),
+            .entries = std.array_list.Managed(Entry).init(gpa),
+            .order = std.array_list.Managed(usize).init(gpa),
             .index = std.HashMap(ModuleKey, usize, ModuleKeyContext, 80).init(gpa),
         };
     }
@@ -1302,7 +1302,7 @@ pub const OrderedSink = struct {
             } else {
                 // New entry
                 entry_index = self.entries.items.len;
-                const reports_list = std.ArrayList(Report).init(self.gpa);
+                const reports_list = std.array_list.Managed(Report).init(self.gpa);
                 try self.entries.append(.{
                     .pkg_name = pkg_names[i],
                     .module_name = module_names[i],
@@ -1368,7 +1368,7 @@ pub const OrderedSink = struct {
             entry_index = idx;
         } else {
             entry_index = self.entries.items.len;
-            const reports_list = std.ArrayList(Report).init(self.gpa);
+            const reports_list = std.array_list.Managed(Report).init(self.gpa);
             self.entries.append(.{
                 .pkg_name = pkg_name,
                 .module_name = module_name,

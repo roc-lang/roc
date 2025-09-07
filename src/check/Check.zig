@@ -1338,7 +1338,7 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                                     }
 
                                     // Create argument list for the function call
-                                    var args = std.ArrayList(Var).init(self.gpa);
+                                    var args = std.array_list.Managed(Var).init(self.gpa);
                                     defer args.deinit();
 
                                     // Add the receiver (the nominal type) as the first argument
@@ -2486,7 +2486,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     const param_y_var = try module_env.types.fresh();
 
 //     // Create a record with fields x and y
-//     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
+//     var record_fields = std.array_list.Managed(types_mod.RecordField).init(gpa);
 //     defer record_fields.deinit();
 
 //     const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"));
@@ -2590,7 +2590,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     const param_var = try module_env.types.fresh();
 
 //     // Create a record with field "x" of the same type as the parameter
-//     var record_fields = std.ArrayList(types_mod.RecordField).init(gpa);
+//     var record_fields = std.array_list.Managed(types_mod.RecordField).init(gpa);
 //     defer record_fields.deinit();
 
 //     const x_ident = try module_env.idents.insert(gpa, base.Ident.for_text("x"));

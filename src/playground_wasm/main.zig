@@ -129,18 +129,18 @@ const CompilerStageData = struct {
     formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
-    tokenize_reports: std.ArrayList(reporting.Report),
-    parse_reports: std.ArrayList(reporting.Report),
-    can_reports: std.ArrayList(reporting.Report),
-    type_reports: std.ArrayList(reporting.Report),
+    tokenize_reports: std.array_list.Managed(reporting.Report),
+    parse_reports: std.array_list.Managed(reporting.Report),
+    can_reports: std.array_list.Managed(reporting.Report),
+    type_reports: std.array_list.Managed(reporting.Report),
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
             .module_env = module_env,
-            .tokenize_reports = std.ArrayList(reporting.Report).init(alloc),
-            .parse_reports = std.ArrayList(reporting.Report).init(alloc),
-            .can_reports = std.ArrayList(reporting.Report).init(alloc),
-            .type_reports = std.ArrayList(reporting.Report).init(alloc),
+            .tokenize_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .parse_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .can_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .type_reports = std.array_list.Managed(reporting.Report).init(alloc),
         };
     }
 
@@ -780,7 +780,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const temp_alloc = local_arena.allocator();
 
     // Generate Tokens HTML
-    var tokens_html_buffer = std.ArrayList(u8).init(temp_alloc);
+    var tokens_html_buffer = std.array_list.Managed(u8).init(temp_alloc);
     const tokens_writer = tokens_html_buffer.writer().any();
     AST.tokensToHtml(&parse_ast, &module_env.common, tokens_writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
@@ -791,7 +791,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Generate AST HTML
-    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
+    var ast_html_buffer = std.array_list.Managed(u8).init(temp_alloc);
     const ast_writer = ast_html_buffer.writer().any();
     {
         const file = parse_ast.store.getFile();
@@ -810,7 +810,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Generate formatted code
-    var formatted_code_buffer = std.ArrayList(u8).init(temp_alloc);
+    var formatted_code_buffer = std.array_list.Managed(u8).init(temp_alloc);
     fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
@@ -1007,7 +1007,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     const w = resp_writer.writer();
 
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
-    var diagnostics = std.ArrayList(Diagnostic).init(allocator);
+    var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
     defer diagnostics.deinit();
     extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {};
     extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
@@ -1268,7 +1268,7 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    var sexpr_buffer = std.array_list.Managed(u8).init(local_arena.allocator());
     defer sexpr_buffer.deinit();
     const sexpr_writer = sexpr_buffer.writer().any();
 
@@ -1306,7 +1306,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    var sexpr_buffer = std.array_list.Managed(u8).init(local_arena.allocator());
     defer sexpr_buffer.deinit();
     const sexpr_writer = sexpr_buffer.writer().any();
 
@@ -1513,7 +1513,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    var sexpr_buffer = std.array_list.Managed(u8).init(local_arena.allocator());
     defer sexpr_buffer.deinit();
     const sexpr_writer = sexpr_buffer.writer().any();
 
@@ -1556,8 +1556,8 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
 }
 
 fn extractDiagnosticsFromReports(
-    diagnostics: *std.ArrayList(Diagnostic),
-    reports: std.ArrayList(reporting.Report),
+    diagnostics: *std.array_list.Managed(Diagnostic),
+    reports: std.array_list.Managed(reporting.Report),
 ) !void {
     var count: usize = 0;
     const max_diagnostics = 100;
@@ -1695,7 +1695,7 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.ArrayList(u8).init(allocator);
+    var temp_buffer = std.array_list.Managed(u8).init(allocator);
     defer temp_buffer.deinit();
     temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
     const json_len = temp_buffer.items.len;

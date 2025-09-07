@@ -280,7 +280,7 @@ const TestData = struct {
 /// Helper to send a message to the WASM Playground and get a response.
 fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
     // Serialize message to JSON
-    var message_json_buffer = std.ArrayList(u8).init(allocator);
+    var message_json_buffer = std.array_list.Managed(u8).init(allocator);
     defer message_json_buffer.deinit();
     try std.json.stringify(message, .{}, message_json_buffer.writer());
     const message_json = message_json_buffer.items;
@@ -802,7 +802,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         .skipped = 0,
     };
 
-    var failures = std.ArrayList(TestFailure).init(arena);
+    var failures = std.array_list.Managed(TestFailure).init(arena);
     defer failures.deinit();
 
     for (test_cases) |case| {
@@ -925,7 +925,7 @@ pub fn main() !void {
     const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
-    var test_cases = std.ArrayList(TestCase).init(allocator);
+    var test_cases = std.array_list.Managed(TestCase).init(allocator);
     defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test

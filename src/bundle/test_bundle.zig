@@ -208,7 +208,7 @@ test "bundle validates paths correctly" {
         try file.writeAll("Test content");
     }
     {
-        var bundle_data = std.ArrayList(u8).init(allocator);
+        var bundle_data = std.array_list.Managed(u8).init(allocator);
         defer bundle_data.deinit();
 
         const paths = [_][]const u8{"CON.txt"};
@@ -228,7 +228,7 @@ test "bundle validates paths correctly" {
         try file.writeAll("Normal content");
     }
     {
-        var bundle_data = std.ArrayList(u8).init(allocator);
+        var bundle_data = std.array_list.Managed(u8).init(allocator);
         defer bundle_data.deinit();
 
         const paths = [_][]const u8{"normal.txt"};
@@ -247,7 +247,7 @@ test "path validation prevents directory traversal" {
     const allocator = testing.allocator;
 
     // Create a malicious tar with directory traversal attempt
-    var malicious_tar = std.ArrayList(u8).init(allocator);
+    var malicious_tar = std.array_list.Managed(u8).init(allocator);
     defer malicious_tar.deinit();
 
     var tar_writer = std.tar.writer(malicious_tar.writer());
@@ -263,7 +263,7 @@ test "path validation prevents directory traversal" {
     try tar_writer.finish();
 
     // Compress it
-    var compressed = std.ArrayList(u8).init(allocator);
+    var compressed = std.array_list.Managed(u8).init(allocator);
     defer compressed.deinit();
 
     var allocator_copy = allocator;
@@ -320,7 +320,7 @@ test "empty directories are preserved" {
     }
 
     // Bundle with explicit directory entries
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     // Note: Current implementation doesn't explicitly handle empty directories
@@ -399,7 +399,7 @@ test "bundle and unbundle roundtrip" {
     var file_iter = FilePathIterator{ .paths = &file_paths };
 
     // Bundle to memory
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
@@ -578,7 +578,7 @@ test "std.tar.writer creates valid tar" {
     const allocator = testing.allocator;
 
     // Create a tar in memory
-    var tar_buffer = std.ArrayList(u8).init(allocator);
+    var tar_buffer = std.array_list.Managed(u8).init(allocator);
     defer tar_buffer.deinit();
 
     var tar_writer = std.tar.writer(tar_buffer.writer());
@@ -631,7 +631,7 @@ test "minimal bundle unbundle" {
     }
 
     // Bundle to memory
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
@@ -680,7 +680,7 @@ test "bundle with path prefix stripping" {
     }
 
     // Bundle with path prefix
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     // File paths include the full prefix
@@ -730,7 +730,7 @@ test "blake3 hash verification success" {
     }
 
     // Bundle the file
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
@@ -772,7 +772,7 @@ test "blake3 hash verification failure" {
     }
 
     // Bundle the file
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
@@ -803,7 +803,7 @@ test "unbundle with existing directory error" {
     const tmp_dir = tmp.dir;
 
     // Create a simple tar archive
-    var output_buffer = std.ArrayList(u8).init(allocator);
+    var output_buffer = std.array_list.Managed(u8).init(allocator);
     defer output_buffer.deinit();
 
     const files = [_][]const u8{"test.txt"};
@@ -851,7 +851,7 @@ test "unbundle multiple archives" {
     const tmp_dir = tmp.dir;
 
     // Create two different archives
-    var filenames = std.ArrayList([]const u8).init(allocator);
+    var filenames = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (filenames.items) |fname| {
             allocator.free(fname);
@@ -861,7 +861,7 @@ test "unbundle multiple archives" {
 
     // First archive
     {
-        var output_buffer = std.ArrayList(u8).init(allocator);
+        var output_buffer = std.array_list.Managed(u8).init(allocator);
         defer output_buffer.deinit();
 
         const files = [_][]const u8{"file1.txt"};
@@ -883,7 +883,7 @@ test "unbundle multiple archives" {
 
     // Second archive
     {
-        var output_buffer = std.ArrayList(u8).init(allocator);
+        var output_buffer = std.array_list.Managed(u8).init(allocator);
         defer output_buffer.deinit();
 
         const files = [_][]const u8{"file2.txt"};
@@ -947,7 +947,7 @@ test "blake3 hash detects corruption" {
     }
 
     // Bundle the file
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{"test.txt"};
@@ -1015,10 +1015,10 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     }
 
     // First bundle
-    var first_bundle = std.ArrayList(u8).init(allocator);
+    var first_bundle = std.array_list.Managed(u8).init(allocator);
     defer first_bundle.deinit();
 
-    var paths1 = std.ArrayList([]const u8).init(allocator);
+    var paths1 = std.array_list.Managed([]const u8).init(allocator);
     defer paths1.deinit();
     for (test_files) |test_file| {
         try paths1.append(test_file.path);
@@ -1050,10 +1050,10 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     }
 
     // Second bundle (from first extraction)
-    var second_bundle = std.ArrayList(u8).init(allocator);
+    var second_bundle = std.array_list.Managed(u8).init(allocator);
     defer second_bundle.deinit();
 
-    var paths2 = std.ArrayList([]const u8).init(allocator);
+    var paths2 = std.array_list.Managed([]const u8).init(allocator);
     defer paths2.deinit();
     for (test_files) |test_file| {
         try paths2.append(test_file.path);
@@ -1110,7 +1110,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
     const tmp_dir = tmp.dir;
 
     // Create multiple archives
-    var archive_names = std.ArrayList([]const u8).init(allocator);
+    var archive_names = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (archive_names.items) |name| {
             allocator.free(name);
@@ -1120,7 +1120,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
 
     // Create 3 different archives
     for ([_][]const u8{ "file1.txt", "file2.txt", "file3.txt" }) |filename| {
-        var output_buffer = std.ArrayList(u8).init(allocator);
+        var output_buffer = std.array_list.Managed(u8).init(allocator);
         defer output_buffer.deinit();
 
         const files = [_][]const u8{filename};
@@ -1154,7 +1154,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
     var cwd = try tmp_dir.openDir(".", .{ .iterate = true });
     defer cwd.close();
 
-    var found_archives = std.ArrayList([]const u8).init(allocator);
+    var found_archives = std.array_list.Managed([]const u8).init(allocator);
     defer found_archives.deinit();
 
     var iter = cwd.iterate();
@@ -1250,13 +1250,13 @@ test "download URL validation" {
 // In-memory file system for testing
 const MemoryFileSystem = struct {
     allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.ArrayList(u8)),
+    files: std.StringHashMap(std.array_list.Managed(u8)),
     directories: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
             .directories = std.StringHashMap(void).init(allocator),
         };
     }
@@ -1302,7 +1302,7 @@ const MemoryFileSystem = struct {
         }
 
         // Create new file data
-        var file_data = std.ArrayList(u8).init(self.allocator);
+        var file_data = std.array_list.Managed(u8).init(self.allocator);
 
         // Stream from reader
         var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
@@ -1362,7 +1362,7 @@ test "download from local server" {
     }
 
     // Bundle the files
-    var bundle_data = std.ArrayList(u8).init(allocator);
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
     defer bundle_data.deinit();
 
     const file_paths = [_][]const u8{

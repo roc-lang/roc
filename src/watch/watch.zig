@@ -272,7 +272,7 @@ pub const Watcher = struct {
 
     const LinuxData = struct {
         inotify_fd: i32,
-        watch_descriptors: std.ArrayList(WatchDescriptor),
+        watch_descriptors: std.array_list.Managed(WatchDescriptor),
         path_cache: std.StringHashMap([]const u8),
 
         const WatchDescriptor = struct {
@@ -282,8 +282,8 @@ pub const Watcher = struct {
     };
 
     const WindowsData = struct {
-        handles: std.ArrayList(std.os.windows.HANDLE),
-        overlapped_data: std.ArrayList(OverlappedData),
+        handles: std.array_list.Managed(std.os.windows.HANDLE),
+        overlapped_data: std.array_list.Managed(OverlappedData),
         stop_event: ?std.os.windows.HANDLE,
 
         const OverlappedData = struct {
@@ -319,12 +319,12 @@ pub const Watcher = struct {
                 },
                 .linux => LinuxData{
                     .inotify_fd = -1,
-                    .watch_descriptors = std.ArrayList(LinuxData.WatchDescriptor).init(allocator),
+                    .watch_descriptors = std.array_list.Managed(LinuxData.WatchDescriptor).init(allocator),
                     .path_cache = std.StringHashMap([]const u8).init(allocator),
                 },
                 .windows => WindowsData{
-                    .handles = std.ArrayList(std.os.windows.HANDLE).init(allocator),
-                    .overlapped_data = std.ArrayList(WindowsData.OverlappedData).init(allocator),
+                    .handles = std.array_list.Managed(std.os.windows.HANDLE).init(allocator),
+                    .overlapped_data = std.array_list.Managed(WindowsData.OverlappedData).init(allocator),
                     .stop_event = null,
                 },
                 else => unreachable,
@@ -1368,10 +1368,10 @@ test "thread safety" {
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var mutex: std.Thread.Mutex = .{};
-        var events: std.ArrayList([]const u8) = undefined;
+        var events: std.array_list.Managed([]const u8) = undefined;
     };
 
-    global.events = std.ArrayList([]const u8).init(allocator);
+    global.events = std.array_list.Managed([]const u8).init(allocator);
     defer global.events.deinit();
 
     const callback = struct {
@@ -1527,7 +1527,7 @@ test "windows long path handling" {
     const long_dir_name = "very_long_directory_name_that_helps_test_path_length_handling";
 
     // Build the nested path
-    var path_components = std.ArrayList([]const u8).init(allocator);
+    var path_components = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (path_components.items) |component| {
             allocator.free(component);
@@ -1541,7 +1541,7 @@ test "windows long path handling" {
     }
 
     // Create the nested directories
-    var current_path = std.ArrayList(u8).init(allocator);
+    var current_path = std.array_list.Managed(u8).init(allocator);
     defer current_path.deinit();
 
     for (path_components.items) |component| {
