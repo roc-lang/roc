@@ -208,11 +208,11 @@ pub const CacheManager = struct {
 
         // Split key: first 2 chars for subdirectory, rest for filename
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
 
         var filename_buf: [62]u8 = undefined;
-        _ = std.fmt.bufPrint(&filename_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[1..32])}) catch unreachable;
+        _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
         const filename = filename_buf[0..];
 
         const cache_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
@@ -228,7 +228,7 @@ pub const CacheManager = struct {
 
         // Print the hex of the first byte into a fixed-size buffer for the subdir
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
         const full_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
         defer self.allocator.free(full_subdir);
