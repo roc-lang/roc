@@ -69,7 +69,16 @@ stringify = |value| value..to_str()
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_simple_dispatch.md:4:1:4:10:**
+```roc
+stringify = |value| value.to_str()
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

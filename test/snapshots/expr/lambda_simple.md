@@ -1,54 +1,62 @@
 # META
 ~~~ini
-description=Lambda expression
+description=lambda_simple
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-|x| x + 1
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-OpBar LowerIdent OpBar LowerIdent OpPlus Int ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(lambda
-  (body
-    (binop_plus
-      (lc "x")
-      (num_literal_i32 1)
-    )
-  )
-  (args
-    (lc "x")
-  )
-)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-|x| x + 1
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**lambda_simple.md:2:1:2:2:**
+```roc
+~~~
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**lambda_simple.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.lambda (canonicalized))
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 8
+; Total type variables: 4
 (var #0 _)
 (var #1 _)
-(var #2 -> #3)
-(var #3 -> #4)
-(var #4 Num *)
-(var #5 -> #7)
-(var #6 _)
-(var #7 fn_pure)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc
-x : _a
 ~~~

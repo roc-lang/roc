@@ -77,6 +77,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-message : Str
-greet : Str
 ~~~

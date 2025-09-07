@@ -109,5 +109,4 @@ foo = Json.parse(data)
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

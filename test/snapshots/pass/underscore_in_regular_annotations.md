@@ -262,7 +262,156 @@ PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:3:1:3:5:**
+```roc
+main : _ -> _
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:4:1:4:5:**
+```roc
+main = |x| x
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:6:1:6:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:7:13:7:14:**
+```roc
+identity = |x| x
+```
+            ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:7:1:7:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:10:1:10:8:**
+```roc
+process : List(_) -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:11:1:11:8:**
+```roc
+process = |list| "processed"
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:14:1:14:9:**
+```roc
+get_data : { field: _, other: U32 } -> U32
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:15:1:15:9:**
+```roc
+get_data = |record| record.other
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:18:1:18:14:**
+```roc
+handle_result : Result(_, Str) -> Str
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:19:1:19:14:**
+```roc
+handle_result = |result|
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:26:1:26:4:**
+```roc
+map : (a -> b), List(a) -> List(b)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:27:1:27:4:**
+```roc
+map = |_, _| []
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:30:1:30:10:**
+```roc
+transform : _a -> _b -> _b
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_in_regular_annotations.md:31:1:31:10:**
+```roc
+transform = |_, b| b
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

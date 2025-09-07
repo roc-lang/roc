@@ -443,7 +443,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 35
+; Total type variables: 36
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -465,7 +465,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #18 _)
 (var #19 Str)
 (var #20 _)
-(var #21 -> #33)
+(var #21 -> #34)
 (var #22 _)
 (var #23 _)
 (var #24 _)
@@ -478,7 +478,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #31 _)
 (var #32 _)
 (var #33 {})
-(var #34 _)
+(var #34 record)
+(var #35 _)
 ~~~
 # TYPES
 ~~~roc

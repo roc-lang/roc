@@ -1,60 +1,61 @@
 # META
 ~~~ini
-description=Example if-then-else statement with a tag expression
+description=if_then_else_simple_tag
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-if Bool.True Ok(0) else Err(1)
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-KwIf UpperIdent Dot UpperIdent UpperIdent OpenRound Int CloseRound KwElse UpperIdent OpenRound Int CloseRound ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(if_else
-  (condition     (binop_dot
-      (uc "Bool")
-      (uc "True")
-    )
-)
-  (then     (apply_uc
-      (uc "Ok")
-      (num_literal_i32 0)
-    )
-)
-  (else     (apply_uc
-      (uc "Err")
-      (num_literal_i32 1)
-    )
-))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-if Bool.True Ok(0) else Err(1)
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**if_then_else_simple_tag.md:2:1:2:2:**
+```roc
+~~~
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**if_then_else_simple_tag.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 11
+; Total type variables: 4
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
-(var #5 Num *)
-(var #6 _)
-(var #7 _)
-(var #8 Num *)
-(var #9 _)
-(var #10 _)
 ~~~
 # TYPES
 ~~~roc

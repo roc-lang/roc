@@ -423,6 +423,66 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:14:1:14:16:**
+```roc
+simpleQualified : Color.RGB
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:15:1:15:16:**
+```roc
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:18:1:18:17:**
+```roc
+aliasedQualified : ExtMod.DataType
+```
+^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:19:1:19:17:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:22:1:22:20:**
+```roc
+multiLevelQualified : ModuleA.ModuleB.TypeC
+```
+^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:23:1:23:20:**
+```roc
+multiLevelQualified = TypeC.new
+```
+^^^^^^^^^^^^^^^^^^^
+
+
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -434,6 +494,66 @@ resultType : Result.Result(I32, Str)
              ^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:26:1:26:11:**
+```roc
+resultType : Result.Result(I32, Str)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:27:1:27:11:**
+```roc
+resultType = Result.Ok(42)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:30:1:30:9:**
+```roc
+getColor : {} -> Color.RGB
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:31:1:31:9:**
+```roc
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:34:1:34:13:**
+```roc
+processColor : Color.RGB -> Str
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:35:1:35:13:**
+```roc
+processColor = |color|
+```
+^^^^^^^^^^^^
+
+
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -443,6 +563,26 @@ Types must be type identifiers, type applications, or type expressions.
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:39:1:39:10:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_type_canonicalization.md:40:1:40:10:**
+```roc
+transform = |result|
+```
+^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -476,6 +616,21 @@ Is there an **import** or **exposing** missing up-top?
         Result.Err(err) => TypeC.default
 ```
                    ^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE
@@ -552,7 +707,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 188
+; Total type variables: 190
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -587,7 +742,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #31 -> #45)
 (var #32 _)
 (var #33 _)
-(var #34 -> #172)
+(var #34 -> #173)
 (var #35 _)
 (var #36 Num *)
 (var #37 _)
@@ -597,7 +752,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #41 _)
 (var #42 Num *)
 (var #43 _)
-(var #44 -> #171)
+(var #44 -> #172)
 (var #45 _)
 (var #46 _)
 (var #47 _)
@@ -636,7 +791,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #80 -> #85)
 (var #81 _)
 (var #82 _)
-(var #83 -> #173)
+(var #83 -> #174)
 (var #84 Num *)
 (var #85 _)
 (var #86 _)
@@ -647,11 +802,11 @@ Is there an **import** or **exposing** missing up-top?
 (var #91 _)
 (var #92 _)
 (var #93 _)
-(var #94 -> #177)
+(var #94 -> #179)
 (var #95 _)
 (var #96 _)
 (var #97 _)
-(var #98 -> #176)
+(var #98 -> #178)
 (var #99 _)
 (var #100 Num *)
 (var #101 _)
@@ -661,9 +816,9 @@ Is there an **import** or **exposing** missing up-top?
 (var #105 _)
 (var #106 Num *)
 (var #107 _)
-(var #108 -> #175)
+(var #108 -> #177)
 (var #109 _)
-(var #110 -> #177)
+(var #110 -> #179)
 (var #111 _)
 (var #112 _)
 (var #113 _)
@@ -672,10 +827,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #116 _)
 (var #117 _)
 (var #118 _)
-(var #119 -> #179)
+(var #119 -> #181)
 (var #120 _)
 (var #121 Str)
-(var #122 -> #179)
+(var #122 -> #181)
 (var #123 _)
 (var #124 _)
 (var #125 _)
@@ -696,26 +851,26 @@ Is there an **import** or **exposing** missing up-top?
 (var #140 _)
 (var #141 _)
 (var #142 _)
-(var #143 -> #181)
+(var #143 -> #183)
 (var #144 _)
 (var #145 _)
 (var #146 _)
 (var #147 _)
 (var #148 _)
-(var #149 -> #181)
+(var #149 -> #183)
 (var #150 _)
-(var #151 -> #182)
+(var #151 -> #184)
 (var #152 _)
 (var #153 _)
 (var #154 _)
 (var #155 _)
 (var #156 _)
-(var #157 -> #184)
+(var #157 -> #186)
 (var #158 _)
 (var #159 _)
 (var #160 _)
 (var #161 _)
-(var #162 -> #185)
+(var #162 -> #187)
 (var #163 _)
 (var #164 _)
 (var #165 _)
@@ -725,22 +880,24 @@ Is there an **import** or **exposing** missing up-top?
 (var #169 _)
 (var #170 _)
 (var #171 {})
-(var #172 fn_pure)
+(var #172 record)
 (var #173 fn_pure)
-(var #174 _)
-(var #175 {})
-(var #176 fn_pure)
-(var #177 fn_pure)
-(var #178 _)
+(var #174 fn_pure)
+(var #175 _)
+(var #176 {})
+(var #177 record)
+(var #178 fn_pure)
 (var #179 fn_pure)
 (var #180 _)
 (var #181 fn_pure)
-(var #182 fn_pure)
-(var #183 _)
+(var #182 _)
+(var #183 fn_pure)
 (var #184 fn_pure)
-(var #185 fn_pure)
-(var #186 _)
-(var #187 _)
+(var #185 _)
+(var #186 fn_pure)
+(var #187 fn_pure)
+(var #188 _)
+(var #189 _)
 ~~~
 # TYPES
 ~~~roc

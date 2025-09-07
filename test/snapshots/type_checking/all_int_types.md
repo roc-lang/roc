@@ -66,7 +66,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "c")
-    (num_literal_big big:<idx:143>)
+    (num_literal_big num:<idx:143>)
   )
   (binop_colon
     (lc "d")
@@ -74,7 +74,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "d")
-    (num_literal_big big:<idx:154>)
+    (num_literal_big num:<idx:154>)
   )
   (binop_colon
     (lc "e")
@@ -82,7 +82,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "e")
-    (num_literal_big big:<idx:175>)
+    (num_literal_big num:<idx:175>)
   )
   (binop_colon
     (lc "f")
@@ -154,7 +154,206 @@ j = -170141183460469231731687303715884105728
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:3:1:3:2:**
+```roc
+a : U8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:4:1:4:2:**
+```roc
+a = 255
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:6:1:6:2:**
+```roc
+b : U16
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:7:1:7:2:**
+```roc
+b = 65535
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:9:1:9:2:**
+```roc
+c : U32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:10:1:10:2:**
+```roc
+c = 4294967295
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:12:1:12:2:**
+```roc
+d : U64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:13:1:13:2:**
+```roc
+d = 18446744073709551615
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:15:1:15:2:**
+```roc
+e : U128
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:16:1:16:2:**
+```roc
+e = 340282366920938463463374607431768211455
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:18:1:18:2:**
+```roc
+f : I8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:19:1:19:2:**
+```roc
+f = -128
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:21:1:21:2:**
+```roc
+g : I16
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:22:1:22:2:**
+```roc
+g = -32768
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:24:1:24:2:**
+```roc
+h : I32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:25:1:25:2:**
+```roc
+h = -2147483648
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:27:1:27:2:**
+```roc
+i : I64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:28:1:28:2:**
+```roc
+i = -9223372036854775808
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:30:1:30:2:**
+```roc
+j : I128
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_int_types.md:31:1:31:2:**
+```roc
+j = -170141183460469231731687303715884105728
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

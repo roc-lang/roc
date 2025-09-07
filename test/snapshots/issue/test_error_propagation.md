@@ -51,7 +51,26 @@ value = "test"
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**test_error_propagation.md:7:1:7:6:**
+```roc
+value : GoodAlias
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**test_error_propagation.md:8:1:8:6:**
+```roc
+value = "test"
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

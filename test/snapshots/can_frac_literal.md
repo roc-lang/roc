@@ -24,7 +24,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign Float LowerIdent O
   )
   (binop_equals
     (lc "y")
-    (frac_literal_big big:<idx:8>)
+    (frac_literal_big frac:<idx:8>)
   )
   (binop_equals
     (lc "z")
@@ -43,7 +43,36 @@ z = 0.5
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_frac_literal.md:3:1:3:2:**
+```roc
+x = 3.14
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_frac_literal.md:4:1:4:2:**
+```roc
+y = 1.23e45
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_frac_literal.md:5:1:5:2:**
+```roc
+z = 0.5
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

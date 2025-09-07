@@ -37,7 +37,26 @@ x = -1
 # EXPECTED
 NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:4:5:4:7
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**u8_negative_value.md:3:1:3:2:**
+```roc
+x : U8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**u8_negative_value.md:4:1:4:2:**
+```roc
+x = -1
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

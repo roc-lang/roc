@@ -1,50 +1,61 @@
 # META
 ~~~ini
-description=If expression with numeric comparison
+description=if_numeric_comparison
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-if 5 > 3 1 else 2
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-KwIf Int OpGreaterThan Int Int KwElse Int ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(if_else
-  (condition     (binop_gt
-      (num_literal_i32 5)
-      (num_literal_i32 3)
-    )
-)
-  (then     (num_literal_i32 1)
-)
-  (else     (num_literal_i32 2)
-))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-if 5 > 3 1 else 2
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**if_numeric_comparison.md:2:1:2:2:**
+```roc
+~~~
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**if_numeric_comparison.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 7
+; Total type variables: 4
 (var #0 _)
-(var #1 Num *)
-(var #2 Num *)
+(var #1 _)
+(var #2 _)
 (var #3 _)
-(var #4 Num *)
-(var #5 Num *)
-(var #6 _)
 ~~~
 # TYPES
 ~~~roc

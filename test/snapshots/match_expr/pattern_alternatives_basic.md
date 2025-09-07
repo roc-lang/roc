@@ -115,6 +115,16 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**pattern_alternatives_basic.md:6:1:6:5:**
+```roc
+kind = |color| match color {
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

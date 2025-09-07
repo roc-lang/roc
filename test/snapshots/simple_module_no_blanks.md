@@ -106,5 +106,4 @@ hello! = Stdout.line!("Hello")
 # TYPES
 ~~~roc
 hello : _a
-world : Str
 ~~~

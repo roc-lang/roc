@@ -83,6 +83,46 @@ match nestedList {
       ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nested_list_scoping.md:3:7:3:8:**
+```roc
+    [[x, y]] => x - y  
+```
+      ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nested_list_scoping.md:3:10:3:11:**
+```roc
+    [[x, y]] => x - y  
+```
+         ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nested_list_scoping.md:4:6:4:7:**
+```roc
+    [x, [y]] => x * y
+```
+     ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nested_list_scoping.md:4:10:4:11:**
+```roc
+    [x, [y]] => x * y
+```
+         ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

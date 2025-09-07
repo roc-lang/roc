@@ -195,7 +195,146 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:9:28:9:37
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:4:1:4:11:**
+```roc
+single_use : List(elem) -> Str
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:5:1:5:11:**
+```roc
+single_use = |x| "hello"
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:8:1:8:18:**
+```roc
+ending_underscore : List(elem_) -> elem_
+```
+^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:9:1:9:18:**
+```roc
+ending_underscore = |list| "default"
+```
+^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:12:1:12:13:**
+```roc
+combo_single : List(bad_) -> Str
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:13:17:13:18:**
+```roc
+combo_single = |x| "combo"
+```
+                ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:13:1:13:13:**
+```roc
+combo_single = |x| "combo"
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:16:1:16:13:**
+```roc
+valid_single : List(_elem) -> Str
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:17:17:17:18:**
+```roc
+valid_single = |x| "valid"
+```
+                ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:17:1:17:13:**
+```roc
+valid_single = |x| "valid"
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:19:1:19:12:**
+```roc
+valid_multi : elem -> List(elem)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:20:16:20:17:**
+```roc
+valid_multi = |x| [x]
+```
+               ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:20:1:20:12:**
+```roc
+valid_multi = |x| [x]
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_underscore_conventions.md:22:9:22:10:**
+```roc
+main = |x| "done"
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -343,6 +482,5 @@ valid_multi : _arg -> _ret
 valid_single : _arg -> Str
 x : _a
 single_use : _arg -> Str
-main : _arg -> Str
 combo_single : _arg -> Str
 ~~~

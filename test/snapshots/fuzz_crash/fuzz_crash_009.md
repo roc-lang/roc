@@ -105,6 +105,16 @@ Is there an **import** or **exposing** missing up-top?
    ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_009.md:4:1:4:4:**
+```roc
+foo =
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

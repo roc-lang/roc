@@ -753,6 +753,36 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:8:1:8:10:**
+```roc
+parseJson : Str -> Result(Value, Error)
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:9:1:9:10:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:12:1:12:14:**
+```roc
+handleRequest : Request -> Response
+```
+^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **error** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -775,6 +805,96 @@ Is there an **import** or **exposing** missing up-top?
                                       ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:13:1:13:14:**
+```roc
+handleRequest = |req| {
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:22:1:22:12:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:23:1:23:12:**
+```roc
+processData = |config, values|
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:37:1:37:13:**
+```roc
+createClient : Config -> Http.Client
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:38:17:38:23:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+                ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:38:1:38:13:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:41:1:41:15:**
+```roc
+handleResponse : Response -> Str
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:44:12:44:18:**
+```roc
+        Ok(status) => Http.statusToString(status)
+```
+           ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:42:1:42:15:**
+```roc
+handleResponse = |response|
+```
+^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **error** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -795,6 +915,46 @@ Is there an **import** or **exposing** missing up-top?
         Err(error) => Error.toString(error)
 ```
                                      ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:49:1:49:15:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:52:12:52:17:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+           ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:50:1:50:15:**
+```roc
+combineResults = |jsonResult, httpStatus|
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_exposing_types.md:52:53:52:59:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                                    ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1175,7 +1335,6 @@ Is there an **import** or **exposing** missing up-top?
 ~~~roc
 response : _a
 processData : _arg, _arg2 -> _ret
-result : _a
 httpStatus : _a
 handleRequest : _arg -> _ret
 config : _a

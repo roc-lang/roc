@@ -142,10 +142,10 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 58
+; Total type variables: 64
 (var #0 _)
 (var #1 _)
-(var #2 _)
+(var #2 -> #57)
 (var #3 Num *)
 (var #4 _)
 (var #5 _)
@@ -153,12 +153,12 @@ NIL
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 _)
+(var #10 -> #58)
 (var #11 Str)
 (var #12 _)
 (var #13 _)
 (var #14 _)
-(var #15 _)
+(var #15 -> #59)
 (var #16 Str)
 (var #17 _)
 (var #18 _)
@@ -197,10 +197,16 @@ NIL
 (var #51 _)
 (var #52 _)
 (var #53 _)
-(var #54 _)
+(var #54 -> #61)
 (var #55 _)
-(var #56 -> #57)
-(var #57 {})
+(var #56 -> #63)
+(var #57 fn_pure)
+(var #58 fn_pure)
+(var #59 fn_pure)
+(var #60 _)
+(var #61 fn_pure)
+(var #62 {})
+(var #63 record)
 ~~~
 # TYPES
 ~~~roc

@@ -93,6 +93,16 @@ updated = { ..person, age: 31 }
                            ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_basic.md:4:23:4:26:**
+```roc
+updated = { ..person, age: 31 }
+```
+                      ^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -124,22 +134,22 @@ updated = { ..person, age: 31 }
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 24
+; Total type variables: 25
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 -> #21)
+(var #3 -> #22)
 (var #4 _)
 (var #5 Str)
 (var #6 _)
 (var #7 _)
 (var #8 Num *)
 (var #9 _)
-(var #10 -> #21)
+(var #10 -> #22)
 (var #11 _)
-(var #12 -> #22)
+(var #12 -> #23)
 (var #13 _)
-(var #14 -> #22)
+(var #14 -> #23)
 (var #15 _)
 (var #16 _)
 (var #17 _)
@@ -147,12 +157,11 @@ updated = { ..person, age: 31 }
 (var #19 _)
 (var #20 _)
 (var #21 {})
-(var #22 {})
-(var #23 _)
+(var #22 record)
+(var #23 {})
+(var #24 _)
 ~~~
 # TYPES
 ~~~roc
-person : {}
 age : _a
-updated : {}
 ~~~

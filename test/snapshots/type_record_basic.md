@@ -94,7 +94,26 @@ main! = |_| getName({ name: "luke", age: 21 })
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_basic.md:3:1:3:8:**
+```roc
+getName : { name: Str, age: U64 } -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_basic.md:4:1:4:8:**
+```roc
+getName = |_person| "hello"
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -114,7 +133,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 43
+; Total type variables: 44
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -138,30 +157,31 @@ NIL
 (var #20 Str)
 (var #21 -> #38)
 (var #22 _)
-(var #23 -> #42)
+(var #23 -> #43)
 (var #24 _)
-(var #25 -> #41)
+(var #25 -> #42)
 (var #26 _)
 (var #27 Str)
 (var #28 _)
 (var #29 _)
 (var #30 Num *)
 (var #31 _)
-(var #32 -> #40)
+(var #32 -> #41)
 (var #33 _)
-(var #34 -> #42)
+(var #34 -> #43)
 (var #35 _)
 (var #36 _)
 (var #37 _)
 (var #38 fn_pure)
 (var #39 _)
 (var #40 {})
-(var #41 fn_pure)
+(var #41 record)
 (var #42 fn_pure)
+(var #43 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 getName : _arg -> Str
-main : _arg -> _ret
 _person : _a
+main : _arg -> _ret
 ~~~

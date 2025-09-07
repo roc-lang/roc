@@ -44,6 +44,16 @@ entrypoint = main
 # EXPECTED
 UNDEFINED VARIABLE - platform_header_str_simple.md:8:14:8:18
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**platform_header_str_simple.md:7:1:7:11:**
+```roc
+entrypoint : Str -> Str
+```
+^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **main** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -53,6 +63,16 @@ Is there an **import** or **exposing** missing up-top?
 entrypoint = main
 ```
              ^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**platform_header_str_simple.md:8:1:8:11:**
+```roc
+entrypoint = main
+```
+^^^^^^^^^^
 
 
 # CANONICALIZE

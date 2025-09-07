@@ -177,7 +177,56 @@ main! = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_multiple_aliases.md:8:1:8:12:**
+```roc
+create_user : UserId, UserName, UserAge -> User
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_multiple_aliases.md:9:1:9:12:**
+```roc
+create_user = |id, name, age| { id, name, age }
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_multiple_aliases.md:11:1:11:14:**
+```roc
+get_user_name : User -> UserName
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_multiple_aliases.md:12:1:12:14:**
+```roc
+get_user_name = |user| user.name
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_multiple_aliases.md:15:2:15:6:**
+```roc
+	user = create_user(123, "Alice", 25)
+```
+	^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

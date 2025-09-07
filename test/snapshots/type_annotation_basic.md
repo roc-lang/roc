@@ -192,7 +192,66 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:4:1:4:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:5:1:5:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:8:1:8:8:**
+```roc
+combine : a, b -> (a, b)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:9:1:9:8:**
+```roc
+combine = |first, second| (first, second)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:12:1:12:7:**
+```roc
+addOne : U64 -> U64
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotation_basic.md:13:1:13:7:**
+```roc
+addOne = |n| n + 1
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -323,15 +382,11 @@ NIL
 # TYPES
 ~~~roc
 combine : _arg, _arg2 -> (_field, _field2)
-num : _c
-result : _c
-identity : _arg -> _ret
-first : _c
-pair : _c
 addOne : _arg -> Num(_size)
 x : _c
-text : _c
 second : _c
 n : _c
+identity : _arg -> _ret
 main : _arg -> _ret
+first : _c
 ~~~

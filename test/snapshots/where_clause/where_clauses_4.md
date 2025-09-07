@@ -83,6 +83,16 @@ Where clauses should contain valid ability constraints.
 	            ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_4.md:7:1:7:13:**
+```roc
+decodeThings = ...
+```
+^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

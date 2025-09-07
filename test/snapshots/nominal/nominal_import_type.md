@@ -55,7 +55,16 @@ red = (Color.RGB.Red)
 # EXPECTED
 MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_import_type.md:6:1:6:4:**
+```roc
+red = Color.RGB.Red
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

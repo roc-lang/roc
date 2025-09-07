@@ -4665,7 +4665,11 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
                     // Big integer stored in ByteSlices
                     // For IntBase, it's stored as base-10 in ByteSlices
                     const ast_tag: Node.Tag = if (tag == .IntBase) .int_literal_big else .num_literal_big;
-                    return try self.ast.appendNode(self.gpa, region, ast_tag, .{ .num_literal_big = idx });
+                    const payload = if (tag == .IntBase)
+                        Node.Payload{ .int_literal_big = idx }
+                    else
+                        Node.Payload{ .num_literal_big = idx };
+                    return try self.ast.appendNode(self.gpa, region, ast_tag, payload);
                 },
                 else => {
                     // Shouldn't happen with well-formed tokens
@@ -5491,7 +5495,11 @@ fn parsePatternPrimary(self: *Parser) Error!Node.Idx {
                 },
                 .bytes_idx => |idx| {
                     const ast_tag: Node.Tag = if (token.tag == .IntBase) .int_literal_big else .num_literal_big;
-                    return try self.ast.appendNode(self.gpa, region, ast_tag, .{ .num_literal_big = idx });
+                    const payload = if (token.tag == .IntBase)
+                        Node.Payload{ .int_literal_big = idx }
+                    else
+                        Node.Payload{ .num_literal_big = idx };
+                    return try self.ast.appendNode(self.gpa, region, ast_tag, payload);
                 },
                 else => {
                     return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });

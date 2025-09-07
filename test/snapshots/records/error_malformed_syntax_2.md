@@ -60,7 +60,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 9
+; Total type variables: 10
 (var #0 _)
 (var #1 _)
 (var #2 Num *)
@@ -68,8 +68,9 @@ Is there an **import** or **exposing** missing up-top?
 (var #4 _)
 (var #5 Str)
 (var #6 _)
-(var #7 -> #8)
+(var #7 -> #9)
 (var #8 {})
+(var #9 record)
 ~~~
 # TYPES
 ~~~roc

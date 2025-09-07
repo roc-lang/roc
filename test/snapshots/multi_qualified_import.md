@@ -154,6 +154,46 @@ UNUSED VARIABLE - multi_qualified_import.md:10:12:10:19
 MODULE NOT IMPORTED - multi_qualified_import.md:13:8:13:34
 UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**multi_qualified_import.md:6:1:6:13:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multi_qualified_import.md:9:1:9:8:**
+```roc
+process : json.Core.Utf8.Encoder -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multi_qualified_import.md:10:1:10:8:**
+```roc
+process = |encoder| "processing"
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multi_qualified_import.md:13:1:13:5:**
+```roc
+data : json.Core.Utf8.EncodedData
+```
+^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **json** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -163,6 +203,16 @@ Is there an **import** or **exposing** missing up-top?
 data = json.Core.Utf8.encode("hello")
 ```
        ^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multi_qualified_import.md:14:1:14:5:**
+```roc
+data = json.Core.Utf8.encode("hello")
+```
+^^^^
 
 
 # CANONICALIZE

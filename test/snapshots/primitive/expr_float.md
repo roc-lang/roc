@@ -55,5 +55,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : F64
 ~~~

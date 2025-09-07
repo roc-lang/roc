@@ -64,7 +64,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 13
+; Total type variables: 14
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -74,10 +74,11 @@ NIL
 (var #6 _)
 (var #7 Num *)
 (var #8 _)
-(var #9 -> #12)
+(var #9 -> #13)
 (var #10 Num *)
 (var #11 _)
 (var #12 {})
+(var #13 record)
 ~~~
 # TYPES
 ~~~roc

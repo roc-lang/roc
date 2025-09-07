@@ -1100,6 +1100,36 @@ y : {}
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:22:1:22:5:**
+```roc
+line : ( # Cm
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:35:1:35:4:**
+```roc
+ane = |num| if num 2 else 5
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:37:1:37:4:**
+```roc
+one : U6
+```
+^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **s** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1131,6 +1161,26 @@ Is there an **import** or **exposing** missing up-top?
 		r
 ```
 		^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:38:1:38:4:**
+```roc
+add = |Rum| {
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:49:1:49:3:**
+```roc
+me = |
+```
+^^
 
 
 **UNDEFINED VARIABLE**
@@ -1232,6 +1282,16 @@ Is there an **import** or **exposing** missing up-top?
 	       ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:88:1:88:2:**
+```roc
+t = [
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **list** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1307,6 +1367,16 @@ Is there an **import** or **exposing** missing up-top?
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
 	                            ^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:97:2:97:3:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+	^
 
 
 **UNDEFINED VARIABLE**
@@ -1406,6 +1476,46 @@ Is there an **import** or **exposing** missing up-top?
 			r(nu) # xpr
 ```
 			  ^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:75:1:75:3:**
+```roc
+ma= |_| { e
+```
+^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:113:1:113:2:**
+```roc
+y : {}
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:114:1:114:2:**
+```roc
+e = {}
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_020.md:116:1:116:2:**
+```roc
+t : V((a,c))
+```
+^
 
 
 **UNDEFINED VARIABLE**
@@ -1539,7 +1649,7 @@ h == foo
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 379
+; Total type variables: 380
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -1713,7 +1823,7 @@ h == foo
 (var #170 _)
 (var #171 _)
 (var #172 _)
-(var #173 -> #373)
+(var #173 -> #374)
 (var #174 _)
 (var #175 _)
 (var #176 -> #177)
@@ -1754,7 +1864,7 @@ h == foo
 (var #211 _)
 (var #212 _)
 (var #213 {})
-(var #214 -> #358)
+(var #214 -> #359)
 (var #215 _)
 (var #216 Num *)
 (var #217 _)
@@ -1765,41 +1875,41 @@ h == foo
 (var #222 _)
 (var #223 _)
 (var #224 _)
-(var #225 _)
+(var #225 -> #357)
 (var #226 _)
 (var #227 _)
 (var #228 _)
 (var #229 _)
 (var #230 _)
-(var #231 -> #358)
+(var #231 -> #359)
 (var #232 _)
-(var #233 -> #360)
+(var #233 -> #361)
 (var #234 Num *)
 (var #235 Str)
 (var #236 _)
 (var #237 _)
 (var #238 _)
 (var #239 _)
-(var #240 -> #359)
+(var #240 -> #360)
 (var #241 Num *)
 (var #242 Num *)
 (var #243 Num *)
 (var #244 _)
-(var #245 -> #360)
+(var #245 -> #361)
 (var #246 _)
-(var #247 -> #363)
+(var #247 -> #364)
 (var #248 Num *)
 (var #249 Str)
 (var #250 _)
 (var #251 _)
 (var #252 _)
 (var #253 _)
-(var #254 -> #361)
+(var #254 -> #362)
 (var #255 Num *)
 (var #256 Num *)
 (var #257 Num *)
 (var #258 _)
-(var #259 -> #362)
+(var #259 -> #363)
 (var #260 _)
 (var #261 _)
 (var #262 Num *)
@@ -1822,16 +1932,16 @@ h == foo
 (var #279 -> #280)
 (var #280 -> #281)
 (var #281 Num *)
-(var #282 -> #364)
+(var #282 -> #365)
 (var #283 _)
 (var #284 _)
 (var #285 _)
 (var #286 _)
-(var #287 -> #366)
+(var #287 -> #367)
 (var #288 _)
 (var #289 _)
 (var #290 _)
-(var #291 -> #368)
+(var #291 -> #369)
 (var #292 _)
 (var #293 _)
 (var #294 _)
@@ -1839,12 +1949,12 @@ h == foo
 (var #296 _)
 (var #297 _)
 (var #298 _)
-(var #299 -> #371)
-(var #300 -> #372)
+(var #299 -> #372)
+(var #300 -> #373)
 (var #301 _)
 (var #302 _)
 (var #303 _)
-(var #304 -> #373)
+(var #304 -> #374)
 (var #305 _)
 (var #306 _)
 (var #307 _)
@@ -1852,8 +1962,8 @@ h == foo
 (var #309 _)
 (var #310 _)
 (var #311 _)
-(var #312 -> #377)
-(var #313 -> #377)
+(var #312 -> #378)
+(var #313 -> #378)
 (var #314 _)
 (var #315 _)
 (var #316 _)
@@ -1897,45 +2007,42 @@ h == foo
 (var #354 _)
 (var #355 _)
 (var #356 fn_pure)
-(var #357 {})
-(var #358 record)
-(var #359 tuple)
+(var #357 fn_pure)
+(var #358 {})
+(var #359 record)
 (var #360 tuple)
 (var #361 tuple)
 (var #362 tuple)
-(var #363 fn_pure)
+(var #363 tuple)
 (var #364 fn_pure)
-(var #365 _)
-(var #366 fn_pure)
-(var #367 _)
-(var #368 fn_pure)
-(var #369 _)
+(var #365 fn_pure)
+(var #366 _)
+(var #367 fn_pure)
+(var #368 _)
+(var #369 fn_pure)
 (var #370 _)
 (var #371 _)
-(var #372 fn_pure)
+(var #372 _)
 (var #373 fn_pure)
-(var #374 _)
+(var #374 fn_pure)
 (var #375 _)
 (var #376 _)
-(var #377 {})
-(var #378 _)
+(var #377 _)
+(var #378 {})
+(var #379 _)
 ~~~
 # TYPES
 ~~~roc
 n : _d
-er : _d
 e : {}
 y : _d
 me : _arg -> _ret
 a : _d
 line : _d
-w : Str
-rd : { ned: _field }
 ane : _arg -> _ret
 add : _arg -> _ret
 one : _d
 main : _d
-i : Str
 num : _d
 t : _d
 ma : _arg -> _ret

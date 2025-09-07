@@ -85,7 +85,26 @@ main! = |_| {}
 PARSE ERROR - type_function_basic.md:3:26:3:28
 PARSE ERROR - type_function_basic.md:3:29:3:31
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_basic.md:3:1:3:6:**
+```roc
+apply : (_a -> _b) -> _a -> _b
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_basic.md:4:1:4:6:**
+```roc
+apply = |fn, x| fn(x)
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

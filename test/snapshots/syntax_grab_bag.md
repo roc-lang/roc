@@ -2018,6 +2018,36 @@ import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*
                                        ^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:65:1:65:16:**
+```roc
+add_one_oneline = |num| if num 2 else 5
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:67:1:67:8:**
+```roc
+add_one : U64 -> U64
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:68:12:68:15:**
+```roc
+add_one = |num| {
+```
+           ^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **some_func** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2027,6 +2057,16 @@ Is there an **import** or **exposing** missing up-top?
 			some_func() # After debug expr
 ```
 			^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:68:1:68:8:**
+```roc
+add_one = |num| {
+```
+^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -2053,6 +2093,16 @@ This might be a limitation in the current implementation that will be addressed 
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:94:5:94:6:**
+```roc
+				x = 12
+```
+				^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **rest** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2073,6 +2123,26 @@ Is there an **import** or **exposing** missing up-top?
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
 		                                  ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:127:4:128:9:**
+```roc
+			.. # After spread operator
+				rest, # After last field
+```
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:80:1:80:11:**
+```roc
+match_time = |
+```
+^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2152,6 +2222,16 @@ Is there an **import** or **exposing** missing up-top?
 	^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:144:1:144:6:**
+```roc
+main! = |_| { # Yeah I can leave a comment here
+```
+^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **number** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2161,6 +2241,36 @@ Is there an **import** or **exposing** missing up-top?
 	tag_with_payload = Ok(number)
 ```
 	                      ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:164:2:164:18:**
+```roc
+	tag_with_payload = Ok(number)
+```
+	^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:165:2:165:14:**
+```roc
+	interpolated = "Hello, ${world}"
+```
+	^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:166:2:166:6:**
+```roc
+	list = [
+```
+	^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2218,6 +2328,16 @@ Is there an **import** or **exposing** missing up-top?
 	                                                             ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:178:2:178:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **tag** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2249,6 +2369,16 @@ Is there an **import** or **exposing** missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:179:2:179:7:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2284,6 +2414,16 @@ Is there an **import** or **exposing** missing up-top?
 		 ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:180:2:180:17:**
+```roc
+	multiline_tuple = (
+```
+	^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **foo** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2293,6 +2433,16 @@ Is there an **import** or **exposing** missing up-top?
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
 	                    ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:188:2:188:15:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2315,6 +2465,16 @@ Is there an **import** or **exposing** missing up-top?
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 	                                ^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:189:2:189:23:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2359,6 +2519,36 @@ Is there an **import** or **exposing** missing up-top?
 		} as a string?",
 ```
 		       ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:198:1:198:6:**
+```roc
+empty : {}
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:199:1:199:6:**
+```roc
+empty = {}
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**syntax_grab_bag.md:201:1:201:6:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^
 
 
 # CANONICALIZE
@@ -2569,7 +2759,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 636
+; Total type variables: 637
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -3007,7 +3197,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #434 _)
 (var #435 _)
 (var #436 {})
-(var #437 -> #609)
+(var #437 -> #610)
 (var #438 _)
 (var #439 Num *)
 (var #440 _)
@@ -3018,45 +3208,45 @@ Is there an **import** or **exposing** missing up-top?
 (var #445 _)
 (var #446 _)
 (var #447 _)
-(var #448 _)
+(var #448 -> #608)
 (var #449 _)
 (var #450 _)
 (var #451 _)
 (var #452 _)
 (var #453 _)
-(var #454 -> #609)
+(var #454 -> #610)
 (var #455 _)
-(var #456 -> #612)
+(var #456 -> #613)
 (var #457 Num *)
 (var #458 Str)
 (var #459 _)
-(var #460 -> #610)
+(var #460 -> #611)
 (var #461 _)
 (var #462 _)
 (var #463 _)
 (var #464 _)
-(var #465 -> #611)
+(var #465 -> #612)
 (var #466 Num *)
 (var #467 Num *)
 (var #468 Num *)
 (var #469 _)
-(var #470 -> #612)
+(var #470 -> #613)
 (var #471 _)
-(var #472 -> #615)
+(var #472 -> #616)
 (var #473 Num *)
 (var #474 Str)
 (var #475 _)
-(var #476 -> #613)
+(var #476 -> #614)
 (var #477 _)
 (var #478 _)
 (var #479 _)
 (var #480 _)
-(var #481 -> #614)
+(var #481 -> #615)
 (var #482 Num *)
 (var #483 Num *)
 (var #484 Num *)
 (var #485 _)
-(var #486 -> #615)
+(var #486 -> #616)
 (var #487 _)
 (var #488 -> #515)
 (var #489 _)
@@ -3088,17 +3278,17 @@ Is there an **import** or **exposing** missing up-top?
 (var #515 Num *)
 (var #516 _)
 (var #517 -> #520)
-(var #518 -> #616)
+(var #518 -> #617)
 (var #519 _)
 (var #520 _)
 (var #521 _)
 (var #522 _)
 (var #523 _)
-(var #524 -> #618)
+(var #524 -> #619)
 (var #525 _)
 (var #526 _)
 (var #527 _)
-(var #528 -> #620)
+(var #528 -> #621)
 (var #529 _)
 (var #530 _)
 (var #531 _)
@@ -3106,18 +3296,18 @@ Is there an **import** or **exposing** missing up-top?
 (var #533 _)
 (var #534 _)
 (var #535 _)
-(var #536 -> #623)
+(var #536 -> #624)
 (var #537 _)
 (var #538 _)
 (var #539 _)
 (var #540 _)
 (var #541 _)
-(var #542 -> #626)
+(var #542 -> #627)
 (var #543 _)
 (var #544 _)
 (var #545 _)
 (var #546 _)
-(var #547 -> #627)
+(var #547 -> #628)
 (var #548 _)
 (var #549 _)
 (var #550 _)
@@ -3131,8 +3321,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #558 _)
 (var #559 _)
 (var #560 _)
-(var #561 -> #634)
-(var #562 -> #634)
+(var #561 -> #635)
+(var #562 -> #635)
 (var #563 _)
 (var #564 _)
 (var #565 _)
@@ -3178,48 +3368,46 @@ Is there an **import** or **exposing** missing up-top?
 (var #605 _)
 (var #606 _)
 (var #607 _)
-(var #608 {})
-(var #609 record)
-(var #610 fn_pure)
-(var #611 tuple)
+(var #608 fn_pure)
+(var #609 {})
+(var #610 record)
+(var #611 fn_pure)
 (var #612 tuple)
-(var #613 fn_pure)
-(var #614 tuple)
+(var #613 tuple)
+(var #614 fn_pure)
 (var #615 tuple)
-(var #616 fn_pure)
-(var #617 _)
-(var #618 fn_pure)
-(var #619 _)
-(var #620 fn_pure)
-(var #621 _)
+(var #616 tuple)
+(var #617 fn_pure)
+(var #618 _)
+(var #619 fn_pure)
+(var #620 _)
+(var #621 fn_pure)
 (var #622 _)
-(var #623 fn_pure)
-(var #624 _)
+(var #623 _)
+(var #624 fn_pure)
 (var #625 _)
-(var #626 fn_pure)
+(var #626 _)
 (var #627 fn_pure)
-(var #628 _)
+(var #628 fn_pure)
 (var #629 _)
 (var #630 _)
 (var #631 _)
 (var #632 _)
 (var #633 _)
-(var #634 {})
-(var #635 _)
+(var #634 _)
+(var #635 {})
+(var #636 _)
 ~~~
 # TYPES
 ~~~roc
 x : _d
-number : _d
-other : Num(_size)
-blah : _d
 empty : {}
 rest : _d
 match_time : _arg, _arg2 -> _ret
 dude : _d
 bin_op_result : Num(_size)
+record : { foo: Num(_size), bar: Str, baz: _field, qux: _field2, punned: _field3 }
 multiline_tuple : (Num(_size), Str, _field, _field2, (_field3, _field4), _field5)
-record : { punned: _field }
 tag_with_payload : _d
 tuple : _d
 list : _d
@@ -3227,7 +3415,6 @@ n : _d
 b : _d
 a : _d
 lower : _d
-foo : _d
 add_one : _arg -> _ret
 interpolated : Str
 add_one_oneline : _arg -> _ret

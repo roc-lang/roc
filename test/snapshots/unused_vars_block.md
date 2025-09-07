@@ -158,10 +158,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-another_unused : Str
-_ignored : Num(_size)
-used_var : Num(_size)
-result : Num(_size)
 main : _arg -> _ret
-unused_var : Num(_size)
 ~~~

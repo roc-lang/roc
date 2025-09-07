@@ -108,6 +108,16 @@ This might be a limitation in the current implementation that will be addressed 
      ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**list_rest_scoping_variables.md:5:6:5:11:**
+```roc
+    [first, ..items, last] => first + last
+```
+     ^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -117,6 +127,16 @@ This might be a limitation in the current implementation that will be addressed 
     [first, ..items, last] => first + last
 ```
             ^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**list_rest_scoping_variables.md:5:22:5:26:**
+```roc
+    [first, ..items, last] => first + last
+```
+                     ^^^^
 
 
 # CANONICALIZE

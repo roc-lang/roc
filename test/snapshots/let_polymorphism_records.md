@@ -285,6 +285,166 @@ update_data = |container, new_value| { container & data: new_value }
                                                  ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:4:1:4:4:**
+```roc
+num = 42
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:5:1:5:5:**
+```roc
+frac = 4.2
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:6:1:6:4:**
+```roc
+str = "hello"
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:7:1:7:14:**
+```roc
+my_empty_list = []
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:8:1:8:17:**
+```roc
+my_nonempty_list = [num, frac]
+```
+^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:11:1:11:15:**
+```roc
+make_container = |value| { data: value, count: 1 }
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:14:1:14:14:**
+```roc
+int_container = make_container(num)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:15:1:15:14:**
+```roc
+str_container = make_container(str)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:16:1:16:15:**
+```roc
+list_container = make_container(my_empty_list)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:19:1:19:12:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:22:1:22:12:**
+```roc
+updated_int = update_data(int_container, 100)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:23:1:23:12:**
+```roc
+updated_str = update_data(str_container, "world")
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:26:1:26:16:**
+```roc
+identity_record = |x| { value: x }
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:29:1:29:11:**
+```roc
+int_record = identity_record(42)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:30:1:30:11:**
+```roc
+str_record = identity_record("test")
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_records.md:31:1:31:12:**
+```roc
+list_record = identity_record([1, 2, 3])
+```
+^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -360,7 +520,7 @@ update_data = |container, new_value| { container & data: new_value }
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 136
+; Total type variables: 138
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -385,7 +545,7 @@ update_data = |container, new_value| { container & data: new_value }
 (var #21 _)
 (var #22 _)
 (var #23 _)
-(var #24 -> #116)
+(var #24 -> #117)
 (var #25 _)
 (var #26 _)
 (var #27 _)
@@ -393,25 +553,25 @@ update_data = |container, new_value| { container & data: new_value }
 (var #29 _)
 (var #30 Num *)
 (var #31 _)
-(var #32 -> #115)
-(var #33 -> #116)
+(var #32 -> #116)
+(var #33 -> #117)
 (var #34 _)
 (var #35 -> #38)
-(var #36 -> #117)
+(var #36 -> #118)
 (var #37 _)
 (var #38 _)
 (var #39 _)
 (var #40 -> #43)
-(var #41 -> #118)
+(var #41 -> #119)
 (var #42 _)
 (var #43 _)
 (var #44 _)
 (var #45 -> #48)
-(var #46 -> #119)
+(var #46 -> #120)
 (var #47 _)
 (var #48 _)
 (var #49 _)
-(var #50 -> #123)
+(var #50 -> #124)
 (var #51 _)
 (var #52 _)
 (var #53 _)
@@ -420,49 +580,49 @@ update_data = |container, new_value| { container & data: new_value }
 (var #56 _)
 (var #57 _)
 (var #58 _)
-(var #59 -> #123)
+(var #59 -> #124)
 (var #60 _)
 (var #61 -> #66)
-(var #62 -> #125)
+(var #62 -> #126)
 (var #63 _)
 (var #64 Num *)
-(var #65 -> #124)
+(var #65 -> #125)
 (var #66 _)
 (var #67 _)
 (var #68 -> #73)
-(var #69 -> #127)
+(var #69 -> #128)
 (var #70 _)
 (var #71 Str)
-(var #72 -> #126)
+(var #72 -> #127)
 (var #73 _)
 (var #74 _)
-(var #75 -> #130)
+(var #75 -> #132)
 (var #76 _)
 (var #77 _)
 (var #78 _)
 (var #79 _)
-(var #80 -> #129)
-(var #81 -> #130)
+(var #80 -> #131)
+(var #81 -> #132)
 (var #82 _)
 (var #83 -> #86)
-(var #84 -> #131)
+(var #84 -> #133)
 (var #85 Num *)
 (var #86 _)
 (var #87 _)
 (var #88 -> #91)
-(var #89 -> #132)
+(var #89 -> #134)
 (var #90 Str)
 (var #91 _)
 (var #92 _)
 (var #93 -> #99)
-(var #94 -> #133)
+(var #94 -> #135)
 (var #95 Num *)
 (var #96 Num *)
 (var #97 Num *)
 (var #98 _)
 (var #99 _)
 (var #100 _)
-(var #101 -> #135)
+(var #101 -> #137)
 (var #102 _)
 (var #103 _)
 (var #104 _)
@@ -472,37 +632,38 @@ update_data = |container, new_value| { container & data: new_value }
 (var #108 -> #109)
 (var #109 _)
 (var #110 _)
-(var #111 -> #135)
+(var #111 -> #137)
 (var #112 _)
 (var #113 _)
 (var #114 _)
 (var #115 {})
-(var #116 fn_pure)
+(var #116 record)
 (var #117 fn_pure)
 (var #118 fn_pure)
 (var #119 fn_pure)
-(var #120 _)
+(var #120 fn_pure)
 (var #121 _)
 (var #122 _)
-(var #123 fn_pure)
-(var #124 tuple)
-(var #125 fn_pure)
-(var #126 tuple)
-(var #127 fn_pure)
-(var #128 _)
-(var #129 {})
-(var #130 fn_pure)
-(var #131 fn_pure)
+(var #123 _)
+(var #124 fn_pure)
+(var #125 tuple)
+(var #126 fn_pure)
+(var #127 tuple)
+(var #128 fn_pure)
+(var #129 _)
+(var #130 {})
+(var #131 record)
 (var #132 fn_pure)
 (var #133 fn_pure)
-(var #134 _)
+(var #134 fn_pure)
 (var #135 fn_pure)
+(var #136 _)
+(var #137 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 my_empty_list : _a
-identity_record : _arg -> {}
-container : _a
+identity_record : _arg -> { value: _field }
 data : _a
 update_data : _arg, _arg2 -> _ret
 updated_int : _a
@@ -515,11 +676,11 @@ frac : F64
 list_record : _a
 str_record : _a
 x : _a
-make_container : _arg -> {}
+make_container : _arg -> { data: _field, count: Num(_size) }
 updated_str : _a
 str : Str
 list_container : _a
-main : _arg -> _ret
-str_container : _a
 value : _a
+str_container : _a
+container : _a
 ~~~

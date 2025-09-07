@@ -52,7 +52,31 @@ b = a + 1
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_two_decls.md:3:1:3:2:**
+```roc
+a = 5
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_two_decls.md:4:1:4:2:**
+```roc
+b = a + 1
+```
+^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

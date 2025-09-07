@@ -53,7 +53,7 @@ OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon String Comma LowerIden
         (record_literal
           (binop_colon
             (lc "lat")
-            (frac_literal_big big:<idx:112>)
+            (frac_literal_big frac:<idx:112>)
           )
           (binop_colon
             (lc "lng")
@@ -163,7 +163,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 46
+; Total type variables: 57
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -172,7 +172,7 @@ NIL
 (var #5 _)
 (var #6 Num *)
 (var #7 _)
-(var #8 _)
+(var #8 -> #46)
 (var #9 _)
 (var #10 _)
 (var #11 _)
@@ -187,11 +187,11 @@ NIL
 (var #20 _)
 (var #21 _)
 (var #22 F64)
-(var #23 _)
+(var #23 -> #22)
 (var #24 _)
-(var #25 _)
+(var #25 -> #48)
 (var #26 _)
-(var #27 _)
+(var #27 -> #50)
 (var #28 _)
 (var #29 _)
 (var #30 _)
@@ -204,12 +204,23 @@ NIL
 (var #37 _)
 (var #38 Str)
 (var #39 _)
-(var #40 _)
+(var #40 -> #52)
 (var #41 _)
-(var #42 _)
+(var #42 -> #54)
 (var #43 _)
-(var #44 -> #45)
+(var #44 -> #56)
 (var #45 {})
+(var #46 record)
+(var #47 {})
+(var #48 record)
+(var #49 {})
+(var #50 record)
+(var #51 {})
+(var #52 record)
+(var #53 {})
+(var #54 record)
+(var #55 {})
+(var #56 record)
 ~~~
 # TYPES
 ~~~roc

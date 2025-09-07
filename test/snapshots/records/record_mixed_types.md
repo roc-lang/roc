@@ -38,7 +38,7 @@ OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIden
   )
   (binop_colon
     (lc "balance")
-    (frac_literal_big big:<idx:20>)
+    (frac_literal_big frac:<idx:20>)
   )
 )
 ~~~
@@ -77,7 +77,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 23
+; Total type variables: 24
 (var #0 _)
 (var #1 _)
 (var #2 Str)
@@ -99,8 +99,9 @@ NIL
 (var #18 _)
 (var #19 F64)
 (var #20 _)
-(var #21 -> #22)
+(var #21 -> #23)
 (var #22 {})
+(var #23 record)
 ~~~
 # TYPES
 ~~~roc

@@ -90,6 +90,16 @@ process : a, b -> c
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_multiline.md:7:1:7:8:**
+```roc
+process = ...
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

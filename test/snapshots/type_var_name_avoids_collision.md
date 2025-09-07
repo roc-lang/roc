@@ -382,7 +382,356 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:4:1:4:2:**
+```roc
+a = 42
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:7:13:7:14:**
+```roc
+identity = |x| x
+```
+            ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:7:1:7:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:10:1:10:2:**
+```roc
+b = "hello"
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:11:1:11:2:**
+```roc
+c = 3.14
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:12:1:12:2:**
+```roc
+d = True
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:13:1:13:2:**
+```roc
+e = False
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:16:20:16:21:**
+```roc
+anotherIdentity = |y| y
+```
+                   ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:16:1:16:16:**
+```roc
+anotherIdentity = |y| y
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:20:1:20:8:**
+```roc
+combine = |first, second| (first, second)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:23:1:23:2:**
+```roc
+f = 1
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:24:1:24:2:**
+```roc
+g = 2
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:25:1:25:2:**
+```roc
+h = 3
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:26:1:26:2:**
+```roc
+i = 4
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:27:1:27:2:**
+```roc
+j = 5
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:28:1:28:2:**
+```roc
+k = 6
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:29:1:29:2:**
+```roc
+l = 7
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:30:1:30:2:**
+```roc
+m = 8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:31:1:31:2:**
+```roc
+n = 9
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:32:1:32:2:**
+```roc
+o = 10
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:33:1:33:2:**
+```roc
+p = 11
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:34:1:34:2:**
+```roc
+q = 12
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:35:1:35:2:**
+```roc
+r = 13
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:36:1:36:2:**
+```roc
+s = 14
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:37:1:37:2:**
+```roc
+t = 15
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:38:1:38:2:**
+```roc
+u = 16
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:39:1:39:2:**
+```roc
+v = 17
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:40:1:40:2:**
+```roc
+w = 18
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:41:1:41:2:**
+```roc
+x = 19
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:42:1:42:2:**
+```roc
+y = 20
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:43:1:43:2:**
+```roc
+z = 21
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:46:1:46:19:**
+```roc
+yetAnotherIdentity = |arg| arg
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:49:1:49:3:**
+```roc
+aa = 100
+```
+^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:50:1:50:3:**
+```roc
+ab = 200
+```
+^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_name_avoids_collision.md:53:1:53:14:**
+```roc
+finalIdentity = |param| param
+```
+^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -706,9 +1055,6 @@ NIL
 # TYPES
 ~~~roc
 b : Str
-result1 : _ac
-result2 : _ac
-result5 : _ac
 n : Num(_size)
 u : Num(_size)
 anotherIdentity : _arg2 -> _ret
@@ -727,14 +1073,12 @@ d : _ac
 ab : Num(_size)
 aa : Num(_size)
 finalIdentity : _arg2 -> _ret
-result3 : _ac
 l : Num(_size)
 p : Num(_size)
 q : Num(_size)
 i : Num(_size)
 k : Num(_size)
 s : Num(_size)
-result4 : _ac
 t : Num(_size)
 arg : _ac
 j : Num(_size)
@@ -743,8 +1087,8 @@ w : Num(_size)
 z : Num(_size)
 combine : _arg2, _arg3 -> (_field, _field2)
 h : Num(_size)
-main : _arg2 -> _ret
 param : _ac
+main : _arg2 -> _ret
 m : Num(_size)
 yetAnotherIdentity : _arg2 -> _ret
 v : Num(_size)

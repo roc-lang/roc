@@ -52,7 +52,26 @@ value = 42
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**usage_test.md:7:1:7:6:**
+```roc
+value : UsedType
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**usage_test.md:8:1:8:6:**
+```roc
+value = 42
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -122,6 +122,16 @@ main! = process!(42)
 # EXPECTED
 MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**function_no_annotation.md:6:1:6:9:**
+```roc
+multiply = |x, y| x * y
+```
+^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -131,6 +141,36 @@ Is there an **import** or **exposing** missing up-top?
 print_number! = |n| Stdout.line!(n)
 ```
                           ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**function_no_annotation.md:9:1:9:14:**
+```roc
+print_number! = |n| Stdout.line!(n)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**function_no_annotation.md:12:13:12:14:**
+```roc
+process! = |x| print_number!(multiply(x, 2))
+```
+            ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**function_no_annotation.md:12:1:12:9:**
+```roc
+process! = |x| print_number!(multiply(x, 2))
+```
+^^^^^^^^
 
 
 # CANONICALIZE

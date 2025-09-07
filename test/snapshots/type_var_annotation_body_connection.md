@@ -94,7 +94,36 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_annotation_body_connection.md:6:13:6:14
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_annotation_body_connection.md:3:1:3:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_annotation_body_connection.md:6:5:6:10:**
+```roc
+    thing = x  # refers to the value from the function parameter
+```
+    ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_annotation_body_connection.md:4:1:4:9:**
+```roc
+identity = |x| {
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -155,6 +184,6 @@ NIL
 ~~~roc
 thing : _b
 identity : _arg -> _ret
-main : _arg -> {}
 x : _b
+main : _arg -> {}
 ~~~

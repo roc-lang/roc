@@ -91,7 +91,26 @@ main! = |_| processNested([])
 # EXPECTED
 UNDECLARED TYPE - type_app_nested.md:3:34:3:37
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:3:1:3:14:**
+```roc
+processNested : List(Result(Str, Err)) -> List(Str)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:4:1:4:14:**
+```roc
+processNested = |_list| ["one","two"]
+```
+^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -156,6 +175,6 @@ NIL
 # TYPES
 ~~~roc
 processNested : _arg -> _ret
-main : _arg -> _ret
 _list : _a
+main : _arg -> _ret
 ~~~

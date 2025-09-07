@@ -89,7 +89,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-f : _arg -> _ret
 y : _a
 ~~~

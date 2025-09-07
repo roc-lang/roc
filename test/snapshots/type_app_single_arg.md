@@ -87,7 +87,26 @@ main! = |_| processList(["one", "two"])
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_single_arg.md:3:1:3:12:**
+```roc
+processList : List(Str) -> U64
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_single_arg.md:4:1:4:12:**
+```roc
+processList = |list| list.len()
+```
+^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

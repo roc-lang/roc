@@ -100,7 +100,16 @@ extract_age = |person| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**module_record_destructure.md:4:1:4:12:**
+```roc
+extract_age = |person| {
+```
+^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -116,7 +125,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 39
+; Total type variables: 41
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -127,7 +136,7 @@ NIL
 (var #7 _)
 (var #8 _)
 (var #9 _)
-(var #10 -> #38)
+(var #10 -> #40)
 (var #11 _)
 (var #12 _)
 (var #13 -> #14)
@@ -136,7 +145,7 @@ NIL
 (var #16 _)
 (var #17 Num *)
 (var #18 _)
-(var #19 -> #36)
+(var #19 -> #37)
 (var #20 _)
 (var #21 -> #22)
 (var #22 -> #23)
@@ -144,18 +153,20 @@ NIL
 (var #24 _)
 (var #25 Num *)
 (var #26 _)
-(var #27 -> #37)
+(var #27 -> #39)
 (var #28 _)
 (var #29 -> #30)
 (var #30 _)
 (var #31 _)
-(var #32 -> #38)
+(var #32 -> #40)
 (var #33 _)
 (var #34 _)
 (var #35 _)
 (var #36 {})
-(var #37 {})
-(var #38 fn_pure)
+(var #37 record)
+(var #38 {})
+(var #39 record)
+(var #40 fn_pure)
 ~~~
 # TYPES
 ~~~roc

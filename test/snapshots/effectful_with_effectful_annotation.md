@@ -86,6 +86,16 @@ main! = print_msg!("Hello, world!")
 # EXPECTED
 MODULE NOT FOUND - effectful_with_effectful_annotation.md:3:1:3:17
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**effectful_with_effectful_annotation.md:6:1:6:11:**
+```roc
+print_msg! : Str => {}
+```
+^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -95,6 +105,16 @@ Is there an **import** or **exposing** missing up-top?
 print_msg! = |msg| Stdout.line!(msg)
 ```
                          ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**effectful_with_effectful_annotation.md:7:1:7:11:**
+```roc
+print_msg! = |msg| Stdout.line!(msg)
+```
+^^^^^^^^^^
 
 
 # CANONICALIZE

@@ -159,6 +159,66 @@ main! : List(String) -> Result({}, _)
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:3:1:3:4:**
+```roc
+foo : U64
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:4:1:4:4:**
+```roc
+bar : Thing(a, b, _)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:5:1:5:4:**
+```roc
+biz : (a, b, c)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:6:1:6:8:**
+```roc
+add_one : (
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:8:1:8:6:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_048.md:9:1:9:10:**
+```roc
+tag_tuple : Value((a, b, c))
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

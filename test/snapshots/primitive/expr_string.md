@@ -39,7 +39,16 @@ foo = "hello ${name}"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**expr_string.md:2:1:2:5:**
+```roc
+name = "luc"
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -68,6 +77,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : Str
 name : Str
 ~~~

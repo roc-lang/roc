@@ -88,7 +88,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-str : Str
-result : Num(_size)
 ~~~

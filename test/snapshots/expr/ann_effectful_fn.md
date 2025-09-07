@@ -55,7 +55,16 @@ launchTheNukes({})
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**ann_effectful_fn.md:3:5:3:19:**
+```roc
+    launchTheNukes = |{}| ...
+```
+    ^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

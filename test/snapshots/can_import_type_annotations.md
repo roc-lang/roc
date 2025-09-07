@@ -545,6 +545,56 @@ Expressions can be identifiers, literals, function calls, or operators.
     ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:7:1:7:15:**
+```roc
+processRequest : Request -> Response
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:8:1:8:15:**
+```roc
+processRequest = |req| Http.defaultResponse
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:10:1:10:10:**
+```roc
+parseJson : Str -> Json.Value
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:11:1:11:10:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:13:1:13:10:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **err** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -565,6 +615,76 @@ Is there an **import** or **exposing** missing up-top?
         Err(err) => Err(err)
 ```
                         ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:14:1:14:10:**
+```roc
+handleApi = |request| {
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:22:1:22:7:**
+```roc
+config : Json.Config
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:23:1:23:7:**
+```roc
+config = Json.defaultConfig
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:26:1:26:15:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:27:33:27:38:**
+```roc
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+```
+                                ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:27:1:27:15:**
+```roc
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:30:1:30:15:**
+```roc
+combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
+```
+^^^^^^^^^^^^^^
 
 
 **UNSUPPORTED NODE**
@@ -588,6 +708,16 @@ Is there an **import** or **exposing** missing up-top?
                 Err(err) => Err(err)
 ```
                                 ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_type_annotations.md:31:1:31:15:**
+```roc
+combineResults = |result1, result2|
+```
+^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -909,7 +1039,6 @@ Is there an **import** or **exposing** missing up-top?
 # TYPES
 ~~~roc
 parserConfig : _c
-result : _c
 processRequest : _arg -> _ret
 config : _c
 parseJson : _arg -> _ret

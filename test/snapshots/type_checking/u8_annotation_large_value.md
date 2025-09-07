@@ -37,7 +37,26 @@ x = 500
 # EXPECTED
 NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:4:5:4:8
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**u8_annotation_large_value.md:3:1:3:2:**
+```roc
+x : U8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**u8_annotation_large_value.md:4:1:4:2:**
+```roc
+x = 500
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

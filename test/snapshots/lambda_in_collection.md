@@ -64,7 +64,26 @@ OpenRound OpBar LowerIdent Comma LowerIdent Comma OpBar OpenCurly LowerIdent OpP
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_in_collection.md:8:3:8:4:**
+```roc
+	|a, b| {
+```
+	 ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_in_collection.md:8:6:8:7:**
+```roc
+	|a, b| {
+```
+	    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.lambda (canonicalized))

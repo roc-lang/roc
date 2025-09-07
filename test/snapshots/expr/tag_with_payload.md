@@ -1,42 +1,61 @@
 # META
 ~~~ini
-description=Tag with payload
+description=tag_with_payload
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-Some(42)
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-UpperIdent OpenRound Int CloseRound ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(apply_uc
-  (uc "Some")
-  (num_literal_i32 42)
-)
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-Some(42)
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tag_with_payload.md:2:1:2:2:**
+```roc
+~~~
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tag_with_payload.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.tag_applied)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 5
+; Total type variables: 4
 (var #0 _)
-(var #1 -> #4)
-(var #2 Num *)
+(var #1 _)
+(var #2 _)
 (var #3 _)
-(var #4 fn_pure)
 ~~~
 # TYPES
 ~~~roc

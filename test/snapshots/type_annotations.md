@@ -99,7 +99,66 @@ UNDECLARED TYPE - type_annotations.md:4:7:4:12
 UNDECLARED TYPE - type_annotations.md:7:14:7:20
 UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:3:1:3:4:**
+```roc
+foo : U64
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:4:1:4:4:**
+```roc
+bar : Thing(_a, _b, _)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:5:1:5:4:**
+```roc
+baz : (_a, _b, _c)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:6:1:6:8:**
+```roc
+add_one : (U8, U16 -> U32)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:7:1:7:6:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:8:1:8:10:**
+```roc
+tag_tuple : Value((_a, _b, _c))
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

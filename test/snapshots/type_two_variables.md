@@ -85,7 +85,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_two_variables.md:3:1:3:5:**
+```roc
+swap : (a, b) -> (b, a)
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_two_variables.md:4:1:4:5:**
+```roc
+swap = |(x, y)| (y, x)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -147,7 +166,7 @@ NIL
 # TYPES
 ~~~roc
 swap : _arg -> (_field, _field2)
-main : _arg -> {}
 x : _c
 y : _c
+main : _arg -> {}
 ~~~

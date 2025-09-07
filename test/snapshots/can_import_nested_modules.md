@@ -309,6 +309,76 @@ MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
 MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:8:1:8:12:**
+```roc
+parseConfig : Config.Settings -> Str
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:9:1:9:12:**
+```roc
+parseConfig = |settings| Config.toString(settings)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:12:1:12:13:**
+```roc
+authenticate : Str, Str -> HttpAuth.Token
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:13:1:13:13:**
+```roc
+authenticate = |user, pass| HttpAuth.login(user, pass)
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:16:1:16:12:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:17:1:17:12:**
+```roc
+processData = |advancedConfig, input|
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:21:1:21:13:**
+```roc
+formatOutput : Str -> Str
+```
+^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **padLeft** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -318,6 +388,36 @@ Is there an **import** or **exposing** missing up-top?
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
                       ^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:22:1:22:13:**
+```roc
+formatOutput = |text| padLeft(text, Config.defaultPadding)
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:25:1:25:13:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_nested_modules.md:26:1:26:13:**
+```roc
+validateAuth = |creds| HttpAuth.validate(creds)
+```
+^^^^^^^^^^^^
 
 
 # CANONICALIZE

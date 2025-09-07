@@ -1,66 +1,61 @@
 # META
 ~~~ini
-description=if_then_else (5)
+description=if_then_else_simple_comments_formatting
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-if bool { # Comment after then open
-	A # Comment after expr
-} else B
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-KwIf LowerIdent OpenCurly LineComment UpperIdent LineComment CloseCurly KwElse UpperIdent ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(if_else
-  (condition     (lc "bool")
-)
-  (then     (block
-      (uc "A")
-    )
-)
-  (else     (uc "B")
-))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-if bool
-	{
-		# Comment after then open
-		A
-	}
-else # Comment after expr
-B
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_simple_comments_formatting.md:1:4:1:8
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named **bool** in this scope.
-Is there an **import** or **exposing** missing up-top?
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**if_then_else_simple_comments_formatting.md:1:4:1:8:**
+**if_then_else_simple_comments_formatting.md:2:1:2:2:**
 ```roc
-if bool { # Comment after then open
+~~~
 ```
-   ^^^^
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**if_then_else_simple_comments_formatting.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
 
 
 # CANONICALIZE
 ~~~clojure
-(Expr.if_else)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 6
+; Total type variables: 4
 (var #0 _)
 (var #1 _)
 (var #2 _)
 (var #3 _)
-(var #4 _)
-(var #5 _)
 ~~~
 # TYPES
 ~~~roc

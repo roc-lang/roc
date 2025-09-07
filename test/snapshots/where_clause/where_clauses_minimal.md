@@ -59,7 +59,16 @@ convert_me = ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_minimal.md:6:1:6:11:**
+```roc
+convert_me = ...
+```
+^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

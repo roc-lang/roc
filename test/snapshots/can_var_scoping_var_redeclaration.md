@@ -77,7 +77,36 @@ result = redeclareTest({})
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_var_redeclaration.md:6:2:6:8:**
+```roc
+	var x_ = 10 # Redeclare var - should warn but proceed
+```
+	^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_var_redeclaration.md:4:1:4:14:**
+```roc
+redeclareTest = |_| {
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_var_redeclaration.md:11:1:11:7:**
+```roc
+result = redeclareTest({})
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -125,5 +154,4 @@ NIL
 ~~~roc
 redeclareTest : _arg -> _ret
 result : _a
-x_ : _a
 ~~~

@@ -360,6 +360,16 @@ identity : a -> a
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:4:1:4:11:**
+```roc
+map_result : Result(a, e), (a -> b) -> Result(b, e)
+```
+^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **error** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -380,6 +390,116 @@ Is there an **import** or **exposing** missing up-top?
         Err(error) => Err(error)
 ```
                           ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:5:1:5:11:**
+```roc
+map_result = |result, transform| {
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:13:1:13:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:14:1:14:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:17:1:17:10:**
+```roc
+make_pair : a, b -> { first: a, second: b }
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:18:14:18:15:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+             ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:18:1:18:10:**
+```roc
+make_pair = |x, y| { first: x, second: y }
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:21:1:21:12:**
+```roc
+list_length : List(_a) -> U64
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:22:1:22:12:**
+```roc
+list_length = |_lst| 42
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:25:1:25:15:**
+```roc
+wrap_in_result : a -> Result(Result(a, Str), Str)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:26:19:26:24:**
+```roc
+wrap_in_result = |value| Ok(Ok(value))
+```
+                  ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_nested.md:26:1:26:15:**
+```roc
+wrap_in_result = |value| Ok(Ok(value))
+```
+^^^^^^^^^^^^^^
 
 
 # CANONICALIZE
@@ -434,7 +554,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 148
+; Total type variables: 149
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -508,7 +628,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #70 _)
 (var #71 _)
 (var #72 _)
-(var #73 -> #139)
+(var #73 -> #140)
 (var #74 _)
 (var #75 _)
 (var #76 _)
@@ -517,8 +637,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #79 _)
 (var #80 _)
 (var #81 _)
-(var #82 -> #138)
-(var #83 -> #139)
+(var #82 -> #139)
+(var #83 -> #140)
 (var #84 _)
 (var #85 _)
 (var #86 _)
@@ -527,10 +647,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #89 _)
 (var #90 _)
 (var #91 _)
-(var #92 -> #141)
+(var #92 -> #142)
 (var #93 _)
 (var #94 Num *)
-(var #95 -> #141)
+(var #95 -> #142)
 (var #96 _)
 (var #97 _)
 (var #98 _)
@@ -545,19 +665,19 @@ Is there an **import** or **exposing** missing up-top?
 (var #107 _)
 (var #108 _)
 (var #109 _)
-(var #110 -> #145)
+(var #110 -> #146)
 (var #111 _)
-(var #112 -> #144)
-(var #113 -> #143)
+(var #112 -> #145)
+(var #113 -> #144)
 (var #114 _)
 (var #115 _)
 (var #116 _)
-(var #117 -> #145)
+(var #117 -> #146)
 (var #118 _)
-(var #119 -> #147)
+(var #119 -> #148)
 (var #120 _)
 (var #121 Str)
-(var #122 -> #147)
+(var #122 -> #148)
 (var #123 _)
 (var #124 _)
 (var #125 _)
@@ -574,28 +694,28 @@ Is there an **import** or **exposing** missing up-top?
 (var #136 _)
 (var #137 _)
 (var #138 {})
-(var #139 fn_pure)
-(var #140 _)
-(var #141 fn_pure)
-(var #142 _)
-(var #143 fn_pure)
+(var #139 record)
+(var #140 fn_pure)
+(var #141 _)
+(var #142 fn_pure)
+(var #143 _)
 (var #144 fn_pure)
 (var #145 fn_pure)
-(var #146 _)
-(var #147 fn_pure)
+(var #146 fn_pure)
+(var #147 _)
+(var #148 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 wrap_in_result : _arg -> _ret
 list_length : _arg -> Num(_size)
-make_pair : _arg, _arg2 -> {}
+make_pair : _arg, _arg2 -> { first: _field, second: _field2 }
 map_result : _arg, _arg2 -> _ret
 x : _c
 _lst : _c
 result : _c
 y : _c
 value : _c
-main : _arg -> Str
 identity : _arg -> _ret
 transform : _c
 ~~~

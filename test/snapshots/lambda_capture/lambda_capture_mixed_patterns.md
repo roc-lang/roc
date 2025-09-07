@@ -104,7 +104,6 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # TYPES
 ~~~roc
-simple : _arg -> Num(_size)
 base : _a
 x : _a
 ~~~

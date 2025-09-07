@@ -144,7 +144,16 @@ match ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_pattern_edge_cases.md:6:13:6:14:**
+```roc
+    { name: x } => "renamed: ${x}"
+```
+            ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

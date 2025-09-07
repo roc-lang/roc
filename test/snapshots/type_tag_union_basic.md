@@ -281,6 +281,76 @@ main! = |_| {}
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:3:1:3:8:**
+```roc
+process : [Some(Str), None] -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:4:1:4:8:**
+```roc
+process = |maybe| "result"
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:6:1:6:27:**
+```roc
+is_ok_ret_unqualified_bool : [Ok(_ok), Err(_err)] -> Bool
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:7:1:7:27:**
+```roc
+is_ok_ret_unqualified_bool = |result| match result {
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:12:1:12:15:**
+```roc
+is_ok_ret_bool : [Ok(_ok2), Err(_err2)] -> Bool
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:13:19:13:25:**
+```roc
+is_ok_ret_bool = |result| match result {
+```
+                  ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_basic.md:13:1:13:15:**
+```roc
+is_ok_ret_bool = |result| match result {
+```
+^^^^^^^^^^^^^^
+
+
 **PATTERN IN EXPRESSION CONTEXT**
 Found a pattern where an expression was expected.
 Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
@@ -438,9 +508,9 @@ Patterns can only appear in specific contexts like function parameters, destruct
 # TYPES
 ~~~roc
 is_ok_ret_unqualified_bool : _arg -> _ret
-is_ok_ret_bool : _arg -> _ret
 process : _arg -> Str
-main : _arg -> {}
 maybe : _a
+main : _arg -> {}
+is_ok_ret_bool : _arg -> _ret
 result : _a
 ~~~

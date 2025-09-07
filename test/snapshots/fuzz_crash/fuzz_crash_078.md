@@ -33,7 +33,16 @@ import
 # EXPECTED
 PARSE ERROR - fuzz_crash_078.md:3:1:3:1
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_078.md:1:9:1:10:**
+```roc
+module[]e="""
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

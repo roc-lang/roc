@@ -105,7 +105,26 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_higher_order_multiple_vars.md:3:1:3:8:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_higher_order_multiple_vars.md:4:1:4:8:**
+```roc
+compose = |f, g| |x| f(g(x))
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

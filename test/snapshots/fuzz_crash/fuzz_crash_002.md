@@ -193,6 +193,16 @@ modu:;::::::::::::::le[%
      ^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_002.md:1:1:1:5:**
+```roc
+modu:;::::::::::::::le[%
+```
+^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **le** in this scope.
 Is there an **import** or **exposing** missing up-top?

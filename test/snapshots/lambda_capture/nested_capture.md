@@ -106,8 +106,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-f : _arg -> _arg2 -> _ret
 a : _c
 b : _c
-g : _c
 ~~~

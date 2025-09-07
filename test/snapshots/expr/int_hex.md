@@ -9,10 +9,10 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-Int ~~~
+IntBase ~~~
 # PARSE
 ~~~clojure
-(num_literal_big big:<idx:5>)
+(int_literal_big int:<idx:4>)
 ~~~
 # FORMATTED
 ~~~roc
@@ -24,13 +24,13 @@ NIL
 NIL
 # CANONICALIZE
 ~~~clojure
-(Expr.num_literal_big)
+(Expr.int_literal_big)
 ~~~
 # SOLVED
 ~~~clojure
 ; Total type variables: 2
 (var #0 _)
-(var #1 Num *)
+(var #1 I128)
 ~~~
 # TYPES
 ~~~roc

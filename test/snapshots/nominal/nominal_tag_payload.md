@@ -132,7 +132,41 @@ none2 = (Maybe.None)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_payload.md:6:1:6:6:**
+```roc
+some1 = |a| Maybe.Some(a)
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_payload.md:9:1:9:6:**
+```roc
+none1 = Maybe.None
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_payload.md:11:10:11:11:**
+```roc
+some2 = |a| Maybe.Some(a)
+```
+         ^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -237,9 +271,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-none2 : _b
-some2 : _arg -> _ret
-none1 : _b
 a : _b
+none1 : _b
 some1 : _arg -> _ret
 ~~~

@@ -12,7 +12,7 @@ type=expr
 Int ~~~
 # PARSE
 ~~~clojure
-(num_literal_big big:<idx:31>)
+(num_literal_big num:<idx:31>)
 ~~~
 # FORMATTED
 ~~~roc

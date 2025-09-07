@@ -67,7 +67,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   (uc "U64")
   (binop_equals
     (lc "d")
-    (num_literal_big big:<idx:101>)
+    (num_literal_big num:<idx:101>)
   )
   (binop_colon
     (lc "e")
@@ -76,7 +76,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   (binop_colon
     (binop_equals
       (lc "e")
-      (frac_literal_big big:<idx:122>)
+      (frac_literal_big frac:<idx:122>)
     )
     (uc "I8")
   )
@@ -152,6 +152,86 @@ PARSE ERROR - fuzz_crash_025.md:15:3:15:4
 PARSE ERROR - fuzz_crash_025.md:15:4:15:5
 TYPE MISMATCH - fuzz_crash_025.md:14:5:14:48
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:3:1:3:2:**
+```roc
+a : U8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:4:1:4:2:**
+```roc
+a = 255
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:6:1:6:2:**
+```roc
+b : U16
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:7:1:7:2:**
+```roc
+b = 65535
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:9:1:9:2:**
+```roc
+c : U32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:10:1:10:2:**
+```roc
+c = 429496729 U64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:11:1:11:2:**
+```roc
+d = 18446744073709551615
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:13:1:13:2:**
+```roc
+e : U128
+```
+^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -161,6 +241,96 @@ This might be a limitation in the current implementation that will be addressed 
 e = 3402823669209384634633746074317682114553.14: I8
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:15:1:15:2:**
+```roc
+f =8
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:17:1:17:2:**
+```roc
+g : I16
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:18:1:18:2:**
+```roc
+g = -32768
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:20:1:20:2:**
+```roc
+h : I32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:21:1:21:2:**
+```roc
+h = -483648
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:23:1:23:2:**
+```roc
+i : I64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:24:1:24:2:**
+```roc
+i = -92233725808
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:26:1:26:2:**
+```roc
+j : I128
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_025.md:27:1:27:2:**
+```roc
+j = -17011687303715884105728
+```
+^
 
 
 # CANONICALIZE

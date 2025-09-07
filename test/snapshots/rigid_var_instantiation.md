@@ -125,7 +125,26 @@ UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**rigid_var_instantiation.md:4:1:4:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**rigid_var_instantiation.md:5:1:5:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -199,10 +218,7 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-num : _b
-x : _b
-lst : _b
-str : _b
 identity : _arg -> _ret
+x : _b
 main : _arg -> _ret
 ~~~

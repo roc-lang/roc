@@ -109,7 +109,26 @@ PARSE ERROR - type_function_multi_arg.md:3:40:3:42
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_multi_arg.md:3:1:3:6:**
+```roc
+curry : (_a, _b -> _c) -> (_a -> _b -> _c)
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_multi_arg.md:4:1:4:6:**
+```roc
+curry = |fn| |x| |y| fn(x, y)
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -185,7 +204,7 @@ NIL
 ~~~roc
 fn : _a
 curry : _arg -> _arg2 -> _arg3 -> _ret
-main : _arg -> {}
 x : _a
 y : _a
+main : _arg -> {}
 ~~~

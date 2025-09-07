@@ -37,7 +37,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "b")
-    (frac_literal_big big:<idx:16>)
+    (frac_literal_big frac:<idx:16>)
   )
   (binop_colon
     (lc "c")
@@ -45,7 +45,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "c")
-    (frac_literal_big big:<idx:24>)
+    (frac_literal_big frac:<idx:24>)
   )
 )
 ~~~
@@ -63,7 +63,66 @@ c = 123.456
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:3:1:3:2:**
+```roc
+a : F32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:4:1:4:2:**
+```roc
+a = 3.14
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:6:1:6:2:**
+```roc
+b : F64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:7:1:7:2:**
+```roc
+b = 2.71828
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:9:1:9:2:**
+```roc
+c : Dec
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:10:1:10:2:**
+```roc
+c = 123.456
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

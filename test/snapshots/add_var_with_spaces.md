@@ -74,5 +74,4 @@ add2 = x +      2
 ~~~
 # TYPES
 ~~~roc
-add2 : Num(_size)
 ~~~

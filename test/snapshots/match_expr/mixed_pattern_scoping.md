@@ -92,6 +92,36 @@ match data {
       ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**mixed_pattern_scoping.md:3:9:3:10:**
+```roc
+    Err(x) => x - 1
+```
+        ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**mixed_pattern_scoping.md:4:9:4:10:**
+```roc
+    Ok([x]) => x * 2
+```
+        ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**mixed_pattern_scoping.md:5:9:5:10:**
+```roc
+    Err(y) => y / 2
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

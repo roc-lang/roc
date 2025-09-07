@@ -46,6 +46,16 @@ foo = asd.0
       ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**expr_no_space_dot_int.md:3:1:3:4:**
+```roc
+foo = asd.0
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

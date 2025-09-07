@@ -77,5 +77,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

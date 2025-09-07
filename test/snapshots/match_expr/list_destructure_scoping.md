@@ -59,6 +59,16 @@ match list {
       ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**list_destructure_scoping.md:3:6:3:11:**
+```roc
+    [first, second] => first + second
+```
+     ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

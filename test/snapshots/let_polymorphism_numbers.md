@@ -173,7 +173,116 @@ main = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:4:1:4:4:**
+```roc
+num = 42
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:5:1:5:5:**
+```roc
+frac = 4.2
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:8:1:8:8:**
+```roc
+int_use = num
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:9:1:9:10:**
+```roc
+float_use = frac
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:12:1:12:8:**
+```roc
+int_add = num + 10
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:13:1:13:13:**
+```roc
+int_multiply = num * 2
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:16:1:16:10:**
+```roc
+float_add = num + 3.14
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:17:1:17:15:**
+```roc
+float_multiply = num * 2.5
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:20:1:20:7:**
+```roc
+double = |x| x * 2
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:23:1:23:12:**
+```roc
+int_doubled = double(5)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_numbers.md:24:1:24:14:**
+```roc
+float_doubled = double(2.5)
+```
+^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -327,6 +436,5 @@ frac : F64
 x : _a
 float_doubled : _a
 float_use : _a
-main : _arg -> _ret
 int_use : _a
 ~~~

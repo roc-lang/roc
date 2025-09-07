@@ -229,7 +229,46 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_complex_nested.md:4:1:4:15:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_complex_nested.md:5:1:5:15:**
+```roc
+processComplex = |result|
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_complex_nested.md:12:1:12:11:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_complex_nested.md:13:1:13:11:**
+```roc
+deepNested = |_| {
+```
+^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

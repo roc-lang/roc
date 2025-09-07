@@ -43,7 +43,16 @@ main = (Json..utf8)
 # EXPECTED
 MODULE NOT FOUND - can_import_json.md:3:1:3:17
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_json.md:5:1:5:5:**
+```roc
+main = Json.utf8
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -258,6 +258,106 @@ all_float_list = float_list ++ my_empty_list
                              ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:4:1:4:14:**
+```roc
+my_empty_list = []
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:7:1:7:9:**
+```roc
+int_list = [1, 2, 3]
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:8:1:8:9:**
+```roc
+str_list = ["hello", "world"]
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:9:1:9:11:**
+```roc
+float_list = [1.1, 2.2, 3.3]
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:12:1:12:13:**
+```roc
+all_int_list = int_list ++ my_empty_list
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:13:1:13:13:**
+```roc
+all_str_list = str_list ++ my_empty_list
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:14:1:14:15:**
+```roc
+all_float_list = float_list ++ my_empty_list
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:17:1:17:10:**
+```roc
+get_empty = |_| []
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:20:1:20:15:**
+```roc
+empty_int_list = get_empty(42)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_lists.md:21:1:21:15:**
+```roc
+empty_str_list = get_empty("test")
+```
+^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -429,7 +529,6 @@ all_float_list = float_list ++ my_empty_list
 ~~~
 # TYPES
 ~~~roc
-len1 : _a
 int_list : _a
 float_list : _a
 get_empty : _arg -> _ret
@@ -437,10 +536,7 @@ my_empty_list : _a
 all_str_list : _a
 str_list : _a
 all_float_list : _a
-len3 : _a
 empty_int_list : _a
-main : _arg -> _ret
-len2 : _a
 empty_str_list : _a
 all_int_list : _a
 ~~~

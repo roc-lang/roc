@@ -725,7 +725,276 @@ main = |_| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:4:1:4:4:**
+```roc
+num = 42
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:5:1:5:5:**
+```roc
+frac = 4.2
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:6:1:6:4:**
+```roc
+str = "hello"
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:7:1:7:5:**
+```roc
+bool = True
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:10:1:10:11:**
+```roc
+empty_list = []
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:11:1:11:13:**
+```roc
+empty_record = {}
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:14:1:14:9:**
+```roc
+int_list = [1, 2, 3]
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:15:1:15:9:**
+```roc
+str_list = ["a", "b", "c"]
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:16:1:16:10:**
+```roc
+bool_list = [True, False]
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:19:1:19:13:**
+```roc
+nested_empty = [empty_list, empty_list, empty_list]
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:20:1:20:13:**
+```roc
+mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:23:1:23:12:**
+```roc
+poly_record = { items: empty_list, count: 0 }
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:24:1:24:17:**
+```roc
+use_poly_record1 = { items: [1, 2, 3], count: 0 }
+```
+^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:25:1:25:17:**
+```roc
+use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+```
+^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:28:1:28:12:**
+```roc
+base_config = {
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:38:1:38:8:**
+```roc
+config1 = {
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:48:1:48:8:**
+```roc
+config2 = { # Test comment 1
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:59:1:59:15:**
+```roc
+make_container = |val| { value: val, wrapper: [val] }
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:60:1:60:11:**
+```roc
+container1 = make_container(num)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:61:1:61:11:**
+```roc
+container2 = make_container(str)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:62:1:62:11:**
+```roc
+container3 = make_container(frac)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:65:1:65:5:**
+```roc
+deep = {
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:84:1:84:9:**
+```roc
+compute1 = num + 10
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:85:1:85:9:**
+```roc
+compute2 = num * 2
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:86:1:86:9:**
+```roc
+compute3 = [num, num]
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:87:1:87:9:**
+```roc
+compute4 = { base: num, derived: [num, num + 1, num + 2] }
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**let_polymorphism_complex.md:90:1:90:6:**
+```roc
+mixed = {
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -1074,7 +1343,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 371
+; Total type variables: 403
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -1134,16 +1403,16 @@ NIL
 (var #56 _)
 (var #57 _)
 (var #58 _)
-(var #59 -> #354)
+(var #59 -> #355)
 (var #60 _)
 (var #61 _)
 (var #62 _)
 (var #63 _)
 (var #64 Num *)
 (var #65 _)
-(var #66 -> #354)
+(var #66 -> #355)
 (var #67 _)
-(var #68 -> #355)
+(var #68 -> #357)
 (var #69 _)
 (var #70 Num *)
 (var #71 Num *)
@@ -1153,9 +1422,9 @@ NIL
 (var #75 _)
 (var #76 Num *)
 (var #77 _)
-(var #78 -> #355)
+(var #78 -> #357)
 (var #79 _)
-(var #80 -> #356)
+(var #80 -> #359)
 (var #81 _)
 (var #82 Str)
 (var #83 Str)
@@ -1165,9 +1434,9 @@ NIL
 (var #87 _)
 (var #88 Num *)
 (var #89 _)
-(var #90 -> #356)
+(var #90 -> #359)
 (var #91 _)
-(var #92 -> #357)
+(var #92 -> #363)
 (var #93 _)
 (var #94 _)
 (var #95 _)
@@ -1181,11 +1450,11 @@ NIL
 (var #103 _)
 (var #104 _)
 (var #105 _)
-(var #106 _)
+(var #106 -> #361)
 (var #107 _)
-(var #108 -> #357)
+(var #108 -> #363)
 (var #109 _)
-(var #110 -> #358)
+(var #110 -> #367)
 (var #111 _)
 (var #112 Num *)
 (var #113 Num *)
@@ -1204,14 +1473,14 @@ NIL
 (var #126 _)
 (var #127 _)
 (var #128 _)
-(var #129 _)
+(var #129 -> #365)
 (var #130 _)
 (var #131 _)
 (var #132 Str)
 (var #133 _)
-(var #134 -> #358)
+(var #134 -> #367)
 (var #135 _)
-(var #136 -> #359)
+(var #136 -> #371)
 (var #137 _)
 (var #138 Str)
 (var #139 Str)
@@ -1228,14 +1497,14 @@ NIL
 (var #150 _)
 (var #151 _)
 (var #152 _)
-(var #153 _)
+(var #153 -> #369)
 (var #154 _)
 (var #155 _)
 (var #156 Str)
 (var #157 _)
-(var #158 -> #359)
+(var #158 -> #371)
 (var #159 _)
-(var #160 -> #362)
+(var #160 -> #375)
 (var #161 _)
 (var #162 _)
 (var #163 _)
@@ -1244,25 +1513,25 @@ NIL
 (var #166 _)
 (var #167 _)
 (var #168 _)
-(var #169 -> #361)
-(var #170 -> #362)
+(var #169 -> #374)
+(var #170 -> #375)
 (var #171 _)
 (var #172 -> #175)
-(var #173 -> #363)
+(var #173 -> #376)
 (var #174 _)
 (var #175 _)
 (var #176 _)
 (var #177 -> #180)
-(var #178 -> #364)
+(var #178 -> #377)
 (var #179 _)
 (var #180 _)
 (var #181 _)
 (var #182 -> #185)
-(var #183 -> #365)
+(var #183 -> #378)
 (var #184 _)
 (var #185 _)
 (var #186 _)
-(var #187 -> #366)
+(var #187 -> #386)
 (var #188 _)
 (var #189 _)
 (var #190 _)
@@ -1272,7 +1541,7 @@ NIL
 (var #194 _)
 (var #195 _)
 (var #196 _)
-(var #197 _)
+(var #197 -> #380)
 (var #198 _)
 (var #199 _)
 (var #200 _)
@@ -1284,12 +1553,12 @@ NIL
 (var #206 _)
 (var #207 _)
 (var #208 _)
-(var #209 _)
+(var #209 -> #382)
 (var #210 _)
 (var #211 _)
 (var #212 _)
 (var #213 _)
-(var #214 _)
+(var #214 -> #384)
 (var #215 _)
 (var #216 _)
 (var #217 _)
@@ -1321,7 +1590,7 @@ NIL
 (var #243 _)
 (var #244 _)
 (var #245 _)
-(var #246 -> #366)
+(var #246 -> #386)
 (var #247 _)
 (var #248 -> #251)
 (var #249 -> #250)
@@ -1338,7 +1607,7 @@ NIL
 (var #260 _)
 (var #261 _)
 (var #262 _)
-(var #263 -> #367)
+(var #263 -> #388)
 (var #264 _)
 (var #265 _)
 (var #266 _)
@@ -1352,9 +1621,9 @@ NIL
 (var #274 _)
 (var #275 _)
 (var #276 _)
-(var #277 -> #367)
+(var #277 -> #388)
 (var #278 _)
-(var #279 -> #368)
+(var #279 -> #400)
 (var #280 _)
 (var #281 _)
 (var #282 _)
@@ -1367,7 +1636,7 @@ NIL
 (var #289 _)
 (var #290 _)
 (var #291 _)
-(var #292 _)
+(var #292 -> #390)
 (var #293 _)
 (var #294 _)
 (var #295 _)
@@ -1378,7 +1647,7 @@ NIL
 (var #300 _)
 (var #301 _)
 (var #302 _)
-(var #303 _)
+(var #303 -> #392)
 (var #304 _)
 (var #305 _)
 (var #306 _)
@@ -1392,20 +1661,20 @@ NIL
 (var #314 _)
 (var #315 _)
 (var #316 _)
-(var #317 _)
+(var #317 -> #394)
 (var #318 _)
-(var #319 _)
+(var #319 -> #396)
 (var #320 _)
 (var #321 _)
 (var #322 _)
-(var #323 _)
-(var #324 Num *)
-(var #325 _)
+(var #323 -> #324)
+(var #324 -> #325)
+(var #325 Num *)
 (var #326 _)
 (var #327 _)
-(var #328 _)
-(var #329 F64)
-(var #330 _)
+(var #328 -> #329)
+(var #329 -> #330)
+(var #330 F64)
 (var #331 _)
 (var #332 _)
 (var #333 _)
@@ -1413,11 +1682,11 @@ NIL
 (var #335 _)
 (var #336 _)
 (var #337 _)
-(var #338 _)
+(var #338 -> #398)
 (var #339 _)
-(var #340 -> #368)
+(var #340 -> #400)
 (var #341 _)
-(var #342 -> #370)
+(var #342 -> #402)
 (var #343 _)
 (var #344 _)
 (var #345 _)
@@ -1425,57 +1694,88 @@ NIL
 (var #347 -> #348)
 (var #348 Num *)
 (var #349 _)
-(var #350 -> #370)
+(var #350 -> #402)
 (var #351 _)
 (var #352 _)
 (var #353 {})
 (var #354 {})
-(var #355 {})
+(var #355 record)
 (var #356 {})
-(var #357 {})
+(var #357 record)
 (var #358 {})
-(var #359 {})
-(var #360 _)
-(var #361 {})
-(var #362 fn_pure)
-(var #363 fn_pure)
-(var #364 fn_pure)
-(var #365 fn_pure)
+(var #359 record)
+(var #360 {})
+(var #361 record)
+(var #362 {})
+(var #363 record)
+(var #364 {})
+(var #365 record)
 (var #366 {})
-(var #367 {})
+(var #367 record)
 (var #368 {})
-(var #369 _)
-(var #370 fn_pure)
+(var #369 record)
+(var #370 {})
+(var #371 record)
+(var #372 _)
+(var #373 {})
+(var #374 record)
+(var #375 fn_pure)
+(var #376 fn_pure)
+(var #377 fn_pure)
+(var #378 fn_pure)
+(var #379 {})
+(var #380 record)
+(var #381 {})
+(var #382 record)
+(var #383 {})
+(var #384 record)
+(var #385 {})
+(var #386 record)
+(var #387 {})
+(var #388 record)
+(var #389 {})
+(var #390 record)
+(var #391 {})
+(var #392 record)
+(var #393 {})
+(var #394 record)
+(var #395 {})
+(var #396 record)
+(var #397 {})
+(var #398 record)
+(var #399 {})
+(var #400 record)
+(var #401 _)
+(var #402 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 bool : _a
 compute1 : Num(_size)
 container3 : _a
-config1 : {}
+config1 : { data: _field, metadata: { version: _field2, ratio: _field3, description: _field4 }, name: Str }
 num : Num(_size)
 empty_record : {}
 compute2 : Num(_size)
 val : _a
 container1 : _a
-base_config : {}
-deep : {}
+base_config : { data: _field, metadata: { version: _field2, ratio: _field3, description: _field4 } }
+deep : { level1: { level2: { level3: { data: _field, value: _field2 }, items: _field3 }, collection: _field4 }, results: _field5 }
 int_list : _a
-make_container : _arg -> {}
+make_container : _arg -> { value: _field, wrapper: _field2 }
 str : Str
 bool_list : _a
-use_poly_record1 : {}
-compute4 : {}
+use_poly_record1 : { items: _field, count: Num(_size) }
+compute4 : { base: _field, derived: _field2 }
 nested_empty : _a
 empty_list : _a
 str_list : _a
-mixed : {}
-config2 : {}
+mixed : { numbers: { value: _field, list: _field2, float: _field3 }, strings: { value: _field4, list: _field5 }, empty_lists: { raw: _field6, in_list: _field7, in_record: { data: _field8 } }, computations: { from_num: Num(_size), from_frac: F64, list_from_num: _field9 } }
+config2 : { data: _field, metadata: { version: _field2, ratio: _field3, description: _field4 }, name: Str }
 compute3 : _a
 frac : F64
-use_poly_record2 : {}
+use_poly_record2 : { items: _field, count: Num(_size) }
 mixed_nested : _a
-poly_record : {}
-main : _arg -> _ret
+poly_record : { items: _field, count: Num(_size) }
 container2 : _a
 ~~~

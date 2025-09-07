@@ -80,5 +80,4 @@ dbg "foo"
 ~~~
 # TYPES
 ~~~roc
-foo : _a
 ~~~

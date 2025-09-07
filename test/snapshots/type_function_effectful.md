@@ -84,7 +84,26 @@ main! = |_| {}
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_effectful.md:3:1:3:11:**
+```roc
+runEffect! : (_a => _b) -> _a => _b
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_function_effectful.md:4:1:4:11:**
+```roc
+runEffect! = |fn!, x| fn!(x)
+```
+^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

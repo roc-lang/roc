@@ -208,7 +208,86 @@ main! = |_| {
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:4:1:4:4:**
+```roc
+add : U64 -> U64
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:5:1:5:4:**
+```roc
+add = |unused| 42
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:8:1:8:9:**
+```roc
+multiply : U64 -> U64
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:9:1:9:9:**
+```roc
+multiply = |_factor| _factor * 2
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:12:1:12:8:**
+```roc
+process : U64 -> U64
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:13:1:13:8:**
+```roc
+process = |_input| 100
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:16:1:16:7:**
+```roc
+double : U64 -> U64
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_parameter_unused.md:17:1:17:7:**
+```roc
+double = |value| value * 2
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -356,15 +435,11 @@ NIL
 ~~~roc
 value : _a
 process : _arg -> Num(_size)
-result4 : _a
-result2 : _a
 add : _arg -> Num(_size)
-result3 : _a
 _factor : _a
 multiply : _arg -> Num(_size)
 unused : _a
 _input : _a
 double : _arg -> Num(_size)
 main : _arg -> _ret
-result1 : _a
 ~~~

@@ -77,7 +77,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 21
+; Total type variables: 22
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -93,12 +93,13 @@ Is there an **import** or **exposing** missing up-top?
 (var #12 _)
 (var #13 Num *)
 (var #14 _)
-(var #15 -> #19)
+(var #15 -> #20)
 (var #16 _)
-(var #17 -> #19)
-(var #18 -> #20)
+(var #17 -> #20)
+(var #18 -> #21)
 (var #19 {})
-(var #20 fn_pure)
+(var #20 record)
+(var #21 fn_pure)
 ~~~
 # TYPES
 ~~~roc

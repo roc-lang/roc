@@ -96,7 +96,46 @@ outerFunc = |_| {
 # EXPECTED
 DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_basic_scoping.md:4:1:4:2:**
+```roc
+x = 5
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_basic_scoping.md:5:1:5:2:**
+```roc
+y = 10
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_basic_scoping.md:9:5:9:6:**
+```roc
+    x = 20  # Should shadow top-level x
+```
+    ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_basic_scoping.md:8:1:8:10:**
+```roc
+outerFunc = |_| {
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -152,7 +191,5 @@ NIL
 ~~~roc
 x : Num(_size)
 y : Num(_size)
-innerResult : _a
 outerFunc : _arg -> _ret
-z : _a
 ~~~

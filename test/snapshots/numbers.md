@@ -21,21 +21,21 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenRound Int Comma Int Comma Int Comma Int Comma Int Comma Int Comma Float Comma Float Comma Int Comma Int Comma Int Comma CloseRound ~~~
+OpenRound IntBase Comma IntBase Comma IntBase Comma IntBase Comma IntBase Comma IntBase Comma Float Comma Float Comma IntBase Comma IntBase Comma IntBase Comma CloseRound ~~~
 # PARSE
 ~~~clojure
 (tuple_literal
-  (num_literal_big big:<idx:77>)
-  (num_literal_big big:<idx:82>)
-  (num_literal_big big:<idx:87>)
-  (num_literal_big big:<idx:92>)
-  (num_literal_big big:<idx:97>)
-  (num_literal_big big:<idx:102>)
-  (frac_literal_big big:<idx:107>)
-  (frac_literal_big big:<idx:114>)
-  (num_literal_big big:<idx:121>)
-  (num_literal_big big:<idx:132>)
-  (num_literal_big big:<idx:143>)
+  (int_literal_big int:<idx:63>)
+  (int_literal_big int:<idx:66>)
+  (int_literal_big int:<idx:69>)
+  (int_literal_big int:<idx:71>)
+  (int_literal_big int:<idx:73>)
+  (int_literal_big int:<idx:76>)
+  (frac_literal_big frac:<idx:79>)
+  (frac_literal_big frac:<idx:86>)
+  (int_literal_big int:<idx:93>)
+  (int_literal_big int:<idx:104>)
+  (int_literal_big int:<idx:115>)
 )
 ~~~
 # FORMATTED
@@ -51,34 +51,34 @@ NIL
 # CANONICALIZE
 ~~~clojure
 (Expr.tuple_literal
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.frac_literal_big big:<idx:107>)
-  (Expr.frac_literal_big big:<idx:114>)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
-  (Expr.num_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.frac_literal_big big:<idx:79>)
+  (Expr.frac_literal_big big:<idx:86>)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
 )
 ~~~
 # SOLVED
 ~~~clojure
 ; Total type variables: 14
 (var #0 _)
-(var #1 Num *)
-(var #2 Num *)
-(var #3 Num *)
-(var #4 Num *)
-(var #5 Num *)
-(var #6 Num *)
+(var #1 I128)
+(var #2 I128)
+(var #3 I128)
+(var #4 I128)
+(var #5 I128)
+(var #6 I128)
 (var #7 F64)
 (var #8 F64)
-(var #9 Num *)
-(var #10 Num *)
-(var #11 Num *)
+(var #9 I128)
+(var #10 I128)
+(var #11 I128)
 (var #12 -> #13)
 (var #13 tuple)
 ~~~

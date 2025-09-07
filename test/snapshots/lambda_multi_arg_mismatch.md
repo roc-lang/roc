@@ -139,7 +139,36 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:33:5:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:41:5:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:5
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_multi_arg_mismatch.md:4:1:4:13:**
+```roc
+multi_arg_fn : a, b, a, c, a, d, a, e -> (a, b, c, d, e)
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_multi_arg_mismatch.md:5:1:5:13:**
+```roc
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_multi_arg_mismatch.md:10:1:10:7:**
+```roc
+result = multi_arg_fn(
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -12,12 +12,12 @@ type=file
 ~~~
 # TOKENS
 ~~~text
-Int Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
+IntBase Dot Int Int Underscore Int Int LowerIdent Dot Int Int Underscore ~~~
 # PARSE
 ~~~clojure
 (block
   (binop_dot
-    (num_literal_big big:<idx:4>)
+    (int_literal_big int:<idx:2>)
     (num_literal_i32 0)
   )
   (num_literal_i32 0)
@@ -102,7 +102,7 @@ Patterns can only appear in specific contexts like function parameters, destruct
 ~~~clojure
 ; Total type variables: 16
 (var #0 _)
-(var #1 Num *)
+(var #1 I128)
 (var #2 Num *)
 (var #3 _)
 (var #4 Num *)

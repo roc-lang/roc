@@ -40,7 +40,16 @@ foo = "one"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**def_simple_with_annotation.md:4:1:4:4:**
+```roc
+foo = "one"
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

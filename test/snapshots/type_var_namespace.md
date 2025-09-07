@@ -146,6 +146,26 @@ Expressions can be identifiers, literals, function calls, or operators.
                                  ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_namespace.md:4:1:4:8:**
+```roc
+process : List(elem) -> elem
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_namespace.md:5:1:5:8:**
+```roc
+process = |list| {
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -221,9 +241,8 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-elem : Num(_size)
 process : _arg -> _ret
-main : _arg -> {}
 list : _a
+main : _arg -> {}
 result : _a
 ~~~

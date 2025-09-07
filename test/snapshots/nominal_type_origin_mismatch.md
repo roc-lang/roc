@@ -73,7 +73,36 @@ MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_type_origin_mismatch.md:5:1:5:14:**
+```roc
+expectsPerson : Person -> Str
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_type_origin_mismatch.md:6:1:6:14:**
+```roc
+expectsPerson = |p| "Got a person"
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_type_origin_mismatch.md:8:1:8:5:**
+```roc
+main =
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

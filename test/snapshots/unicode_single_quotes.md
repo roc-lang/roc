@@ -579,6 +579,16 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**unicode_single_quotes.md:3:1:3:2:**
+```roc
+x = (
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **ong** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -588,6 +598,16 @@ Is there an **import** or **exposing** missing up-top?
     'long',
 ```
       ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**unicode_single_quotes.md:20:1:20:2:**
+```roc
+y = 'u
+```
+^
 
 
 # CANONICALIZE

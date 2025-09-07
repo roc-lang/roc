@@ -86,7 +86,36 @@ wrong_type_function = |x| x * 3.14
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_annotation_mismatch_error.md:5:1:5:16:**
+```roc
+string_function = |x| x + 42
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_annotation_mismatch_error.md:9:24:9:25:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+                       ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_annotation_mismatch_error.md:9:1:9:20:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+^^^^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

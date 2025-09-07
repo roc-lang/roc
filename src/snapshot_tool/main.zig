@@ -2894,6 +2894,46 @@ fn outputHeaderAsSExpr(writer: anytype, ast: *const AST, env: *const base.Common
     }
 }
 
+/// Helper to output big number literals from ByteSlices
+fn outputBigNumberLiteral(writer: anytype, ast: *const AST, idx: ByteSlices.Idx, prefix: []const u8) !void {
+    const idx_val = @intFromEnum(idx);
+    const idx_usize = @as(usize, @intCast(idx_val));
+    const items = ast.byte_slices.entries.items.items;
+
+    // First check if index is even in bounds
+    if (items.len == 0 or idx_usize >= items.len) {
+        try writer.print(" {s}:<idx:{}>", .{ prefix, idx_val });
+    } else {
+        // Now check if we can actually read the slice at this index
+        // The ByteSlices format is: [length_byte(s)] [data...]
+        const first_byte = items[idx_usize];
+
+        const can_read = blk: {
+            if (first_byte < 128) {
+                // Single-byte length encoding
+                const slice_len = first_byte;
+                const slice_start = idx_usize + 1;
+                break :blk (slice_start + slice_len <= items.len);
+            } else {
+                // Multi-byte length encoding (4 bytes for length)
+                if (idx_usize + 5 > items.len) break :blk false;
+                const len_bytes = items[idx_usize + 1 .. idx_usize + 5];
+                const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
+                const slice_start = idx_usize + 5;
+                break :blk (slice_start + @as(usize, @intCast(slice_len)) <= items.len);
+            }
+        };
+
+        if (can_read) {
+            const slice = ast.byte_slices.slice(idx);
+            try writer.print(" {s}:{}", .{ prefix, std.fmt.fmtSliceEscapeLower(slice) });
+        } else {
+            // Index is valid but data extends beyond buffer
+            try writer.print(" {s}:<invalid:{}>", .{ prefix, idx_val });
+        }
+    }
+}
+
 /// Helper to output AST node as S-expression
 fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.CommonEnv, node_idx: AST.Node.Idx, indent: usize) !void {
     const node = ast.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
@@ -3138,55 +3178,18 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
             }
         },
 
-        // Big number literals
-        .num_literal_big, .int_literal_big, .frac_literal_big => {
-            // These store digits in ByteSlices
-            // However, after CIR mutation, the ByteSlices might be empty
-            // so we need to handle that case
-            const idx = switch (node.tag) {
-                .num_literal_big => node.payload.num_literal_big,
-                .int_literal_big => node.payload.int_literal_big,
-                .frac_literal_big => node.payload.frac_literal_big,
-                else => unreachable,
-            };
-
-            // Check if we can safely read from ByteSlices
-            const idx_val = @intFromEnum(idx);
-            const idx_usize = @as(usize, @intCast(idx_val));
-            const items = ast.byte_slices.entries.items.items;
-
-            // First check if index is even in bounds
-            if (items.len == 0 or idx_usize >= items.len) {
-                try writer.print(" big:<idx:{}>", .{idx_val});
-            } else {
-                // Now check if we can actually read the slice at this index
-                // The ByteSlices format is: [length_byte(s)] [data...]
-                const first_byte = items[idx_usize];
-
-                const can_read = blk: {
-                    if (first_byte < 128) {
-                        // Single-byte length encoding
-                        const slice_len = first_byte;
-                        const slice_start = idx_usize + 1;
-                        break :blk (slice_start + slice_len <= items.len);
-                    } else {
-                        // Multi-byte length encoding (4 bytes for length)
-                        if (idx_usize + 5 > items.len) break :blk false;
-                        const len_bytes = items[idx_usize + 1 .. idx_usize + 5];
-                        const slice_len = std.mem.readInt(u32, len_bytes[0..4], .little);
-                        const slice_start = idx_usize + 5;
-                        break :blk (slice_start + @as(usize, @intCast(slice_len)) <= items.len);
-                    }
-                };
-
-                if (can_read) {
-                    const slice = ast.byte_slices.slice(idx);
-                    try writer.print(" big:{}", .{std.fmt.fmtSliceEscapeLower(slice)});
-                } else {
-                    // Index is valid but data extends beyond buffer
-                    try writer.print(" big:<invalid:{}>", .{idx_val});
-                }
-            }
+        // Big number literals - each case handled separately to avoid union field access errors
+        .num_literal_big => {
+            const idx = node.payload.num_literal_big;
+            try outputBigNumberLiteral(writer, ast, idx, "num");
+        },
+        .int_literal_big => {
+            const idx = node.payload.int_literal_big;
+            try outputBigNumberLiteral(writer, ast, idx, "int");
+        },
+        .frac_literal_big => {
+            const idx = node.payload.frac_literal_big;
+            try outputBigNumberLiteral(writer, ast, idx, "frac");
         },
 
         // If/match/when expressions with branches
@@ -4080,6 +4083,39 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         return false;
     };
     defer gpa.free(file_content);
+
+    // Check if file is empty and needs initialization
+    if (file_content.len == 0) {
+        // Initialize empty snapshot file with a template
+        std.log.info("initializing empty snapshot file '{s}'", .{snapshot_path});
+
+        // Extract the filename without extension for the description
+        const basename = std.fs.path.basename(snapshot_path);
+        const name_without_ext = if (std.mem.lastIndexOf(u8, basename, ".")) |dot_idx|
+            basename[0..dot_idx]
+        else
+            basename;
+
+        // Create initial content
+        const initial_content = try std.fmt.allocPrint(gpa,
+            \\# META
+            \\~~~ini
+            \\description={s}
+            \\type=expr
+            \\~~~
+            \\# SOURCE
+            \\~~~roc
+            \\# TODO: Add Roc code here
+            \\~~~
+        , .{name_without_ext});
+        defer gpa.free(initial_content);
+
+        // Write the initial content to the file
+        try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = initial_content });
+
+        std.log.info("initialized '{s}' with template content", .{snapshot_path});
+        return true; // Successfully initialized
+    }
 
     // Check our file starts with the metadata section
     if (!std.mem.startsWith(u8, file_content, "# META")) {

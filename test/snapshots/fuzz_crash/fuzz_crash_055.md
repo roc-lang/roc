@@ -41,7 +41,16 @@ r : a where module(a)..h : s
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_055.md:1:9:1:10:**
+```roc
+module[]r:a	where
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

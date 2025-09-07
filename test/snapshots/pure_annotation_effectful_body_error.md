@@ -86,6 +86,16 @@ main! = bad_function("This should fail")
 # EXPECTED
 MODULE NOT FOUND - pure_annotation_effectful_body_error.md:3:1:3:17
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_annotation_effectful_body_error.md:6:1:6:13:**
+```roc
+bad_function : Str -> {}
+```
+^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -95,6 +105,16 @@ Is there an **import** or **exposing** missing up-top?
 bad_function = |msg| Stdout.line!(msg)
 ```
                            ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_annotation_effectful_body_error.md:7:1:7:13:**
+```roc
+bad_function = |msg| Stdout.line!(msg)
+```
+^^^^^^^^^^^^
 
 
 # CANONICALIZE

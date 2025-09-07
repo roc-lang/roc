@@ -112,6 +112,16 @@ main! = |_| {}
 # EXPECTED
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
 # PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_effectful.md:5:1:5:10:**
+```roc
+printName : { name: Str, age: U64 } => Str
+```
+^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **.line!** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -121,6 +131,16 @@ Is there an **import** or **exposing** missing up-top?
     Stdout.line!(person.name)
 ```
           ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_effectful.md:6:1:6:10:**
+```roc
+printName = |person| {
+```
+^^^^^^^^^
 
 
 # CANONICALIZE

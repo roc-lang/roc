@@ -101,7 +101,26 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 # EXPECTED
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_with_vars.md:3:1:3:8:**
+```roc
+mapList : List(a), (a -> b) -> List(b)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_with_vars.md:4:1:4:8:**
+```roc
+mapList = |list, fn| list.map(fn)
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -176,7 +195,7 @@ NIL
 # TYPES
 ~~~roc
 mapList : _arg, _arg2 -> _ret
-main : _arg -> _ret
 fn : _c
+main : _arg -> _ret
 list : _c
 ~~~

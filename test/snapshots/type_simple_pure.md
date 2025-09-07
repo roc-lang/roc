@@ -73,7 +73,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_simple_pure.md:3:1:3:9:**
+```roc
+identity : Str -> Str
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_simple_pure.md:4:1:4:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

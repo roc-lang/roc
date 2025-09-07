@@ -74,6 +74,16 @@ vavar t= '
 ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_031.md:4:7:4:8:**
+```roc
+vavar t= '
+```
+      ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

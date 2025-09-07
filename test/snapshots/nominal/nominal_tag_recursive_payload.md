@@ -67,7 +67,21 @@ empty = (ConsList.Nil)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_recursive_payload.md:6:1:6:6:**
+```roc
+empty = ConsList.Nil
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

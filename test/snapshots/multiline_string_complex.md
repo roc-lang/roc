@@ -526,6 +526,16 @@ x = {
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:8:1:8:7:**
+```roc
+value1 = """This is a "string" with just one line
+```
+^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **is** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -579,6 +589,16 @@ Is there an **import** or **exposing** missing up-top?
 value1 = """This is a "string" with just one line
 ```
                                              ^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:10:1:10:7:**
+```roc
+value2 = 
+```
+^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -636,6 +656,16 @@ Is there an **import** or **exposing** missing up-top?
 	                                    ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:13:1:13:7:**
+```roc
+value3 = """This is a string
+```
+^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **is** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -689,6 +719,16 @@ Is there an **import** or **exposing** missing up-top?
 	"""With multiple lines
 ```
 	                 ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:17:1:17:7:**
+```roc
+value4 = 
+```
+^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -746,6 +786,26 @@ Is there an **import** or **exposing** missing up-top?
 	                 ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:23:1:23:7:**
+```roc
+value5 = {
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:32:2:32:3:**
+```roc
+	c: [
+```
+	^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **multiline** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -768,6 +828,26 @@ Types must be type identifiers, type applications, or type expressions.
 	),
 	e: !"""
 ```
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:36:2:36:3:**
+```roc
+	d: (
+```
+	^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**multiline_string_complex.md:44:1:44:2:**
+```roc
+x = {
+```
+^
 
 
 # CANONICALIZE
@@ -879,7 +959,7 @@ Types must be type identifiers, type applications, or type expressions.
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 115
+; Total type variables: 116
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -938,7 +1018,7 @@ Types must be type identifiers, type applications, or type expressions.
 (var #55 _)
 (var #56 _)
 (var #57 _)
-(var #58 -> #106)
+(var #58 -> #107)
 (var #59 _)
 (var #60 Str)
 (var #61 _)
@@ -946,7 +1026,7 @@ Types must be type identifiers, type applications, or type expressions.
 (var #63 _)
 (var #64 Str)
 (var #65 _)
-(var #66 -> #106)
+(var #66 -> #107)
 (var #67 _)
 (var #68 _)
 (var #69 _)
@@ -987,7 +1067,7 @@ Types must be type identifiers, type applications, or type expressions.
 (var #104 _)
 (var #105 _)
 (var #106 {})
-(var #107 _)
+(var #107 record)
 (var #108 _)
 (var #109 _)
 (var #110 _)
@@ -995,6 +1075,7 @@ Types must be type identifiers, type applications, or type expressions.
 (var #112 _)
 (var #113 _)
 (var #114 _)
+(var #115 _)
 ~~~
 # TYPES
 ~~~roc
@@ -1005,5 +1086,5 @@ x : _f
 d : _f
 value3 : Str
 value4 : Str
-value5 : {}
+value5 : { a: Str, b: Str }
 ~~~

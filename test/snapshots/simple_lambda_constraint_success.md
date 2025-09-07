@@ -85,7 +85,36 @@ addTwoF64 = |x| x + 2.0
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_lambda_constraint_success.md:5:1:5:7:**
+```roc
+addTwo = |x| x + 2
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_lambda_constraint_success.md:9:14:9:15:**
+```roc
+addTwoF64 = |x| x + 2.0
+```
+             ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_lambda_constraint_success.md:9:1:9:10:**
+```roc
+addTwoF64 = |x| x + 2.0
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

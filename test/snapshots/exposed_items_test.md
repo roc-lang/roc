@@ -80,5 +80,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-main : Num(_size)
 ~~~

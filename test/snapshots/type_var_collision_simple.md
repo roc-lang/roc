@@ -166,7 +166,66 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:4:1:4:2:**
+```roc
+a = 1
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:5:1:5:2:**
+```roc
+b = 2
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:6:1:6:2:**
+```roc
+c = 3
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:9:1:9:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:12:1:12:10:**
+```roc
+identity2 = |y| y
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_collision_simple.md:15:1:15:5:**
+```roc
+pair = |first, second| (first, second)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -282,7 +341,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-result3 : _d
 a : Num(_size)
 first : _d
 b : Num(_size)
@@ -292,8 +350,6 @@ x : _d
 y : _d
 pair : _arg, _arg2 -> (_field, _field2)
 identity2 : _arg -> _ret
-result1 : _d
-result2 : _d
 main : _arg -> _ret
 second : _d
 ~~~

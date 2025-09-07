@@ -170,7 +170,76 @@ addThreeTwice = |n| applyTwice(|x| (x + 3, n))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:5:1:5:10:**
+```roc
+makeAdder = |x| |y| x + y
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:9:1:9:11:**
+```roc
+curriedAdd = makeAdder(5)
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:13:18:13:19:**
+```roc
+applyTwice = |f, x| f(f(x))
+```
+                 ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:13:1:13:11:**
+```roc
+applyTwice = |f, x| f(f(x))
+```
+^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:16:1:16:14:**
+```roc
+addThreeTwice : I64 -> I64
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:17:33:17:34:**
+```roc
+addThreeTwice = |n| applyTwice(|x| x + 3, n)
+```
+                                ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_currying_constraint.md:17:1:17:14:**
+```roc
+addThreeTwice = |n| applyTwice(|x| x + 3, n)
+```
+^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -298,10 +367,10 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-applyTwice : _arg, _arg2 -> _ret
+y : _b
 curriedAdd : _b
 addThreeTwice : _arg -> _ret
-y : _b
+applyTwice : _arg, _arg2 -> _ret
 f : _b
 n : _b
 makeAdder : _arg -> _arg2 -> _ret

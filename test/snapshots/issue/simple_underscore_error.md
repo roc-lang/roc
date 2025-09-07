@@ -44,7 +44,26 @@ foo = 42
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_underscore_error.md:5:1:5:4:**
+```roc
+foo : BadType
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_underscore_error.md:6:1:6:4:**
+```roc
+foo = 42
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

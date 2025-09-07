@@ -85,7 +85,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_with_vars.md:3:1:3:9:**
+```roc
+getField : { field: a, other: _b } -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_with_vars.md:4:1:4:9:**
+```roc
+getField = |record| record.field
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

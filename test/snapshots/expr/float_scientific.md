@@ -12,7 +12,7 @@ type=expr
 Float ~~~
 # PARSE
 ~~~clojure
-(frac_literal_big big:<idx:8>)
+(frac_literal_big frac:<idx:8>)
 ~~~
 # FORMATTED
 ~~~roc

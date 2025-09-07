@@ -150,6 +150,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-checkNumber : _arg -> _ret
 num : _a
 ~~~

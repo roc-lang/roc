@@ -45,7 +45,11 @@ Foo((a, b)) : (a, b, Str, U64)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -169,7 +169,46 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_simple.md:4:1:4:15:**
+```roc
+unused_regular = |x| 42
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_simple.md:7:1:7:16:**
+```roc
+used_underscore = |_value| _value
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_simple.md:10:1:10:18:**
+```roc
+unused_underscore = |_ignored| 100
+```
+^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**unused_vars_simple.md:13:1:13:13:**
+```roc
+used_regular = |number| number + 1
+```
+^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -278,13 +317,9 @@ NIL
 # TYPES
 ~~~roc
 _ignored : _e
-c : _e
-d : _e
-a : _e
 unused_regular : _arg -> Num(_size)
 _value : _e
 used_regular : _arg -> Num(_size)
-b : _e
 x : _e
 number : _e
 used_underscore : _arg -> _ret

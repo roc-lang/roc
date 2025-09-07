@@ -23,7 +23,7 @@ KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIde
   )
   (binop_equals
     (lc "x")
-    (frac_literal_big big:<idx:8>)
+    (frac_literal_big frac:<idx:8>)
   )
 )
 ~~~
@@ -37,7 +37,26 @@ x = 123.456
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**dec_annotation.md:3:1:3:2:**
+```roc
+x : Dec
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**dec_annotation.md:4:1:4:2:**
+```roc
+x = 123.456
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

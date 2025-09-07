@@ -79,7 +79,16 @@ testFunc = |input| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_var_idents.md:4:1:4:9:**
+```roc
+testFunc = |input| {
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -122,6 +131,4 @@ NIL
 ~~~roc
 testFunc : _arg -> _ret
 input : _a
-sum_ : _a
-sum : _a
 ~~~

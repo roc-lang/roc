@@ -133,6 +133,11 @@ Where clauses should contain valid ability constraints.
 ```
 
 
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

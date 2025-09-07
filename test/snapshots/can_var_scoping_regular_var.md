@@ -137,7 +137,16 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_regular_var.md:4:1:4:13:**
+```roc
+processItems = |items| {
+```
+^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -206,10 +215,6 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-total_ : _a
-count_ : _a
-result : _a
-nestedFunc : _arg -> _ret
 processItems : _arg -> _ret
 items : _a
 ~~~

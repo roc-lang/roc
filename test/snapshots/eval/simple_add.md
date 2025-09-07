@@ -86,7 +86,16 @@ expect addU8((0, 10)) == 10
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**simple_add.md:4:1:4:6:**
+```roc
+addU8 = |a, b| a + b
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

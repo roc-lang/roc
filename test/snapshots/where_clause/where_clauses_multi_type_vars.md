@@ -93,6 +93,16 @@ process : a, b -> c where module(a).convert : a -> c, module(b).transform : b ->
                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_multi_type_vars.md:4:1:4:8:**
+```roc
+process = |_, _| ...
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

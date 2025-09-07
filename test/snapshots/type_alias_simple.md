@@ -92,7 +92,26 @@ main! = |_| getUser(100)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:5:1:5:8:**
+```roc
+getUser : UserId -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:6:1:6:8:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

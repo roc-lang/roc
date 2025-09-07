@@ -196,6 +196,26 @@ Expressions can be identifiers, literals, function calls, or operators.
 ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_payload_two.md:6:1:6:3:**
+```roc
+ok = |a| MyResult.Ok(a)
+```
+^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_payload_two.md:9:1:9:6:**
+```roc
+is_ok = |result| match result {
+```
+^^^^^
+
+
 **PATTERN IN EXPRESSION CONTEXT**
 Found a pattern where an expression was expected.
 Patterns can only appear in specific contexts like function parameters, destructuring assignments, or **when** branches.
@@ -216,6 +236,11 @@ Patterns can only appear in specific contexts like function parameters, destruct
     MyResult.Err(_) => Bool.False
 ```
                  ^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE

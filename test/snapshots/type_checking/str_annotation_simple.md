@@ -37,7 +37,26 @@ x = "hello"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**str_annotation_simple.md:3:1:3:2:**
+```roc
+x : Str
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**str_annotation_simple.md:4:1:4:2:**
+```roc
+x = "hello"
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

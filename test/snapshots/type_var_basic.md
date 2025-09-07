@@ -75,7 +75,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_basic.md:4:1:4:9:**
+```roc
+identity : a -> a
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_basic.md:5:1:5:9:**
+```roc
+identity = |a| a
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -128,6 +147,6 @@ NIL
 # TYPES
 ~~~roc
 identity : _arg -> _ret
-main : _arg -> {}
 a : _b
+main : _arg -> {}
 ~~~

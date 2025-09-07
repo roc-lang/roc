@@ -100,7 +100,26 @@ main! = |_| processDict(Dict..empty()..insert(("one", 1)))
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_multiple_args.md:3:1:3:12:**
+```roc
+processDict : Dict(Str, U64) -> List(Str)
+```
+^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_multiple_args.md:4:1:4:12:**
+```roc
+processDict = |_dict| []
+```
+^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

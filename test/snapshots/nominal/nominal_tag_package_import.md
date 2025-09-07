@@ -72,7 +72,16 @@ blue = CC.Color.RGB((0, 0, 255))
 # EXPECTED
 MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_package_import.md:8:1:8:5:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

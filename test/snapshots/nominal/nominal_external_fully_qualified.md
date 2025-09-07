@@ -195,6 +195,16 @@ Is there an **import** or **exposing** missing up-top?
                                         ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_external_fully_qualified.md:6:1:6:13:**
+```roc
+handleResult = |result| {
+```
+^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

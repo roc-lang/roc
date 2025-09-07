@@ -103,7 +103,76 @@ func = |x| {
 # EXPECTED
 TYPE MISMATCH - statement_annotations.md:13:7:13:8
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:5:3:5:4:**
+```roc
+  y = x + 1
+```
+  ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:3:1:3:10:**
+```roc
+addOneU64 = |x| {
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:10:1:10:5:**
+```roc
+func : val -> val
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:11:9:11:10:**
+```roc
+func = |x| {
+```
+        ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:12:3:12:4:**
+```roc
+  y : val
+```
+  ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:13:3:13:4:**
+```roc
+  y = x
+```
+  ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**statement_annotations.md:11:1:11:5:**
+```roc
+func = |x| {
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -101,6 +101,16 @@ H{o,
   ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_010.md:3:1:3:4:**
+```roc
+foo =
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

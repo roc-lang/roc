@@ -193,6 +193,21 @@ This might be a limitation in the current implementation that will be addressed 
     ^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_mixed_scope.md:6:1:6:13:**
+```roc
+processColor = |color| {
+```
+^^^^^^^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

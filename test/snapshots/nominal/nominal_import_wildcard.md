@@ -97,6 +97,36 @@ red : Color
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_import_wildcard.md:6:1:6:4:**
+```roc
+red = Red
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_import_wildcard.md:9:1:9:5:**
+```roc
+blue = Blue
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_import_wildcard.md:12:1:12:6:**
+```roc
+green = Green
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

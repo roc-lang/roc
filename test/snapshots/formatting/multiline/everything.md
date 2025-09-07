@@ -716,6 +716,16 @@ g : e -> e where module(e).A, module(e).B
                                     ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:58:1:58:2:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **a** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -815,6 +825,16 @@ Is there an **import** or **exposing** missing up-top?
 		     ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:60:1:60:2:**
+```roc
+h = |x, y| {
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -847,7 +867,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 229
+; Total type variables: 232
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -971,10 +991,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #120 _)
 (var #121 _)
 (var #122 _)
-(var #123 -> #227)
+(var #123 -> #230)
 (var #124 _)
 (var #125 _)
-(var #126 -> #212)
+(var #126 -> #215)
 (var #127 _)
 (var #128 _)
 (var #129 _)
@@ -988,22 +1008,22 @@ Is there an **import** or **exposing** missing up-top?
 (var #137 _)
 (var #138 _)
 (var #139 _)
-(var #140 _)
+(var #140 -> #213)
 (var #141 _)
-(var #142 -> #212)
+(var #142 -> #215)
 (var #143 _)
 (var #144 -> #149)
-(var #145 -> #214)
+(var #145 -> #217)
 (var #146 _)
 (var #147 _)
-(var #148 -> #213)
+(var #148 -> #216)
 (var #149 _)
 (var #150 _)
 (var #151 -> #156)
-(var #152 -> #216)
+(var #152 -> #219)
 (var #153 _)
 (var #154 _)
-(var #155 -> #215)
+(var #155 -> #218)
 (var #156 _)
 (var #157 _)
 (var #158 -> #161)
@@ -1011,10 +1031,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #160 _)
 (var #161 _)
 (var #162 _)
-(var #163 -> #217)
+(var #163 -> #220)
 (var #164 _)
 (var #165 _)
-(var #166 -> #217)
+(var #166 -> #220)
 (var #167 _)
 (var #168 _)
 (var #169 _)
@@ -1026,22 +1046,22 @@ Is there an **import** or **exposing** missing up-top?
 (var #175 _)
 (var #176 _)
 (var #177 _)
-(var #178 -> #219)
+(var #178 -> #222)
 (var #179 _)
 (var #180 _)
-(var #181 -> #218)
+(var #181 -> #221)
 (var #182 _)
 (var #183 _)
 (var #184 _)
-(var #185 -> #223)
+(var #185 -> #226)
 (var #186 _)
 (var #187 _)
 (var #188 _)
-(var #189 -> #222)
+(var #189 -> #225)
 (var #190 _)
 (var #191 _)
 (var #192 _)
-(var #193 -> #225)
+(var #193 -> #228)
 (var #194 _)
 (var #195 _)
 (var #196 _)
@@ -1049,7 +1069,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #198 _)
 (var #199 _)
 (var #200 _)
-(var #201 -> #227)
+(var #201 -> #230)
 (var #202 _)
 (var #203 _)
 (var #204 _)
@@ -1061,32 +1081,30 @@ Is there an **import** or **exposing** missing up-top?
 (var #210 _)
 (var #211 _)
 (var #212 {})
-(var #213 tuple)
-(var #214 fn_pure)
-(var #215 tuple)
-(var #216 fn_pure)
-(var #217 tuple)
+(var #213 record)
+(var #214 {})
+(var #215 record)
+(var #216 tuple)
+(var #217 fn_pure)
 (var #218 tuple)
 (var #219 fn_pure)
-(var #220 _)
-(var #221 {})
-(var #222 record)
-(var #223 fn_pure)
-(var #224 _)
-(var #225 fn_pure)
-(var #226 _)
-(var #227 fn_pure)
-(var #228 _)
+(var #220 tuple)
+(var #221 tuple)
+(var #222 fn_pure)
+(var #223 _)
+(var #224 {})
+(var #225 record)
+(var #226 fn_pure)
+(var #227 _)
+(var #228 fn_pure)
+(var #229 _)
+(var #230 fn_pure)
+(var #231 _)
 ~~~
 # TYPES
 ~~~roc
-h1 : {}
-h2 : _c
 x : _c
-h3 : _c
-h5 : (_field, _field2)
 y : _c
-h4 : _c
 g : _c
 h : _arg, _arg2 -> _ret
 ~~~

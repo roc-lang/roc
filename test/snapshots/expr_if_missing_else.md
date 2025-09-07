@@ -47,6 +47,16 @@ foo = if tru 0
          ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**expr_if_missing_else.md:3:1:3:4:**
+```roc
+foo = if tru 0
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

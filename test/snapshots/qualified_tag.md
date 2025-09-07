@@ -47,7 +47,21 @@ test = (Color.Red)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_tag.md:5:1:5:5:**
+```roc
+test = Color.Red
+```
+^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

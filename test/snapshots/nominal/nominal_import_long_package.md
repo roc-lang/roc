@@ -95,6 +95,16 @@ red : CE
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_import_long_package.md:6:1:6:4:**
+```roc
+red = ... # not implemented
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

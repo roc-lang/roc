@@ -67,7 +67,16 @@ foo = |a| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**expect_stmt_block_assertion.md:4:1:4:4:**
+```roc
+foo = |a| {
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

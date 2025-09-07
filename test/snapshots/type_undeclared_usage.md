@@ -79,7 +79,21 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_undeclared_usage.md:6:1:6:13:**
+```roc
+processValue = |value| {
+```
+^^^^^^^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

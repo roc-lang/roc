@@ -34,7 +34,16 @@ MISSING HEADER - fuzz_crash_018.md:1:1:1:2
 PARSE ERROR - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_018.md:1:3:1:4:**
+```roc
+0 b:S
+```
+  ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

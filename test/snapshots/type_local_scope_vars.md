@@ -106,7 +106,36 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_local_scope_vars.md:3:1:3:6:**
+```roc
+outer : a -> a
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_local_scope_vars.md:6:5:6:10:**
+```roc
+    inner = |y| y
+```
+    ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_local_scope_vars.md:4:1:4:6:**
+```roc
+outer = |x| {
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -175,8 +204,8 @@ NIL
 # TYPES
 ~~~roc
 outer : _arg -> _ret
-main : _arg -> {}
 x : _c
 inner : _arg -> _ret
 y : _c
+main : _arg -> {}
 ~~~

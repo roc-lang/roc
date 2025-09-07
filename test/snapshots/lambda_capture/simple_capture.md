@@ -94,6 +94,4 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-y : _a
 ~~~

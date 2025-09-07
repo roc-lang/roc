@@ -53,7 +53,16 @@ value = (MyType.TagA)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**qualified_with_anno.md:6:1:6:6:**
+```roc
+value = MyType.TagA
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

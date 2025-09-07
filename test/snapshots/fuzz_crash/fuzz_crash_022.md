@@ -193,6 +193,26 @@ getUser = |id| if (id > 1!) "big" else "l"
                                   ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_022.md:5:1:5:4:**
+```roc
+ser : UserId -> Str
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_022.md:6:1:6:8:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+^^^^^^^
+
+
 **EXPRESSION IN PATTERN CONTEXT**
 Found an expression where a pattern was expected.
 This location requires a pattern for matching or destructuring, not a computed value.
@@ -203,6 +223,11 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 -ain! = |_| getUser(900)
 ```
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE

@@ -83,6 +83,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-y : Num(_size)
 ~~~

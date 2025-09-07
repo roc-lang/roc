@@ -71,6 +71,16 @@ module[]import u.R}g:r->R.a.E
                          ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_042.md:1:20:1:21:**
+```roc
+module[]import u.R}g:r->R.a.E
+```
+                   ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

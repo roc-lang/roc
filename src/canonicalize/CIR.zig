@@ -897,6 +897,56 @@ pub const ExprIterator = struct {
     }
 };
 
+/// Iterator for statements in a block
+pub const StmtIterator = struct {
+    inner: collections.NodeSlices(AST.Node.Idx).Iterator,
+    remaining: usize,
+
+    pub fn next(self: *StmtIterator) ?Stmt.Idx {
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
+        if (self.inner.next()) |node_idx| {
+            // Cast AST.Node.Idx to Stmt.Idx (same underlying i32 value)
+            return @as(Stmt.Idx, @enumFromInt(@intFromEnum(node_idx)));
+        }
+        return null;
+    }
+};
+
+/// Represents a block: 0 or more statements followed by exactly 1 expression
+pub const Block = struct {
+    statements: StmtIterator,
+    final_expr: Expr.Idx,
+};
+
+/// Get a block structure from node indices
+/// A block contains 0 or more statements followed by exactly 1 expression
+pub fn getBlock(self: *const CIR, nodes_idx: NodeSlicesIdx) Block {
+    var iter = self.ast.node_slices.nodes(&nodes_idx);
+
+    // Count how many nodes we have total
+    var count: usize = 0;
+    var last_node: ?AST.Node.Idx = null;
+    while (iter.next()) |node| {
+        count += 1;
+        last_node = node;
+    }
+
+    // The last node must be an expression
+    const final_expr = @as(Expr.Idx, @enumFromInt(@intFromEnum(last_node.?)));
+
+    // Reset iterator for statements (all but the last)
+    iter = self.ast.node_slices.nodes(&nodes_idx);
+
+    return Block{
+        .statements = StmtIterator{
+            .inner = iter,
+            .remaining = if (count > 0) count - 1 else 0,
+        },
+        .final_expr = final_expr,
+    };
+}
+
 /// Get an iterator over expression indices
 /// This hides the fact that internally we're still using AST.Node.Idx
 pub fn getExprIndices(self: *const CIR, nodes_idx: NodeSlicesIdx) ExprIterator {
@@ -3369,7 +3419,7 @@ pub fn canonicalizeStmt(self: *CIR, allocator: Allocator, node_idx: AST.Node.Idx
         .import => {
             // Import statement: import module.name [exposing (...)]
             // Process the import and register it in scope
-            const nodes_idx = node.payload.nodes;
+            const nodes_idx = node.payload.import_nodes;
             if (!nodes_idx.isNil()) {
                 var iter = self.ast.*.node_slices.nodes(&nodes_idx);
 

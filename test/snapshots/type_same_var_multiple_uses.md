@@ -79,7 +79,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_same_var_multiple_uses.md:3:1:3:5:**
+```roc
+pair : a -> (a, a)
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_same_var_multiple_uses.md:4:1:4:5:**
+```roc
+pair = |x| (x, x)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

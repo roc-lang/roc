@@ -113,7 +113,26 @@ main! = |_| swapPair((1, 2))
 # EXPECTED
 TYPE MISMATCH - type_alias_parameterized.md:8:13:8:21
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_parameterized.md:5:1:5:9:**
+```roc
+swapPair : Pair(a, b) -> Pair(b, a)
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_parameterized.md:6:1:6:9:**
+```roc
+swapPair = |(x, y)| (y, x)
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -194,7 +213,7 @@ NIL
 # TYPES
 ~~~roc
 y : _c
-main : _arg -> _ret
-swapPair : _arg -> (_field, _field2)
 x : _c
+swapPair : _arg -> (_field, _field2)
+main : _arg -> _ret
 ~~~

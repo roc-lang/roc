@@ -141,6 +141,16 @@ var t= 0
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_024.md:7:1:7:6:**
+```roc
+var t= 0
+```
+^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -183,5 +193,4 @@ var t= 0
 # TYPES
 ~~~roc
 pf : _a
-t : _a
 ~~~

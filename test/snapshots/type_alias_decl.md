@@ -252,7 +252,36 @@ TYPE REDECLARED - type_alias_decl.md:7:1:7:37
 UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_decl.md:30:5:30:11:**
+```roc
+    userId = 123
+```
+    ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_decl.md:33:5:33:11:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+    ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_decl.md:36:5:36:10:**
+```roc
+    color = Red
+```
+    ^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -271,7 +300,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 115
+; Total type variables: 116
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -353,7 +382,7 @@ NIL
 (var #78 _)
 (var #79 _)
 (var #80 _)
-(var #81 -> #114)
+(var #81 -> #115)
 (var #82 _)
 (var #83 _)
 (var #84 _)
@@ -364,14 +393,14 @@ NIL
 (var #89 _)
 (var #90 _)
 (var #91 _)
-(var #92 -> #113)
+(var #92 -> #114)
 (var #93 _)
 (var #94 Str)
 (var #95 _)
 (var #96 _)
 (var #97 Num *)
 (var #98 _)
-(var #99 -> #113)
+(var #99 -> #114)
 (var #100 _)
 (var #101 _)
 (var #102 _)
@@ -381,17 +410,18 @@ NIL
 (var #106 _)
 (var #107 _)
 (var #108 _)
-(var #109 -> #114)
+(var #109 -> #115)
 (var #110 _)
 (var #111 _)
 (var #112 _)
 (var #113 {})
-(var #114 fn_pure)
+(var #114 record)
+(var #115 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 color : _c
+person : { name: Str, age: Num(_size2) }
 main : _arg -> _ret
-person : {}
 userId : Num(_size2)
 ~~~

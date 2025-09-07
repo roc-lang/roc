@@ -85,7 +85,26 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_simple.md:3:1:3:9:**
+```roc
+get_name : { name: Str, age: U64 } -> Str
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_record_simple.md:4:1:4:9:**
+```roc
+get_name = |person| person.name
+```
+^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

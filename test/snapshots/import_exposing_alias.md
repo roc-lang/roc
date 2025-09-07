@@ -246,7 +246,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 47
+; Total type variables: 48
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -264,22 +264,22 @@ Is there an **import** or **exposing** missing up-top?
 (var #14 _)
 (var #15 _)
 (var #16 -> #37)
-(var #17 -> #44)
+(var #17 -> #45)
 (var #18 _)
 (var #19 Str)
 (var #20 _)
 (var #21 _)
 (var #22 Num *)
 (var #23 _)
-(var #24 -> #44)
+(var #24 -> #45)
 (var #25 _)
 (var #26 -> #29)
-(var #27 -> #45)
+(var #27 -> #46)
 (var #28 _)
 (var #29 _)
 (var #30 _)
 (var #31 -> #34)
-(var #32 -> #46)
+(var #32 -> #47)
 (var #33 _)
 (var #34 _)
 (var #35 _)
@@ -292,13 +292,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #42 _)
 (var #43 _)
 (var #44 {})
-(var #45 fn_pure)
+(var #45 record)
 (var #46 fn_pure)
+(var #47 fn_pure)
 ~~~
 # TYPES
 ~~~roc
-data : {}
-encoded : _a
-main : _a
-decoded : _a
 ~~~

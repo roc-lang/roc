@@ -279,7 +279,206 @@ INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
 TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:5:1:5:8:**
+```roc
+pairU64 : Pair(U64)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:6:1:6:8:**
+```roc
+pairU64 = Pair.Pair(1, 2)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:8:1:8:8:**
+```roc
+pairStr : Pair(Str)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:9:1:9:8:**
+```roc
+pairStr = Pair.Pair("hello", "world")
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:11:1:11:7:**
+```roc
+mkPair : a, a -> Pair(a)
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:12:1:12:7:**
+```roc
+mkPair = |x, y| Pair.Pair(x, y)
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:14:1:14:20:**
+```roc
+succeedPairSameType : Pair(U8)
+```
+^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:15:1:15:20:**
+```roc
+succeedPairSameType = mkPair(1, 2)
+```
+^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:17:1:17:18:**
+```roc
+failPairDiffTypes : Pair(U8)
+```
+^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:18:1:18:18:**
+```roc
+failPairDiffTypes = mkPair("1", 2)
+```
+^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:20:1:20:19:**
+```roc
+failPairDiffTypes2 : Pair(U64)
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:21:1:21:19:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:23:1:23:14:**
+```roc
+mkPairInvalid : a, b -> Pair(a)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:24:18:24:19:**
+```roc
+mkPairInvalid = |x, y| Pair.Pair(x, y)
+```
+                 ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:24:21:24:22:**
+```roc
+mkPairInvalid = |x, y| Pair.Pair(x, y)
+```
+                    ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:24:1:24:14:**
+```roc
+mkPairInvalid = |x, y| Pair.Pair(x, y)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:26:19:26:20:**
+```roc
+mkPairInferred = |x, y| Pair.Pair(x, y)
+```
+                  ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:26:22:26:23:**
+```roc
+mkPairInferred = |x, y| Pair.Pair(x, y)
+```
+                     ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:26:1:26:15:**
+```roc
+mkPairInferred = |x, y| Pair.Pair(x, y)
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**annotations.md:28:1:28:17:**
+```roc
+failWithImplicit = mkPairInferred("str", 2)
+```
+^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

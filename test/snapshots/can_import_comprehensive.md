@@ -211,6 +211,16 @@ Is there an **import** or **exposing** missing up-top?
               ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_comprehensive.md:7:1:7:5:**
+```roc
+main = {
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -335,13 +345,5 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # TYPES
 ~~~roc
-helper : _a
-result4 : _a
-combined : _a
 main : _a
-client : _a
-result1 : _a
-parser : _a
-result2 : _a
-result3 : _a
 ~~~

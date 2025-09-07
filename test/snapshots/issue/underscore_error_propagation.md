@@ -79,7 +79,46 @@ goodValue = "test"
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_propagation.md:7:1:7:6:**
+```roc
+value : BadDerived
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_propagation.md:8:1:8:6:**
+```roc
+value = "test"
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_propagation.md:14:1:14:10:**
+```roc
+goodValue : GoodDerived
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_propagation.md:15:1:15:10:**
+```roc
+goodValue = "test"
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

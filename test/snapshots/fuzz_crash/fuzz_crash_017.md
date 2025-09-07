@@ -49,6 +49,26 @@ foo = "hello ${namF
       ^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_017.md:1:1:1:3:**
+```roc
+me = "luc"
+```
+^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_017.md:2:1:2:4:**
+```roc
+foo = "hello ${namF
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

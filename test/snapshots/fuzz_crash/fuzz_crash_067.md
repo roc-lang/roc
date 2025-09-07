@@ -52,6 +52,16 @@ f = || {
     ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_067.md:3:1:3:2:**
+```roc
+f = || {
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

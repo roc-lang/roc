@@ -186,7 +186,46 @@ main! = |_| {}
 # EXPECTED
 TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_complex.md:17:1:17:14:**
+```roc
+processResult : Result -> Str
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_complex.md:18:1:18:14:**
+```roc
+processResult = |_result| "processed"
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_complex.md:21:1:21:15:**
+```roc
+handleResponse : Response -> Str
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_tag_union_complex.md:22:1:22:15:**
+```roc
+handleResponse = |_response| "handled"
+```
+^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

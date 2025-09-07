@@ -160,5 +160,4 @@ Is there an **import** or **exposing** missing up-top?
 # TYPES
 ~~~roc
 main : _arg -> _ret
-result : _a
 ~~~

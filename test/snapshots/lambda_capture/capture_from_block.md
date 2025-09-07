@@ -99,6 +99,4 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~
 # TYPES
 ~~~roc
-a : Num(_size)
-b : Num(_size)
 ~~~

@@ -124,6 +124,5 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-foo : _arg -> _ret
 num : _a
 ~~~

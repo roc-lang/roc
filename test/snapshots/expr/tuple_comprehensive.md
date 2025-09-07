@@ -331,17 +331,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-pair : (Num(_size), Num(_size2))
-with_vars : (_field, _field2, _field3)
 n : _a
-x : Num(_size)
-y : Num(_size)
-empty : ()
-z : Num(_size)
-triple : (Num(_size), Str, _field)
-single : Num(_size)
-nested : ((Num(_size), Num(_size2)), (Num(_size3), Num(_size4)))
-add_one : _arg -> {}
-with_lambda : _arg -> (Num(_size), Num(_size2))
-mixed : (_field, Str, _field2)
 ~~~

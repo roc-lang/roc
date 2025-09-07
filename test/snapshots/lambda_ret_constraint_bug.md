@@ -92,7 +92,36 @@ main = |_, _| helper(5)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_ret_constraint_bug.md:3:1:3:7:**
+```roc
+helper : I64 -> I64
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_ret_constraint_bug.md:4:1:4:7:**
+```roc
+helper = |n| n * 2
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**lambda_ret_constraint_bug.md:7:1:7:5:**
+```roc
+main = |_, _| helper(5)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -162,6 +191,6 @@ NIL
 # TYPES
 ~~~roc
 helper : _arg -> Num(_size)
-main : _arg, _arg2 -> _ret
 n : _a
+main : _arg, _arg2 -> _ret
 ~~~

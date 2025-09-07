@@ -62,6 +62,16 @@ module[]s:b->c where module(a).t:c,u:o...
           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_057.md:1:9:1:10:**
+```roc
+module[]s:b->c where module(a).t:c,u:o...
+```
+        ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

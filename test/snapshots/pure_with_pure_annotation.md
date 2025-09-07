@@ -121,7 +121,56 @@ main! = add((1, 2))
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:4:1:4:4:**
+```roc
+add : I32, I32 -> I32
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:5:1:5:4:**
+```roc
+add = |x, y| { x: x, y: y }.x
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:8:1:8:7:**
+```roc
+double : I32 -> I32
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:9:11:9:12:**
+```roc
+double = |x| add(x, x)
+```
+          ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**pure_with_pure_annotation.md:9:1:9:7:**
+```roc
+double = |x| add(x, x)
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -149,7 +198,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 60
+; Total type variables: 61
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -164,7 +213,7 @@ NIL
 (var #11 _)
 (var #12 _)
 (var #13 _)
-(var #14 -> #53)
+(var #14 -> #54)
 (var #15 _)
 (var #16 _)
 (var #17 _)
@@ -173,49 +222,50 @@ NIL
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 -> #52)
+(var #23 -> #53)
 (var #24 _)
 (var #25 _)
-(var #26 -> #53)
+(var #26 -> #54)
 (var #27 _)
 (var #28 _)
 (var #29 _)
 (var #30 _)
 (var #31 _)
 (var #32 _)
-(var #33 -> #57)
+(var #33 -> #58)
 (var #34 _)
-(var #35 -> #56)
+(var #35 -> #57)
 (var #36 _)
 (var #37 _)
-(var #38 -> #55)
+(var #38 -> #56)
 (var #39 _)
-(var #40 -> #57)
+(var #40 -> #58)
 (var #41 _)
 (var #42 -> #47)
-(var #43 -> #59)
+(var #43 -> #60)
 (var #44 Num *)
 (var #45 Num *)
-(var #46 -> #58)
+(var #46 -> #59)
 (var #47 _)
 (var #48 _)
 (var #49 _)
 (var #50 _)
 (var #51 _)
 (var #52 {})
-(var #53 fn_pure)
-(var #54 _)
-(var #55 tuple)
-(var #56 fn_pure)
+(var #53 record)
+(var #54 fn_pure)
+(var #55 _)
+(var #56 tuple)
 (var #57 fn_pure)
-(var #58 tuple)
-(var #59 fn_pure)
+(var #58 fn_pure)
+(var #59 tuple)
+(var #60 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 add : _arg, _arg2 -> _ret
-main : _a
 x : _a
-double : _arg -> _ret
 y : _a
+double : _arg -> _ret
+main : _a
 ~~~

@@ -71,7 +71,26 @@ my_number = add_one(42)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_anno_connection.md:4:1:4:8:**
+```roc
+add_one = |x| x + 1
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_anno_connection.md:7:1:7:10:**
+```roc
+my_number = add_one(42)
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -127,6 +146,6 @@ NIL
 # TYPES
 ~~~roc
 add_one : _arg -> Num(_size)
-my_number : _a
 x : _a
+my_number : _a
 ~~~

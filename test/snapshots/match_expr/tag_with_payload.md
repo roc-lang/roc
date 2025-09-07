@@ -82,6 +82,16 @@ match shape {
       ^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**tag_with_payload.md:4:20:4:26:**
+```roc
+    Triangle(base, height) => 0.5 * base * height
+```
+                   ^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

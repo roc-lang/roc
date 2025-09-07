@@ -210,6 +210,16 @@ LocalStatus :lue => Loc= [Pending, Complete]
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_032.md:5:1:5:5:**
+```roc
+olor : _ -> tus
+```
+^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -219,6 +229,26 @@ This might be a limitation in the current implementation that will be addressed 
 olor = |color| { import Color.RGB
 ```
                  ^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_032.md:6:1:6:5:**
+```roc
+olor = |color| { import Color.RGB
+```
+^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
 
 
 # CANONICALIZE

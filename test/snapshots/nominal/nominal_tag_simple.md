@@ -72,7 +72,41 @@ yellow = (Color.Yellow)
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_simple.md:6:1:6:5:**
+```roc
+blue = Color.Blue
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_simple.md:8:1:8:7:**
+```roc
+yellow : Color
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_simple.md:9:1:9:7:**
+```roc
+yellow = Color.Yellow
+```
+^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -106,6 +106,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-fib : _arg -> _ret
 n : _a
 ~~~

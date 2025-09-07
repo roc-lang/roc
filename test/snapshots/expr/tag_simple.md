@@ -1,36 +1,61 @@
 # META
 ~~~ini
-description=Simple tag literal
+description=tag_simple
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-MyTag
+# TODO: Add Roc code here
+~~~
 ~~~
 # TOKENS
 ~~~text
-UpperIdent ~~~
+LineComment MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken ~~~
 # PARSE
 ~~~clojure
-(uc "MyTag")
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-MyTag
+# TODO: Add Roc code here
+~
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tag_simple.md:2:1:2:2:**
+```roc
+~~~
+```
+^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**tag_simple.md:2:2:2:3:**
+```roc
+~~~
+```
+ ^
+
+
 # CANONICALIZE
 ~~~clojure
-(Expr.tag_no_args)
+(Expr.malformed)
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 2
+; Total type variables: 4
 (var #0 _)
 (var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
 ~~~roc

@@ -102,7 +102,21 @@ TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_shadowing_across_scopes.md:6:1:6:12:**
+```roc
+processData = |data|
+```
+^^^^^^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

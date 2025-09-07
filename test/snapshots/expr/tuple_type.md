@@ -60,7 +60,16 @@ f((1, 2))
 # EXPECTED
 TYPE MISMATCH - tuple_type.md:5:7:5:13
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**tuple_type.md:3:5:3:6:**
+```roc
+    f = |x| x
+```
+    ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

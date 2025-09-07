@@ -177,7 +177,76 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:7:1:7:8:**
+```roc
+process : MyResult(Str, I32) -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:8:1:8:8:**
+```roc
+process = |_result| "processed"
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:14:1:14:10:**
+```roc
+getString : Option(Str) -> Str
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:15:1:15:10:**
+```roc
+getString = |_opt| "default"
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:17:1:17:10:**
+```roc
+getNumber : Option(I32) -> I32
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:18:14:18:18:**
+```roc
+getNumber = |_opt| 0
+```
+             ^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_tag_union.md:18:1:18:10:**
+```roc
+getNumber = |_opt| 0
+```
+^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -301,10 +370,10 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-_opt : _b
-process : _arg -> Str
-_result : _b
 getString : _arg -> Str
 main : _arg -> {}
+_opt : _b
+process : _arg -> Str
 getNumber : _arg -> Num(_size)
+_result : _b
 ~~~

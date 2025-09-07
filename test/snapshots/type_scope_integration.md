@@ -66,7 +66,16 @@ Baz : Foo
 TYPE REDECLARED - type_scope_integration.md:7:1:7:10
 UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

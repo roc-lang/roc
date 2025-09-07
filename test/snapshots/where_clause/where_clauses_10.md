@@ -85,6 +85,21 @@ Where clauses should contain valid ability constraints.
 				      ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_10.md:5:1:5:13:**
+```roc
+decodeThings # After member name
+```
+^^^^^^^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -178,7 +178,66 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:4:1:4:13:**
+```roc
+testEllipsis : U64 -> U64
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:5:1:5:13:**
+```roc
+testEllipsis = |_| ...
+```
+^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:8:1:8:10:**
+```roc
+testCrash : U64 -> U64
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:9:1:9:10:**
+```roc
+testCrash = |_| {
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:14:1:14:16:**
+```roc
+testCrashSimple : U64 -> U64
+```
+^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**crash_and_ellipsis_test.md:15:1:15:16:**
+```roc
+testCrashSimple = |_| {
+```
+^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -293,11 +352,8 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-result2 : _a
 testCrashSimple : _arg -> _ret
 testCrash : _arg -> _ret
 testEllipsis : _arg -> _ret
 main : _arg -> _ret
-result3 : _a
-result1 : _a
 ~~~

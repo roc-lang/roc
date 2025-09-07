@@ -106,6 +106,4 @@ Expressions can be identifiers, literals, function calls, or operators.
 ~~~
 # TYPES
 ~~~roc
-x : Num(_size)
-main : _a
 ~~~

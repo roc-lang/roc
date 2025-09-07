@@ -203,7 +203,96 @@ MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:7:1:7:5:**
+```roc
+main = Json.NonExistent.method
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:10:1:10:10:**
+```roc
+parseData : Json.InvalidType -> Str
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:11:1:11:10:**
+```roc
+parseData = |data| Json.stringify(data)
+```
+^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:14:1:14:15:**
+```roc
+processRequest : Http.Server.Request -> Http.Server.Response
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:15:1:15:15:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:18:1:18:7:**
+```roc
+result = Json.prase("test")
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:21:1:21:7:**
+```roc
+config = Unknown.Module.config
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:24:1:24:7:**
+```roc
+client = Http.invalidMethod
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_unresolved_qualified.md:27:1:27:7:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

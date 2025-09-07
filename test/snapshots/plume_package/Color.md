@@ -273,6 +273,106 @@ Color := [
       ^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:18:1:18:4:**
+```roc
+rgb = |r, g, b| Color.RGB(r, g, b)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:21:9:21:10:**
+```roc
+rgba = |r, g, b, a| {
+```
+        ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:21:12:21:13:**
+```roc
+rgba = |r, g, b, a| {
+```
+           ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:21:15:21:16:**
+```roc
+rgba = |r, g, b, a| {
+```
+              ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:21:1:21:5:**
+```roc
+rgba = |r, g, b, a| {
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:30:29:30:30:**
+```roc
+    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+```
+                            ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:33:15:33:16:**
+```roc
+        ['#', a, b, c, d, e, f] => {
+```
+              ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:33:18:33:19:**
+```roc
+        ['#', a, b, c, d, e, f] => {
+```
+                 ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:27:1:27:4:**
+```roc
+hex = |str| {
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:49:1:49:7:**
+```roc
+to_str = |color| match color {
+```
+^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **inner** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -315,6 +415,36 @@ Is there an **import** or **exposing** missing up-top?
     Color.Hex(inner) => inner
 ```
                         ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:61:10:61:13:**
+```roc
+named = |str|
+```
+         ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:61:1:61:6:**
+```roc
+named = |str|
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**Color.md:67:19:67:22:**
+```roc
+is_named_color = |str|{
+```
+                  ^^^
 
 
 # CANONICALIZE
@@ -771,22 +901,16 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # TYPES
 ~~~roc
-colors : _h
 hex : _arg -> _ret
 str : _h
 named : _arg -> _ret
 r : _h
-bytes : _h
 d : _h
 f : _h
 g : _h
-is_char_in_hex_range : _arg -> Str
 rgb : _arg, _arg2, _arg3 -> _ret
 b : _h
 color : _h
-is_valid : _h
-rounded : F64
-is_named_color : _arg -> _ret
 c : _h
 rgba : _arg, _arg2, _arg3, _arg4 -> _ret
 to_str : _arg -> _ret

@@ -54,6 +54,16 @@ This is an unexpected parsing error. Please check your syntax.
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**argument_shadows_capture.md:3:7:3:8:**
+```roc
+    (|x| x)(10) # Should not capture outer `x` -- this should give a shadowing warning
+```
+      ^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

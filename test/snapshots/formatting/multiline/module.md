@@ -78,6 +78,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-a : Str
-b : Str
 ~~~

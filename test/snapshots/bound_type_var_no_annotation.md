@@ -181,7 +181,56 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**bound_type_var_no_annotation.md:3:1:3:9:**
+```roc
+identity = |x| x
+```
+^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**bound_type_var_no_annotation.md:6:1:6:8:**
+```roc
+combine : a, b -> (a, b)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**bound_type_var_no_annotation.md:7:1:7:8:**
+```roc
+combine = |first, second| (first, second)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**bound_type_var_no_annotation.md:10:1:10:7:**
+```roc
+addOne : U64 -> U64
+```
+^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**bound_type_var_no_annotation.md:11:1:11:7:**
+```roc
+addOne = |n| n + 1
+```
+^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -302,16 +351,12 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-num : _c
-result : _c
-identity : _arg -> _ret
-first : _c
-pair : _c
 addOne : _arg -> Num(_size)
 combine : _arg, _arg2 -> (_field, _field2)
-text : _c
 second : _c
 n : _c
-main : _arg -> _ret
+identity : _arg -> _ret
 x : _c
+main : _arg -> _ret
+first : _c
 ~~~

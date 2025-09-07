@@ -168,6 +168,16 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
                                                    ^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_chained.md:4:1:4:12:**
+```roc
+updated_one = { ..person, age: 31 }
+```
+^^^^^^^^^^^
+
+
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -177,6 +187,26 @@ Types must be type identifiers, type applications, or type expressions.
 updated_one = { ..person, age: 31 }
 ```
                                ^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_chained.md:4:27:4:30:**
+```roc
+updated_one = { ..person, age: 31 }
+```
+                          ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_chained.md:5:1:5:9:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+```
+^^^^^^^^
 
 
 **EXPRESSION IN TYPE CONTEXT**
@@ -190,6 +220,16 @@ updated2 = { ..updated_one, city: "New York" }
                                   ^^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_chained.md:5:29:5:33:**
+```roc
+updated2 = { ..updated_one, city: "New York" }
+```
+                            ^^^^
+
+
 **EXPRESSION IN TYPE CONTEXT**
 Found an expression where a type was expected.
 Types must be type identifiers, type applications, or type expressions.
@@ -199,6 +239,16 @@ Types must be type identifiers, type applications, or type expressions.
 final = { ..updated2, name: "Alice Smith", age: 32 }
 ```
                             ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**record_updater_chained.md:6:23:6:27:**
+```roc
+final = { ..updated2, name: "Alice Smith", age: 32 }
+```
+                      ^^^^
 
 
 # CANONICALIZE
@@ -258,11 +308,11 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 51
+; Total type variables: 52
 (var #0 _)
 (var #1 _)
 (var #2 _)
-(var #3 -> #44)
+(var #3 -> #45)
 (var #4 _)
 (var #5 Str)
 (var #6 _)
@@ -272,27 +322,27 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 (var #10 _)
 (var #11 Str)
 (var #12 _)
-(var #13 -> #44)
+(var #13 -> #45)
 (var #14 _)
-(var #15 -> #45)
+(var #15 -> #46)
 (var #16 _)
-(var #17 -> #45)
+(var #17 -> #46)
 (var #18 _)
 (var #19 _)
 (var #20 _)
 (var #21 _)
 (var #22 _)
-(var #23 -> #47)
+(var #23 -> #48)
 (var #24 _)
-(var #25 -> #47)
+(var #25 -> #48)
 (var #26 _)
 (var #27 _)
 (var #28 _)
 (var #29 _)
 (var #30 _)
-(var #31 -> #49)
+(var #31 -> #50)
 (var #32 _)
-(var #33 -> #49)
+(var #33 -> #50)
 (var #34 _)
 (var #35 _)
 (var #36 _)
@@ -304,20 +354,19 @@ final = { ..updated2, name: "Alice Smith", age: 32 }
 (var #42 _)
 (var #43 _)
 (var #44 {})
-(var #45 {})
-(var #46 _)
-(var #47 {})
-(var #48 _)
-(var #49 {})
-(var #50 _)
+(var #45 record)
+(var #46 {})
+(var #47 _)
+(var #48 {})
+(var #49 _)
+(var #50 {})
+(var #51 _)
 ~~~
 # TYPES
 ~~~roc
 updated_one : {}
-updated2 : {}
 city : _a
-person : {}
 age : _a
 name : _a
-final : {}
+updated2 : {}
 ~~~

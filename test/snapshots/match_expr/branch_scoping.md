@@ -87,6 +87,26 @@ match result {
       ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**branch_scoping.md:3:9:3:14:**
+```roc
+    Err(value) => value - 1
+```
+        ^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**branch_scoping.md:5:9:5:18:**
+```roc
+    Err(different) => different / 2
+```
+        ^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.match)

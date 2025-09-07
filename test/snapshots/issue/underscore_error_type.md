@@ -170,7 +170,106 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:5:1:5:4:**
+```roc
+foo : BadType
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:6:1:6:4:**
+```roc
+foo = 42
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:10:1:10:4:**
+```roc
+bar : BadList
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:11:1:11:4:**
+```roc
+bar = [1, 2, 3]
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:15:1:15:4:**
+```roc
+baz : BadRecord
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:16:1:16:4:**
+```roc
+baz = { field: "hi", other: 5 }
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:20:1:20:4:**
+```roc
+qux : BadFunction
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:21:1:21:4:**
+```roc
+qux = |x| x
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:25:1:25:5:**
+```roc
+quux : BadTuple
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**underscore_error_type.md:26:1:26:5:**
+```roc
+quux = ("hello", 42)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -235,7 +334,7 @@ NIL
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 76
+; Total type variables: 77
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -272,14 +371,14 @@ NIL
 (var #33 _)
 (var #34 _)
 (var #35 _)
-(var #36 -> #72)
+(var #36 -> #73)
 (var #37 _)
 (var #38 Str)
 (var #39 _)
 (var #40 _)
 (var #41 Num *)
 (var #42 _)
-(var #43 -> #72)
+(var #43 -> #73)
 (var #44 _)
 (var #45 _)
 (var #46 _)
@@ -289,10 +388,10 @@ NIL
 (var #50 _)
 (var #51 _)
 (var #52 _)
-(var #53 -> #74)
+(var #53 -> #75)
 (var #54 _)
 (var #55 _)
-(var #56 -> #74)
+(var #56 -> #75)
 (var #57 _)
 (var #58 _)
 (var #59 _)
@@ -302,21 +401,22 @@ NIL
 (var #63 _)
 (var #64 _)
 (var #65 _)
-(var #66 -> #75)
+(var #66 -> #76)
 (var #67 Str)
 (var #68 Num *)
-(var #69 -> #75)
+(var #69 -> #76)
 (var #70 _)
 (var #71 _)
 (var #72 {})
-(var #73 _)
-(var #74 fn_pure)
-(var #75 tuple)
+(var #73 record)
+(var #74 _)
+(var #75 fn_pure)
+(var #76 tuple)
 ~~~
 # TYPES
 ~~~roc
 quux : (Str, Num(_size))
-baz : {}
+baz : { field: Str, other: Num(_size) }
 bar : _a
 qux : _arg -> _ret
 foo : Num(_size)

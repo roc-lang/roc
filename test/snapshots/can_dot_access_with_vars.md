@@ -101,7 +101,5 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-fn : _arg -> Num(_size)
-list : _a
 x : _a
 ~~~

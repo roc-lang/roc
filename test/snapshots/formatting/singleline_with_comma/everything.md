@@ -601,6 +601,16 @@ h = |x, y,| {
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:16:1:16:2:**
+```roc
+g : e -> e where module(e).A, module(e).B,
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

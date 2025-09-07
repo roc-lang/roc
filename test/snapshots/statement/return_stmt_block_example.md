@@ -102,7 +102,16 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**return_stmt_block_example.md:4:1:4:4:**
+```roc
+foo = |num| {
+```
+^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -161,5 +170,4 @@ NIL
 ~~~roc
 foo : _arg -> _ret
 num : _a
-str : _a
 ~~~

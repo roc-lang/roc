@@ -69,7 +69,16 @@ convert = |a| a..to_b()
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_type_annotation.md:4:1:4:8:**
+```roc
+convert = |a| a.to_b()
+```
+^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

@@ -492,6 +492,66 @@ g : e -> e where module(e).A, module(e).B
                                     ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:16:1:16:2:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:27:6:27:7:**
+```roc
+		Z2(a, b) => a
+```
+		   ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:27:9:27:10:**
+```roc
+		Z2(a, b) => a
+```
+		      ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:29:7:29:8:**
+```roc
+		Z4([a, b]) => a
+```
+		    ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:29:10:29:11:**
+```roc
+		Z4([a, b]) => a
+```
+		       ^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**everything.md:18:1:18:2:**
+```roc
+h = |x, y| {
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -522,7 +582,7 @@ g : e -> e where module(e).A, module(e).B
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 215
+; Total type variables: 218
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -645,10 +705,10 @@ g : e -> e where module(e).A, module(e).B
 (var #119 _)
 (var #120 _)
 (var #121 _)
-(var #122 -> #214)
+(var #122 -> #217)
 (var #123 _)
 (var #124 _)
-(var #125 -> #208)
+(var #125 -> #211)
 (var #126 _)
 (var #127 _)
 (var #128 _)
@@ -662,22 +722,22 @@ g : e -> e where module(e).A, module(e).B
 (var #136 _)
 (var #137 _)
 (var #138 _)
-(var #139 _)
+(var #139 -> #209)
 (var #140 _)
-(var #141 -> #208)
+(var #141 -> #211)
 (var #142 _)
 (var #143 -> #148)
-(var #144 -> #210)
+(var #144 -> #213)
 (var #145 _)
 (var #146 _)
-(var #147 -> #209)
+(var #147 -> #212)
 (var #148 _)
 (var #149 _)
 (var #150 -> #155)
-(var #151 -> #212)
+(var #151 -> #215)
 (var #152 _)
 (var #153 _)
-(var #154 -> #211)
+(var #154 -> #214)
 (var #155 _)
 (var #156 _)
 (var #157 -> #160)
@@ -685,10 +745,10 @@ g : e -> e where module(e).A, module(e).B
 (var #159 _)
 (var #160 _)
 (var #161 _)
-(var #162 -> #213)
+(var #162 -> #216)
 (var #163 _)
 (var #164 _)
-(var #165 -> #213)
+(var #165 -> #216)
 (var #166 _)
 (var #167 _)
 (var #168 _)
@@ -722,7 +782,7 @@ g : e -> e where module(e).A, module(e).B
 (var #196 _)
 (var #197 _)
 (var #198 _)
-(var #199 -> #214)
+(var #199 -> #217)
 (var #200 _)
 (var #201 _)
 (var #202 _)
@@ -732,23 +792,21 @@ g : e -> e where module(e).A, module(e).B
 (var #206 _)
 (var #207 _)
 (var #208 {})
-(var #209 tuple)
-(var #210 fn_pure)
-(var #211 tuple)
-(var #212 fn_pure)
-(var #213 tuple)
-(var #214 fn_pure)
+(var #209 record)
+(var #210 {})
+(var #211 record)
+(var #212 tuple)
+(var #213 fn_pure)
+(var #214 tuple)
+(var #215 fn_pure)
+(var #216 tuple)
+(var #217 fn_pure)
 ~~~
 # TYPES
 ~~~roc
 b : _c
-h1 : {}
-h2 : _c
 x : _c
-h3 : _c
-h5 : (_field, _field2)
 y : _c
-h4 : _c
 g : _c
 h : _arg, _arg2 -> _ret
 a : _c

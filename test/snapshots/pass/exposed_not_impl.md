@@ -67,7 +67,41 @@ REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
-NIL
+**REDUNDANT EXPOSED**
+This value is exposed multiple times in the module header.
+
+**exposed_not_impl.md:1:38:1:41:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                     ^^^
+
+
+**REDUNDANT EXPOSED**
+This value is exposed multiple times in the module header.
+
+**exposed_not_impl.md:1:43:1:49:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                          ^^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -101,5 +135,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-foo : Num(_size)
 ~~~

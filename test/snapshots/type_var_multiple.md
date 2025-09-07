@@ -112,6 +112,26 @@ This is an unexpected parsing error. Please check your syntax.
 ```
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_multiple.md:4:1:4:5:**
+```roc
+swap : (a, b) -> (b, a)
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_var_multiple.md:5:1:5:5:**
+```roc
+swap = |pair| {
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -180,7 +200,7 @@ This is an unexpected parsing error. Please check your syntax.
 ~~~roc
 second : _c
 swap : _arg -> _ret
-main : _arg -> {}
 pair : _c
 first : _c
+main : _arg -> {}
 ~~~

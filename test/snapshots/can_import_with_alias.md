@@ -46,7 +46,16 @@ main = (MyJson..decode)
 # EXPECTED
 MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_import_with_alias.md:5:1:5:5:**
+```roc
+main = MyJson.decode
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

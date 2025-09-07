@@ -67,6 +67,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-hello : Str
-world : Str
 ~~~

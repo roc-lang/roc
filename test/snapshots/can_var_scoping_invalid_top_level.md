@@ -33,7 +33,16 @@ var topLevelVar_ = 0
 # EXPECTED
 PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:4
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_var_scoping_invalid_top_level.md:4:1:4:17:**
+```roc
+var topLevelVar_ = 0
+```
+^^^^^^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block
@@ -54,5 +63,4 @@ NIL
 ~~~
 # TYPES
 ~~~roc
-topLevelVar_ : _a
 ~~~

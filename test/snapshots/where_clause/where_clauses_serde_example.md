@@ -87,7 +87,16 @@ deserialize = |_| ...
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**SHADOWING**
+This definition shadows an existing one.
+
+**where_clauses_serde_example.md:5:1:5:12:**
+```roc
+deserialize = |_| ...
+```
+^^^^^^^^^^^
+
+
 # CANONICALIZE
 ~~~clojure
 (Expr.block

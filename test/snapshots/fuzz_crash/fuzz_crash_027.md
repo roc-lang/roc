@@ -1696,6 +1696,56 @@ import pkg.S exposing [func as fry, Custom.*]
                                ^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:28:1:28:5:**
+```roc
+line : ( # Cpen
+```
+^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:45:1:45:4:**
+```roc
+ane = |num| if num 2 else 5
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:47:1:47:8:**
+```roc
+add_one : U64 -> U64
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:48:12:48:15:**
+```roc
+add_one = |num| {
+```
+           ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:48:1:48:8:**
+```roc
+add_one = |num| {
+```
+^^^^^^^
+
+
 **UNSUPPORTED NODE**
 This syntax is not yet supported by the compiler.
 This might be a limitation in the current implementation that will be addressed in a future update.
@@ -1760,6 +1810,16 @@ Is there an **import** or **exposing** missing up-top?
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
 		                                  ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:60:1:60:11:**
+```roc
+match_time = |
+```
+^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1839,6 +1899,16 @@ Is there an **import** or **exposing** missing up-top?
 	^^^^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:100:1:100:6:**
+```roc
+main! = |_| { # Yeah Ie
+```
+^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **number** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1848,6 +1918,36 @@ Is there an **import** or **exposing** missing up-top?
 	tag_with = Ok(number)
 ```
 	              ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:119:2:119:10:**
+```roc
+	tag_with = Ok(number)
+```
+	^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:120:2:120:6:**
+```roc
+	ited = "Hello, ${world}"
+```
+	^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:121:2:121:6:**
+```roc
+	list = [
+```
+	^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1894,6 +1994,16 @@ Is there an **import** or **exposing** missing up-top?
 	                                                             ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:131:2:131:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+	^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **tag** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1925,6 +2035,16 @@ Is there an **import** or **exposing** missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:132:2:132:7:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1960,6 +2080,16 @@ Is there an **import** or **exposing** missing up-top?
 		 ^^^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:133:2:133:9:**
+```roc
+	m_tuple = (
+```
+	^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **foo** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -1969,6 +2099,16 @@ Is there an **import** or **exposing** missing up-top?
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
 	            ^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:141:2:141:7:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1993,6 +2133,16 @@ Is there an **import** or **exposing** missing up-top?
 	                ^^^^
 
 
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:142:2:142:7:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named **number** in this scope.
 Is there an **import** or **exposing** missing up-top?
@@ -2002,6 +2152,36 @@ Is there an **import** or **exposing** missing up-top?
 			Num.toStr(number) # on expr
 ```
 			          ^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:150:1:150:6:**
+```roc
+empty : {}
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:151:1:151:6:**
+```roc
+empty = {}
+```
+^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**fuzz_crash_027.md:153:1:153:6:**
+```roc
+tuple : Value((a, b, c))
+```
+^^^^^
 
 
 # CANONICALIZE
@@ -2209,7 +2389,7 @@ Is there an **import** or **exposing** missing up-top?
 ~~~
 # SOLVED
 ~~~clojure
-; Total type variables: 537
+; Total type variables: 538
 (var #0 _)
 (var #1 _)
 (var #2 _)
@@ -2566,7 +2746,7 @@ Is there an **import** or **exposing** missing up-top?
 (var #353 _)
 (var #354 _)
 (var #355 {})
-(var #356 -> #514)
+(var #356 -> #515)
 (var #357 _)
 (var #358 Num *)
 (var #359 _)
@@ -2577,45 +2757,45 @@ Is there an **import** or **exposing** missing up-top?
 (var #364 _)
 (var #365 _)
 (var #366 _)
-(var #367 _)
+(var #367 -> #513)
 (var #368 _)
 (var #369 _)
 (var #370 _)
 (var #371 _)
 (var #372 _)
-(var #373 -> #514)
+(var #373 -> #515)
 (var #374 _)
-(var #375 -> #517)
+(var #375 -> #518)
 (var #376 Num *)
 (var #377 Str)
 (var #378 _)
-(var #379 -> #515)
+(var #379 -> #516)
 (var #380 _)
 (var #381 _)
 (var #382 _)
 (var #383 _)
-(var #384 -> #516)
+(var #384 -> #517)
 (var #385 Num *)
 (var #386 Num *)
 (var #387 Num *)
 (var #388 _)
-(var #389 -> #517)
+(var #389 -> #518)
 (var #390 _)
-(var #391 -> #520)
+(var #391 -> #521)
 (var #392 Num *)
 (var #393 Str)
 (var #394 _)
-(var #395 -> #518)
+(var #395 -> #519)
 (var #396 _)
 (var #397 _)
 (var #398 _)
 (var #399 _)
-(var #400 -> #519)
+(var #400 -> #520)
 (var #401 Num *)
 (var #402 Num *)
 (var #403 Num *)
 (var #404 _)
-(var #405 -> #520)
+(var #405 -> #521)
 (var #406 _)
 (var #407 -> #434)
 (var #408 _)
@@ -2647,17 +2827,17 @@ Is there an **import** or **exposing** missing up-top?
 (var #434 Num *)
 (var #435 _)
 (var #436 -> #439)
-(var #437 -> #521)
+(var #437 -> #522)
 (var #438 _)
 (var #439 _)
 (var #440 _)
 (var #441 _)
 (var #442 _)
-(var #443 -> #523)
+(var #443 -> #524)
 (var #444 _)
 (var #445 _)
 (var #446 _)
-(var #447 -> #525)
+(var #447 -> #526)
 (var #448 _)
 (var #449 _)
 (var #450 _)
@@ -2665,10 +2845,10 @@ Is there an **import** or **exposing** missing up-top?
 (var #452 _)
 (var #453 _)
 (var #454 _)
-(var #455 -> #528)
+(var #455 -> #529)
 (var #456 _)
 (var #457 _)
-(var #458 -> #529)
+(var #458 -> #530)
 (var #459 _)
 (var #460 _)
 (var #461 _)
@@ -2680,8 +2860,8 @@ Is there an **import** or **exposing** missing up-top?
 (var #467 _)
 (var #468 _)
 (var #469 _)
-(var #470 -> #535)
-(var #471 -> #535)
+(var #470 -> #536)
+(var #471 -> #536)
 (var #472 _)
 (var #473 _)
 (var #474 _)
@@ -2723,36 +2903,35 @@ Is there an **import** or **exposing** missing up-top?
 (var #510 _)
 (var #511 _)
 (var #512 _)
-(var #513 {})
-(var #514 record)
-(var #515 fn_pure)
-(var #516 tuple)
+(var #513 fn_pure)
+(var #514 {})
+(var #515 record)
+(var #516 fn_pure)
 (var #517 tuple)
-(var #518 fn_pure)
-(var #519 tuple)
+(var #518 tuple)
+(var #519 fn_pure)
 (var #520 tuple)
-(var #521 fn_pure)
-(var #522 _)
-(var #523 fn_pure)
-(var #524 _)
-(var #525 fn_pure)
-(var #526 _)
+(var #521 tuple)
+(var #522 fn_pure)
+(var #523 _)
+(var #524 fn_pure)
+(var #525 _)
+(var #526 fn_pure)
 (var #527 _)
 (var #528 _)
-(var #529 fn_pure)
-(var #530 _)
+(var #529 _)
+(var #530 fn_pure)
 (var #531 _)
 (var #532 _)
 (var #533 _)
 (var #534 _)
-(var #535 {})
-(var #536 _)
+(var #535 _)
+(var #536 {})
+(var #537 _)
 ~~~
 # TYPES
 ~~~roc
 b : _d
-number : _d
-foo : _d
 add_one : _arg -> _ret
 tag_with : _d
 stale : _d
@@ -2760,7 +2939,6 @@ rest : _d
 line : _d
 empty : {}
 a : _d
-blah : _d
 list : _d
 m_tuple : (Num(_size), Str, _field, _field2, (_field3, _field4), _field5)
 n : _d
@@ -2770,8 +2948,7 @@ num : _d
 ist : _d
 main : _arg -> {}
 ane : _arg -> _ret
-other : Num(_size)
 match_time : _arg, _arg2 -> _ret
-record : { punned: _field }
+record : { foo: Num(_size), bar: Str, baz: _field, qux: _field2, punned: _field3 }
 bsult : Num(_size)
 ~~~
