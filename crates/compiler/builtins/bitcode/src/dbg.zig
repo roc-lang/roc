@@ -5,7 +5,7 @@ const RocStr = @import("str.zig").RocStr;
 // An optional debug impl to be called during `roc test`
 pub fn dbg_impl(loc: *const RocStr, msg: *const RocStr, src: *const RocStr) callconv(.c) void {
     if (builtin.target.cpu.arch != .wasm32) {
-        const stderr = std.io.getStdErr().writer();
+        const stderr = std.fs.File.stderr().deprecatedWriter();
         stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
     }
 }

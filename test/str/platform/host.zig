@@ -58,7 +58,7 @@ fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
     };
     defer allocator.free(bytes);
 
-    std.io.getStdErr().writeAll(bytes) catch |err| {
+    std.fs.File.stderr().writeAll(bytes) catch |err| {
         std.log.err("Failed to write debug message to stderr: {s}", .{@errorName(err)});
         return;
     };

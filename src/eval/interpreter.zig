@@ -63,7 +63,7 @@ const target = base.target;
 /// Used in conjunction with tracing in a single test e.g.
 ///
 /// ```zig
-/// interpreter.startTrace("<name of my trace>", std.io.getStdErr().writer().any());
+/// interpreter.startTrace("<name of my trace>", std.fs.File.stderr().deprecatedWriter().any());
 /// defer interpreter.endTrace();
 /// ```
 ///

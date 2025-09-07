@@ -47,7 +47,7 @@ pub const FormattingResult = struct {
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
@@ -171,7 +171,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -205,7 +205,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -224,7 +224,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -2300,7 +2300,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 

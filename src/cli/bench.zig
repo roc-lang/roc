@@ -281,7 +281,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    std.fs.File.stderr().deprecatedWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

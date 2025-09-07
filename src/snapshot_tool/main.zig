@@ -2532,7 +2532,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Enable tracing if requested
     if (config.trace_eval) {
-        repl_instance.setTraceWriter(std.io.getStdErr().writer().any());
+        repl_instance.setTraceWriter(std.fs.File.stderr().deprecatedWriter().any());
     }
 
     // Process each input and generate output

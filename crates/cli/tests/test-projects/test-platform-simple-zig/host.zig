@@ -39,7 +39,7 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.c) void {
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     switch (tag_id) {
         0 => {
             stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
@@ -53,7 +53,7 @@ export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
 }
 
 export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.c) void {
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 

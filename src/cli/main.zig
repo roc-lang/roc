@@ -376,7 +376,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     defer trace.end();
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     const parsed_args = try cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
@@ -1122,7 +1122,7 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     // Use arena allocator for all bundle operations
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -1282,7 +1282,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
 
 fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -1512,7 +1512,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const start_time = std.time.nanoTimestamp();
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
@@ -1940,7 +1940,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     defer trace.end();
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     const stderr_writer = stderr.any();
 
     var timer = try std.time.Timer.start();
@@ -2057,7 +2057,7 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    std.fs.File.stderr().deprecatedWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

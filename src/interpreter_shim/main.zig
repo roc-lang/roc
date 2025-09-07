@@ -182,7 +182,7 @@ fn createInterpreter(env_ptr: *ModuleEnv) ShimError!Interpreter {
     errdefer interpreter.deinit();
 
     // Enable tracing to stderr
-    interpreter.startTrace(std.io.getStdErr().writer().any());
+    interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
 
     return interpreter;
 }

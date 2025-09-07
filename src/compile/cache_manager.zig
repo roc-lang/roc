@@ -249,7 +249,7 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = std.io.getStdErr().writer();
+        const stderr = std.fs.File.stderr().deprecatedWriter();
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
             // If we can't print stats, just continue
         };

@@ -168,7 +168,7 @@ pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.c) void {
 
     //    const cstr = @ptrCast([*:0]u8, c_ptr);
     //
-    //    const stderr = std.io.getStdErr().writer();
+    //    const stderr = std.fs.File.stderr().deprecatedWriter();
     //    stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
     //
     //    std.c.exit(1);

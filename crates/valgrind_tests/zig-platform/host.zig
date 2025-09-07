@@ -45,7 +45,7 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.c) void {
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     switch (tag_id) {
         0 => {
             stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
@@ -59,7 +59,7 @@ export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
 }
 
 export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.c) void {
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
@@ -108,7 +108,7 @@ const Unit = extern struct {};
 
 pub export fn main() u8 {
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     var timer = std.time.Timer.start() catch unreachable;
 
