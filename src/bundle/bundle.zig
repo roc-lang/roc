@@ -34,7 +34,7 @@ const TAR_EXTENSION = ".tar.zst";
 pub const DEFAULT_COMPRESSION_LEVEL: c_int = 22;
 
 /// Custom allocator function for zstd that adds extra bytes to store allocation size
-pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaque {
+pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
     // Allocate extra bytes to store the size
     const total_size = size + SIZE_STORAGE_BYTES;
@@ -49,7 +49,7 @@ pub fn allocForZstd(opaque_ptr: ?*anyopaque, size: usize) callconv(.C) ?*anyopaq
 }
 
 /// Custom free function for zstd that retrieves the original allocation size
-pub fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.C) void {
+pub fn freeForZstd(opaque_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.c) void {
     if (address == null) return;
     const allocator = @as(*std.mem.Allocator, @ptrCast(@alignCast(opaque_ptr.?)));
 

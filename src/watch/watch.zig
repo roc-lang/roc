@@ -55,7 +55,7 @@ const macos_externs = if (use_real_fsevents) struct {
             eventPaths: *anyopaque,
             eventFlags: [*]const FSEventStreamEventFlags,
             eventIds: [*]const FSEventStreamEventId,
-        ) callconv(.C) void,
+        ) callconv(.c) void,
         context: ?*FSEventStreamContext,
         pathsToWatch: CFArrayRef,
         sinceWhen: FSEventStreamEventId,
@@ -114,7 +114,7 @@ const macos_stubs = struct {
             eventPaths: *anyopaque,
             eventFlags: [*]const FSEventStreamEventFlags,
             eventIds: [*]const FSEventStreamEventId,
-        ) callconv(.C) void,
+        ) callconv(.c) void,
         context: ?*FSEventStreamContext,
         pathsToWatch: CFArrayRef,
         sinceWhen: FSEventStreamEventId,
@@ -576,7 +576,7 @@ pub const Watcher = struct {
         eventPaths: *anyopaque,
         eventFlags: [*]const FSEventStreamEventFlags,
         eventIds: [*]const FSEventStreamEventId,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         _ = streamRef;
         _ = eventFlags;
         _ = eventIds;

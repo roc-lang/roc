@@ -376,7 +376,7 @@ fn createWasmRocOps() !*RocOps {
     return roc_ops;
 }
 
-fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const result = allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
     if (result) |ptr| {
@@ -388,7 +388,7 @@ fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv
     }
 }
 
-fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
     // For WASM, we need to handle this carefully since we can't create slices from raw pointers
     // We'll use a dummy slice for now - this is a limitation of the WASM target
@@ -396,7 +396,7 @@ fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) ca
     allocator.rawFree(dummy_slice, align_enum, @returnAddress());
 }
 
-fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
     // For WASM, we'll just allocate new memory for now
     // A proper implementation would need to handle reallocation carefully
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
@@ -410,17 +410,17 @@ fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) ca
     }
 }
 
-fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.C) void {
+fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
     _ = dbg_args;
 }
 
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.C) void {
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
     _ = expect_failed_args;
 }
 
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.C) void {
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
     _ = crashed_args;
 }

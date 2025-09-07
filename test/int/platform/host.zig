@@ -9,7 +9,7 @@ const HostEnv = struct {
 };
 
 /// Roc allocation function
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.C) void {
+fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.arena.allocator();
 
@@ -24,35 +24,35 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 }
 
 /// Roc deallocation function
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.C) void {
+fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
     _ = roc_dealloc;
     _ = env;
     // NoOp as our arena frees all memory at once
 }
 
 /// Roc reallocation function
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.C) void {
+fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
     _ = roc_realloc;
     _ = env;
     @panic("Realloc not implemented in this example");
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.C) void {
+fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
     _ = env;
     const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = env;
     const message = roc_expect.utf8_bytes[0..roc_expect.len];
     std.debug.print("ROC EXPECT FAILED: {s}\n", .{message});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) noreturn {
+fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
     _ = env;
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     @panic(message);
@@ -60,7 +60,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+extern fn roc_entrypoint(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // Windows __main stub for MinGW-style initialization
 pub export fn __main() void {}

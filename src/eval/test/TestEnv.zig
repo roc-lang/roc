@@ -62,7 +62,7 @@ pub fn get_ops(self: *TestEnv) *RocOps {
     return &(self.roc_ops.?);
 }
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
@@ -86,7 +86,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
     // Calculate where the size metadata is stored
@@ -108,7 +108,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void 
     test_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
     // Calculate where the size metadata is stored for the old allocation
@@ -138,19 +138,19 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = dbg_args;
     _ = env;
     @panic("testRocDbg not implemented yet");
 }
 
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = expect_args;
     _ = env;
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
 

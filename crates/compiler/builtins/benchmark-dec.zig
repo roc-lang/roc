@@ -5,13 +5,13 @@ const Timer = time.Timer;
 const RocStr = @import("./bitcode/src/str.zig").RocStr;
 const RocDec = @import("./bitcode/src/dec.zig").RocDec;
 
-fn roc_alloc(_: usize, _: u32) callconv(.C) ?*anyopaque {
+fn roc_alloc(_: usize, _: u32) callconv(.c) ?*anyopaque {
     @panic("Not needed for dec benchmark");
 }
-fn roc_panic(_: *anyopaque, _: u32) callconv(.C) void {
+fn roc_panic(_: *anyopaque, _: u32) callconv(.c) void {
     @panic("Not needed for dec benchmark");
 }
-fn roc_dbg(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.C) void {
+fn roc_dbg(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {
     @panic("Not needed for dec benchmark");
 }
 
