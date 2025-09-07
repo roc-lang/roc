@@ -29,7 +29,7 @@ pub fn fuzz_main() !void {
     allocator = gpa.allocator();
 
     // Read the data from stdin
-    const stdin = std.io.getStdIn();
+    const stdin = std.fs.File.stdin();
     const data = try stdin.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(data);
 
