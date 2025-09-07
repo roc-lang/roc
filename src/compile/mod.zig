@@ -19,6 +19,8 @@ pub const CacheResult = manager.CacheResult;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
 pub const PackageEnv = package.PackageEnv;
+pub const ReportSink = package.ReportSink;
+pub const ScheduleHook = package.ScheduleHook;
 pub const BuildEnv = build.BuildEnv;
 
 // /// Global cache statistics (optional, for debugging)

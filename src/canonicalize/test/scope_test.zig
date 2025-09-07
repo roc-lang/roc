@@ -4,11 +4,11 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 
-const CIR = @import("../CIR.zig");
-const ModuleEnv = @import("../ModuleEnv.zig");
+const CIR = @import("../mod.zig").CIR;
+const ModuleEnv = @import("../mod.zig").ModuleEnv;
 const Ident = base.Ident;
 const Region = base.Region;
-const Scope = @import("../Scope.zig");
+const Scope = @import("../mod.zig").Scope;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
 

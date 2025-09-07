@@ -881,6 +881,30 @@ pub fn getByteSlice(self: *const CIR, idx: ByteSlices.Idx) []const u8 {
     return self.ast.byte_slices.slice(idx);
 }
 
+/// Type alias for node slice indices to hide AST dependency
+pub const NodeSlicesIdx = collections.NodeSlices(AST.Node.Idx).Idx;
+
+/// Iterator that wraps AST.Node.Idx and returns Expr.Idx
+pub const ExprIterator = struct {
+    inner: collections.NodeSlices(AST.Node.Idx).Iterator,
+
+    pub fn next(self: *ExprIterator) ?Expr.Idx {
+        if (self.inner.next()) |node_idx| {
+            // Cast AST.Node.Idx to Expr.Idx (same underlying i32 value)
+            return @as(Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
+        }
+        return null;
+    }
+};
+
+/// Get an iterator over expression indices
+/// This hides the fact that internally we're still using AST.Node.Idx
+pub fn getExprIndices(self: *const CIR, nodes_idx: NodeSlicesIdx) ExprIterator {
+    return ExprIterator{
+        .inner = self.ast.node_slices.nodes(&nodes_idx),
+    };
+}
+
 /// Get an iterator over AST node indices (for legacy compatibility)
 /// TODO: Eventually phase this out in favor of Expr.Idx everywhere
 pub fn getNodeIndices(self: *const CIR, nodes_idx: collections.NodeSlices(AST.Node.Idx).Idx) collections.NodeSlices(AST.Node.Idx).Iterator {

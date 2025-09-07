@@ -10,7 +10,7 @@ const parse = @import("parse");
 const base = @import("base");
 
 const Can = @import("../mod.zig").Can;
-const ModuleEnv = @import("../ModuleEnv.zig");
+const ModuleEnv = @import("../mod.zig").ModuleEnv;
 
 const AST = parse.AST;
 const tokenize = parse.tokenize;

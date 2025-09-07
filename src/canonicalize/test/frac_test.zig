@@ -12,7 +12,7 @@ const types = @import("types");
 const builtins = @import("builtins");
 
 const Can = @import("../mod.zig").Can;
-const CIR = @import("../CIR.zig");
+const CIR = @import("../mod.zig").CIR;
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const RocDec = builtins.dec.RocDec;

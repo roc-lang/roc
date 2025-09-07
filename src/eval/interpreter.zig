@@ -43,7 +43,6 @@ const StackValue = @import("StackValue.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const AST = @import("parse").AST;
 const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
@@ -734,10 +733,11 @@ pub const Interpreter = struct {
                             i = 1;
                         }
 
-                        // Parse digits
+                        // Parse decimal digits only - hex/binary should already be converted
                         while (i < bytes.len) : (i += 1) {
-                            if (bytes[i] >= '0' and bytes[i] <= '9') {
-                                const digit = bytes[i] - '0';
+                            const c = bytes[i];
+                            if (c >= '0' and c <= '9') {
+                                const digit = c - '0';
                                 result = result * 10 + digit;
                             } else {
                                 // Invalid character in number
@@ -794,50 +794,12 @@ pub const Interpreter = struct {
                         const byte_slice_idx = expr.payload.frac_literal_big;
                         const bytes = cir.getByteSlice(byte_slice_idx);
 
-                        // Parse the fractional value from the byte slice
-                        // Format: digits before decimal, then '.', then digits after
-                        var result: f64 = 0.0;
-                        var is_negative = false;
-                        var i: usize = 0;
-
-                        // Check for negative sign
-                        if (bytes.len > 0 and bytes[0] == '-') {
-                            is_negative = true;
-                            i = 1;
-                        }
-
-                        // Parse integer part
-                        while (i < bytes.len and bytes[i] != '.') : (i += 1) {
-                            if (bytes[i] >= '0' and bytes[i] <= '9') {
-                                const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
-                                result = result * 10.0 + digit;
-                            } else {
-                                // Invalid character in number
-                                break;
-                            }
-                        }
-
-                        // Skip decimal point
-                        if (i < bytes.len and bytes[i] == '.') {
-                            i += 1;
-
-                            // Parse fractional part
-                            var divisor: f64 = 10.0;
-                            while (i < bytes.len) : (i += 1) {
-                                if (bytes[i] >= '0' and bytes[i] <= '9') {
-                                    const digit = @as(f64, @floatFromInt(bytes[i] - '0'));
-                                    result += digit / divisor;
-                                    divisor *= 10.0;
-                                } else {
-                                    // Invalid character in number
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (is_negative) {
-                            result = -result;
-                        }
+                        // Use standard library to parse the float string
+                        // The tokenizer should have already validated this is a valid float
+                        const result = std.fmt.parseFloat(f64, bytes) catch {
+                            self.traceError("Failed to parse float literal: {s}", .{bytes});
+                            return error.InvalidFloat;
+                        };
 
                         break :blk result;
                     },
@@ -914,8 +876,8 @@ pub const Interpreter = struct {
             .if_else => {
                 // Get the if-else branches from the node payload
                 const if_branches_u32 = expr.payload.if_branches;
-                const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
-                var iter = cir.getNodeIndices(nodes_idx);
+                const nodes_idx = @as(CIR.NodeSlicesIdx, @enumFromInt(if_branches_u32));
+                var iter = cir.getExprIndices(nodes_idx);
 
                 // Check if there's a condition to evaluate
                 if (iter.next()) |condition_idx| {
@@ -1053,7 +1015,7 @@ pub const Interpreter = struct {
                 const nodes_idx = apply_expr.payload.nodes;
 
                 // Get iterator over the function and argument nodes
-                var nodes_iter = cir.getNodeIndices(nodes_idx);
+                var nodes_iter = cir.getExprIndices(nodes_idx);
 
                 // First node should be the function to call
                 const func_node_idx = nodes_iter.next() orelse {
@@ -1062,7 +1024,7 @@ pub const Interpreter = struct {
                 };
 
                 // Collect argument nodes
-                var args = std.ArrayList(AST.Node.Idx).init(self.allocator);
+                var args = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
                 defer args.deinit();
 
                 while (nodes_iter.next()) |arg_node_idx| {
@@ -1107,7 +1069,7 @@ pub const Interpreter = struct {
 
                 // Unary operations use the nodes payload to store the operand
                 const nodes_idx = unary_expr.payload.nodes;
-                var nodes_iter = cir.getNodeIndices(nodes_idx);
+                var nodes_iter = cir.getExprIndices(nodes_idx);
 
                 // Should have exactly one operand
                 const operand_node_idx = nodes_iter.next() orelse {
@@ -1146,7 +1108,7 @@ pub const Interpreter = struct {
 
                 // Unary operations use the nodes payload to store the operand
                 const nodes_idx = not_expr.payload.nodes;
-                var nodes_iter = cir.getNodeIndices(nodes_idx);
+                var nodes_iter = cir.getExprIndices(nodes_idx);
 
                 // Should have exactly one operand
                 const operand_node_idx = nodes_iter.next() orelse {
@@ -1233,14 +1195,17 @@ pub const Interpreter = struct {
                 const str_expr = cir.getExpr(expr_idx);
                 const str_bytes = str_expr.payload.str_literal_small;
 
-                // Find the actual length by looking for the null terminator
-                var str_len: usize = 0;
-                for (str_bytes) |byte| {
-                    if (byte == 0) break;
-                    str_len += 1;
-                }
+                // Branchless length calculation using bit manipulation
+                // Cast 4 bytes to u32 and find position of first null byte
+                const bytes_u32 = @as(u32, @bitCast(str_bytes));
 
-                // Get a slice of just the actual string content (without null terminator)
+                // Create a mask where each null byte becomes 0x80
+                // This works by subtracting 0x01 from each byte and checking for underflow
+                const null_mask = (bytes_u32 - 0x01010101) & ~bytes_u32 & 0x80808080;
+
+                // If null_mask is non-zero, we have at least one null byte
+                // Count trailing zeros to find its position (in bits), then divide by 8
+                const str_len = if (null_mask != 0) @ctz(null_mask) / 8 else 4;
                 const str_content = str_bytes[0..str_len];
 
                 // Allocate stack space for RocStr
@@ -1341,7 +1306,7 @@ pub const Interpreter = struct {
                 var body_idx: CIR.Expr.Idx = @enumFromInt(0);
 
                 if (!body_then_args.isNil()) {
-                    var iter = cir.getNodeIndices(body_then_args);
+                    var iter = cir.getExprIndices(body_then_args);
                     // First element is the body
                     if (iter.next()) |body_node| {
                         body_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(body_node)));
@@ -1446,11 +1411,11 @@ pub const Interpreter = struct {
                 // Blocks have already been canonicalized with their bindings in scope
                 self.traceInfo("Evaluating block expression", .{});
                 const nodes_idx = expr.payload.nodes;
-                var nodes_iter = cir.getNodeIndices(nodes_idx);
+                var nodes_iter = cir.getExprIndices(nodes_idx);
 
                 // Count nodes to find the last one
                 var node_count: usize = 0;
-                var last_node: ?AST.Node.Idx = null;
+                var last_node: ?CIR.Expr.Idx = null;
                 while (nodes_iter.next()) |n| {
                     last_node = n;
                     node_count += 1;
@@ -1465,7 +1430,7 @@ pub const Interpreter = struct {
                 }
 
                 // Reset iterator to evaluate nodes
-                nodes_iter = cir.getNodeIndices(nodes_idx);
+                nodes_iter = cir.getExprIndices(nodes_idx);
 
                 // Schedule block completion work
                 self.schedule_work(WorkItem{
@@ -1475,7 +1440,7 @@ pub const Interpreter = struct {
                 });
 
                 // Schedule evaluation of all nodes in reverse order (for LIFO stack)
-                var nodes_to_eval = std.ArrayList(AST.Node.Idx).init(self.allocator);
+                var nodes_to_eval = std.ArrayList(CIR.Expr.Idx).init(self.allocator);
                 defer nodes_to_eval.deinit();
 
                 while (nodes_iter.next()) |n| {
@@ -1999,14 +1964,28 @@ pub const Interpreter = struct {
         self.traceInfo("buildTypeScopeForCall: lambda_var={}, lambda_expr_idx={}", .{ lambda_var, closure.lambda_expr_idx });
         self.traceInfo("  lambda type content: {s}", .{@tagName(lambda_resolved.desc.content)});
 
+        // Handle polymorphic functions with unresolved type variables
+        if (lambda_resolved.desc.content == .flex_var) {
+            // Polymorphic functions may have unresolved type variables
+            // For now, skip type checking for them
+            self.traceInfo("Lambda has unresolved type variable, skipping type check", .{});
+            return;
+        }
+
         const func_type = switch (lambda_resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .fn_pure => |func| func,
                 .fn_effectful => |func| func,
                 .fn_unbound => |func| func,
-                else => return error.TypeMismatch,
+                else => {
+                    self.traceError("Unexpected structure type: {s}", .{@tagName(structure)});
+                    return error.TypeMismatch;
+                },
             },
-            else => return error.TypeMismatch,
+            else => {
+                self.traceError("Unexpected content type: {s}", .{@tagName(lambda_resolved.desc.content)});
+                return error.TypeMismatch;
+            },
         };
 
         // Get the argument expressions from the call
@@ -2478,6 +2457,16 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 },
             },
+            .flex_var => {
+                // Polymorphic function - try to infer return type from body
+                self.traceInfo("Lambda has flex_var type, inferring from body", .{});
+                const body_type_var = try self.inferLambdaBodyType(closure.body_idx);
+                _ = self.env.types.resolveVar(body_type_var); // Ensure resolved
+
+                // Try to get layout from the inferred body type
+                const body_layout = try self.env.types.getLayout(body_type_var, self.layout_cache, null);
+                return body_layout;
+            },
             else => {
                 self.traceError("Closure lambda type is not a structure: {}", .{lambda_resolved.desc.content});
                 return error.TypeMismatch;
@@ -2517,10 +2506,10 @@ pub const Interpreter = struct {
 
         // Extract the branch expressions from the CIR using the proper structure
         const if_branches_u32 = expr.payload.if_branches;
-        const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_branches_u32));
+        const nodes_idx = @as(CIR.NodeSlicesIdx, @enumFromInt(if_branches_u32));
 
         // Get iterator over the branches: [condition, then_branch, else_branch]
-        var iter = cir.getNodeIndices(nodes_idx);
+        var iter = cir.getExprIndices(nodes_idx);
 
         // Skip condition (already evaluated)
         _ = iter.next().?;
@@ -2655,7 +2644,7 @@ pub const Interpreter = struct {
         defer param_patterns.deinit();
 
         if (!lambda_expr.payload.body_then_args.isNil()) {
-            var iter = cir.getNodeIndices(lambda_expr.payload.body_then_args);
+            var iter = cir.getExprIndices(lambda_expr.payload.body_then_args);
             // Skip the body (first element)
             _ = iter.next();
 
@@ -2869,13 +2858,11 @@ pub const Interpreter = struct {
 
             // Access record fields through the nodes payload
             const nodes_idx = record_expr.payload.nodes;
-            var nodes_iter = cir.getNodeIndices(nodes_idx);
+            var nodes_iter = cir.getExprIndices(nodes_idx);
 
             // Find the field we're looking for by iterating through all record field expressions
             var value_expr_idx: ?CIR.Expr.Idx = null;
-            while (nodes_iter.next()) |field_node_idx| {
-                // Convert AST.Node.Idx to CIR.Expr.Idx
-                const field_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(field_node_idx)));
+            while (nodes_iter.next()) |field_expr_idx| {
                 // Each field is a record_field expression: field_name : field_value
                 const field_expr = cir.getExpr(field_expr_idx);
                 if (field_expr.tag == .record_field) {
@@ -3443,8 +3430,8 @@ pub const Interpreter = struct {
                 const if_expr = cir.getExpr(work.expr_idx);
 
                 // Get the branches from the payload
-                const nodes_idx = @as(collections.NodeSlices(AST.Node.Idx).Idx, @enumFromInt(if_expr.payload.if_branches));
-                var iter = cir.getNodeIndices(nodes_idx);
+                const nodes_idx = @as(CIR.NodeSlicesIdx, @enumFromInt(if_expr.payload.if_branches));
+                var iter = cir.getExprIndices(nodes_idx);
 
                 // Skip the condition (already evaluated)
                 _ = iter.next();
@@ -3989,7 +3976,7 @@ pub const Interpreter = struct {
                 .block => {
                     // Process block statements and track local bindings
                     const nodes_idx = expr.payload.nodes;
-                    var nodes_iter = cir.getNodeIndices(nodes_idx);
+                    var nodes_iter = cir.getExprIndices(nodes_idx);
 
                     while (nodes_iter.next()) |node_idx| {
                         const node = cir.getNode(@enumFromInt(@intFromEnum(node_idx)));
@@ -4041,7 +4028,7 @@ pub const Interpreter = struct {
                 .fn_call, .apply_anon => {
                     // Traverse function and arguments
                     const nodes_idx = expr.payload.nodes;
-                    var nodes_iter = cir.getNodeIndices(nodes_idx);
+                    var nodes_iter = cir.getExprIndices(nodes_idx);
 
                     while (nodes_iter.next()) |node_idx| {
                         const sub_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(node_idx)));
@@ -4724,7 +4711,7 @@ pub const Interpreter = struct {
             // Get tuple elements from the nodes payload
             const nodes_idx = tuple_expr.payload.nodes;
             if (!nodes_idx.isNil()) {
-                var iter = cir.getNodeIndices(nodes_idx);
+                var iter = cir.getExprIndices(nodes_idx);
                 var element_idx: usize = 0;
 
                 // Skip to the current element
@@ -4867,7 +4854,7 @@ fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: CIR.Expr.Idx
     const body_then_args = expr.payload.body_then_args;
 
     // Get the slice iterator - skip first element (body), rest are patterns
-    var iter = cir.getNodeIndices(body_then_args);
+    var iter = cir.getExprIndices(body_then_args);
     _ = iter.next(); // Skip the body expression
 
     // Collect the parameter patterns

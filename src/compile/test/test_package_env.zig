@@ -5,9 +5,10 @@ const cache = @import("cache");
 const reporting = @import("reporting");
 
 const Report = reporting.Report;
-const PackageEnv = @import("../compile_package.zig").PackageEnv;
-const ReportSink = @import("../compile_package.zig").ReportSink;
-const ScheduleHook = @import("../compile_package.zig").ScheduleHook;
+const compile = @import("../mod.zig");
+const PackageEnv = compile.PackageEnv;
+const ReportSink = compile.ReportSink;
+const ScheduleHook = compile.ScheduleHook;
 
 test "PackageEnv: parallel success across modules" {
     const gpa = std.testing.allocator;

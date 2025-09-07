@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig").TestEnv;
-const CIR = @import("../CIR.zig");
+const CIR = @import("../mod.zig").CIR;
 const testing = std.testing;
 
 test "canonicalize Bool.True" {

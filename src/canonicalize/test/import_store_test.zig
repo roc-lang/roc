@@ -4,7 +4,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
-const CIR = @import("../CIR.zig");
+const CIR = @import("../mod.zig").CIR;
 
 const Import = CIR.Import;
 const StringLiteral = base.StringLiteral;

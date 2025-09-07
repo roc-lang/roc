@@ -4,9 +4,10 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
-const CIR = @import("../CIR.zig");
-const Can = @import("../mod.zig").Can;
-const ModuleEnv = @import("../ModuleEnv.zig");
+const can_mod = @import("../mod.zig");
+const CIR = can_mod.CIR;
+const Can = can_mod.Can;
+const ModuleEnv = can_mod.ModuleEnv;
 
 const CommonEnv = base.CommonEnv;
 

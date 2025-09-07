@@ -3390,12 +3390,31 @@ pub const TokenIterator = struct {
                         .extra = .{ .none = 0 },
                     };
                 }
-                // Store number text in ByteSlices for deferred parsing
-                // Number parsing happens during expression canonicalization
-                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
-                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                // Parse the hex number and convert to decimal string
+                const hex_text = self.cursor.buf[start_pos + 2 .. self.cursor.pos]; // Skip "0x"
+
+                // Parse hex to integer
+                var value: u128 = 0;
+                for (hex_text) |c| {
+                    if (c == '_') continue; // Skip underscores
+                    const digit: u8 = if (c >= '0' and c <= '9')
+                        c - '0'
+                    else if (c >= 'a' and c <= 'f')
+                        c - 'a' + 10
+                    else if (c >= 'A' and c <= 'F')
+                        c - 'A' + 10
+                    else
+                        unreachable; // Already validated above
+                    value = value * 16 + digit;
+                }
+
+                // Convert to decimal string
+                var buf: [40]u8 = undefined; // u128 max is 39 digits
+                const decimal_str = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
+                const bytes_idx = try self.byte_slices.append(gpa, decimal_str);
+
                 return Token{
-                    .tag = .Int,
+                    .tag = .IntBase,
                     .region = base.Region{
                         .start = base.Region.Position{ .offset = @intCast(start_pos) },
                         .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
@@ -3425,10 +3444,24 @@ pub const TokenIterator = struct {
                         .extra = .{ .none = 0 },
                     };
                 }
-                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
-                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                // Parse the binary number and convert to decimal string
+                const bin_text = self.cursor.buf[start_pos + 2 .. self.cursor.pos]; // Skip "0b"
+
+                // Parse binary to integer
+                var value: u128 = 0;
+                for (bin_text) |c| {
+                    if (c == '_') continue; // Skip underscores
+                    const digit: u8 = c - '0'; // '0' or '1'
+                    value = value * 2 + digit;
+                }
+
+                // Convert to decimal string
+                var buf: [40]u8 = undefined; // u128 max is 39 digits
+                const decimal_str = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
+                const bytes_idx = try self.byte_slices.append(gpa, decimal_str);
+
                 return Token{
-                    .tag = .Int,
+                    .tag = .IntBase,
                     .region = base.Region{
                         .start = base.Region.Position{ .offset = @intCast(start_pos) },
                         .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },
@@ -3458,10 +3491,24 @@ pub const TokenIterator = struct {
                         .extra = .{ .none = 0 },
                     };
                 }
-                const num_text = self.cursor.buf[start_pos..self.cursor.pos];
-                const bytes_idx = try self.byte_slices.append(gpa, num_text);
+                // Parse the octal number and convert to decimal string
+                const oct_text = self.cursor.buf[start_pos + 2 .. self.cursor.pos]; // Skip "0o"
+
+                // Parse octal to integer
+                var value: u128 = 0;
+                for (oct_text) |c| {
+                    if (c == '_') continue; // Skip underscores
+                    const digit: u8 = c - '0'; // '0' through '7'
+                    value = value * 8 + digit;
+                }
+
+                // Convert to decimal string
+                var buf: [40]u8 = undefined; // u128 max is 39 digits
+                const decimal_str = std.fmt.bufPrint(&buf, "{}", .{value}) catch unreachable;
+                const bytes_idx = try self.byte_slices.append(gpa, decimal_str);
+
                 return Token{
-                    .tag = .Int,
+                    .tag = .IntBase,
                     .region = base.Region{
                         .start = base.Region.Position{ .offset = @intCast(start_pos) },
                         .end = base.Region.Position{ .offset = @intCast(self.cursor.pos) },

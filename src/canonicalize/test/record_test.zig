@@ -4,7 +4,7 @@ const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
 const types = @import("types");
-const ModuleEnv = @import("../ModuleEnv.zig");
+const ModuleEnv = @import("../mod.zig").ModuleEnv;
 const Can = @import("../mod.zig").Can;
 
 const Ident = base.Ident;

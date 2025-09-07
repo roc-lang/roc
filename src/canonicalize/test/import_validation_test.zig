@@ -11,8 +11,8 @@ const parse = @import("parse");
 const collections = @import("collections");
 
 const Can = @import("../mod.zig").Can;
-const ModuleEnv = @import("../ModuleEnv.zig");
-const CIR = @import("../CIR.zig");
+const ModuleEnv = @import("../mod.zig").ModuleEnv;
+const CIR = @import("../mod.zig").CIR;
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
