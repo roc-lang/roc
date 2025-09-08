@@ -23,10 +23,8 @@ const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
 pub const UnbundleError = error{
     DecompressionFailed,
     InvalidTarHeader,
-    UnexpectedEndOfStream,
     FileCreateFailed,
     DirectoryCreateFailed,
-    FileWriteFailed,
     HashMismatch,
     InvalidFilename,
     FileTooLarge,
@@ -36,6 +34,8 @@ pub const UnbundleError = error{
     DictionaryIdFlagUnsupported,
     MalformedBlock,
     MalformedFrame,
+    StreamError,
+    WriteFailed,
 } || std.mem.Allocator.Error;
 
 /// Context for error reporting during unbundle operations
@@ -388,7 +388,7 @@ fn HashingReader(comptime ReaderType: type) type {
 
         const Self = @This();
         pub const Error = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, Error, read);
+        pub const Reader = std.Io.GenericReader(*Self, Error, read);
 
         pub fn read(self: *Self, buffer: []u8) Error!usize {
             const n = try self.child_reader.read(buffer);
@@ -425,12 +425,13 @@ pub fn unbundleStream(
     };
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-    var zstd_stream = std.compress.zstd.Decompress.init(hashing_reader.reader(), &window_buffer, .{});
-    const decompressed_reader = zstd_stream.reader();
+    var reader_buffer: [4096]u8 = undefined;
+    var reader = hashing_reader.reader().adaptToNewApi(&reader_buffer).new_interface;
+    var zstd_stream = std.compress.zstd.Decompress.init(&reader, &window_buffer, .{});
 
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{
+    var tar_iterator = std.tar.Iterator.init(&zstd_stream.reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -460,18 +461,13 @@ pub fn unbundleStream(
                 data_extracted = true;
             },
             .file => {
-                const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile(file_writer);
-
                 var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
-                    bytes_remaining -= bytes_read;
-                }
+                const old_writer = try extract_writer.createFile(file_path);
+                var file_writer = old_writer.adaptToNewApi(&buffer).new_interface;
+                defer extract_writer.finishFile(old_writer);
+
+                tar_iterator.streamRemaining(entry, &file_writer) catch return error.StreamError;
+                try file_writer.flush();
 
                 data_extracted = true;
             },
@@ -505,14 +501,6 @@ pub fn unbundleStream(
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    bytes_remaining -= bytes_read;
-                }
-
                 data_extracted = true;
             },
         }
