@@ -16,7 +16,7 @@ match list {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare UpperIdent Comma UpperIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpThinArrow Int OpenSquare LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare UpperIdent Comma UpperIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpThinArrow Int OpenSquare LowerIdent Comma LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -85,7 +85,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow Int OpenSquare Lo
 # FORMATTED
 ~~~roc
 match list
-	[] => 
+	[] =>
 		0
 		[x] => x
 		[first, second] => first + second

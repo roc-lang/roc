@@ -13,7 +13,7 @@ match value {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly LowerIdent KwIf LowerIdent OpGreaterThan Int OpFatArrow String LowerIdent KwIf LowerIdent OpLessThan Int OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly LowerIdent KwIf LowerIdent OpGreaterThan Int OpThinArrow String LowerIdent KwIf LowerIdent OpLessThan Int OpThinArrow String Underscore OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -52,7 +52,7 @@ KwMatch LowerIdent OpenCurly LowerIdent KwIf LowerIdent OpGreaterThan Int OpFatA
 # FORMATTED
 ~~~roc
 match value
-	x if x > 0 => 
+	x if x > 0 =>
 		"positive: ${Num.toStr x}"
 		x
 		if x < 0 => "negative: ${Num.toStr x}" _ => "other"

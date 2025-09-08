@@ -9,7 +9,7 @@ create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpBang OpColon UpperIdent Comma UpperIdent OpFatArrow OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly ~~~
+LowerIdent OpBang OpColon UpperIdent Comma UpperIdent OpThinArrow OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (empty)

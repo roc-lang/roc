@@ -7,13 +7,13 @@ type=expr
 ~~~roc
 match nestedList {
     [[x], [y]] => x + y
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
     [x, [y]] => x * y
 }
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma OpenSquare LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare OpenSquare LowerIdent Comma LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpBinaryMinus LowerIdent OpenSquare LowerIdent Comma OpenSquare LowerIdent CloseSquare CloseSquare OpFatArrow LowerIdent OpStar LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma OpenSquare LowerIdent CloseSquare CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent OpenSquare OpenSquare LowerIdent Comma LowerIdent CloseSquare CloseSquare OpThinArrow LowerIdent OpBinaryMinus LowerIdent OpenSquare LowerIdent Comma OpenSquare LowerIdent CloseSquare CloseSquare OpThinArrow LowerIdent OpStar LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -64,7 +64,7 @@ KwMatch LowerIdent OpenCurly OpenSquare OpenSquare LowerIdent CloseSquare Comma 
 # FORMATTED
 ~~~roc
 match nestedList
-	[[x], [y]] => 
+	[[x], [y]] =>
 		x + y
 		[[x, y]] => x - y
 		[x, [y]] => x * y
@@ -88,7 +88,7 @@ This definition shadows an existing one.
 
 **nested_list_scoping.md:3:7:3:8:**
 ```roc
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
 ```
       ^
 
@@ -98,7 +98,7 @@ This definition shadows an existing one.
 
 **nested_list_scoping.md:3:10:3:11:**
 ```roc
-    [[x, y]] => x - y  
+    [[x, y]] => x - y
 ```
          ^
 

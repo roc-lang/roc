@@ -24,7 +24,7 @@ ar,
 ~~~
 # TOKENS
 ~~~text
-KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineComment OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare Dot CloseSquare LineComment KwPackages LineComment OpenCurly LineComment LowerIdent OpColon Int String Comma LowerIdent CloseCurly LineComment KwProvides LineComment OpenSquare LineComment LowerIdent Comma CloseSquare ~~~
+KwPlatform LineComment String LineComment KwRequires OpenCurly CloseCurly LineComment OpenCurly LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpThinArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare Dot CloseSquare LineComment KwPackages LineComment OpenCurly LineComment LowerIdent OpColon Int String Comma LowerIdent CloseCurly LineComment KwProvides LineComment OpenSquare LineComment LowerIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
 (platform-header
@@ -68,20 +68,20 @@ platform # Cd
 {} exposes [: ]
 
 Str
-) 
-=> 
+)
+=>
 {}
 , # ure
-			
+
 } #Ce
-	
+
 exposes #rd
-		
+
 [.
 		]
 # Cse
 packages # Cd
-		
+
 { # pen
 	pkg: 77,
 	"..c",
@@ -89,7 +89,7 @@ packages # Cd
 }
 #
 provides # Cd
-		
+
 [ # pen
 	ar,
 ]

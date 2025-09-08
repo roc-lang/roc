@@ -4,7 +4,8 @@ const base = @import("base");
 const collections = @import("collections");
 const AST = @import("../AST.zig");
 const Parser = @import("../Parser.zig");
-const tokenize_iter = @import("../tokenize.zig");
+const tokens = @import("tokens");
+const tokenize_iter = tokens.Tokenizer;
 
 fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST {
     var ast = try AST.initCapacity(allocator, 100);

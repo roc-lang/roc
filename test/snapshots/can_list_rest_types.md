@@ -12,14 +12,14 @@ match numbers {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow OpenSquare CloseSquare CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot KwAs LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare CloseSquare OpThinArrow OpenSquare CloseSquare CloseCurly ~~~
 # PARSE
 ~~~clojure
 (malformed)
 ~~~
 # FORMATTED
 ~~~roc
-] 
+]
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14

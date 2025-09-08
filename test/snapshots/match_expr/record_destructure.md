@@ -13,7 +13,7 @@ match ... {
 ~~~
 # TOKENS
 ~~~text
-KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpFatArrow String OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly CloseCurly OpFatArrow String CloseCurly ~~~
+KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpThinArrow String OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpThinArrow String OpenCurly CloseCurly OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -55,7 +55,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent CloseCurly OpF
 # FORMATTED
 ~~~roc
 match ...
-	{name: name, age: age} => 
+	{name: name, age: age} =>
 		"${name} is ${age.to_str()} years old"
 		{ name, address: {
 			city

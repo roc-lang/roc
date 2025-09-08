@@ -11,7 +11,7 @@ match person {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly CloseCurly OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent Comma LowerIdent CloseCurly CloseCurly OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

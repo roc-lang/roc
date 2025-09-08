@@ -25,7 +25,7 @@ ar,
 ~~~
 # TOKENS
 ~~~text
-KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineComment LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare LineComment CloseSquare LineComment KwPackages LineComment LowerIdent LineComment OpenCurly LineComment LowerIdent OpColon String Comma LowerIdent CloseCurly LineComment KwProvides LineComment OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent LineComment LowerIdent Comma CloseSquare ~~~
+KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineComment LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpThinArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare LineComment CloseSquare LineComment KwPackages LineComment LowerIdent LineComment OpenCurly LineComment LowerIdent OpColon String Comma LowerIdent CloseCurly LineComment KwProvides LineComment OpenSquare UpperIdent OpenRound LowerIdent CloseRound Comma OpenRound LowerIdent LineComment LowerIdent Comma CloseSquare ~~~
 # PARSE
 ~~~clojure
 (platform-header
@@ -75,20 +75,20 @@ platform # Cd
 {} exposes [: ]
 
 Str
-) 
-=> 
+)
+=>
 {}
 , # ure
-			
+
 } #Ce
-	
+
 exposes #rd
-		
+
 [, #
 ]
 # Cse
 packages # Cd
-		
+
 vides
 # Cd
 { # pen
@@ -97,14 +97,14 @@ vides
 }
 # Cose
 provides # Cd
-		
+
 [
 	Ok(world),
 	n, # pen
 ]
 ar
 ,
-		
+
 ]
 ~~~
 # EXPECTED

@@ -9,7 +9,8 @@ const collections = @import("collections");
 const base = @import("base");
 
 const AST = @import("AST.zig");
-const TokenIdx = @import("tokenize.zig").Token.Idx;
+const tokens = @import("tokens");
+const TokenIdx = tokens.Token.Idx;
 
 const Node = @This();
 

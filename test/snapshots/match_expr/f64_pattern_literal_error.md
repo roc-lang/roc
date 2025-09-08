@@ -13,7 +13,7 @@ match x {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly Float LowerIdent OpFatArrow String Float LowerIdent OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly Float LowerIdent OpThinArrow String Float LowerIdent OpThinArrow String LowerIdent OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (malformed)

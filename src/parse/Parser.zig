@@ -14,11 +14,12 @@ const AST = @import("AST.zig");
 const Node = AST.Node;
 const Region = base.Region;
 const Position = base.Region.Position;
+const tokens = @import("tokens");
+const tokenize = tokens.Tokenizer;
+const tokenize_iter = tokens.Tokenizer;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const Token = tokenize.Token;
+const Token = tokens.Token;
 const TokenIdx = Token.Idx;
-const tokenize = @import("tokenize.zig");
-const tokenize_iter = @import("tokenize.zig");
 const Ident = base.Ident;
 
 const MAX_PARSE_DIAGNOSTICS: usize = 1_000;
@@ -863,9 +864,9 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                 }
 
                 // Now check what follows the comma-separated items
-                if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                if (self.peek() == .OpArrow or self.peek() == .OpThinArrow) {
                     // It's a function type - build curried arrows
-                    const is_effectful = self.peek() == .OpFatArrow;
+                    const is_effectful = self.peek() == .OpThinArrow;
                     const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_region = self.currentRegion();
                     self.advance();
@@ -4324,7 +4325,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
 
                 // Check if this is an effectful type annotation with => or ->
                 const arrow_token = self.peek();
-                if (arrow_token == .OpArrow or arrow_token == .OpFatArrow) {
+                if (arrow_token == .OpArrow or arrow_token == .OpThinArrow) {
                     self.advance(); // consume the arrow
 
                     // Parse the return type
@@ -4334,7 +4335,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
                         try self.parseExpr();
 
                     // Create arrow node for function type
-                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_arrow_call;
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpThinArrow) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
                     const arrow_region = makeRegion(self.ast.start(rhs), self.ast.getRegion(return_type).end);
                     rhs = try self.ast.appendNode(self.gpa, arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
@@ -4382,14 +4383,14 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 // Check for arrow operators (thin -> or thick =>) after the type
                 // This handles effectful function types like {} => Result(...)
                 const arrow_token = self.peek();
-                if (arrow_token == .OpArrow or arrow_token == .OpFatArrow) {
+                if (arrow_token == .OpArrow or arrow_token == .OpThinArrow) {
                     self.advance(); // consume the arrow
 
                     // Parse the return type
                     const return_type = try self.parseExpr();
 
                     // Create the arrow node
-                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpFatArrow) .binop_thick_arrow else .binop_arrow_call;
+                    const arrow_tag: AST.Node.Tag = if (arrow_token == .OpThinArrow) .binop_thick_arrow else .binop_arrow_call;
                     const arrow_binop_idx = try self.ast.appendBinOp(self.gpa, rhs, return_type);
                     const full_arrow_region = makeRegion(self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(rhs)))).start, self.ast.nodes.fieldItem(.region, @as(collections.SafeMultiList(Node).Idx, @enumFromInt(@intFromEnum(return_type)))).end);
                     rhs = try self.ast.appendNode(self.gpa, full_arrow_region, arrow_tag, .{ .binop = arrow_binop_idx });
@@ -5751,11 +5752,11 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
 
         // Expect => or ->
         const arrow_type = self.peek();
-        if (arrow_type != .OpFatArrow and arrow_type != .OpArrow) {
+        if (arrow_type != .OpThinArrow and arrow_type != .OpArrow) {
             _ = try self.pushMalformed(.expected_arrow_after_pattern, self.getCurrentErrorPos());
             break;
         }
-        const is_effectful = arrow_type == .OpFatArrow;
+        const is_effectful = arrow_type == .OpThinArrow;
         const arrow_end = self.getLastConsumedRegion().end;
         self.advance(); // consume arrow
 
@@ -6055,7 +6056,7 @@ pub fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpColon => .{ .left = 3, .right = 4 },
         .OpColonEqual => .{ .left = 3, .right = 4 },
         .OpArrow => .{ .left = 2, .right = 3 },
-        .OpFatArrow => .{ .left = 1, .right = 2 },
+        .OpThinArrow => .{ .left = 1, .right = 2 },
         .KwAs => .{ .left = 3, .right = 4 },
         .KwWhere => .{ .left = 1, .right = 2 },
         else => .{ .left = 0, .right = 0 },
@@ -6079,7 +6080,7 @@ fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpGreaterThanOrEq => .binop_gte,
         .OpLessThan => .binop_lt,
         .OpLessThanOrEq => .binop_lte,
-        .OpFatArrow => .binop_thick_arrow,
+        .OpThinArrow => .binop_thick_arrow,
         .OpArrow => .binop_arrow_call,
         .OpAnd => .binop_and,
         .OpOr => .binop_or,

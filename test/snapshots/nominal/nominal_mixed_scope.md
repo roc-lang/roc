@@ -24,7 +24,7 @@ processColor = |color| {
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly BlankLine LineComment KwImport UpperIdent Dot UpperIdent BlankLine KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent CloseCurly CloseCurly ~~~
+KwModule OpenSquare UpperIdent Comma LowerIdent CloseSquare BlankLine UpperIdent OpColonEqual OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly BlankLine LineComment KwImport UpperIdent Dot UpperIdent BlankLine KwMatch LowerIdent OpenCurly UpperIdent Dot UpperIdent OpThinArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpThinArrow UpperIdent Dot UpperIdent UpperIdent Dot UpperIdent OpThinArrow UpperIdent Dot UpperIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -107,13 +107,13 @@ processColor = |color| {
 	import Color.RGB
 	match color
 	Red
-	=> 
+	=>
 	LocalStatus.Pending
 	RGB.Green
-	=> 
+	=>
 	LocalStatus.Complete
 	RGB.Blue
-	=> 
+	=>
 	LocalStatus.Pending
 }
 

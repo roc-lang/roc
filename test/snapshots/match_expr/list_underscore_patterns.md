@@ -16,7 +16,7 @@ match items {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int LineComment OpenSquare DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent LineComment OpenSquare LowerIdent Comma DoubleDot CloseSquare OpFatArrow LowerIdent LineComment OpenSquare Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent LineComment OpenSquare LowerIdent Comma Underscore Comma Underscore Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent LineComment OpenSquare CloseSquare OpFatArrow Int LineComment CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpThinArrow Int LineComment OpenSquare DoubleDot Comma LowerIdent CloseSquare OpThinArrow LowerIdent LineComment OpenSquare LowerIdent Comma DoubleDot CloseSquare OpThinArrow LowerIdent LineComment OpenSquare Underscore Comma Underscore Comma LowerIdent CloseSquare OpThinArrow LowerIdent LineComment OpenSquare LowerIdent Comma Underscore Comma Underscore Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent LineComment OpenSquare CloseSquare OpThinArrow Int LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -74,7 +74,7 @@ KwMatch LowerIdent OpenCurly OpenSquare Underscore CloseSquare OpFatArrow Int Li
 # FORMATTED
 ~~~roc
 match items
-	[_] => 
+	[_] =>
 		1
 		 # pattern match on a list with a single (ignored) element
 [.., ]

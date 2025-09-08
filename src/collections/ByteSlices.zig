@@ -110,6 +110,19 @@ pub fn append(self: *Self, allocator: Allocator, bytes: []const u8) Allocator.Er
     return @as(Self.Idx, @enumFromInt(@as(u32, @intCast(len_idx))));
 }
 
+pub fn extendLast(self: *Self, allocator: Allocator, idx: Idx, bytes: []const u8) Allocator.Error!void {
+    // TODO:
+    // - debug verify that this is indeed the last one (get the length at this idx, verify that if you add that length to the idx, you get the end of the backing SafeList's length, so we know we're not trying to extend in the middle here.)
+    // - get the current length
+    // - add the given number of bytes to the length
+    // - if that new number overflows into another length category, we have to resize and shift over
+    // - also, if we're out of room for the new bytes in the backing array, we have to resize it and copy over
+    // - at the end, append the new bytes to the existing idx.
+    _ = idx; // TODO: verify this is indeed the last one
+    try self.entries.appendSlice(allocator, bytes);
+    @panic("TODO: implement the rest of extendLast");
+}
+
 test "variable length encoding - single byte (< 253)" {
     const testing = std.testing;
     const allocator = testing.allocator;

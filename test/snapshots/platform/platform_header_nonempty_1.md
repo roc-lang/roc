@@ -29,7 +29,7 @@ platform # Comment after platform keyword
 ~~~
 # TOKENS
 ~~~text
-KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineComment UpperIdent Comma LineComment CloseCurly LineComment OpenCurly LineComment LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpFatArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare LineComment LowerIdent Comma LineComment CloseSquare LineComment KwPackages LineComment OpenCurly LineComment LowerIdent OpColon String Comma LineComment CloseCurly LineComment KwProvides LineComment OpenSquare LineComment LowerIdent Comma LineComment CloseSquare ~~~
+KwPlatform LineComment String LineComment KwRequires LineComment OpenCurly LineComment UpperIdent Comma LineComment CloseCurly LineComment OpenCurly LineComment LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpThinArrow OpenCurly CloseCurly Comma LineComment CloseCurly LineComment KwExposes LineComment OpenSquare LineComment LowerIdent Comma LineComment CloseSquare LineComment KwPackages LineComment OpenCurly LineComment LowerIdent OpColon String Comma LineComment CloseCurly LineComment KwProvides LineComment OpenSquare LineComment LowerIdent Comma LineComment CloseSquare ~~~
 # PARSE
 ~~~clojure
 (platform-header
@@ -72,27 +72,27 @@ Main} # Comment after rigid member
 } exposes [: ]
 
 Str
-) 
-=> 
+)
+=>
 {}
 , # Comment after signature
-			
+
 } # Comment after signatures close
-	
+
 exposes # Comment after exposes keyword
-		
+
 [ # Comment after exposes open
 	foo, # Comment after exposed item
 ]
 # Comment after exposes close
 packages # Comment after packages keyword
-		
+
 { # Comment after packages open
 	some_pkg: "../some_pkg.roc", # Comment after package
 }
 # Comment after packages close
 provides # Comment after provides keyword
-		
+
 [ # Comment after provides open
 	bar, # Comment after exposed item
 ]

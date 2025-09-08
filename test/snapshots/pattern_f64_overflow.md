@@ -15,7 +15,7 @@ match x {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Float OpFatArrow String Float OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly Float OpThinArrow String Float OpThinArrow String Float OpThinArrow String Float OpThinArrow String LowerIdent OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -48,7 +48,7 @@ KwMatch LowerIdent OpenCurly Float OpFatArrow String Float OpFatArrow String Flo
 # FORMATTED
 ~~~roc
 match x
-	1e100 => 
+	1e100 =>
 		"very large number"
 		1e-40 => "very small number"
 		1.7976931348623157e308 => "near f64 max"

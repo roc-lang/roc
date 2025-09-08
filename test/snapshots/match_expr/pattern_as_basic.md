@@ -11,7 +11,7 @@ match (1, 2) {
 ~~~
 # TOKENS
 ~~~text
-KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound KwAs LowerIdent OpFatArrow LowerIdent CloseCurly ~~~
+KwMatch OpenRound Int Comma Int CloseRound OpenCurly OpenRound LowerIdent Comma LowerIdent CloseRound KwAs LowerIdent OpThinArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

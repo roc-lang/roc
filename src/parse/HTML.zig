@@ -6,7 +6,8 @@ const base = @import("base");
 const AST = @import("AST.zig");
 const RegionInfo = base.RegionInfo;
 const CommonEnv = base.CommonEnv;
-const Token = @import("tokenize.zig").Token;
+const tokens = @import("tokens");
+const Token = tokens.Token;
 
 /// Generate an interactive source range span for the playground
 fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {
@@ -61,7 +62,7 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: anytype) !vo
             .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpEquals, .OpColonEqual, .NoSpaceOpQuestion => "token-punctuation",
             .StringStart, .StringEnd, .MultilineStringStart, .StringPart => "token-string",
             .Float, .Int => "token-number",
-            .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation, .NoSpaceOpenRound => "token-punctuation",
+            .OpenRound, .CloseRound, .OpenSquare, .CloseSquare, .OpenCurly, .CloseCurly, .OpenStringInterpolation, .CloseStringInterpolation => "token-punctuation",
             .EndOfFile => "token-default",
             else => "token-default",
         };

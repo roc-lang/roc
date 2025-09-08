@@ -14,7 +14,7 @@ match data {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatArrow Int OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpThinArrow Int OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -58,7 +58,7 @@ KwMatch LowerIdent OpenCurly OpenSquare DoubleDot LowerIdent CloseSquare OpFatAr
 # FORMATTED
 ~~~roc
 match data
-	[..items] => 
+	[..items] =>
 		1
 		[first, ..items] => first
 		[..items, last] => last

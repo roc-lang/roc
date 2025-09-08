@@ -14,7 +14,7 @@ match Answer {
 ~~~
 # TOKENS
 ~~~text
-KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow String UpperIdent OpFatArrow Int Int OpFatArrow Int CloseCurly ~~~
+KwMatch UpperIdent OpenCurly UpperIdent OpThinArrow Int UpperIdent OpThinArrow String UpperIdent OpThinArrow Int Int OpThinArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -47,7 +47,7 @@ KwMatch UpperIdent OpenCurly UpperIdent OpFatArrow Int UpperIdent OpFatArrow Str
 match Answer
 	Answer => 1
 	Zero => "hello"
-	Greeting => 
+	Greeting =>
 		3
 		10 => 4
 ~~~

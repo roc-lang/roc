@@ -9,7 +9,7 @@ process_user! : { name : Str, age : U32, .. } => Str
 ~~~
 # TOKENS
 ~~~text
-LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma DoubleDot CloseCurly OpFatArrow UpperIdent ~~~
+LowerIdent OpBang OpColon OpenCurly LowerIdent OpColon UpperIdent Comma LowerIdent OpColon UpperIdent Comma DoubleDot CloseCurly OpThinArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
 (empty)

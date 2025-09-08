@@ -12,7 +12,7 @@ match person {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIdent OpenCurly LowerIdent CloseCurly OpFatArrow LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpThinArrow LowerIdent OpenCurly LowerIdent CloseCurly OpThinArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -40,7 +40,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent CloseCurly OpFatArrow LowerIde
 # FORMATTED
 ~~~roc
 match person
-	{name: name} => 
+	{name: name} =>
 		name
 		{
 			age

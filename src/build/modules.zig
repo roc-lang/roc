@@ -20,6 +20,7 @@ pub const ModuleType = enum {
     builtins,
     compile,
     reporting,
+    tokens,
     parse,
     can,
     check,
@@ -47,7 +48,8 @@ pub const ModuleType = enum {
             .base => &.{.collections},
             .types => &.{ .base, .collections },
             .reporting => &.{ .collections, .base },
-            .parse => &.{ .tracy, .collections, .base, .reporting },
+            .tokens => &.{ .collections, .base },
+            .parse => &.{ .tracy, .collections, .base, .reporting, .tokens },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .collections, .base, .types, .builtins, .can },
@@ -72,6 +74,7 @@ pub const RocModules = struct {
     builtins: *Module,
     compile: *Module,
     reporting: *Module,
+    tokens: *Module,
     parse: *Module,
     can: *Module,
     check: *Module,
@@ -140,6 +143,7 @@ pub const RocModules = struct {
             .builtins,
             .compile,
             .reporting,
+            .tokens,
             .parse,
             .can,
             .check,
@@ -175,6 +179,7 @@ pub const RocModules = struct {
         step.root_module.addImport("types", self.types);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
+        step.root_module.addImport("tokens", self.tokens);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
         step.root_module.addImport("check", self.check);
@@ -211,6 +216,7 @@ pub const RocModules = struct {
             .builtins => self.builtins,
             .compile => self.compile,
             .reporting => self.reporting,
+            .tokens => self.tokens,
             .parse => self.parse,
             .can => self.can,
             .check => self.check,

@@ -15,7 +15,7 @@ match ... {
 ~~~
 # TOKENS
 ~~~text
-KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly CloseCurly OpFatArrow String OpenCurly LowerIdent CloseCurly OpFatArrow String OpenCurly CloseCurly OpFatArrow String CloseCurly ~~~
+KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly CloseCurly OpThinArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent Comma LowerIdent CloseCurly Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly OpThinArrow String OpenCurly LowerIdent OpColon OpenCurly LowerIdent OpColon OpenCurly LowerIdent CloseCurly CloseCurly CloseCurly OpThinArrow String OpenCurly LowerIdent CloseCurly OpThinArrow String OpenCurly CloseCurly OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -97,7 +97,7 @@ KwMatch TripleDot OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCu
 # FORMATTED
 ~~~roc
 match ...
-	{name: name, address: {city: city, country: country}} => 
+	{name: name, address: {city: city, country: country}} =>
 		"${name} lives in ${city}, ${country}"
 		{ person: { name, age: age }, location: {
 			city

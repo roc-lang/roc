@@ -13,7 +13,7 @@ match color {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int UpperIdent OpFatArrow Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly UpperIdent OpBar UpperIdent OpBar UpperIdent OpThinArrow Int UpperIdent OpThinArrow Int UpperIdent OpThinArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

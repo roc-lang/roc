@@ -12,7 +12,7 @@ match isReady {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly UpperIdent OpThinArrow String UpperIdent OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

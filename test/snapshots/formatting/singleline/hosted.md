@@ -12,7 +12,7 @@ b! : Str => Str
 ~~~
 # TOKENS
 ~~~text
-KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare BlankLine LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpFatArrow UpperIdent ~~~
+KwHosted OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare BlankLine LowerIdent OpBang OpColon UpperIdent OpThinArrow UpperIdent LowerIdent OpBang OpColon UpperIdent OpThinArrow UpperIdent ~~~
 # PARSE
 ~~~clojure
 (hosted-header

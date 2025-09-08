@@ -13,7 +13,7 @@ match value {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow String LowerIdent OpFatArrow String CloseCurly ~~~
+KwMatch LowerIdent OpenCurly UpperIdent OpThinArrow String UpperIdent OpThinArrow String LowerIdent OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -40,7 +40,7 @@ KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow String UpperIdent OpFatArrow 
 ~~~roc
 match value
 	Answer => "the answer"
-	Zero => 
+	Zero =>
 		"zero"
 		other => "something else"
 ~~~

@@ -8,8 +8,9 @@ const base = @import("base");
 const collections = @import("collections");
 const tracy = @import("tracy");
 
-pub const tokenize = @import("tokenize.zig");
-pub const tokenize_iter = @import("tokenize.zig");
+const tokens = @import("tokens");
+pub const tokenize = tokens.Tokenizer;
+pub const tokenize_iter = tokens.Tokenizer;
 
 const CommonEnv = base.CommonEnv;
 
@@ -33,7 +34,7 @@ pub fn parse(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     errdefer ast.deinit(gpa);
 
     // Placeholder for tokenizer diagnostics
-    var messages: [128]tokenize.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
 
     // Create parser and parse the file
     var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
@@ -56,7 +57,7 @@ pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     errdefer ast.deinit(gpa);
 
     // Placeholder for tokenizer diagnostics
-    var messages: [128]tokenize.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
 
     // Create parser and parse expression
     var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
@@ -78,7 +79,7 @@ pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     errdefer ast.deinit(gpa);
 
     // Placeholder for tokenizer diagnostics
-    var messages: [128]tokenize.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
 
     // Create parser and parse header
     var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
@@ -100,7 +101,7 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     errdefer ast.deinit(gpa);
 
     // Placeholder for tokenizer diagnostics
-    var messages: [128]tokenize.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
 
     // Create parser and parse statement
     var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
@@ -116,7 +117,6 @@ test "parser tests" {
     std.testing.refAllDecls(@import("HTML.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
-    std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/parse_test.zig"));
     std.testing.refAllDecls(@import("test/snapshot_comparison_test.zig"));
     std.testing.refAllDecls(@import("test/test_string_parsing.zig"));

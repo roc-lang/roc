@@ -7,14 +7,14 @@ type=expr
 ~~~roc
 match items {
     [first, .., last] => first + last
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
     [single] => single
     [] => 0
 }
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent OpenSquare LowerIdent Comma LowerIdent Comma DoubleDot KwAs LowerIdent Comma LowerIdent Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpPlus LowerIdent OpenSquare LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare CloseSquare OpThinArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -71,7 +71,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot Comma LowerId
 # FORMATTED
 ~~~roc
 match items
-	[first, .., last] => 
+	[first, .., last] =>
 		first + last
 		[a, b, ..as ]
 		(middle, x, y)
@@ -89,7 +89,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **middle_rest.md:3:15:3:18:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
               ^^^
 
@@ -100,7 +100,7 @@ Expected either a comma **,** to continue the list or a closing bracket **]** to
 
 **middle_rest.md:3:5:3:18:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
     ^^^^^^^^^^^^^
 
@@ -111,7 +111,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 **middle_rest.md:3:30:3:32:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                              ^^
 
@@ -144,7 +144,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:6:3:7:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
      ^
 
@@ -155,7 +155,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:9:3:10:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
         ^
 
@@ -166,7 +166,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:18:3:24:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                  ^^^^^^
 
@@ -177,7 +177,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:26:3:27:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                          ^
 
@@ -188,7 +188,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:29:3:30:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                             ^
 
@@ -199,7 +199,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:35:3:36:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                                   ^
 
@@ -210,7 +210,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:39:3:40:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                                       ^
 
@@ -221,7 +221,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:43:3:44:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                                           ^
 
@@ -232,7 +232,7 @@ Is there an **import** or **exposing** missing up-top?
 
 **middle_rest.md:3:47:3:48:**
 ```roc
-    [a, b, .. as middle, x, y] => a + b + x + y  
+    [a, b, .. as middle, x, y] => a + b + x + y
 ```
                                               ^
 

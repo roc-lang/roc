@@ -15,7 +15,7 @@ match sequence {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma LowerIdent Comma Int CloseSquare OpFatArrow LowerIdent OpenSquare Int Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma Int CloseSquare OpFatArrow LowerIdent OpenSquare CloseSquare OpFatArrow Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare Int Comma LowerIdent Comma Int CloseSquare OpThinArrow LowerIdent OpenSquare Int Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare LowerIdent Comma Int CloseSquare OpThinArrow LowerIdent OpenSquare CloseSquare OpThinArrow Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -61,7 +61,7 @@ KwMatch LowerIdent OpenCurly OpenSquare Int Comma LowerIdent CloseSquare OpFatAr
 # FORMATTED
 ~~~roc
 match sequence
-	[0, count] => 
+	[0, count] =>
 		count
 		[1, x, 3] => x
 		[42, value] => value

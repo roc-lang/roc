@@ -20,7 +20,7 @@ Green => LocalStatus-Complete
 ~~~
 # TOKENS
 ~~~text
-KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine UpperIdent OpColon LowerIdent OpFatArrow UpperIdent OpAssign OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly KwImport UpperIdent Dot UpperIdent BlankLine KwMatch LowerIdent OpenCurly UpperIdent OpFatArrow UpperIdent Dot UpperIdent UpperIdent OpFatArrow UpperIdent OpUnaryMinus UpperIdent UpperIdent Dot UpperIdent OpFatArrow UpperIdent Dot UpperIdent CloseCurly CloseCurly ~~~
+KwModule OpenSquare LowerIdent Comma LowerIdent CloseSquare BlankLine UpperIdent OpColon LowerIdent OpThinArrow UpperIdent OpAssign OpenSquare UpperIdent Comma UpperIdent CloseSquare BlankLine LowerIdent OpColon Underscore OpArrow LowerIdent LowerIdent OpAssign OpBar LowerIdent OpBar OpenCurly KwImport UpperIdent Dot UpperIdent BlankLine KwMatch LowerIdent OpenCurly UpperIdent OpThinArrow UpperIdent Dot UpperIdent UpperIdent OpThinArrow UpperIdent OpUnaryMinus UpperIdent UpperIdent Dot UpperIdent OpThinArrow UpperIdent Dot UpperIdent CloseCurly CloseCurly ~~~
 # PARSE
 ~~~clojure
 (module-header
@@ -105,10 +105,10 @@ olor = |color| {
 	match color
 		RGB => LocalStatus
 	Green
-	=> 
+	=>
 	LocalStatus - Complete
 	B.Blue
-	=> 
+	=>
 	LocalStatus.Pending
 }
 

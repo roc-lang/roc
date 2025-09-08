@@ -14,7 +14,7 @@ match result {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpPlus Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpBinaryMinus Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpStar Int UpperIdent OpenRound LowerIdent CloseRound OpFatArrow LowerIdent OpSlash Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly UpperIdent OpenRound LowerIdent CloseRound OpThinArrow LowerIdent OpPlus Int UpperIdent OpenRound LowerIdent CloseRound OpThinArrow LowerIdent OpBinaryMinus Int UpperIdent OpenRound LowerIdent CloseRound OpThinArrow LowerIdent OpStar Int UpperIdent OpenRound LowerIdent CloseRound OpThinArrow LowerIdent OpSlash Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

@@ -4,7 +4,8 @@ const base = @import("base");
 const collections = @import("collections");
 const AST = @import("../AST.zig");
 const Parser = @import("../Parser.zig");
-const tokenize_iter = @import("../tokenize.zig");
+const tokens = @import("tokens");
+const tokenize_iter = tokens.Tokenizer;
 
 test "parse simple string literal" {
     const allocator = testing.allocator;

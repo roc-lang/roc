@@ -13,7 +13,7 @@ match items {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int LineComment OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int LineComment OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpFatArrow Int LineComment CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpThinArrow Int LineComment OpenSquare DoubleDot LowerIdent Comma LowerIdent CloseSquare OpThinArrow Int LineComment OpenSquare LowerIdent Comma DoubleDot LowerIdent Comma LowerIdent CloseSquare OpThinArrow Int LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -48,7 +48,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent Comma DoubleDot LowerIdent Cl
 # FORMATTED
 ~~~roc
 match items
-	[first, ..rest] => 
+	[first, ..rest] =>
 		0
 		 # invalid rest pattern should error
 [..rest, last] => 1

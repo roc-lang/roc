@@ -14,7 +14,7 @@ match coord {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound OpFatArrow String OpenRound LowerIdent Comma UpperIdent CloseRound OpFatArrow LowerIdent OpenRound UpperIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpFatArrow LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenRound UpperIdent Comma UpperIdent CloseRound OpThinArrow String OpenRound LowerIdent Comma UpperIdent CloseRound OpThinArrow LowerIdent OpenRound UpperIdent Comma LowerIdent CloseRound OpThinArrow LowerIdent OpenRound LowerIdent Comma LowerIdent CloseRound OpThinArrow LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

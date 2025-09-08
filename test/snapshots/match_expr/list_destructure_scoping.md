@@ -12,7 +12,7 @@ match list {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpFatArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpThinArrow LowerIdent OpenSquare LowerIdent Comma LowerIdent CloseSquare OpThinArrow LowerIdent OpPlus LowerIdent CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -41,7 +41,7 @@ KwMatch LowerIdent OpenCurly OpenSquare LowerIdent CloseSquare OpFatArrow LowerI
 # FORMATTED
 ~~~roc
 match list
-	[first] => 
+	[first] =>
 		first
 		[first, second] => first + second
 ~~~

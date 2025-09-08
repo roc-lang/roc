@@ -11,7 +11,7 @@ match value {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly LowerIdent OpFatArrow LowerIdent OpPlus Int CloseCurly ~~~
+KwMatch LowerIdent OpenCurly LowerIdent OpThinArrow LowerIdent OpPlus Int CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match

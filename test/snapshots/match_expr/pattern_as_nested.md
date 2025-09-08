@@ -12,7 +12,7 @@ match person {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpFatArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenCurly LowerIdent CloseCurly KwAs LowerIdent CloseCurly KwAs LowerIdent OpThinArrow OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound OpenCurly LowerIdent CloseCurly KwAs LowerIdent OpThinArrow OpenRound LowerIdent Comma LowerIdent Comma String CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -66,7 +66,7 @@ KwMatch LowerIdent OpenCurly OpenCurly LowerIdent Comma LowerIdent OpColon OpenC
 # FORMATTED
 ~~~roc
 match person
-	{name: name, address: {city: city} as addr} as fullPerson => 
+	{name: name, address: {city: city} as addr} as fullPerson =>
 		(fullPerson, addr, city)
 		{
 			name

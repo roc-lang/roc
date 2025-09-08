@@ -14,7 +14,7 @@ type=expr
 ~~~
 # TOKENS
 ~~~text
-OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpFatArrow UpperIdent UpperIdent UpperIdent LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot BlankLine LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
+OpenCurly LowerIdent OpColon OpenCurly CloseCurly OpThinArrow UpperIdent UpperIdent UpperIdent LowerIdent OpAssign OpBar OpenCurly CloseCurly OpBar TripleDot BlankLine LowerIdent OpenRound OpenCurly CloseCurly CloseRound CloseCurly ~~~
 # PARSE
 ~~~clojure
 (block

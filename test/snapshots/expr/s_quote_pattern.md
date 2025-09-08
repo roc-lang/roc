@@ -13,7 +13,7 @@ match ... {
 ~~~
 # TOKENS
 ~~~text
-KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow TripleDot OpenSquare SingleQuote Comma SingleQuote CloseSquare OpFatArrow TripleDot Underscore OpFatArrow TripleDot CloseCurly ~~~
+KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpThinArrow TripleDot OpenSquare SingleQuote Comma SingleQuote CloseSquare OpThinArrow TripleDot Underscore OpThinArrow TripleDot CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -44,7 +44,7 @@ KwMatch TripleDot OpenCurly OpenSquare SingleQuote CloseSquare OpFatArrow Triple
 # FORMATTED
 ~~~roc
 match ...
-	['#'] => 
+	['#'] =>
 		...
 		['a', 'b'] => ...
 	_ => ...

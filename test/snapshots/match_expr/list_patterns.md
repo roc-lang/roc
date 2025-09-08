@@ -12,7 +12,7 @@ match numbers {
 ~~~
 # TOKENS
 ~~~text
-KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpFatArrow Int LineComment CloseCurly ~~~
+KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpThinArrow LowerIdent OpenSquare LowerIdent Comma DoubleDot LowerIdent CloseSquare OpThinArrow Int LineComment CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -36,7 +36,7 @@ KwMatch LowerIdent OpenCurly OpenSquare CloseSquare OpFatArrow LowerIdent OpenSq
 # FORMATTED
 ~~~roc
 match numbers
-	[] => 
+	[] =>
 		acc
 		[first, ..rest] => 0
 # invalid rest pattern should error

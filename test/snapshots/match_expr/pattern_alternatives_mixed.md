@@ -16,7 +16,7 @@ match ... {
 ~~~
 # TOKENS
 ~~~text
-KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpBar String OpFatArrow String UpperIdent OpenRound Underscore CloseRound OpBar UpperIdent OpenRound Underscore CloseRound OpFatArrow String OpenSquare CloseSquare OpBar OpenSquare Underscore CloseSquare OpFatArrow String OpenRound Int Comma Underscore CloseRound OpBar OpenRound Underscore Comma Int CloseRound OpFatArrow String Underscore OpFatArrow String CloseCurly ~~~
+KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpThinArrow String String OpBar String OpThinArrow String UpperIdent OpenRound Underscore CloseRound OpBar UpperIdent OpenRound Underscore CloseRound OpThinArrow String OpenSquare CloseSquare OpBar OpenSquare Underscore CloseSquare OpThinArrow String OpenRound Int Comma Underscore CloseRound OpBar OpenRound Underscore Comma Int CloseRound OpThinArrow String Underscore OpThinArrow String CloseCurly ~~~
 # PARSE
 ~~~clojure
 (match
@@ -74,17 +74,17 @@ KwMatch TripleDot OpenCurly Int OpBar Int OpBar Int OpFatArrow String String OpB
 # FORMATTED
 ~~~roc
 match ...
-	(1 || 2) || 3 => 
+	(1 || 2) || 3 =>
 		"small numbers"
 		"hello"
-		=> 
+		=>
 		"greetings"
-	Ok(_) || Some(_) => 
+	Ok(_) || Some(_) =>
 		"success value"
 		[]
-		=> 
+		=>
 		"short list"((0, _))
-		=> 
+		=>
 		"has zero"
 	_ => "other"
 ~~~
