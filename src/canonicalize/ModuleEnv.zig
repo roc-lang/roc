@@ -18,6 +18,7 @@ const parse = @import("parse");
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
 const CommonEnv = base.CommonEnv;
+const SrcBytes = base.SrcBytes;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
@@ -224,7 +225,7 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 }
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+pub fn init(gpa: std.mem.Allocator, source: SrcBytes) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{

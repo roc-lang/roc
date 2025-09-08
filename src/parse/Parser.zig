@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const SrcBytes = base.SrcBytes;
 const tracy = @import("tracy");
 const collections = @import("collections");
 
@@ -198,7 +199,8 @@ pub const StateValue = union(enum) {
     precedence: u8,
 };
 /// Initialize a state machine parser
-fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, source: []const u8, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
+fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
+    const source = src_bytes.bytes();
     return Parser{
         .gpa = gpa,
         .source = source,
@@ -245,10 +247,10 @@ pub fn parseAndCollectTokens(
 
     // Helper to get next non-comment token while saving all tokens
     const getNextNonComment = struct {
-        fn next(iter: *tokenize_iter.TokenIterator, alloc: std.mem.Allocator, token_list: *std.ArrayList(Token)) !?Token {
+        fn next(iter: *tokenize_iter.TokenIterator, alloc: std.mem.Allocator, tokens_list: *std.ArrayList(Token)) !?Token {
             while (true) {
                 const token = try iter.next(alloc);
-                try token_list.append(token);
+                try tokens_list.append(token);
 
                 switch (token.tag) {
                     .EndOfFile => return null,
@@ -260,10 +262,10 @@ pub fn parseAndCollectTokens(
     }.next;
 
     // Get first two NON-COMMENT tokens to start
-    const first = try getNextNonComment(&token_iter, allocator, &tokens) orelse
-        return .{ .tokens = tokens, .root = null };
+    const first = try getNextNonComment(&token_iter, allocator, &token_list) orelse
+        return .{ .tokens = token_list, .root = null };
 
-    const second = try getNextNonComment(&token_iter, allocator, &tokens);
+    const second = try getNextNonComment(&token_iter, allocator, &token_list);
 
     var current = first;
     var lookahead = second;
@@ -287,7 +289,7 @@ pub fn parseAndCollectTokens(
 
         // Advance: current becomes lookahead, get new non-comment lookahead
         current = lookahead.?;
-        lookahead = try getNextNonComment(&token_iter, allocator, &tokens);
+        lookahead = try getNextNonComment(&token_iter, allocator, &token_list);
     }
 
     // Get the root node from the value stack (if any)
@@ -296,7 +298,7 @@ pub fn parseAndCollectTokens(
     else
         null;
 
-    return .{ .tokens = tokens, .root = root };
+    return .{ .tokens = token_list, .root = root };
 }
 
 /// Compatibility init function for existing code
@@ -304,14 +306,14 @@ pub fn parseAndCollectTokens(
 pub fn init(
     env: *base.CommonEnv,
     allocator: std.mem.Allocator,
-    source: []const u8,
+    src_bytes: SrcBytes,
     messages: []tokenize_iter.Diagnostic,
     ast: *AST,
     byte_slices: *collections.ByteSlices,
     diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic),
 ) !Parser {
     _ = messages;
-    var parser = try initStateMachine(env, allocator, source, ast, byte_slices);
+    var parser = try initStateMachine(env, allocator, src_bytes, ast, byte_slices);
     parser.diagnostics = diagnostics;
     return parser;
 }
@@ -864,7 +866,7 @@ fn parseExprWithPrecedence(self: *Parser, initial_min_bp: u8) Error!Node.Idx {
                 }
 
                 // Now check what follows the comma-separated items
-                if (self.peek() == .OpArrow or self.peek() == .OpThinArrow) {
+                if (self.peek() == .OpThickArrow or self.peek() == .OpThinArrow) {
                     // It's a function type - build curried arrows
                     const is_effectful = self.peek() == .OpThinArrow;
                     const arrow_tag: Node.Tag = if (is_effectful) .binop_thick_arrow else .binop_arrow_call;
@@ -2003,7 +2005,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     // Check for effectful suffix
                     const effectful = self.eat(.OpBang);
 
-                    const ident_idx: base.Ident.Idx = switch (ident_token.extra) {
+                    const ident_idx: base.Ident.Idx = switch (ident_token.payload) {
                         .interned => |idx| blk: {
                             // Update attributes if effectful
                             if (effectful) {
@@ -2085,7 +2087,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
                         // Create string node for path
                         const path_region = self.currentRegion();
-                        const str_val = switch (path_token.extra) {
+                        const str_val = switch (path_token.payload) {
                             .bytes_idx => |idx| idx,
                             else => blk: {
                                 // If we don't have a valid bytes_idx, create an empty string
@@ -2101,7 +2103,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                         const path_node = try self.ast.appendNode(self.gpa, path_region, .str_literal_big, .{ .str_literal_big = str_val });
 
                         // Create package field node
-                        const pkg_ident_idx: base.Ident.Idx = switch (pkg_name_token.extra) {
+                        const pkg_ident_idx: base.Ident.Idx = switch (pkg_name_token.payload) {
                             .interned => |idx| idx,
                             .ident_with_flags => |iwf| iwf.ident,
                             else => .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
@@ -2388,7 +2390,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
             // After parsing condition, expect arrow
             _ = self.state_stack.pop();
 
-            if (self.peek() != .OpArrow) {
+            if (self.peek() != .OpThickArrow) {
                 // Error: expected arrow after if condition
                 // But continue parsing anyway
             } else {
@@ -2612,7 +2614,7 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
             _ = self.state_stack.pop();
 
-            if (token.tag == .OpArrow) {
+            if (token.tag == .OpThickArrow) {
                 self.advance();
                 // Push state to parse the branch expression
                 try self.state_stack.append(self.gpa, .match_branch_complete);
@@ -3337,11 +3339,11 @@ fn currentToken(self: *Parser) ?Token {
 }
 
 /// Get the current token's extra data
-fn currentExtra(self: *Parser) Token.Extra {
+fn currentExtra(self: *Parser) Token.Payload {
     if (self.currentToken()) |token| {
-        return token.extra;
+        return token.payload;
     }
-    return .{ .none = 0 };
+    return .{ .none = {} };
 }
 
 /// Try to consume a token of a specific type
@@ -3393,7 +3395,7 @@ fn currentPosition(self: *Parser) Position {
 /// Get the identifier at the current position (if it's an identifier token)
 fn currentIdent(self: *Parser) ?Ident.Idx {
     if (self.currentToken()) |token| {
-        return switch (token.extra) {
+        return switch (token.payload) {
             .interned => |idx| idx,
             else => null,
         };
@@ -4325,7 +4327,7 @@ fn parseStmtOrRecordField(self: *Parser, in_potential_record: bool) Error!?Node.
 
                 // Check if this is an effectful type annotation with => or ->
                 const arrow_token = self.peek();
-                if (arrow_token == .OpArrow or arrow_token == .OpThinArrow) {
+                if (arrow_token == .OpThickArrow or arrow_token == .OpThinArrow) {
                     self.advance(); // consume the arrow
 
                     // Parse the return type
@@ -4383,7 +4385,7 @@ pub fn parseStmt(self: *Parser) Error!?Node.Idx {
                 // Check for arrow operators (thin -> or thick =>) after the type
                 // This handles effectful function types like {} => Result(...)
                 const arrow_token = self.peek();
-                if (arrow_token == .OpArrow or arrow_token == .OpThinArrow) {
+                if (arrow_token == .OpThickArrow or arrow_token == .OpThinArrow) {
                     self.advance(); // consume the arrow
 
                     // Parse the return type
@@ -5752,7 +5754,7 @@ fn parseMatch(self: *Parser) Error!Node.Idx {
 
         // Expect => or ->
         const arrow_type = self.peek();
-        if (arrow_type != .OpThinArrow and arrow_type != .OpArrow) {
+        if (arrow_type != .OpThinArrow and arrow_type != .OpThickArrow) {
             _ = try self.pushMalformed(.expected_arrow_after_pattern, self.getCurrentErrorPos());
             break;
         }
@@ -6055,7 +6057,7 @@ pub fn getBindingPower(tag: Token.Tag) BindingPower {
         .OpAssign => .{ .left = 5, .right = 6 },
         .OpColon => .{ .left = 3, .right = 4 },
         .OpColonEqual => .{ .left = 3, .right = 4 },
-        .OpArrow => .{ .left = 2, .right = 3 },
+        .OpThickArrow => .{ .left = 2, .right = 3 },
         .OpThinArrow => .{ .left = 1, .right = 2 },
         .KwAs => .{ .left = 3, .right = 4 },
         .KwWhere => .{ .left = 1, .right = 2 },
@@ -6080,8 +6082,8 @@ fn tokenToBinOpTag(tag: Token.Tag) ?Node.Tag {
         .OpGreaterThanOrEq => .binop_gte,
         .OpLessThan => .binop_lt,
         .OpLessThanOrEq => .binop_lte,
-        .OpThinArrow => .binop_thick_arrow,
-        .OpArrow => .binop_arrow_call,
+        .OpThinArrow => .binop_arrow_call,
+        .OpThickArrow => .binop_thick_arrow,
         .OpAnd => .binop_and,
         .OpOr => .binop_or,
         .OpBar => .binop_pipe,

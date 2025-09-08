@@ -13,7 +13,6 @@ const Can = @import("../mod.zig").Can;
 const ModuleEnv = @import("../mod.zig").ModuleEnv;
 
 const AST = parse.AST;
-const tokenize = parse.tokenize;
 const testing = std.testing;
 
 test "exposed but not implemented - values" {

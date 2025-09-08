@@ -119,7 +119,7 @@ pub fn extendLast(self: *Self, allocator: Allocator, idx: Idx, bytes: []const u8
     // - also, if we're out of room for the new bytes in the backing array, we have to resize it and copy over
     // - at the end, append the new bytes to the existing idx.
     _ = idx; // TODO: verify this is indeed the last one
-    try self.entries.appendSlice(allocator, bytes);
+    _ = try self.entries.appendSlice(allocator, bytes);
     @panic("TODO: implement the rest of extendLast");
 }
 

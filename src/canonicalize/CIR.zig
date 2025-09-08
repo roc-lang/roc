@@ -7,6 +7,7 @@ const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
 const parse = @import("parse");
+const tokens = @import("tokens");
 pub const Diagnostic = parse.AST.Diagnostic;
 
 const CompactWriter = collections.CompactWriter;
@@ -2835,7 +2836,7 @@ test "CIR2 canonicalize simple number literal" {
     var byte_slices = ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
     const msg_slice = messages[0..];
 
     var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);
@@ -2890,7 +2891,7 @@ test "CIR2 canonicalize simple number literal" {
 //     var byte_slices = ByteSlices{ .entries = .{} };
 //     defer byte_slices.entries.deinit(allocator);
 
-//     var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+//     var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
 //     const msg_slice = messages[0..];
 
 //     var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices);
@@ -4966,7 +4967,7 @@ test "CIR2 canonicalize mutable variable declaration" {
     var byte_slices = ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
     const msg_slice = messages[0..];
 
     var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);

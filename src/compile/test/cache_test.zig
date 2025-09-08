@@ -4,6 +4,7 @@ const std = @import("std");
 const Can = @import("can");
 const fs_mod = @import("fs");
 const base = @import("base");
+const SrcBytes = base.SrcBytes;
 const parse = @import("parse");
 const can = @import("can");
 const collections = @import("collections");
@@ -312,14 +313,15 @@ test "create and restore cache" {
 
     // Create a simple Roc source to cache
     const source = "x = 42\ny = x + 1\ny";
+    var src_testing = try SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
 
     // Create a ModuleEnv for testing
     var module_env = try allocator.create(ModuleEnv);
     defer allocator.destroy(module_env);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, src_testing.src);
     defer module_env.deinit();
 
-    module_env.common.source = source;
     try module_env.common.calcLineStarts(allocator);
 
     // Parse the source

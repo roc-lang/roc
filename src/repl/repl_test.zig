@@ -5,6 +5,8 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const layout = @import("layout");
+const base = @import("base");
+const SrcBytes = base.SrcBytes;
 
 const Repl = @import("Repl.zig");
 
@@ -185,7 +187,9 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
+    var module_env = try ModuleEnv.init(gpa, src_testing.src);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
@@ -201,7 +205,7 @@ test "Repl - minimal interpreter integration" {
     module_env.ast = &parse_ast;
 
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, module_env.common.source, &module_env.common.idents);
+    const canonical_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, module_env.common.source.bytes(), &module_env.common.idents);
 
     // Step 4: Type check
     var checker = try Check.initForCIR(gpa, &module_env.types, &module_env.store.regions);

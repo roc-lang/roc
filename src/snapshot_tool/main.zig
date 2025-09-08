@@ -9,6 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const SrcBytes = base.SrcBytes;
 const parse = @import("parse");
 const can = @import("can");
 const types = @import("types");
@@ -1497,8 +1498,12 @@ fn processSnapshotContent(
     var ast = try AST.initCapacity(allocator, 16384);
     defer ast.deinit(allocator);
 
+    // Create SrcBytes from source
+    var src_testing = try SrcBytes.Testing.initFromSlice(allocator, content.source);
+    defer src_testing.deinit(allocator);
+
     // Create common environment for Parser
-    var env = try base.CommonEnv.init(allocator, content.source);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
     try env.calcLineStarts(allocator);
 
@@ -1510,7 +1515,7 @@ fn processSnapshotContent(
     defer tokens.deinit();
 
     // Tokenize the source
-    var token_iter = try parse.tokenize_iter.TokenIterator.init(&env, allocator, content.source, &messages, &byte_slices);
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(&env, allocator, src_testing.src, &messages, &byte_slices);
     defer token_iter.deinit(allocator);
 
     // Collect all tokens (including comments for formatter)
@@ -1523,7 +1528,7 @@ fn processSnapshotContent(
     }
 
     // Create Parser
-    var parser = try Parser.init(&env, allocator, content.source, &messages, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, &messages, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     // Parse based on node type

@@ -6,12 +6,13 @@ const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
+const tokens = @import("tokens");
 
 const AST = parse.AST;
 const Node = AST.Node;
 const Parser = parse.Parser;
-const tokenize_iter = parse.tokenize_iter;
-const Token = tokenize_iter.Token;
+const Tokenizer = tokens.Tokenizer;
+const Token = tokens.Token;
 const CommonEnv = base.CommonEnv;
 const ByteSlices = collections.ByteSlices;
 const Position = base.Region.Position;
@@ -24,7 +25,7 @@ const Formatter = struct {
     ast: *const AST,
     source: []const u8,
     ident_store: *const Ident.Store,
-    tokens: []const Token, // Now includes comment tokens!
+    token_list: []const Token,
     output: std.ArrayList(u8),
     scratch_nodes: std.ArrayList(Node.Idx), // Scratch buffer for temporary node collections
 
@@ -40,7 +41,7 @@ const Formatter = struct {
         ast: *const AST,
         source: []const u8,
         ident_store: *const Ident.Store,
-        tokens: []const Token,
+        token_list: []const Token,
     ) !Formatter {
         return Formatter{
             .allocator = allocator,
@@ -48,7 +49,7 @@ const Formatter = struct {
             .ast = ast,
             .source = source,
             .ident_store = ident_store,
-            .tokens = tokens, // Use pre-collected tokens including comments
+            .token_list = token_list,
             .output = std.ArrayList(u8).init(allocator),
             .scratch_nodes = std.ArrayList(Node.Idx).init(scratch_allocator),
             .token_cursor = 0,
@@ -85,7 +86,7 @@ const Formatter = struct {
         }
 
         // Flush any trailing comments using token-based approach
-        if (self.tokens.len > 0) {
+        if (self.token_list.len > 0) {
             _ = try self.flushTrailingComments();
         }
     }
@@ -113,8 +114,8 @@ const Formatter = struct {
         var found_any = false;
 
         // Process tokens in the specified region
-        while (self.token_cursor < self.tokens.len) {
-            const token = self.tokens[self.token_cursor];
+        while (self.token_cursor < self.token_list.len) {
+            const token = self.token_list[self.token_cursor];
 
             // Stop if we've passed the end of the region
             if (token.region.start.offset >= end_offset) {
@@ -162,8 +163,8 @@ const Formatter = struct {
     fn flushCommentsBeforePosition(self: *Formatter, pos: Position) !bool {
         var found_any = false;
 
-        while (self.token_cursor < self.tokens.len) {
-            const token = self.tokens[self.token_cursor];
+        while (self.token_cursor < self.token_list.len) {
+            const token = self.token_list[self.token_cursor];
 
             // Stop if we've reached or passed the position
             if (token.region.start.offset >= pos.offset) {
@@ -210,10 +211,10 @@ const Formatter = struct {
     /// Binary search to find the first token at or after the given offset
     fn findFirstTokenAtOrAfter(self: *const Formatter, offset: usize) usize {
         var left: usize = 0;
-        var right = self.tokens.len;
+        var right = self.token_list.len;
         while (left < right) {
             const mid = left + (right - left) / 2;
-            if (self.tokens[mid].region.start.offset < offset) {
+            if (self.token_list[mid].region.start.offset < offset) {
                 left = mid + 1;
             } else {
                 right = mid;
@@ -229,8 +230,8 @@ const Formatter = struct {
         var cursor = self.findFirstTokenAtOrAfter(offset);
 
         // Look for a comma token after the offset
-        while (cursor < self.tokens.len) : (cursor += 1) {
-            const token = self.tokens[cursor];
+        while (cursor < self.token_list.len) : (cursor += 1) {
+            const token = self.token_list[cursor];
             switch (token.tag) {
                 .Comma => return true,
                 .CloseCurly => return false, // Found the closing brace
@@ -509,8 +510,8 @@ const Formatter = struct {
             // Save current cursor position and check ahead
             const saved_cursor = self.token_cursor;
             var check_cursor = self.token_cursor;
-            while (check_cursor < self.tokens.len) : (check_cursor += 1) {
-                const token = self.tokens[check_cursor];
+            while (check_cursor < self.token_list.len) : (check_cursor += 1) {
+                const token = self.token_list[check_cursor];
                 if (token.region.start.offset >= node.region.start.offset) break;
                 switch (token.tag) {
                     .LineComment, .DocComment => {
@@ -537,10 +538,10 @@ const Formatter = struct {
 
             // Use binary search to find tokens after the last node
             var cursor: usize = 0;
-            var search_end = self.tokens.len;
+            var search_end = self.token_list.len;
             while (cursor < search_end) {
                 const mid = cursor + (search_end - cursor) / 2;
-                if (self.tokens[mid].region.start.offset < last_node.region.end.offset) {
+                if (self.token_list[mid].region.start.offset < last_node.region.end.offset) {
                     cursor = mid + 1;
                 } else {
                     search_end = mid;
@@ -548,8 +549,8 @@ const Formatter = struct {
             }
 
             // Look for a comma token immediately after the last node
-            while (cursor < self.tokens.len) : (cursor += 1) {
-                const token = self.tokens[cursor];
+            while (cursor < self.token_list.len) : (cursor += 1) {
+                const token = self.token_list[cursor];
                 switch (token.tag) {
                     .Comma => {
                         has_trailing_comma = true;
@@ -639,8 +640,8 @@ const Formatter = struct {
 
     fn flushBlankLinesAfterPosition(self: *Formatter, pos: Position) !void {
         // Look ahead for blank line tokens immediately after this position
-        if (self.token_cursor < self.tokens.len) {
-            const token = self.tokens[self.token_cursor];
+        if (self.token_cursor < self.token_list.len) {
+            const token = self.token_list[self.token_cursor];
             if (token.tag == .BlankLine and token.region.start.offset >= pos.offset) {
                 // Found a blank line token after this statement
                 // Add an extra newline to create the blank line
@@ -923,8 +924,8 @@ const Formatter = struct {
                     }
 
                     // Update token cursor to skip past this malformed region
-                    while (self.token_cursor < self.tokens.len and
-                        self.tokens[self.token_cursor].region.start.offset < end)
+                    while (self.token_cursor < self.token_list.len and
+                        self.token_list[self.token_cursor].region.start.offset < end)
                     {
                         self.token_cursor += 1;
                     }
@@ -1729,8 +1730,8 @@ const Formatter = struct {
             // Check if there are any comments inside the empty record
             const has_internal_comments = blk: {
                 var scan = self.token_cursor;
-                while (scan < self.tokens.len) {
-                    const token = self.tokens[scan];
+                while (scan < self.token_list.len) {
+                    const token = self.token_list[scan];
                     if (token.region.start.offset >= node.region.end.offset) break;
                     if (token.region.start.offset > node.region.start.offset and
                         (token.tag == .LineComment or token.tag == .DocComment))
@@ -1978,8 +1979,8 @@ const Formatter = struct {
             // Check if there are any comments inside the empty block
             const has_internal_comments = blk: {
                 var scan = self.token_cursor;
-                while (scan < self.tokens.len) {
-                    const token = self.tokens[scan];
+                while (scan < self.token_list.len) {
+                    const token = self.token_list[scan];
                     if (token.region.start.offset >= node.region.end.offset) break;
                     if (token.region.start.offset > node.region.start.offset and
                         (token.tag == .LineComment or token.tag == .DocComment))
@@ -3169,8 +3170,8 @@ const Formatter = struct {
 
         // Check tokens within the collection's range for comments
         var i = start_token_idx;
-        while (i < self.tokens.len and self.tokens[i].region.start.offset < end_offset) : (i += 1) {
-            if (self.tokens[i].tag == .LineComment or self.tokens[i].tag == .DocComment) {
+        while (i < self.token_list.len and self.token_list[i].region.start.offset < end_offset) : (i += 1) {
+            if (self.token_list[i].tag == .LineComment or self.token_list[i].tag == .DocComment) {
                 // Found a comment inside the collection
                 return true;
             }
@@ -3190,12 +3191,12 @@ const Formatter = struct {
 
         // Use binary search to find tokens within the node's region
         var left: usize = 0;
-        var right: usize = self.tokens.len;
+        var right: usize = self.token_list.len;
 
         // Binary search for first token with offset >= start
         while (left < right) {
             const mid = left + (right - left) / 2;
-            if (self.tokens[mid].region.start.offset < start) {
+            if (self.token_list[mid].region.start.offset < start) {
                 left = mid + 1;
             } else {
                 right = mid;
@@ -3208,8 +3209,8 @@ const Formatter = struct {
 
         // Scan tokens within the node's region
         var cursor = left;
-        while (cursor < self.tokens.len) : (cursor += 1) {
-            const token = self.tokens[cursor];
+        while (cursor < self.token_list.len) : (cursor += 1) {
+            const token = self.token_list[cursor];
 
             // Stop if we're past the node's region
             if (token.region.start.offset >= end) break;
@@ -3323,8 +3324,8 @@ const Formatter = struct {
             .binop_double_question => .OpDoubleQuestion,
             .binop_equals => .OpAssign,
             .binop_colon => .OpColon,
-            .binop_arrow_call => .OpArrow,
-            .binop_thick_arrow => .OpThinArrow,
+            .binop_arrow_call => .OpThinArrow,
+            .binop_thick_arrow => .OpThickArrow,
             .binop_as => .KwAs,
             .binop_where => .KwWhere,
             .binop_exposing => .KwExposing,
@@ -3556,12 +3557,12 @@ const Formatter = struct {
     fn hasCommentBetween(self: *const Formatter, start: usize, end: usize) bool {
         // Use binary search to find the first token that could be in range
         var left: usize = 0;
-        var right: usize = self.tokens.len;
+        var right: usize = self.token_list.len;
 
         // Binary search for first token with offset >= start
         while (left < right) {
             const mid = left + (right - left) / 2;
-            if (self.tokens[mid].region.start.offset < start) {
+            if (self.token_list[mid].region.start.offset < start) {
                 left = mid + 1;
             } else {
                 right = mid;
@@ -3570,8 +3571,8 @@ const Formatter = struct {
 
         // Now scan from this position until we reach end
         var cursor = left;
-        while (cursor < self.tokens.len) : (cursor += 1) {
-            const token = self.tokens[cursor];
+        while (cursor < self.token_list.len) : (cursor += 1) {
+            const token = self.token_list[cursor];
             if (token.region.start.offset >= end) break;
             switch (token.tag) {
                 .LineComment, .DocComment => return true,
@@ -3584,8 +3585,8 @@ const Formatter = struct {
     fn flushTrailingComments(self: *Formatter) !bool {
         // Flush all remaining comment tokens
         var found_any = false;
-        while (self.token_cursor < self.tokens.len) {
-            const token = self.tokens[self.token_cursor];
+        while (self.token_cursor < self.token_list.len) {
+            const token = self.token_list[self.token_cursor];
             switch (token.tag) {
                 .LineComment, .DocComment => {
                     try self.pushIndent();
@@ -3621,26 +3622,32 @@ pub fn formatAst(
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(scratch);
 
-    var messages: [256]tokenize_iter.Diagnostic = undefined;
-
     // Tokenize without parsing
-    var tokens = std.ArrayList(tokenize_iter.Token).init(scratch);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(Token).init(scratch);
+    defer token_list.deinit();
 
-    var token_iter = try tokenize_iter.TokenIterator.init(&env, scratch, source, &messages, &byte_slices);
-    defer token_iter.deinit(scratch);
+    var problems = collections.SafeList(Tokenizer.Diagnostic){};
+    defer problems.deinit(scratch);
+
+    var token_iter = Tokenizer{
+        .gpa = scratch,
+        .src = source,
+        .problems = &problems,
+        .byte_slices = &byte_slices,
+        .ident_store = &env.idents,
+    };
 
     // Collect all tokens
     while (true) {
-        const token = try token_iter.next(scratch);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => break,
-            else => try tokens.append(token),
+            else => try token_list.append(token),
         }
     }
 
     // Now format using the collected tokens
-    return formatAstWithTokens(allocator, ast, source, ident_store, tokens.items, root_node);
+    return formatAstWithTokens(allocator, ast, source, ident_store, token_list.items, root_node);
 }
 
 /// Formats AST with pre-tokenized source
@@ -3649,7 +3656,7 @@ pub fn formatAstWithTokens(
     ast: *const AST,
     source: []const u8,
     ident_store: *const Ident.Store,
-    tokens: []const tokenize_iter.Token,
+    token_list: []const Token,
     root_node: ?Node.Idx,
 ) ![]u8 {
     // Create a scratch arena for temporary allocations
@@ -3657,7 +3664,7 @@ pub fn formatAstWithTokens(
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
 
-    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, tokens);
+    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, token_list);
     defer formatter.deinit();
 
     try formatter.format(root_node);

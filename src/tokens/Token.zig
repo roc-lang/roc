@@ -278,7 +278,7 @@ pub const Tag = enum(u8) {
             .TripleDot,
             .DotStar,
             .OpColon,
-            .OpArrow,
+            .OpThickArrow,
             .OpThinArrow,
             .OpBackslash,
             .OpBackpass,

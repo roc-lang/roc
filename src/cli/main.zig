@@ -35,7 +35,6 @@ const BuildEnv = compile.BuildEnv;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
-const tokenize = parse.tokenize;
 const Interpreter = eval.Interpreter;
 const LayoutStore = layout.Store;
 const RocOps = builtins.host_abi.RocOps;

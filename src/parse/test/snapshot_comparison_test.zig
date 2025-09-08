@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
+const SrcBytes = base.SrcBytes;
 const collections = @import("collections");
 const AST = @import("../AST.zig");
 const Parser = @import("../Parser.zig");
@@ -108,8 +109,12 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     var ast = try AST.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
 
+    // Create SrcBytes from source
+    var src_testing = try SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+
     // Create a CommonEnv for tokenization
-    var env = try base.CommonEnv.init(allocator, source);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     // Create diagnostics buffer
@@ -119,7 +124,7 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     defer byte_slices.entries.deinit(allocator);
 
     // Parse using new Parser with TokenIterator
-    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {
