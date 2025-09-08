@@ -35,7 +35,7 @@ jobs:
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          ./llvm.sh 18
+          sudo ./llvm.sh 18
           sudo ln -s /usr/bin/clang-18 /usr/bin/clang
           sudo ln -s /usr/bin/lld-18 /usr/bin/ld.lld
           sudo apt -y install libpolly-18-dev # required by llvm-sys crate
