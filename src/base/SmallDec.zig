@@ -7,7 +7,7 @@ denominator_power_of_ten: u8,
 pub const Self = @This();
 
 /// Try to parse a fractional literal as a small dec (numerator/10^power)
-pub fn parse(token_text: []const u8) Self {
+pub fn parse(token_text: []const u8) ?Self {
     // Return null if input is too long to fit in our 32-byte buffer
     if (token_text.len > 32) return null;
 
