@@ -1,8 +1,8 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.20.0/X73hGh05nNTkDHU06FHC0YfFaQB1pimX7gncRcao5mU.tar.br" }
 
 import cli.Stdout
 import cli.Stderr
-import cli.Path
+import cli.File
 import "../Glossary.md" as glossary_as_str : Str
 
 # This script checks if all markdown links that point to files or dirs are valid for the file Glossary.md
@@ -81,12 +81,8 @@ check_link! = |link_str|
         # TODO check links to other markdown headers as well, e.g. #tokenization
         Ok({})
     else
-        path = Path.from_str(link_str)
+        _ = File.exists!(link_str) ? |_| BadLink(link_str)
 
-        when Path.type!(path) is
-            Ok(_) ->
-                Ok({})
-            Err(_) ->
-                Err(BadLink(link_str))
+        Ok({})
         
     
