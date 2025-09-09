@@ -3606,7 +3606,7 @@ const Formatter = struct {
 pub fn formatAst(
     allocator: std.mem.Allocator,
     ast: *const AST,
-    source: []const u8,
+    source: base.SrcBytes,
     ident_store: *const Ident.Store,
     root_node: ?Node.Idx,
 ) ![]u8 {
@@ -3654,7 +3654,7 @@ pub fn formatAst(
 pub fn formatAstWithTokens(
     allocator: std.mem.Allocator,
     ast: *const AST,
-    source: []const u8,
+    source: base.SrcBytes,
     ident_store: *const Ident.Store,
     token_list: []const Token,
     root_node: ?Node.Idx,
@@ -3664,7 +3664,7 @@ pub fn formatAstWithTokens(
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
 
-    var formatter = try Formatter.init(allocator, scratch, ast, source, ident_store, token_list);
+    var formatter = try Formatter.init(allocator, scratch, ast, source.bytes(), ident_store, token_list);
     defer formatter.deinit();
 
     try formatter.format(root_node);

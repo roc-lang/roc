@@ -3389,9 +3389,8 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    // Use the new AST-aware formatter with pre-tokenized tokens
     const ident_store = env.getIdentStore();
-    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, content.source, ident_store, tokens, root_node);
+    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, env.source, ident_store, tokens, root_node);
     defer output.gpa.free(formatted_output);
 
     // Check if formatting changed the source

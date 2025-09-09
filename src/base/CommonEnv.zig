@@ -107,7 +107,9 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        self.source = SrcBytes{ .ptr = null, .len = 0 }; // All zeros
+        // Cast 0 to the required pointer type for serialization as zeros
+        const null_ptr: [*]align(16) const u8 = @ptrFromInt(0);
+        self.source = SrcBytes{ .ptr = null_ptr, .len = 0 }; // All zeros for serialization
 
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
