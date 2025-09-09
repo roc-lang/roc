@@ -477,7 +477,31 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) !void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
+
+        // Open and read file with single allocation for SrcBytes format
+        const file = try std.fs.cwd().openFile(st.path, .{});
+        defer file.close();
+
+        const file_size = try file.getEndPos();
+        const total_size = file_size + base.SrcBytes.suffix.len;
+
+        // Check size limit for u31
+        if (total_size > std.math.maxInt(u31)) {
+            return error.FileTooBig;
+        }
+
+        // Single allocation with proper alignment and space for suffix
+        const allocation = try self.gpa.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+        errdefer self.gpa.free(allocation);
+
+        // Read file directly into the allocated buffer
+        _ = try file.read(allocation[0..file_size]);
+
+        // Add the suffix
+        @memcpy(allocation[file_size..], &base.SrcBytes.suffix);
+
+        // Create SrcBytes
+        const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
 
         // line starts for diagnostics and consistent positions
 

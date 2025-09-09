@@ -802,15 +802,25 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Read the entire file into shared memory
     const file_size = try roc_file.getEndPos();
-    const source = try shm_allocator.alloc(u8, @intCast(file_size));
-    _ = try roc_file.read(source);
+    const total_size = file_size + base.SrcBytes.suffix.len;
+    
+    // Single allocation with proper alignment and space for suffix
+    const allocation = try shm_allocator.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+    
+    // Read file directly into the allocated buffer
+    _ = try roc_file.read(allocation[0..file_size]);
+    
+    // Add the suffix
+    @memcpy(allocation[file_size..], &base.SrcBytes.suffix);
+    
+    // Create SrcBytes
+    const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
 
     // Extract module name from the file path
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
-    var env = try ModuleEnv.init(shm_allocator, source);
-    env.common.source = source;
+    var env = try ModuleEnv.init(shm_allocator, src);
     env.module_name = module_name;
     try env.common.calcLineStarts(shm_allocator);
 

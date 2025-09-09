@@ -107,9 +107,9 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        // Cast 0 to the required pointer type for serialization as zeros
-        const null_ptr: [*]align(16) const u8 = @ptrFromInt(0);
-        self.source = SrcBytes{ .ptr = null_ptr, .len = 0 }; // All zeros for serialization
+        // Create a dummy aligned pointer for serialization (will serialize as zeros)
+        const dummy: [16]u8 align(16) = .{0} ** 16;
+        self.source = SrcBytes{ .ptr = &dummy, .len = 0 }; // Dummy value for serialization
 
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
@@ -335,7 +335,9 @@ test "CommonEnv.Serialized roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify the data was preserved
     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
@@ -387,7 +389,9 @@ test "CommonEnv.Serialized roundtrip with empty data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify empty state is preserved
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
@@ -472,7 +476,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify large data was preserved
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
@@ -551,7 +557,9 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify special characters were preserved
     try testing.expectEqualStrings("café", env.getIdent(unicode_idx));

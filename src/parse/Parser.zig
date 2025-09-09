@@ -199,7 +199,7 @@ pub const StateValue = union(enum) {
     precedence: u8,
 };
 /// Initialize a state machine parser
-pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, ast: *AST, byte_slices: *collections.ByteSlices, diagnostics: *collections.SafeList(AST.Diagnostic)) !Parser {
+pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, ast: *AST, byte_slices: *collections.ByteSlices, diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic)) !Parser {
     const source = src_bytes.bytes();
     return Parser{
         .gpa = gpa,
@@ -212,7 +212,7 @@ pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, a
         .scratch_nodes = .{},
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
-        .diagnostics = diagnostics
+        .diagnostics = diagnostics,
         .state_stack = .{},
         .value_stack = .{},
         .min_bp_stack = .{},
@@ -508,7 +508,7 @@ fn advance(self: *Parser) void {
     // If we have a token iterator, fetch the next non-comment token
     if (self.token_iterator) |iter| {
         while (true) {
-            const token = iter.next(self.gpa) catch null;
+            const token = iter.next() catch null;
             if (token == null) {
                 self.lookahead = null;
                 break;
@@ -3357,12 +3357,14 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
 
     if (!already_tokenized) {
         // Create tokenizer using the shared environment
-        token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, &messages, self.byte_slices);
+        // Create SrcBytes from source
+        const src_bytes = SrcBytes{ .ptr = @alignCast(self.source.ptr), .len = @intCast(self.source.len) };
+        token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, &self.env.idents, &messages, self.byte_slices);
 
         // Get first two non-comment tokens to start
         var first: ?Token = null;
         while (true) {
-            const token = try token_iter.?.next(self.gpa);
+            const token = try token_iter.?.next();
             // Skip comments and blank lines
             switch (token.tag) {
                 .EndOfFile => {
@@ -3381,7 +3383,7 @@ pub fn parseFile(self: *Parser) Error!?Node.Idx {
         // Get second non-comment token
         var second: ?Token = null;
         while (true) {
-            const token = try token_iter.?.next(self.gpa);
+            const token = try token_iter.?.next();
             // Skip comments and blank lines
             switch (token.tag) {
                 .EndOfFile => break,
@@ -3483,7 +3485,9 @@ pub fn parseHeader(self: *Parser) Error!void {
     var messages: [128]tokenize_iter.Diagnostic = undefined;
 
     // Create tokenizer using the shared environment
-    var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, &messages, self.byte_slices);
+    // Create SrcBytes from source
+    const src_bytes = SrcBytes{ .ptr = self.source.ptr, .len = @intCast(self.source.len) };
+    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, &messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two non-comment tokens to start
@@ -4491,7 +4495,8 @@ pub fn parseExpr(self: *Parser) Error!Node.Idx {
 /// Parse an expression from source text (sets up tokenizer)
 pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) Error!Node.Idx {
     // Create tokenizer using the shared environment
-    var token_iter = try tokenize_iter.TokenIterator.init(self.env, self.gpa, self.source, messages, self.byte_slices);
+    const src_bytes = SrcBytes{ .ptr = self.source.ptr, .len = @intCast(self.source.len) };
+    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two non-comment tokens to start

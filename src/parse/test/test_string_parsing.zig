@@ -15,7 +15,11 @@ test "parse simple string literal" {
     var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
-    var env = try base.CommonEnv.init(allocator, source);
+    const src_bytes_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    const src_bytes = src_bytes_testing.src;
+    defer allocator.free(src_bytes.ptr[0..@intCast(src_bytes.len)]);
+    
+    var env = try base.CommonEnv.init(allocator, src_bytes);
     defer env.deinit(allocator);
 
     var messages: [128]tokenize_iter.Diagnostic = undefined;
@@ -62,7 +66,11 @@ test "parse string with escapes" {
     var ast = try AST.initCapacity(allocator, 10);
     defer ast.deinit(allocator);
 
-    var env = try base.CommonEnv.init(allocator, source);
+    const src_bytes_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    const src_bytes = src_bytes_testing.src;
+    defer allocator.free(src_bytes.ptr[0..@intCast(src_bytes.len)]);
+    
+    var env = try base.CommonEnv.init(allocator, src_bytes);
     defer env.deinit(allocator);
 
     var messages: [128]tokenize_iter.Diagnostic = undefined;

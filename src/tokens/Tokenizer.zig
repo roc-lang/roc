@@ -15,7 +15,7 @@ pub const TokenIterator = Self; // Alias for compatibility
 
 gpa: Allocator,
 src_bytes: SrcBytes,
-src: []const u8,
+ident_store: *base.IdentStore,
 problems: *SafeList(Diagnostic),
 byte_slices: *collections.ByteSlices,
 pos: usize = 0, // Initial byte position within src
@@ -28,18 +28,17 @@ inside_string: enum { None, SingleQuote, TripleQuote } = .None, // What type of 
 pub fn init(
     gpa: Allocator,
     src_bytes: SrcBytes,
+    ident_store: *base.IdentStore,
     diagnostics: []Diagnostic,
     byte_slices: *ByteSlices,
 ) Allocator.Error!Self {
-    const src = src_bytes.bytes();
-
     // Convert diagnostics array to SafeList
     var problems = try SafeList(Diagnostic).initCapacity(gpa, diagnostics.len);
 
     return Self{
         .gpa = gpa,
         .src_bytes = src_bytes,
-        .src = src,
+        .ident_store = ident_store,
         .problems = &problems,
         .byte_slices = byte_slices,
     };
@@ -55,8 +54,6 @@ pub fn deinit(self: *Self, gpa: Allocator) void {
 /// Get the next token from the iterator, pushing diagnostics if there are errors.
 /// Returns Token.EndOfFile when it has reached the end of the file (or string).
 pub fn next(self: *Self) Allocator.Error!Token {
-    debugVerifySrc(self.src);
-
     if (self.pending_string_interpolation) {
         self.pending_string_interpolation = false;
         return Token.no_payload(.OpenStringInterpolation, @intCast(self.pos), @intCast(self.pos));
@@ -72,23 +69,25 @@ pub fn next(self: *Self) Allocator.Error!Token {
         }
     }
 
+    const src = self.src_bytes.bytes();
+
     while (true) { // We keep checking the byte until we hit the null terminator
-        std.debug.assert(self.pos < self.src.len); // We should have exited via null terminator before this ended
+        std.debug.assert(self.pos < src.len); // We should have exited via null terminator before this ended
 
         const start: u32 = @intCast(self.pos);
-        const byte = self.src[self.pos];
+        const byte = src[self.pos];
 
         switch (byte) {
             // Comments and doc comments
             '#' => {
                 self.pos += 1; // Chomp the '#'
 
-                const is_doc = self.src[self.pos + 1] == '#'; // Detect if it's a doc comment (##)
-                self.pos += is_doc; // Branchlessly chomp the second '#'
+                const is_doc = src[self.pos + 1] == '#'; // Detect if it's a doc comment (##)
+                self.pos += @intFromBool(is_doc); // Branchlessly chomp the second '#'
 
                 // Find the newline that ends the comment. (src ends in newline followed by zeros, so this is safe.)
                 // TODO: Could try this with SIMD if we terminate src with 15 zeros after the newline.
-                while (self.src[self.pos] != '\n') self.pos += 1;
+                while (src[self.pos] != '\n') self.pos += 1;
 
                 return Token.no_payload(if (is_doc) .DocComment else .LineComment, @intCast(start), @intCast(self.pos));
             },
@@ -99,7 +98,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
 
                 // Emit a BlankLine token if this \n has another \n after it with only whitespace, if anything, in between.
                 while (true) {
-                    switch (self.src[self.pos]) {
+                    switch (src[self.pos]) {
                         ' ', '\t', '\r' => self.pos += 1, // Discard spaces, tabs, and carriage returns.
                         '\n' => {
                             // 2+ newlines separated only by whitespace, if anything? That's a blank line!
@@ -107,7 +106,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
                             while (true) {
                                 // Discard all whitespace following the blank line,
                                 // so that we never emit consecutive BlankLine tokens.
-                                switch (self.src[self.pos]) {
+                                switch (src[self.pos]) {
                                     ' ', '\t', '\r', '\n' => self.pos += 1,
                                     else => return Token.no_payload(.BlankLine, start, end),
                                 }
@@ -122,7 +121,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
                 self.pos += 1;
 
                 // If it's a triple-quote string, go down that path.
-                if (self.src[self.pos] == '"' and self.src[self.pos + 1] == '"') {
+                if (src[self.pos] == '"' and src[self.pos + 1] == '"') {
                     self.pos += 2; // Advance past the second and third quote
                     return self.tokenizeTripleQuoteString();
                 }
@@ -134,14 +133,14 @@ pub fn next(self: *Self) Allocator.Error!Token {
             '_' => {
                 self.pos += 1; // Advance past the underscore
 
-                if (isValidIdentStart(self.src[self.pos])) return try self.tokenizeLowerIdentOrKeyword(self.gpa, start);
+                if (isValidIdentStart(src[self.pos])) return try self.tokenizeLowerIdentOrKeyword(self.gpa, start);
 
                 return Token.no_payload(.Underscore, start, @intCast(self.pos));
             },
             '0'...'9' => return try self.tokenizeNumber(self.gpa, start),
-            '/' => return chompOneOfTwo(&self.pos, self.src, '/', .OpSlash, .OpDoubleSlash),
-            '-' => return chompOneOfTwo(&self.pos, self.src, '>', .OpMinus, .OpThinArrow), // TODO handle unary minus here by checking for preceding whitespace
-            '=' => return chompOneOfThree(&self.pos, self.src, '=', '>', .OpAssign, .OpEquals, .OpThickArrow),
+            '/' => return chompOneOfTwo(&self.pos, src, '/', .OpSlash, .OpDoubleSlash),
+            '-' => return chompOneOfTwo(&self.pos, src, '>', .OpMinus, .OpThinArrow), // TODO handle unary minus here by checking for preceding whitespace
+            '=' => return chompOneOfThree(&self.pos, src, '=', '>', .OpAssign, .OpEquals, .OpThickArrow),
             '(' => return chompOne(&self.pos, .OpenRound),
             ')' => return chompOne(&self.pos, .CloseRound),
             '[' => return chompOne(&self.pos, .OpenSquare),
@@ -158,21 +157,21 @@ pub fn next(self: *Self) Allocator.Error!Token {
                 return chompOne(&self.pos, tag);
             },
             ',' => return chompOne(&self.pos, .Comma),
-            ':' => return chompOneOfTwo(&self.pos, self.src, '=', .OpColon, .OpColonEqual),
+            ':' => return chompOneOfTwo(&self.pos, src, '=', .OpColon, .OpColonEqual),
             '+' => return chompOne(&self.pos, .OpPlus),
             '*' => return chompOne(&self.pos, .OpStar),
             '.' => {
                 // ".", "..", and "..."
                 self.pos += 1;
 
-                if (self.pos >= self.src.len) return Token.no_payload(.Dot, start, @intCast(self.pos));
+                if (self.pos >= src.len) return Token.no_payload(.Dot, start, @intCast(self.pos));
 
-                if (self.src[self.pos] == '.') {
+                if (src[self.pos] == '.') {
                     self.pos += 1;
 
-                    if (self.pos >= self.src.len) return Token.no_payload(.DoubleDot, start, @intCast(self.pos));
+                    if (self.pos >= src.len) return Token.no_payload(.DoubleDot, start, @intCast(self.pos));
 
-                    if (self.src[self.pos] == '.') {
+                    if (src[self.pos] == '.') {
                         self.pos += 1;
                         return Token.no_payload(.TripleDot, start, @intCast(self.pos));
                     }
@@ -182,37 +181,20 @@ pub fn next(self: *Self) Allocator.Error!Token {
 
                 return Token.no_payload(.Dot, start, @intCast(self.pos));
             },
-            '<' => return chompOneOfThree(self.src, &self.pos, '=', '-', .OpLessThan, .OpLessThanOrEq, .OpBackArrow),
-            '>' => return chompOneOfTwo(&self.pos, self.src, '=', .OpGreaterThan, .OpGreaterThanOrEq),
-            '!' => return chompOneOfTwo(&self.pos, self.src, '=', .OpBang, .OpNotEquals),
+            '<' => return chompOneOfThree(&self.pos, src, '=', '-', .OpLessThan, .OpLessThanOrEq, .OpBackArrow),
+            '>' => return chompOneOfTwo(&self.pos, src, '=', .OpGreaterThan, .OpGreaterThanOrEq),
+            '!' => return chompOneOfTwo(&self.pos, src, '=', .OpBang, .OpNotEquals),
             '&' => {
                 // TODO should treat both of these as malformed, report diagnostic, etc.
-                return chompOneOfTwo(&self.pos, self.src, '&', .OpAmpersand, .OpAnd);
+                return chompOneOfTwo(&self.pos, src, '&', .OpAmpersand, .OpAnd);
             },
             '|' => {
                 // TODO should treat both of these as malformed, report diagnostic, etc.
-                return chompOneOfTwo(&self.pos, self.src, '&', .OpBar, .OpOr);
+                return chompOneOfTwo(&self.pos, src, '&', .OpBar, .OpOr);
             },
-            '?' => return chompOneOfTwo(&self.pos, self.src, '?', .OpDouble, .OpDoubleQuestion),
+            '?' => return chompOneOfTwo(&self.pos, src, '?', .OpDouble, .OpDoubleQuestion),
             '\\' => return chompOne(&self.pos, .OpBackslash),
             '\'' => return try self.tokenizeSingleQuote(self.gpa, start),
-            '#' => {
-                self.pos += 1;
-
-                // Check if it's a doc comment (##)
-                if (self.pos >= self.src.len) return Token.no_payload(.Comment, start, @intCast(self.pos));
-                const is_doc = self.src[self.pos] == '#';
-                self.pos += is_doc;
-
-                // Find the end of the comment (newline or EOF)
-                while (self.pos < self.src.len and self.src[self.pos] != '\n') {
-                    self.pos += 1;
-                }
-
-                // Don't include the newline in the comment.
-                // Don't advance past the newline either, so it can participate in blank line detection.
-                return Token.no_payload(if (is_doc) .DocComment else .LineComment, start, @intCast(self.pos));
-            },
             else => { // Anything else is an unsupported  token
                 self.pos += 1;
                 // TODO Keep chomping until we hit a valid token, then report *one* diagnostic spanning the chomped region
@@ -236,9 +218,11 @@ pub fn next(self: *Self) Allocator.Error!Token {
 }
 
 fn tokenizeLowerIdentOrKeyword(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+    const src = self.src_bytes.bytes();
+
     // Consume identifier characters
-    while (self.pos < self.src.len) {
-        const c = self.src[self.pos];
+    while (self.pos < src.len) {
+        const c = src[self.pos];
         if ((c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
@@ -251,7 +235,7 @@ fn tokenizeLowerIdentOrKeyword(self: *Self, gpa: std.mem.Allocator, start_pos: u
     }
 
     // Get the identifier text
-    const ident_text = self.src[start_pos..self.pos];
+    const ident_text = src[start_pos..self.pos];
 
     // Check if it's a keyword or a named underscore
     const tag: Token.Tag = if (ident_text[0] == '_')
@@ -261,7 +245,7 @@ fn tokenizeLowerIdentOrKeyword(self: *Self, gpa: std.mem.Allocator, start_pos: u
     // For identifiers, we need to intern them
     if (tag == .LowerIdent or tag == .NamedUnderscore) {
         const ident = base.Ident.for_text(ident_text);
-        const interned = try self.env.idents.insert(gpa, ident);
+        const interned = try self.ident_store.insert(gpa, ident);
         return Token{
             .tag = tag,
             .region = Region{
@@ -284,9 +268,11 @@ fn tokenizeLowerIdentOrKeyword(self: *Self, gpa: std.mem.Allocator, start_pos: u
 }
 
 fn tokenizeUpperIdent(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+    const src = self.src_bytes.bytes();
+
     // Consume identifier characters
-    while (self.pos < self.src.len) {
-        const c = self.src[self.pos];
+    while (self.pos < src.len) {
+        const c = src[self.pos];
         if ((c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
@@ -299,9 +285,9 @@ fn tokenizeUpperIdent(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std
     }
 
     // Get the identifier text and intern it
-    const ident_text = self.src[start_pos..self.pos];
+    const ident_text = src[start_pos..self.pos];
     const ident = base.Ident.for_text(ident_text);
-    const interned = try self.env.idents.insert(gpa, ident);
+    const interned = try self.ident_store.insert(gpa, ident);
 
     return Token{
         .tag = .UpperIdent,
@@ -314,19 +300,21 @@ fn tokenizeUpperIdent(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std
 }
 
 fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem.Allocator.Error!Token {
+    const src = self.src_bytes.bytes();
+
     // Start position is at the first digit, move past it
     self.pos = @intCast(start_pos + 1);
 
     // Check for hex, octal, binary prefixes
-    if (self.src[start_pos] == '0' and self.pos < self.src.len) {
-        const next_char = self.src[self.pos];
+    if (src[start_pos] == '0' and self.pos < src.len) {
+        const next_char = src[self.pos];
         if (next_char == 'x' or next_char == 'X') {
             // Hex number
             self.pos += 1;
             // Consume hex digits
             var has_digits = false;
-            while (self.pos < self.src.len) {
-                const c = self.src[self.pos];
+            while (self.pos < src.len) {
+                const c = src[self.pos];
                 if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == '_') {
                     if (c != '_') has_digits = true;
                     self.pos += 1;
@@ -346,7 +334,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                 };
             }
             // Parse the hex number and convert to decimal string
-            const hex_text = self.src[start_pos + 2 .. self.pos]; // Skip "0x"
+            const hex_text = src[start_pos + 2 .. self.pos]; // Skip "0x"
 
             // Parse hex to integer
             var value: u128 = 0;
@@ -380,8 +368,8 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
             // Binary number
             self.pos += 1;
             var has_digits = false;
-            while (self.pos < self.src.len) {
-                const c = self.src[self.pos];
+            while (self.pos < src.len) {
+                const c = src[self.pos];
                 if (c == '0' or c == '1' or c == '_') {
                     if (c != '_') has_digits = true;
                     self.pos += 1;
@@ -400,7 +388,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                 };
             }
             // Parse the binary number and convert to decimal string
-            const bin_text = self.src[start_pos + 2 .. self.pos]; // Skip "0b"
+            const bin_text = src[start_pos + 2 .. self.pos]; // Skip "0b"
 
             // Parse binary to integer
             var value: u128 = 0;
@@ -427,8 +415,8 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
             // Octal number
             self.pos += 1;
             var has_digits = false;
-            while (self.pos < self.src.len) {
-                const c = self.src[self.pos];
+            while (self.pos < src.len) {
+                const c = src[self.pos];
                 if ((c >= '0' and c <= '7') or c == '_') {
                     if (c != '_') has_digits = true;
                     self.pos += 1;
@@ -447,7 +435,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                 };
             }
             // Parse the octal number and convert to decimal string
-            const oct_text = self.src[start_pos + 2 .. self.pos]; // Skip "0o"
+            const oct_text = src[start_pos + 2 .. self.pos]; // Skip "0o"
 
             // Parse octal to integer
             var value: u128 = 0;
@@ -477,21 +465,21 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
     var has_decimal = false;
     var has_exponent = false;
 
-    while (self.pos < self.src.len) {
-        const c = self.src[self.pos];
+    while (self.pos < src.len) {
+        const c = src[self.pos];
         if (c >= '0' and c <= '9') {
             self.pos += 1;
         } else if (c == '.' and !has_decimal and !has_exponent) {
             // Check if it's a decimal point
-            if (self.pos + 1 < self.src.len) {
-                const next_char = self.src[self.pos + 1];
+            if (self.pos + 1 < src.len) {
+                const next_char = src[self.pos + 1];
                 if (next_char >= '0' and next_char <= '9') {
                     // It's a decimal number
                     has_decimal = true;
                     self.pos += 1;
                     // Continue consuming digits after decimal
-                    while (self.pos < self.src.len) {
-                        const dc = self.src[self.pos];
+                    while (self.pos < src.len) {
+                        const dc = src[self.pos];
                         if (dc >= '0' and dc <= '9') {
                             self.pos += 1;
                         } else {
@@ -506,9 +494,9 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
             }
         } else if ((c == 'e' or c == 'E') and !has_exponent) {
             // Check for scientific notation
-            if (self.pos + 1 < self.src.len) {
+            if (self.pos + 1 < src.len) {
                 var exp_pos = self.pos + 1;
-                const next_char = self.src[exp_pos];
+                const next_char = src[exp_pos];
 
                 // Check for optional + or - after e
                 if (next_char == '+' or next_char == '-') {
@@ -516,12 +504,12 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                 }
 
                 // Check if there's at least one digit after e/E
-                if (exp_pos < self.src.len and self.src[exp_pos] >= '0' and self.src[exp_pos] <= '9') {
+                if (exp_pos < src.len and src[exp_pos] >= '0' and src[exp_pos] <= '9') {
                     has_exponent = true;
                     self.pos = exp_pos;
                     // Consume exponent digits
-                    while (self.pos < self.src.len) {
-                        const ec = self.src[self.pos];
+                    while (self.pos < src.len) {
+                        const ec = src[self.pos];
                         if (ec >= '0' and ec <= '9') {
                             self.pos += 1;
                         } else {
@@ -539,7 +527,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
         }
     }
 
-    const num_text = self.src[start_pos..self.pos];
+    const num_text = src[start_pos..self.pos];
 
     // Check if it's a float
     if (has_decimal or has_exponent) {
@@ -605,9 +593,9 @@ inline fn chompEscapedChar(self: *Self, escaped: u8, bytes_idx: ByteSlices.Idx) 
         else => {
             // Report the invalid escape sequence
             const start: u32 = @intCast(self.pos - 1); // Include the backslash in the region
-            try self.problems.append(Diagnostic{
+            try self.problems.append(self.gpa, Diagnostic{
                 .region = Region.from_raw_offsets(start, @intCast(self.pos)),
-                .kind = .InvalidEscapeSequence,
+                .tag = .InvalidEscapeSequence,
             });
             // Write the unescaped string into the buffer.
             try self.byte_slices.extendLast(self.gpa, bytes_idx, &[_]u8{ '\\', escaped });
@@ -617,10 +605,12 @@ inline fn chompEscapedChar(self: *Self, escaped: u8, bytes_idx: ByteSlices.Idx) 
 
 /// We're starting on a single quote that opens a string.
 fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!Token {
+    const src = self.src_bytes.bytes();
+
     // Start after the opening single quote
     self.pos += 1;
 
-    if (self.pos >= self.src.len) {
+    if (self.pos >= src.len) {
         return Token{
             .tag = .MalformedSingleQuoteUnclosed,
             .region = Region{
@@ -632,12 +622,12 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
     }
 
     var char_value: u8 = 0;
-    const c = self.src[self.pos];
+    const c = src[self.pos];
 
     if (c == '\\') {
         // Handle escape sequence
         self.pos += 1;
-        if (self.pos >= self.src.len) {
+        if (self.pos >= src.len) {
             return Token{
                 .tag = .MalformedSingleQuoteUnclosed,
                 .region = Region{
@@ -647,7 +637,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                 .payload = .none,
             };
         }
-        const escaped = self.src[self.pos];
+        const escaped = src[self.pos];
         switch (escaped) {
             'n' => char_value = '\n',
             'r' => char_value = '\r',
@@ -657,7 +647,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
             else => {
                 self.pos += 1;
                 // Check for closing quote
-                if (self.pos < self.src.len and self.src[self.pos] == '\'') {
+                if (self.pos < src.len and src[self.pos] == '\'') {
                     self.pos += 1;
                 }
                 return Token{
@@ -689,7 +679,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
     }
 
     // Check for closing quote
-    if (self.pos >= self.src.len or self.src[self.pos] != '\'') {
+    if (self.pos >= src.len or src[self.pos] != '\'') {
         return Token{
             .tag = .MalformedSingleQuoteUnclosed,
             .region = Region{
@@ -713,6 +703,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
 }
 
 fn tokenizeTripleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
+    const src = self.src_bytes.bytes();
     const start: u32 = @intCast(self.pos);
     const bytes_idx = try self.byte_slices.append(self.gpa, &.{});
 
@@ -721,19 +712,19 @@ fn tokenizeTripleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
 
         // Process escapes until we hit a newline or an interpolation start
         while (true) {
-            switch (self.src[self.pos]) {
+            switch (src[self.pos]) {
                 '\\' => {
                     // We hit an escape, so copy over the segment we've seen so far
-                    try self.byte_slices.extendLast(self.gpa, bytes_idx, self.src[segment_start..self.pos]);
+                    try self.byte_slices.extendLast(self.gpa, bytes_idx, src[segment_start..self.pos]);
                     self.pos += 1; // Advance past the backslash
-                    try self.chompEscapedChar(self.src[self.pos], bytes_idx);
+                    try self.chompEscapedChar(src[self.pos], bytes_idx);
                     segment_start = self.pos; // The next segment begins right after the escaped char
                 },
                 '$' => {
                     self.pos += 1; // Advance past the '$'
 
                     // "${" begins string interpolation.
-                    if (self.src[self.pos] == '{') {
+                    if (src[self.pos] == '{') {
                         self.pos += 1;
                         self.pending_string_interpolation = true;
                         self.unclosed_curlies += 1;
@@ -749,16 +740,16 @@ fn tokenizeTripleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
         const end = self.pos; // If it turns out this was the end of the string, mark it before the newline.
 
         // Copy the remainder of the current segment, including the newline.
-        try self.byte_slices.extendLast(self.gpa, bytes_idx, self.src[segment_start..self.pos]);
+        try self.byte_slices.extendLast(self.gpa, bytes_idx, src[segment_start..self.pos]);
         self.pos += 1; // Advance past the newline.
 
         // Chomp all the spaces and tabs at the beginning of the next line,
         // then see if we have another triple quote to continue the multiline string.
-        while (self.src[self.pos] == ' ' or self.src[self.pos] == '\t') self.pos += 1;
+        while (src[self.pos] == ' ' or src[self.pos] == '\t') self.pos += 1;
 
         // We don't need a bounds check here, because the source always ends in newline followed by three zeros,
         // so even if we hit the "\n" at the last possible point in the source, this will still just read the zeros.
-        if (self.src[self.pos] == '"' and self.src[self.pos + 1] == '"' and self.src[self.pos + 2] == '"') {
+        if (src[self.pos] == '"' and src[self.pos + 1] == '"' and src[self.pos + 2] == '"') {
             // We hit another triple-quoted string, so chomp the three quotes and continue.
             // The next segment will naturally begin right after these triple quotes, after we loop back around.
             self.pos += 3;
@@ -770,27 +761,27 @@ fn tokenizeTripleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
 }
 
 fn tokenizeSingleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
-    // It's a single-quote string, so proceed accordingly.
+    const src = self.src_bytes.bytes();
     const start: u32 = @intCast(self.pos);
     var segment_start = self.pos;
-    var tag = undefined;
+    var tag: Token.Tag = .String;
     const bytes_idx = try self.byte_slices.append(self.gpa, &.{});
 
     // Process escapes until we hit a closing quote, newline or an interpolation start
     while (true) {
-        switch (self.src[self.pos]) {
+        switch (src[self.pos]) {
             '\\' => {
                 // We hit an escape, so copy over the segment we've seen so far
-                try self.byte_slices.extendLast(self.gpa, bytes_idx, self.src[segment_start..self.pos]);
+                try self.byte_slices.extendLast(self.gpa, bytes_idx, src[segment_start..self.pos]);
                 self.pos += 1; // Advance past the backslash
-                try self.chompEscapedChar(self.src[self.pos], bytes_idx);
+                try self.chompEscapedChar(src[self.pos], bytes_idx);
                 segment_start = self.pos; // The next segment begins right after the escaped char
             },
             '$' => {
                 self.pos += 1; // Advance past the '$'
 
                 // "${" begins string interpolation.
-                if (self.src[self.pos] == '{') {
+                if (src[self.pos] == '{') {
                     self.pos += 1;
                     self.pending_string_interpolation = true;
                     self.unclosed_curlies += 1;
@@ -813,7 +804,7 @@ fn tokenizeSingleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
     const end = self.pos; // Mark the end of the string as being before the closing delimiter
 
     // Copy the remainder of the current segment.
-    try self.byte_slices.extendLast(self.gpa, bytes_idx, self.src[segment_start..self.pos]);
+    try self.byte_slices.extendLast(self.gpa, bytes_idx, src[segment_start..self.pos]);
     self.pos += 1; // Advance past the delimiter.
 
     return Token{
@@ -829,10 +820,13 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     var src_testing = try SrcBytes.Testing.initFromSlice(gpa, input);
     defer src_testing.deinit(gpa);
 
+    var ident_store = base.IdentStore{};
+    defer ident_store.deinit(gpa);
+
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(gpa);
 
-    var tokenizer = try Self.init(gpa, src_testing.src, &messages, &byte_slices);
+    var tokenizer = try Self.init(gpa, src_testing.src, &ident_store, &messages, &byte_slices);
     defer tokenizer.deinit(gpa);
 
     // Collect all tokens
@@ -1116,8 +1110,6 @@ inline fn chompOneOfTwo(
     fst_tag: Token.Tag,
     snd_tag: Token.Tag,
 ) Token {
-    debugVerifySrc(src);
-
     const start: u32 = @intCast(*pos);
     pos.? = *pos + 1; // Chomp the first byte
 
@@ -1137,8 +1129,6 @@ inline fn chompOneOfThree(
     snd_tag: Token.Tag,
     thd_tag: Token.Tag,
 ) Token {
-    debugVerifySrc(src);
-
     const start: u32 = @intCast(*pos);
 
     pos.? = *pos + 1; // Chomp the first byte
@@ -1158,14 +1148,4 @@ inline fn chompOneOfThree(
 
 fn isValidIdentStart(byte: u8) bool {
     return (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z');
-}
-
-// Verify that src ends in a newline followed by 3 zeros. We'll infinite loop (or worse) if it isn't!
-// The newline lets us check for end-of-comment and end-of-triple-quote-string without needing to check for EOF too,
-// and also means we can always peek ahead 3 characters safely (useful for 3-length tokens like triple quotes).
-fn debugVerifySrc(src: []const u8) void {
-    // Check that source ends with newline and zeros (the SrcBytes guarantee)
-    if (src.len >= 4) {
-        std.debug.assert(std.mem.endsWith(u8, src, &[_]u8{ '\n', 0, 0, 0 }));
-    }
 }

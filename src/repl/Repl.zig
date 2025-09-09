@@ -85,7 +85,7 @@ pub fn getDebugTypesHtml(self: *Repl) []const []const u8 {
 }
 
 /// Allocate a new ModuleEnv and save it
-fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
+fn allocateModuleEnv(self: *Repl, src: base.SrcBytes) !*ModuleEnv {
     // Clean up previous ModuleEnv if it exists
     if (self.last_module_env) |old_env| {
         old_env.deinit();
@@ -94,7 +94,7 @@ fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
 
     // Allocate new ModuleEnv on heap
     const new_env = try self.allocator.create(ModuleEnv);
-    new_env.* = try ModuleEnv.init(self.allocator, source);
+    new_env.* = try ModuleEnv.init(self.allocator, src);
     self.last_module_env = new_env;
     return new_env;
 }
@@ -205,14 +205,35 @@ pub fn step(self: *Repl, line: []const u8) ![]const u8 {
         return try self.allocator.dupe(u8, "Goodbye!");
     }
 
+    // Create SrcBytes from input with single allocation
+    const total_size = trimmed.len + base.SrcBytes.suffix.len;
+    
+    if (total_size > std.math.maxInt(u31)) {
+        return error.InputTooBig;
+    }
+    
+    // Single allocation with proper alignment and space for suffix
+    const allocation = try self.allocator.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+    defer self.allocator.free(allocation);
+    
+    // Copy trimmed input
+    @memcpy(allocation[0..trimmed.len], trimmed);
+    
+    // Add the suffix
+    @memcpy(allocation[trimmed.len..], &base.SrcBytes.suffix);
+    
+    // Create SrcBytes
+    const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
+
     // Process the input
-    return try self.processInput(trimmed);
+    return try self.processInput(src);
 }
 
 /// Process regular input (not special commands)
-fn processInput(self: *Repl, input: []const u8) ![]const u8 {
+fn processInput(self: *Repl, src: base.SrcBytes) ![]const u8 {
     // Try to parse as a statement first
-    const parse_result = try self.tryParseStatement(input);
+    const parse_result = try self.tryParseStatement(src);
+    const input = src.bytes();
 
     switch (parse_result) {
         .assignment => |info| {
@@ -230,8 +251,10 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
             return try self.allocator.dupe(u8, "Imports not yet supported");
         },
         .expression => {
-            // Evaluate expression with all past definitions
-            const full_source = try self.buildFullSource(input);
+            // Evaluate expression with all past definitions  
+            // Remove suffix from input to get the original expression
+            const expr_without_suffix = input[0..input.len - base.SrcBytes.suffix.len];
+            const full_source = try self.buildFullSource(expr_without_suffix);
             defer self.allocator.free(full_source);
 
             return try self.evaluateSource(full_source);
@@ -259,8 +282,8 @@ const ParseResult = union(enum) {
 };
 
 /// Try to parse input as a statement
-fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-    var module_env = try ModuleEnv.init(self.allocator, input);
+fn tryParseStatement(self: *Repl, src: base.SrcBytes) !ParseResult {
+    var module_env = try ModuleEnv.init(self.allocator, src);
     defer module_env.deinit();
 
     // Try parsing as an expression (since parseStatement uses parseFile which is wrong)
@@ -287,9 +310,13 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
 
                         // Duplicate the identifier name since module_env will be deinitialized
                         const owned_name = try self.allocator.dupe(u8, ident_name);
+                        
+                        // Get the source without suffix for the assignment
+                        const bytes = src.bytes();
+                        const source_without_suffix = bytes[0..bytes.len - base.SrcBytes.suffix.len];
 
                         return ParseResult{ .assignment = .{
-                            .source = input,
+                            .source = source_without_suffix,
                             .var_name = owned_name,
                         } };
                     }
@@ -343,7 +370,27 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
 
 /// Evaluate source code
 fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-    const module_env = try self.allocateModuleEnv(source);
+    // Create SrcBytes from source with single allocation
+    const total_size = source.len + base.SrcBytes.suffix.len;
+    
+    if (total_size > std.math.maxInt(u31)) {
+        return error.InputTooBig;
+    }
+    
+    // Single allocation with proper alignment and space for suffix
+    const allocation = try self.allocator.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+    // Note: allocation will be freed when module_env is deinitialized
+    
+    // Copy source
+    @memcpy(allocation[0..source.len], source);
+    
+    // Add the suffix
+    @memcpy(allocation[source.len..], &base.SrcBytes.suffix);
+    
+    // Create SrcBytes
+    const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
+    
+    const module_env = try self.allocateModuleEnv(src);
     return try self.evaluatePureExpression(module_env);
 }
 
@@ -380,7 +427,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     // For now, use the first node as a placeholder
     const expr_idx: AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
 
-    const canonical_expr = try cir.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source, &module_env.common.idents);
+    const canonical_expr = try cir.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source.bytes(), &module_env.common.idents);
 
     // Type check
     // Check.initForCIR needs different parameters for new architecture

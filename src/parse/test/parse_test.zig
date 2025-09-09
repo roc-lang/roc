@@ -21,13 +21,11 @@ fn parseTestFile(allocator: std.mem.Allocator, source: []const u8) !AST {
     defer env.deinit(allocator);
 
     // Create diagnostics buffer
-    var messages: [128]tokenize_iter.Diagnostic = undefined;
-    const msg_slice = messages[0..];
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
     // Parse using new Parser with TokenIterator
-    var parser = try Parser.init(&env, allocator, src_testing.src, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     _ = try parser.parseFile();
@@ -48,16 +46,15 @@ fn parseTestExpr(allocator: std.mem.Allocator, source: []const u8) !AST {
     defer env.deinit(allocator);
 
     // Create diagnostics buffer
-    var messages: [128]tokenize_iter.Diagnostic = undefined;
-    const msg_slice = messages[0..];
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
     // Parse expression using new Parser with TokenIterator
-    var parser = try Parser.init(&env, allocator, src_testing.src, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
-    const expr_idx = try parser.parseExprFromSource(msg_slice);
+    var messages: [128]tokenize_iter.Diagnostic = undefined;
+    const expr_idx = try parser.parseExprFromSource(&messages);
     ast.root_node_idx = @intCast(@intFromEnum(expr_idx));
 
     return ast;
@@ -1102,15 +1099,17 @@ test "manual snapshot comparison - one file" {
     var ast = try AST.initCapacity(allocator, 100);
     defer ast.deinit(allocator);
 
-    var env = try base.CommonEnv.init(allocator, source);
+    const src_bytes_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    const src_bytes = src_bytes_testing.src;
+    defer allocator.free(src_bytes.ptr[0..@intCast(src_bytes.len)]);
+
+    var env = try base.CommonEnv.init(allocator, src_bytes);
     defer env.deinit(allocator);
 
-    var messages: [128]tokenize_iter.Diagnostic = undefined;
-    const msg_slice = messages[0..];
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_bytes, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     // std.debug.print("Parsing...\n", .{});
@@ -1140,7 +1139,11 @@ test "Parser: iterative parser simple expression" {
         var ast = try AST.initCapacity(allocator, 100);
         defer ast.deinit(allocator);
 
-        var env = try base.CommonEnv.init(allocator, source);
+        const src_bytes_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+        const src_bytes = src_bytes_testing.src;
+        defer allocator.free(src_bytes.ptr[0..@intCast(src_bytes.len)]);
+
+        var env = try base.CommonEnv.init(allocator, src_bytes);
         defer env.deinit(allocator);
 
         var messages: [128]tokenize_iter.Diagnostic = undefined;
@@ -1149,7 +1152,7 @@ test "Parser: iterative parser simple expression" {
         defer byte_slices.entries.deinit(allocator);
 
         // Create parser
-        var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+        var parser = try Parser.init(&env, allocator, src_bytes, &ast, &byte_slices, &ast.parse_diagnostics);
         defer parser.deinit();
 
         const result = try parser.parseExprFromSource(msg_slice);
@@ -1164,7 +1167,11 @@ test "Parser: iterative parser simple expression" {
         var ast = try AST.initCapacity(allocator, 100);
         defer ast.deinit(allocator);
 
-        var env = try base.CommonEnv.init(allocator, source);
+        const src_bytes_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+        const src_bytes = src_bytes_testing.src;
+        defer allocator.free(src_bytes.ptr[0..@intCast(src_bytes.len)]);
+
+        var env = try base.CommonEnv.init(allocator, src_bytes);
         defer env.deinit(allocator);
 
         var messages: [128]tokenize_iter.Diagnostic = undefined;
@@ -1173,7 +1180,7 @@ test "Parser: iterative parser simple expression" {
         defer byte_slices.entries.deinit(allocator);
 
         // Create parser
-        var parser = try Parser.init(&env, allocator, source, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+        var parser = try Parser.init(&env, allocator, src_bytes, &ast, &byte_slices, &ast.parse_diagnostics);
         defer parser.deinit();
 
         const result = try parser.parseExprFromSource(msg_slice);

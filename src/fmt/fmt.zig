@@ -3631,7 +3631,7 @@ pub fn formatAst(
 
     var token_iter = Tokenizer{
         .gpa = scratch,
-        .src = source,
+        .src_bytes = source,
         .problems = &problems,
         .byte_slices = &byte_slices,
         .ident_store = &env.idents,

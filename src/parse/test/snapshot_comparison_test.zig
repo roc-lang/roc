@@ -118,13 +118,11 @@ fn parseWithNewPipeline(allocator: std.mem.Allocator, source: []const u8, snapsh
     defer env.deinit(allocator);
 
     // Create diagnostics buffer
-    var messages: [128]tokenize_iter.Diagnostic = undefined;
-    const msg_slice = messages[0..];
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
     // Parse using new Parser with TokenIterator
-    var parser = try Parser.init(&env, allocator, src_testing.src, msg_slice, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     if (std.mem.eql(u8, snapshot_type, "file")) {
