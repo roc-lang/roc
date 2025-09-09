@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const SrcBytes = base.SrcBytes;
 const parse = @import("parse");
+const tokens = @import("tokens");
 const can = @import("can");
 const types = @import("types");
 const reporting = @import("reporting");
@@ -1511,19 +1512,19 @@ fn processSnapshotContent(
     var messages: [128]parse.tokenize_iter.Diagnostic = undefined;
 
     // Tokenize once for both parser and formatter
-    var tokens = std.ArrayList(parse.tokenize_iter.Token).init(allocator);
-    defer tokens.deinit();
+    var token_list = std.ArrayList(tokens.Token).init(allocator);
+    defer token_list.deinit();
 
     // Tokenize the source
-    var token_iter = try parse.tokenize_iter.TokenIterator.init(&env, allocator, src_testing.src, &messages, &byte_slices);
+    var token_iter = try parse.tokenize_iter.TokenIterator.init(allocator, src_testing.src, &env.idents, &messages, &byte_slices);
     defer token_iter.deinit(allocator);
 
     // Collect all tokens (including comments for formatter)
     while (true) {
-        const token = try token_iter.next(allocator);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => break,
-            else => try tokens.append(token),
+            else => try token_list.append(token),
         }
     }
 
@@ -1569,7 +1570,7 @@ fn processSnapshotContent(
     try generateTokensSection2(&output, &parser, &content, &env);
     try generateParseSection2(&output, &content, ast_ptr, &env, parse_result);
     const root_node_idx: ?AST.Node.Idx = if (parse_result) |idx| @as(AST.Node.Idx, @enumFromInt(idx)) else null;
-    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx, tokens.items);
+    try generateFormattedSection2(&output, &content, ast_ptr, &parser, &env, root_node_idx, token_list.items);
 
     // Create a TypeStore for type inference
     // Increase capacity to handle large files with many type variables
@@ -2313,8 +2314,8 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
     }
 
     var tokenizedBuffer = parse_ast.tokens;
-    const tokens = tokenizedBuffer.tokens.items(.tag);
-    for (tokens, 0..) |tok, i| {
+    const token_tags = tokenizedBuffer.tokens.items(.tag);
+    for (token_tags, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
         const info = module_env.calcRegionInfo(region);
 
@@ -2344,7 +2345,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
             });
 
             // Add comma except for last token
-            if (i < tokens.len - 1) {
+            if (i < token_tags.len - 1) {
                 try writer.writeAll(",");
             }
         }
@@ -3385,7 +3386,7 @@ fn outputASTNodeAsSExpr(writer: anytype, ast: *const AST, env: *const base.Commo
 }
 
 /// Generate FORMATTED section for AST
-fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx, tokens: []const parse.tokenize_iter.Token) !void {
+fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: *AST, parser: *const Parser, env: *const base.CommonEnv, root_node: ?AST.Node.Idx, token_list: []const tokens.Token) !void {
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 

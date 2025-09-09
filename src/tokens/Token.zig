@@ -384,6 +384,6 @@ pub fn no_payload(tag: Self.Tag, start: u32, end: u32) Self {
     return Self{
         .tag = tag,
         .region = Region.from_raw_offsets(start, end),
-        .payload = .none,
+        .payload = .{ .none = {} },
     };
 }

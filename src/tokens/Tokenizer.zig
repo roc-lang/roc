@@ -15,7 +15,7 @@ pub const TokenIterator = Self; // Alias for compatibility
 
 gpa: Allocator,
 src_bytes: SrcBytes,
-ident_store: *base.IdentStore,
+ident_store: *base.Ident.Store,
 problems: *SafeList(Diagnostic),
 byte_slices: *collections.ByteSlices,
 pos: usize = 0, // Initial byte position within src
@@ -28,7 +28,7 @@ inside_string: enum { None, SingleQuote, TripleQuote } = .None, // What type of 
 pub fn init(
     gpa: Allocator,
     src_bytes: SrcBytes,
-    ident_store: *base.IdentStore,
+    ident_store: *base.Ident.Store,
     diagnostics: []Diagnostic,
     byte_slices: *ByteSlices,
 ) Allocator.Error!Self {
@@ -204,7 +204,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
                         .start = Region.Position{ .offset = @intCast(start) },
                         .end = Region.Position{ .offset = @intCast(self.pos) },
                     },
-                    .payload = .none,
+                    .payload = .{ .none = {} },
                 };
             },
         }
@@ -262,7 +262,7 @@ fn tokenizeLowerIdentOrKeyword(self: *Self, gpa: std.mem.Allocator, start_pos: u
                 .start = Region.Position{ .offset = @intCast(start_pos) },
                 .end = Region.Position{ .offset = @intCast(self.pos) },
             },
-            .payload = .none,
+            .payload = .{ .none = {} },
         };
     }
 }
@@ -330,7 +330,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                         .start = Region.Position{ .offset = @intCast(start_pos) },
                         .end = Region.Position{ .offset = @intCast(self.pos) },
                     },
-                    .payload = .none,
+                    .payload = .{ .none = {} },
                 };
             }
             // Parse the hex number and convert to decimal string
@@ -384,7 +384,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                         .start = Region.Position{ .offset = @intCast(start_pos) },
                         .end = Region.Position{ .offset = @intCast(self.pos) },
                     },
-                    .payload = .none,
+                    .payload = .{ .none = {} },
                 };
             }
             // Parse the binary number and convert to decimal string
@@ -431,7 +431,7 @@ fn tokenizeNumber(self: *Self, gpa: std.mem.Allocator, start_pos: usize) std.mem
                         .start = Region.Position{ .offset = @intCast(start_pos) },
                         .end = Region.Position{ .offset = @intCast(self.pos) },
                     },
-                    .payload = .none,
+                    .payload = .{ .none = {} },
                 };
             }
             // Parse the octal number and convert to decimal string
@@ -617,7 +617,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                 .start = Region.Position{ .offset = @intCast(start_pos) },
                 .end = Region.Position{ .offset = @intCast(self.pos) },
             },
-            .payload = .none,
+            .payload = .{ .none = {} },
         };
     }
 
@@ -634,7 +634,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                     .start = Region.Position{ .offset = @intCast(start_pos) },
                     .end = Region.Position{ .offset = @intCast(self.pos) },
                 },
-                .payload = .none,
+                .payload = .{ .none = {} },
             };
         }
         const escaped = src[self.pos];
@@ -656,7 +656,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                         .start = Region.Position{ .offset = @intCast(start_pos) },
                         .end = Region.Position{ .offset = @intCast(self.pos) },
                     },
-                    .payload = .none,
+                    .payload = .{ .none = {} },
                 };
             },
         }
@@ -670,7 +670,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                 .start = Region.Position{ .offset = @intCast(start_pos) },
                 .end = Region.Position{ .offset = @intCast(self.pos) },
             },
-            .payload = .none,
+            .payload = .{ .none = {} },
         };
     } else {
         // Regular character
@@ -686,7 +686,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
                 .start = Region.Position{ .offset = @intCast(start_pos) },
                 .end = Region.Position{ .offset = @intCast(self.pos) },
             },
-            .payload = .none,
+            .payload = .{ .none = {} },
         };
     }
     self.pos += 1;
@@ -820,7 +820,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     var src_testing = try SrcBytes.Testing.initFromSlice(gpa, input);
     defer src_testing.deinit(gpa);
 
-    var ident_store = base.IdentStore{};
+    var ident_store = base.Ident.Store{};
     defer ident_store.deinit(gpa);
 
     var byte_slices = collections.ByteSlices{ .entries = .{} };
