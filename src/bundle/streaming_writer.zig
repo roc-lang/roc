@@ -14,24 +14,18 @@ pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: std.io.AnyWriter,
+    output_writer: std.io.Writer,
     out_buffer: []u8,
     in_buffer: []u8,
     in_pos: usize,
     finished: bool,
 
     const Self = @This();
-    const Writer = std.io.Writer(*Self, Error, write);
-    const Error = error{
-        CompressionFailed,
-        WriteFailed,
-        AlreadyFinished,
-    } || std.mem.Allocator.Error;
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: std.io.AnyWriter,
+        output_writer: std.io.Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
@@ -66,37 +60,49 @@ pub const CompressingHashWriter = struct {
         };
     }
 
+    pub fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Error!usize {
+        // There is no need to splat
+        std.debug.assert(splat == 0);
+
+        const compressing_hash_writer: *CompressingHashWriter = @fieldParentPtr("output_writer", w);
+
+        if (compressing_hash_writer.finished) return error.WriteFailed;
+
+        var written: usize = 0;
+        for (data) |bytes| {
+            while (written < bytes.len) {
+                // Fill input buffer
+                const space_available = compressing_hash_writer.in_buffer.len - compressing_hash_writer.in_pos;
+                const to_copy = @min(space_available, bytes.len - written);
+                @memcpy(compressing_hash_writer.in_buffer[compressing_hash_writer.in_pos..][0..to_copy], bytes[written..][0..to_copy]);
+                compressing_hash_writer.in_pos += to_copy;
+                written += to_copy;
+
+                // If buffer is full, compress it
+                if (compressing_hash_writer.in_pos == compressing_hash_writer.in_buffer.len) {
+                    try compressing_hash_writer.compressBuffer(false);
+                }
+            }
+        }
+        return written;
+    }
+
     pub fn deinit(self: *Self) void {
         _ = c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
         self.allocator_ptr.free(self.in_buffer);
     }
 
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
+    pub fn writer(self: *Self) std.io.Writer {
+        // TODO: Or should this be the out_buffer?
+        return .{ .buffer = self.in_buffer, .vtable = &vtable };
     }
 
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        if (self.finished) return error.AlreadyFinished;
+    const vtable: std.io.Writer.VTable = .{
+        .drain = @This().drain,
+    };
 
-        var written: usize = 0;
-        while (written < bytes.len) {
-            // Fill input buffer
-            const space_available = self.in_buffer.len - self.in_pos;
-            const to_copy = @min(space_available, bytes.len - written);
-            @memcpy(self.in_buffer[self.in_pos..][0..to_copy], bytes[written..][0..to_copy]);
-            self.in_pos += to_copy;
-            written += to_copy;
-
-            // If buffer is full, compress it
-            if (self.in_pos == self.in_buffer.len) {
-                try self.compressBuffer(false);
-            }
-        }
-        return written;
-    }
-
-    fn compressBuffer(self: *Self, end_stream: bool) Error!void {
+    fn compressBuffer(self: *Self, end_stream: bool) std.io.Writer.Error!void {
         if (self.in_pos == 0 and !end_stream) return;
 
         var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = self.in_pos, .pos = 0 };
@@ -108,7 +114,7 @@ pub const CompressingHashWriter = struct {
 
             const remaining = c.ZSTD_compressStream2(self.ctx, &out_buf, &in_buf, mode);
             if (c.ZSTD_isError(remaining) != 0) {
-                return error.CompressionFailed;
+                return error.WriteFailed;
             }
 
             if (out_buf.pos > 0) {
@@ -123,7 +129,7 @@ pub const CompressingHashWriter = struct {
         self.in_pos = 0;
     }
 
-    pub fn finish(self: *Self) Error!void {
+    pub fn finish(self: *Self) std.io.Writer.Error!void {
         if (self.finished) return;
         try self.compressBuffer(true);
         self.finished = true;
