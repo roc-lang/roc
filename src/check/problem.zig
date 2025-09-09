@@ -8,27 +8,21 @@ const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
 const Check = @import("Check.zig");
-
 const snapshot = @import("snapshot.zig");
 
 const Allocator = std.mem.Allocator;
-
+const SrcBytes = base.SrcBytes;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-
 const Report = reporting.Report;
 const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 const SourceRegion = reporting.SourceRegion;
-
 const TypesStore = types_mod.Store;
 const Ident = base.Ident;
-
 const MkSafeMultiList = collections.SafeMultiList;
-
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
-
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 
@@ -199,7 +193,7 @@ pub const ReportBuilder = struct {
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
-    source: []const u8,
+    source: SrcBytes,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
 

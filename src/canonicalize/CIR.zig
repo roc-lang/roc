@@ -2821,6 +2821,8 @@ test "CIR2 canonicalize simple number literal" {
 
     // Parse a simple number literal
     const source = "42";
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
 
     // Create heap-allocated AST for CIR to use
     const ast_ptr = try allocator.create(AST);
@@ -2830,7 +2832,7 @@ test "CIR2 canonicalize simple number literal" {
         allocator.destroy(ast_ptr);
     }
 
-    var env = try base.CommonEnv.init(allocator, source);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
@@ -2839,7 +2841,7 @@ test "CIR2 canonicalize simple number literal" {
     var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
     const msg_slice = messages[0..];
 
-    var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);
     defer parser.deinit();
 
     // Parse as an expression (need to use parseExprFromSource to set up tokenizer)
@@ -4952,6 +4954,8 @@ test "CIR2 canonicalize mutable variable declaration" {
 
     // Parse a mutable variable declaration
     const source = "var x = 10";
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
 
     // Create heap-allocated AST for CIR to use
     const ast_ptr = try allocator.create(AST);
@@ -4961,20 +4965,17 @@ test "CIR2 canonicalize mutable variable declaration" {
         allocator.destroy(ast_ptr);
     }
 
-    var env = try base.CommonEnv.init(allocator, source);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     var byte_slices = ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(allocator);
 
-    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
-    const msg_slice = messages[0..];
-
-    var parser = try Parser.init(&env, allocator, source, msg_slice, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, ast_ptr, &byte_slices, &ast_ptr.parse_diagnostics);
     defer parser.deinit();
 
-    // Parse the statement (need to use parseExprFromSource to set up tokenizer)
-    const node_idx = try parser.parseExprFromSource(msg_slice);
+    // Parse the statement
+    const node_idx = try parser.parseExpr();
 
     // Verify we got a binop_equals node with var_lc on the left
     const node = ast_ptr.nodes.get(@enumFromInt(@intFromEnum(node_idx)));
@@ -5012,7 +5013,9 @@ test "CIR2 error: expression in statement context" {
 
     // Create a simple source for testing
     const source = "42";
-    var env = try base.CommonEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     // Create heap-allocated AST
@@ -5060,7 +5063,9 @@ test "CIR2 demonstrates in-place tag mutation" {
 
     // Create a simple source for testing
     const source = "x";
-    var env = try base.CommonEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     // Create heap-allocated AST
@@ -5161,7 +5166,9 @@ test "sign bit encoding: mutable vs immutable pattern canonicalization" {
 
     // Create a simple source for testing
     const source = "x y";
-    var env = try base.CommonEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try base.CommonEnv.init(allocator, src_testing.src);
     defer env.deinit(allocator);
 
     var ast = try AST.initCapacity(allocator, 10);

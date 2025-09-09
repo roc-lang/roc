@@ -151,7 +151,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
                 self.unclosed_curlies -= 1;
                 // If we just closed the last curly inside a string interpolation, emit CloseStringInterpolation.
                 self.just_ended_interpolation = self.unclosed_curlies == 0 and self.inside_string != .None;
-                const tag = if (self.just_ended_interpolation) .CloseStringInterpolation else .CloseCurly;
+                const tag: Token.Tag = if (self.just_ended_interpolation) .CloseStringInterpolation else .CloseCurly;
                 return chompOne(&self.pos, tag);
             },
             ',' => return chompOne(&self.pos, .Comma),

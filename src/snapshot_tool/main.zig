@@ -610,9 +610,9 @@ fn convertParserDiagnosticToReport(
         },
         .pattern_unexpected_token => {
             const token_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             const owned_token = try report.addOwnedString(token_text);
             try report.document.addText("The token ");
             try report.document.addAnnotated(owned_token, .error_highlight);
@@ -632,9 +632,9 @@ fn convertParserDiagnosticToReport(
         },
         .ty_anno_unexpected_token => {
             const token_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             const owned_token = try report.addOwnedString(token_text);
             try report.document.addText("The token ");
             try report.document.addAnnotated(owned_token, .error_highlight);
@@ -650,9 +650,9 @@ fn convertParserDiagnosticToReport(
         },
         .string_unexpected_token => {
             const token_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             const owned_token = try report.addOwnedString(token_text);
             try report.document.addText("The token ");
             try report.document.addAnnotated(owned_token, .error_highlight);
@@ -662,9 +662,9 @@ fn convertParserDiagnosticToReport(
         },
         .expr_unexpected_token => {
             const token_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             const owned_token = try report.addOwnedString(token_text);
             try report.document.addText("The token ");
             try report.document.addAnnotated(owned_token, .error_highlight);
@@ -717,7 +717,7 @@ fn convertParserDiagnosticToReport(
     {
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
-            env.source,
+            env.source.bytes(),
             env.line_starts.items.items,
             diag.region.start.offset,
             diag.region.end.offset,
@@ -731,7 +731,7 @@ fn convertParserDiagnosticToReport(
             region_info,
             .error_highlight,
             snapshot_path,
-            env.source,
+            env.source.bytes(),
             env.line_starts.items.items,
         );
     }
@@ -814,9 +814,9 @@ fn convertCIRDiagnosticToReport(
         },
         .ident_not_in_scope => {
             const ident_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             try report.document.addText("Nothing is named ");
             try report.document.addAnnotated(ident_text, .error_highlight);
             try report.document.addText(" in this scope.");
@@ -829,9 +829,9 @@ fn convertCIRDiagnosticToReport(
         },
         .ident_already_defined => {
             const ident_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             try report.document.addText("The identifier ");
             try report.document.addAnnotated(ident_text, .error_highlight);
             try report.document.addText(" has already been defined in this scope.");
@@ -840,9 +840,9 @@ fn convertCIRDiagnosticToReport(
         },
         .unused_variable => {
             const var_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             try report.document.addText("Variable ");
             try report.document.addAnnotated(var_text, .error_highlight);
             try report.document.addText(" is not used anywhere in your code.");
@@ -867,9 +867,9 @@ fn convertCIRDiagnosticToReport(
         },
         .type_not_in_scope => {
             const type_text = if (region.start.offset < region.end.offset)
-                env.source[region.start.offset..region.end.offset]
+                env.source.bytes()[region.start.offset..region.end.offset]
             else
-                "<unknown>";
+                "<invalid region>";
             try report.document.addText("The type ");
             try report.document.addAnnotated(type_text, .error_highlight);
             try report.document.addText(" is not in scope.");
@@ -926,7 +926,7 @@ fn convertCIRDiagnosticToReport(
     {
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
-            env.source,
+            env.source.bytes(),
             env.line_starts.items.items,
             diag.region.start.offset,
             diag.region.end.offset,
@@ -940,7 +940,7 @@ fn convertCIRDiagnosticToReport(
             region_info,
             .error_highlight,
             snapshot_path,
-            env.source,
+            env.source.bytes(),
             env.line_starts.items.items,
         );
     }
@@ -2667,17 +2667,20 @@ fn generateTokensSection2(output: *DualOutput, parser: *const Parser, content: *
     var byte_slices_temp = ByteSlices{ .entries = .{} };
     defer byte_slices_temp.entries.deinit(parser.gpa);
 
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(parser.gpa, content.source);
+    defer src_testing.deinit(parser.gpa);
+
     var token_iter = try parse.tokenize_iter.TokenIterator.init(
-        env,
         parser.gpa,
-        content.source,
+        src_testing.src,
+        &env.idents,
         &messages,
         &byte_slices_temp,
     );
 
     // Iterate through tokens and output them
     while (true) {
-        const token = try token_iter.next(parser.gpa);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => break,
             else => try output.md_writer.print("{s} ", .{@tagName(token.tag)}),
@@ -3391,7 +3394,7 @@ fn generateFormattedSection2(output: *DualOutput, content: *const Content, ast: 
     try output.begin_code_block("roc");
 
     const ident_store = env.getIdentStore();
-    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, env.source, ident_store, tokens, root_node);
+    const formatted_output = try fmt.formatAstWithTokens(output.gpa, ast, env.source, ident_store, token_list, root_node);
     defer output.gpa.free(formatted_output);
 
     // Check if formatting changed the source
@@ -3851,7 +3854,9 @@ fn generateSolvedSection(output: *DualOutput, cir: *const CIR, env: *const Commo
     // Create a ModuleEnv for type checking with the CIR properly set
     // This is needed because the type checker might call the interpreter
     // which requires a ModuleEnv with a valid cir field
-    var module_env = try ModuleEnv.init(output.gpa, "");
+    var empty_src_testing = try base.SrcBytes.Testing.initFromSlice(output.gpa, "");
+    defer empty_src_testing.deinit(output.gpa);
+    var module_env = try ModuleEnv.init(output.gpa, empty_src_testing.src);
     defer module_env.deinit();
     module_env.cir = @constCast(cir);
 
@@ -3893,7 +3898,9 @@ fn generateTypesSection2(output: *DualOutput, cir: *const CIR, env: *const Commo
     try output.begin_code_block("roc");
 
     // Create a ModuleEnv for type checking with the CIR properly set
-    var module_env = try ModuleEnv.init(output.gpa, "");
+    var empty_src_testing2 = try base.SrcBytes.Testing.initFromSlice(output.gpa, "");
+    defer empty_src_testing2.deinit(output.gpa);
+    var module_env = try ModuleEnv.init(output.gpa, empty_src_testing2.src);
     defer module_env.deinit();
     module_env.cir = @constCast(cir);
 

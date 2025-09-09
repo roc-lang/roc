@@ -24,7 +24,7 @@ const Closure = @import("../interpreter.zig").Closure;
 const LayoutStore = layout.Store;
 const test_allocator = std.testing.allocator;
 
-const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
+const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError, TooBig };
 
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: EvalError, should_trace: enum { trace, no_trace }) !void {
@@ -357,12 +357,16 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     can: *Can,
     checker: *Check,
     expr_idx: CIR.Expr.Idx,
+    src_testing: base.SrcBytes.Testing,
 } {
+    // Initialize SrcBytes.Testing for the source
+    const src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, src_testing.src);
 
-    module_env.common.source = source;
+    module_env.common.source = src_testing.src;
     try module_env.common.calcLineStarts(module_env.gpa);
 
     // Parse the source code as an expression
@@ -404,7 +408,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(allocator, expr_idx, module_env.common.source, &module_env.common.idents);
+    const canonical_expr_idx = try czer.canonicalizeExpr(allocator, expr_idx, module_env.common.source.bytes(), &module_env.common.idents);
 
     // CRITICAL: Set the CIR and AST on module_env so the interpreter can access them
     module_env.cir = czer;
@@ -430,6 +434,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .can = czer,
         .checker = checker,
         .expr_idx = canonical_expr_idx,
+        .src_testing = src_testing,
     };
 }
 
@@ -438,6 +443,9 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     resources.checker.deinit();
     resources.can.deinit(allocator);
     resources.parse_ast.deinit(allocator);
+    // Clean up SrcBytes.Testing
+    var src_testing_mut = resources.src_testing;
+    src_testing_mut.deinit(allocator);
     // module_env.source is freed by module_env.deinit()
     resources.module_env.deinit();
     allocator.destroy(resources.checker);

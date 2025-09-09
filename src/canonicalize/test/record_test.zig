@@ -18,7 +18,9 @@ test "record literal uses record_unbound" {
     {
         const source = "{ x: 42, y: \"hello\" }";
 
-        var env = try ModuleEnv.init(gpa, source);
+        var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, source);
+        defer src_testing.deinit(gpa);
+        var env = try ModuleEnv.init(gpa, src_testing.src);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -30,7 +32,7 @@ test "record literal uses record_unbound" {
         defer can.deinit(gpa);
 
         const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, src_testing.src.bytes(), &env.common.idents);
 
         // Get the type of the expression
         const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
@@ -53,7 +55,9 @@ test "record literal uses record_unbound" {
     {
         const source2 = "{}";
 
-        var env = try ModuleEnv.init(gpa, source2);
+        var src_testing2 = try base.SrcBytes.Testing.initFromSlice(gpa, source2);
+        defer src_testing2.deinit(gpa);
+        var env = try ModuleEnv.init(gpa, src_testing2.src);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -65,7 +69,7 @@ test "record literal uses record_unbound" {
         defer can.deinit(gpa);
 
         const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source2, &env.common.idents);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, src_testing2.src.bytes(), &env.common.idents);
 
         // Get the type of the expression
         const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
@@ -88,7 +92,9 @@ test "record literal uses record_unbound" {
     {
         const source3 = "{ value: 123 }";
 
-        var env = try ModuleEnv.init(gpa, source3);
+        var src_testing3 = try base.SrcBytes.Testing.initFromSlice(gpa, source3);
+        defer src_testing3.deinit(gpa);
+        var env = try ModuleEnv.init(gpa, src_testing3.src);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -100,7 +106,7 @@ test "record literal uses record_unbound" {
         defer can.deinit(gpa);
 
         const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source3, &env.common.idents);
+        const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, src_testing3.src.bytes(), &env.common.idents);
 
         // Get the type of the expression
         const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
@@ -130,7 +136,9 @@ test "record_unbound basic functionality" {
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
-    var env = try ModuleEnv.init(gpa, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
+    var env = try ModuleEnv.init(gpa, src_testing.src);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");
@@ -142,7 +150,7 @@ test "record_unbound basic functionality" {
     defer can.deinit(gpa);
 
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
+    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, src_testing.src.bytes(), &env.common.idents);
 
     // Get the type of the expression
     const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
@@ -170,7 +178,9 @@ test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
     const source = "{ a: 123, b: 456, c: 789 }";
 
-    var env = try ModuleEnv.init(gpa, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
+    var env = try ModuleEnv.init(gpa, src_testing.src);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");
@@ -183,7 +193,7 @@ test "record_unbound with multiple fields" {
     defer can.deinit(gpa);
 
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, source, &env.common.idents);
+    const canonical_expr_idx = try can.canonicalizeExpr(gpa, expr_idx, src_testing.src.bytes(), &env.common.idents);
 
     const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx)));
     const resolved = env.types.resolveVar(expr_var);
@@ -209,7 +219,9 @@ test "record_unbound with multiple fields" {
 test "record with extension variable" {
     const gpa = std.testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "");
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, "");
+    defer src_testing.deinit(gpa);
+    var env = try ModuleEnv.init(gpa, src_testing.src);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");

@@ -836,7 +836,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Canonicalize the entire module
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
     // For expressions, use canonicalizeExpr instead of canonicalizeFileBlock
-    const canonicalized_expr = try canonicalizer.canonicalizeExpr(shm_allocator, root_node_idx, env.common.source, &env.common.idents);
+    const canonicalized_expr = try canonicalizer.canonicalizeExpr(shm_allocator, root_node_idx, env.common.source.bytes(), &env.common.idents);
 
     // Store the canonicalized expression index for the child
     expr_idx_ptr[0] = @intCast(@intFromEnum(canonicalized_expr));

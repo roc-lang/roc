@@ -15,6 +15,7 @@ gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
 parse_ast: *parse.AST,
 can: *Can,
+src_testing: base.SrcBytes.Testing,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
@@ -34,8 +35,12 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
+    // Create SrcBytes from source
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, source);
+    errdefer src_testing.deinit(gpa);
+
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, source);
+    module_env.* = try ModuleEnv.init(gpa, src_testing.src);
     errdefer module_env.deinit();
 
     parse_ast.* = try parse.parseExpr(&module_env.common, gpa);
@@ -52,6 +57,7 @@ pub fn init(source: []const u8) !TestEnv {
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = can,
+        .src_testing = src_testing,
     };
 }
 
@@ -65,6 +71,9 @@ pub fn deinit(self: *TestEnv) void {
     // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
+    
+    // Clean up SrcBytes.Testing
+    self.src_testing.deinit(self.gpa);
 }
 
 /// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.
@@ -77,7 +86,7 @@ pub fn canonicalizeExpr(self: *TestEnv) !?Can.Expr.Idx {
         return null;
     }
 
-    return try self.can.canonicalizeExpr(self.gpa, expr_idx, self.module_env.common.source, &self.module_env.common.idents);
+    return try self.can.canonicalizeExpr(self.gpa, expr_idx, self.module_env.common.source.bytes(), &self.module_env.common.idents);
 }
 
 /// Retrieves a canonical expression from the module store by its index.

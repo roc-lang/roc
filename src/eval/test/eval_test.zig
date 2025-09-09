@@ -767,10 +767,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
     defer test_env_instance.deinit();
 
     // Create original ModuleEnv
-    var original_env = try ModuleEnv.init(gpa, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
+    var original_env = try ModuleEnv.init(gpa, src_testing.src);
     defer original_env.deinit();
 
-    original_env.common.source = source;
+    original_env.common.source = src_testing.src;
     original_env.module_name = "TestModule";
     try original_env.common.calcLineStarts(original_env.gpa);
 
@@ -787,7 +789,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonicalized_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, original_env.common.source, &original_env.common.idents);
+    const canonicalized_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, original_env.common.source.bytes(), &original_env.common.idents);
 
     // Type check the expression
     var checker = try Check.initForCIR(gpa, &original_env.types, &original_env.store.regions);
@@ -852,11 +854,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, src_testing.src, "TestModule");
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);
-        try testing.expectEqualStrings(source, deserialized_env.common.source);
+        try testing.expectEqualStrings(src_testing.src.bytes(), deserialized_env.common.source.bytes());
 
         // Test 3: Verify the deserialized ModuleEnv has the correct structure
         try testing.expect(deserialized_env.types.len() > 0);

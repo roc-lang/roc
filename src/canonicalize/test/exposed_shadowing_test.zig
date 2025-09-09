@@ -29,7 +29,10 @@ test "exposed but not implemented - values" {
         std.debug.print("\nexposed_shadowing_test source: '{s}'\n", .{source});
     }
 
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -40,7 +43,7 @@ test "exposed but not implemented - values" {
     defer czer.deinit(allocator);
 
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
 
     // Check that we have an "exposed but not implemented" diagnostic for 'bar'
     var found_bar_error = false;
@@ -67,7 +70,10 @@ test "exposed but not implemented - types" {
         \\MyType : [A, B]
     ;
 
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -78,7 +84,7 @@ test "exposed but not implemented - types" {
     defer czer.deinit(allocator);
 
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_node_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
 
     // Check that we have an "exposed but not implemented" diagnostic for 'OtherType'
     var found_other_type_error = false;
@@ -105,7 +111,9 @@ test "redundant exposed entries" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -113,7 +121,7 @@ test "redundant exposed entries" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Check that we have redundant exposed warnings
     var found_foo_redundant = false;
     var found_bar_redundant = false;
@@ -145,7 +153,9 @@ test "shadowing with exposed items" {
         \\y = "first"
         \\y = "second"
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -153,7 +163,7 @@ test "shadowing with exposed items" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Check that we have shadowing warnings
     var shadowing_count: usize = 0;
     for (env.diagnostics.items) |diag| {
@@ -175,7 +185,9 @@ test "shadowing non-exposed items" {
         \\notExposed = 2
         \\# Shadowing is allowed for non-exposed items
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -183,7 +195,7 @@ test "shadowing non-exposed items" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Check that we still get shadowing warnings for non-exposed items
     var found_shadowing = false;
     for (env.diagnostics.items) |diag| {
@@ -212,7 +224,9 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -220,7 +234,7 @@ test "exposed items correctly tracked across shadowing" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Should have:
     // - Shadowing warning for x
     // - No "exposed but not implemented" for x (it is implemented)
@@ -265,7 +279,9 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\
         \\c = 100
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -273,7 +289,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     var found_a_redundant = false;
     var found_a_shadowing = false;
     var found_not_implemented = false;
@@ -314,7 +330,9 @@ test "exposed_items is populated correctly" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -322,7 +340,7 @@ test "exposed_items is populated correctly" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Check that exposed_items contains the correct number of items
     // The exposed items were added during canonicalization
     // Should have exactly 3 entries (duplicates not stored)
@@ -345,7 +363,9 @@ test "exposed_items persists after canonicalization" {
         \\y = 2
         \\# z is not defined
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -353,7 +373,7 @@ test "exposed_items persists after canonicalization" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // All exposed items should be in exposed_items, even those not implemented
     const x_idx = env.common.idents.findByString("x").?;
     const y_idx = env.common.idents.findByString("y").?;
@@ -374,7 +394,9 @@ test "exposed_items never has entries removed" {
         \\bar = "hello"
         \\baz = 3.14
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -382,7 +404,7 @@ test "exposed_items never has entries removed" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // All exposed items should remain in exposed_items
     // Even though foo appears twice and baz is not implemented,
     // exposed_items should have all unique exposed identifiers
@@ -406,7 +428,9 @@ test "exposed_items handles identifiers with different attributes" {
         \\foo = 42
         \\foo! = |x| x + 1
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+    var env = try ModuleEnv.init(allocator, src_testing.src);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -414,7 +438,7 @@ test "exposed_items handles identifiers with different attributes" {
     var czer = Can.init(&ast, &env.types);
     defer czer.deinit(allocator);
     const root_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source, &env.common.idents, &env.common, &env.diagnostics);
+    _ = try czer.canonicalizeFileBlock(allocator, root_idx, env.common.source.bytes(), &env.common.idents, &env.common, &env.diagnostics);
     // Both should be in exposed_items as separate entries
     // Note: The effectful identifier is stored as "foo" with effectful attribute, not "foo!"
     const foo_idx = env.common.idents.findByString("foo").?;

@@ -449,7 +449,7 @@ pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
 
 /// Extract a literal from source code between given byte offsets
 pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.common.source[start_offset..end_offset];
+    return self.common.source.bytes()[start_offset..end_offset];
 }
 
 /// Get the source line for a given region
@@ -550,7 +550,7 @@ pub const Serialized = struct {
         self: *Serialized,
         offset: i64,
         gpa: std.mem.Allocator,
-        source: []const u8,
+        source: base.SrcBytes,
         module_name: []const u8,
     ) *Self {
         // ModuleEnv.Serialized should be at least as big as ModuleEnv

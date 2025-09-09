@@ -349,7 +349,8 @@ test "CommonEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 10), env.line_starts.items.items[1]);
     try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
 
-    try testing.expectEqualStrings(source, env.source);
+    const src_without_suffix = env.source.bytes()[0..source.len];
+    try testing.expectEqualStrings(source, src_without_suffix);
 }
 
 test "CommonEnv.Serialized roundtrip with empty data" {
@@ -397,7 +398,8 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
     try testing.expectEqual(@as(usize, 0), env.exposed_items.count());
     try testing.expectEqual(@as(usize, 0), env.line_starts.len());
-    try testing.expectEqualStrings(source, env.source);
+    const src_without_suffix = env.source.bytes()[0..source.len];
+    try testing.expectEqualStrings(source, src_without_suffix);
 }
 
 test "CommonEnv.Serialized roundtrip with large data" {
@@ -483,8 +485,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
     // Verify large data was preserved
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
     try testing.expectEqual(@as(usize, 3), env.exposed_items.count());
-    try testing.expectEqual(@as(usize, 101), env.line_starts.len()); // 100 lines + 1 for first line at offset 0
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqual(@as(usize, 102), env.line_starts.len()); // 100 lines + 1 for first line at offset 0 + 1 for suffix newline
+    const src_without_suffix = env.source.bytes()[0..source.len];
+    try testing.expectEqualStrings(source, src_without_suffix);
 
     // Verify some specific identifiers
     try testing.expectEqualStrings("ident_0", env.getIdent(ident_indices.items[0]));
@@ -571,6 +574,7 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     try testing.expectEqualStrings("Tab\there", env.getString(string3_idx));
 
     try testing.expectEqual(@as(usize, 2), env.exposed_items.count());
-    try testing.expectEqual(@as(usize, 5), env.line_starts.len()); // 4 lines + 1 for first line at offset 0
-    try testing.expectEqualStrings(source, env.source);
+    try testing.expectEqual(@as(usize, 6), env.line_starts.len()); // 4 lines + 1 for first line at offset 0 + 1 for suffix newline
+    const src_without_suffix = env.source.bytes()[0..source.len];
+    try testing.expectEqualStrings(source, src_without_suffix);
 }

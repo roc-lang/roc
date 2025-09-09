@@ -20,8 +20,10 @@ const TestEnv = struct {
     rigid_var_subs: *Instantiate.RigidToFlexSubs,
 
     fn init(allocator: std.mem.Allocator) !TestEnv {
+        var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+        defer src_testing.deinit(allocator);
         const module_env = try allocator.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(allocator, "");
+        module_env.* = try ModuleEnv.init(allocator, src_testing.src);
 
         const store = try allocator.create(TypesStore);
         store.* = try TypesStore.init(allocator);

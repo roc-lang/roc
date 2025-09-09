@@ -23,8 +23,11 @@ fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, 
     ast: *parse.AST,
     can: *Can,
 } {
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
+
     const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, src_testing.src);
 
     const ast = try allocator.create(parse.AST);
     ast.* = try parse.parse(&parse_env.common, allocator);
@@ -50,8 +53,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var module_envs = std.StringHashMap(*ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create module environment for "Json" module
+    var json_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer json_src_testing.deinit(allocator);
     const json_env = try allocator.create(ModuleEnv);
-    json_env.* = try ModuleEnv.init(allocator, "");
+    json_env.* = try ModuleEnv.init(allocator, json_src_testing.src);
     defer {
         json_env.deinit();
         allocator.destroy(json_env);
@@ -68,8 +73,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try json_env.addExposedById(decode_problem_idx);
     try module_envs.put("Json", json_env);
     // Create module environment for "Utils" module
+    var utils_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer utils_src_testing.deinit(allocator);
     const utils_env = try allocator.create(ModuleEnv);
-    utils_env.* = try ModuleEnv.init(allocator, "");
+    utils_env.* = try ModuleEnv.init(allocator, utils_src_testing.src);
     defer {
         utils_env.deinit();
         allocator.destroy(utils_env);
@@ -101,8 +108,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\main = "test"
     ;
     // Parse the source
+    var main_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer main_src_testing.deinit(allocator);
     const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, main_src_testing.src);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
@@ -115,7 +124,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var can = Can.init(&ast, &parse_env.types);
     defer can.deinit(allocator);
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
+    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source.bytes(), &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
     // Collect all diagnostics
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
@@ -148,8 +157,10 @@ test "import validation - no module_envs provided" {
         \\main = "test"
     ;
     // Let's do it manually instead of using the helper to isolate the issue
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, source);
+    defer src_testing.deinit(allocator);
     const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, src_testing.src);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
@@ -163,7 +174,7 @@ test "import validation - no module_envs provided" {
     var can = Can.init(&ast, &parse_env.types);
     defer can.deinit(allocator);
     const root_node_idx: parse.AST.Node.Idx = @enumFromInt(ast.root_node_idx);
-    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source, &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
+    _ = try can.canonicalizeFileBlock(allocator, root_node_idx, parse_env.common.source.bytes(), &parse_env.common.idents, &parse_env.common, &parse_env.diagnostics);
     const diagnostics = try parse_env.getDiagnostics();
     defer allocator.free(diagnostics);
     for (diagnostics) |diagnostic| {
@@ -203,7 +214,7 @@ test "import interner - Import.Idx functionality" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source.bytes(), &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Check that we have the correct number of unique imports (duplicates are deduplicated)
     // Expected: List, Dict, Json, Set (4 unique)
     try expectEqual(@as(usize, 4), result.parse_env.imports.count());
@@ -269,7 +280,7 @@ test "import interner - comprehensive usage example" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source.bytes(), &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Check that we have the correct number of unique imports
     // Expected: List, Dict, Result (3 unique)
     try expectEqual(@as(usize, 3), result.parse_env.imports.count());
@@ -346,7 +357,7 @@ test "module scopes - imports work in module scope" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source.bytes(), &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Verify that List and Dict imports were processed correctly
     try testing.expect(result.parse_env.imports.count() >= 2); // List and Dict
     var has_list = false;
@@ -387,7 +398,7 @@ test "module-qualified lookups with e_lookup_external" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source.bytes(), &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Count e_lookup_external expressions
     var external_lookup_count: u32 = 0;
     var found_list_map = false;
@@ -431,8 +442,10 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     var module_envs = std.StringHashMap(*ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create a "MathUtils" module with some exposed definitions
+    var math_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer math_src_testing.deinit(allocator);
     const math_env = try allocator.create(ModuleEnv);
-    math_env.* = try ModuleEnv.init(allocator, "");
+    math_env.* = try ModuleEnv.init(allocator, math_src_testing.src);
     defer {
         math_env.deinit();
         allocator.destroy(math_env);
@@ -474,7 +487,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(result.parse_env);
     }
     const root_idx: parse.AST.Node.Idx = @enumFromInt(result.ast.root_node_idx);
-    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source, &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
+    _ = try result.can.canonicalizeFileBlock(allocator, root_idx, result.parse_env.common.source.bytes(), &result.parse_env.common.idents, &result.parse_env.common, &result.parse_env.diagnostics);
     // Verify that e_lookup_external expressions have the correct target_node_idx values
     var found_add_with_idx_100 = false;
     var found_multiply_with_idx_200 = false;
@@ -500,8 +513,10 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try expectEqual(true, found_multiply_with_idx_200);
     try expectEqual(true, found_pi_with_idx_300);
     // Test case where node index is not populated (should get 0)
+    var empty_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer empty_src_testing.deinit(allocator);
     const empty_env = try allocator.create(ModuleEnv);
-    empty_env.* = try ModuleEnv.init(allocator, "");
+    empty_env.* = try ModuleEnv.init(allocator, empty_src_testing.src);
     defer {
         empty_env.deinit();
         allocator.destroy(empty_env);
@@ -527,7 +542,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(result2.parse_env);
     }
     const root_idx2: parse.AST.Node.Idx = @enumFromInt(result2.ast.root_node_idx);
-    _ = try result2.can.canonicalizeFileBlock(allocator, root_idx2, result2.parse_env.common.source, &result2.parse_env.common.idents, &result2.parse_env.common, &result2.parse_env.diagnostics);
+    _ = try result2.can.canonicalizeFileBlock(allocator, root_idx2, result2.parse_env.common.source.bytes(), &result2.parse_env.common.idents, &result2.parse_env.common, &result2.parse_env.diagnostics);
     // Verify that undefined gets target_node_idx = 0 (not found)
     var found_undefined_with_idx_0 = false;
     // Verify EmptyModule was imported
@@ -556,7 +571,9 @@ test "export count safety - ensures safe u16 casting" {
     // Verify the threshold is what we expect
     try expectEqual(@as(u32, 65535), std.math.maxInt(u16));
     // Test the diagnostic for exactly maxInt(u16) exports
-    var env1 = try ModuleEnv.init(allocator, "");
+    var env1_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer env1_src_testing.deinit(allocator);
+    var env1 = try ModuleEnv.init(allocator, env1_src_testing.src);
     defer env1.deinit();
     try env1.initCIRFields(allocator, "Test");
     const diag_at_limit = CIR.CanDiagnostic{
@@ -568,7 +585,9 @@ test "export count safety - ensures safe u16 casting" {
     try testing.expect(diag_idx1 >= 0);
 
     // Test the diagnostic for exceeding the limit
-    var env2 = try ModuleEnv.init(allocator, "");
+    var env2_src_testing = try base.SrcBytes.Testing.initFromSlice(allocator, "");
+    defer env2_src_testing.deinit(allocator);
+    var env2 = try ModuleEnv.init(allocator, env2_src_testing.src);
     defer env2.deinit();
     try env2.initCIRFields(allocator, "Test");
     const diag_over_limit = CIR.CanDiagnostic{

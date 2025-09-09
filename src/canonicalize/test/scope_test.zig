@@ -16,17 +16,20 @@ const TypeAnno = CIR.TypeAnno;
 const ScopeTestContext = struct {
     scope_state: CIR.ScopeState,
     module_env: *ModuleEnv,
+    src_testing: base.SrcBytes.Testing,
     gpa: std.mem.Allocator,
 
     fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, "");
+        const src_testing = try base.SrcBytes.Testing.initFromSlice(gpa, "");
+        module_env.* = try ModuleEnv.init(gpa, src_testing.src);
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{
             .scope_state = CIR.ScopeState{},
             .module_env = module_env,
+            .src_testing = src_testing,
             .gpa = gpa,
         };
     }
@@ -35,6 +38,7 @@ const ScopeTestContext = struct {
         ctx.scope_state.deinit(ctx.gpa);
         ctx.module_env.deinit();
         ctx.gpa.destroy(ctx.module_env);
+        ctx.src_testing.deinit(ctx.gpa);
     }
 };
 

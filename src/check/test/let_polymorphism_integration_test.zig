@@ -16,8 +16,10 @@ const CIR = canonicalize.CIR;
 
 /// Helper to create a test module environment
 fn createTestEnv() !*ModuleEnv {
+    var src_testing = try base.SrcBytes.Testing.initFromSlice(test_allocator, "Test");
+    defer src_testing.deinit(test_allocator);
     const env = try test_allocator.create(ModuleEnv);
-    env.* = try ModuleEnv.init(test_allocator, "Test");
+    env.* = try ModuleEnv.init(test_allocator, src_testing.src);
     return env;
 }
 
