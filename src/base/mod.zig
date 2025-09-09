@@ -9,7 +9,7 @@ pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
-
+pub const SmallDec = @import("SmallDec.zig");
 pub const safe_memory = @import("safe_memory.zig");
 
 pub const target = @import("target.zig");
@@ -19,6 +19,7 @@ pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
 pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
+pub const SrcBytes = @import("SrcBytes.zig");
 
 test {
     _ = @import("Ident.zig");

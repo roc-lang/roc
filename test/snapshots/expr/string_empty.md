@@ -7,30 +7,31 @@ type=expr
 ~~~roc
 ""
 ~~~
+# TOKENS
+~~~text
+String ~~~
+# PARSE
+~~~clojure
+(str_literal_small "")
+~~~
+# FORMATTED
+~~~roc
+""
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:2),StringEnd(1:2-1:3),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-string @1.1-1.3
-	(e-string-part @1.2-1.2 (raw "")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.3
-	(e-literal @1.2-1.2 (string "")))
+(Expr.str_literal_small)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 2
+(var #0 _)
+(var #1 Str)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.3 (type "Str"))
+~~~roc
 ~~~

@@ -5,11 +5,12 @@ const base = @import("base");
 const collections = @import("collections");
 const parse = @import("parse");
 const can = @import("can");
+const tokens = @import("tokens");
 
 const tracy = @import("tracy");
 const fmt = @import("fmt");
 
-const tokenize = parse.tokenize;
+const Tokenizer = tokens.Tokenizer;
 const ModuleEnv = can.ModuleEnv;
 const CommonEnv = base.CommonEnv;
 
@@ -96,14 +97,26 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 parse_env.deinit();
             } else {
                 // Tokenize mode
-                var messages: [128]tokenize.Diagnostic = undefined;
-                const msg_slice = messages[0..];
+                var byte_slices = collections.ByteSlices{ .entries = .{} };
+                defer byte_slices.entries.deinit(gpa);
 
-                var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice);
-                try tokenizer.tokenize(gpa);
-                var result = tokenizer.finishAndDeinit(gpa);
-                iteration_tokens += result.tokens.tokens.len;
-                result.tokens.deinit(gpa);
+                var problems = collections.SafeList(Tokenizer.Diagnostic){};
+                defer problems.deinit(gpa);
+
+                var tokenizer = Tokenizer{
+                    .gpa = gpa,
+                    .src = roc_file.content,
+                    .problems = &problems,
+                    .byte_slices = &byte_slices,
+                };
+
+                var token_count: usize = 0;
+                while (true) {
+                    const token = try tokenizer.next();
+                    if (token.tag == .EndOfFile) break;
+                    token_count += 1;
+                }
+                iteration_tokens += token_count;
             }
         }
 

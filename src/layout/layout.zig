@@ -111,8 +111,8 @@ pub const Idx = enum(@Type(.{
 /// Represents a closure with its captured environment
 pub const Closure = struct {
     body_idx: CIR.Expr.Idx,
-    params: CIR.Pattern.Span,
-    captures_pattern_idx: CIR.Pattern.Idx,
+    params: CIR.Patt.Idx,
+    captures_pattern_idx: CIR.Patt.Idx,
     // Layout index for the captured environment record
     captures_layout_idx: Idx,
     // Original lambda expression index for accessing captures

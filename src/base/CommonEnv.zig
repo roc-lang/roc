@@ -18,6 +18,8 @@ const SafeList = collections.SafeList;
 const ExposedItems = collections.ExposedItems;
 const CompactWriter = collections.CompactWriter;
 
+const SrcBytes = @import("SrcBytes.zig");
+
 const CommonEnv = @This();
 
 idents: Ident.Store,
@@ -30,9 +32,9 @@ exposed_items: ExposedItems,
 /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
 line_starts: SafeList(u32),
 /// The source code of this module.
-source: []const u8,
+source: SrcBytes,
 
-pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!CommonEnv {
+pub fn init(gpa: std.mem.Allocator, source: SrcBytes) std.mem.Allocator.Error!CommonEnv {
     return CommonEnv{
         .idents = try Ident.Store.initCapacity(gpa, 1024),
         .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
@@ -77,7 +79,7 @@ pub fn serialize(
         .strings = (try self.strings.serialize(allocator, writer)).*,
         .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
         .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
+        .source = undefined, // Will be set when deserializing
     };
 
     return @constCast(offset_self);
@@ -96,7 +98,7 @@ pub const Serialized = struct {
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
-    source: []const u8, // Serialized as zeros, provided during deserialization
+    source: SrcBytes, // Serialized as zeros, provided during deserialization
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -105,7 +107,9 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        self.source = ""; // Empty slice
+        // Create a dummy aligned pointer for serialization (will serialize as zeros)
+        const dummy: [16]u8 align(16) = .{0} ** 16;
+        self.source = SrcBytes{ .ptr = &dummy, .len = 0 }; // Dummy value for serialization
 
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
@@ -118,7 +122,7 @@ pub const Serialized = struct {
     pub fn deserialize(
         self: *Serialized,
         offset: i64,
-        source: []const u8,
+        source: SrcBytes,
     ) *CommonEnv {
         // CommonEnv.Serialized should be at least as big as CommonEnv
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(CommonEnv));
@@ -191,8 +195,9 @@ pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ide
 
 /// Get region info for a given region
 pub fn getRegionInfo(self: *const CommonEnv, region: Region) !RegionInfo {
+    const src = self.source.bytes();
     return RegionInfo.position(
-        self.source,
+        src,
         self.line_starts.items.items,
         region.start.offset,
         region.end.offset,
@@ -212,10 +217,10 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const source = self.source;
+    const src = self.source.bytes();
 
     const info = RegionInfo.position(
-        source,
+        src,
         self.line_starts.items.items,
         region.start.offset,
         region.end.offset,
@@ -229,7 +234,8 @@ pub fn calcRegionInfo(self: *const CommonEnv, region: Region) RegionInfo {
 
 /// Returns the entire source code content.
 pub fn getSourceAll(self: *const CommonEnv) []const u8 {
-    return self.source;
+    const src = self.source.bytes();
+    return src;
 }
 
 /// Calculate and store line starts from the source text
@@ -264,7 +270,8 @@ pub fn getLineStartsAll(self: *const CommonEnv) []const u32 {
 
 /// Get the source text for a given region
 pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
-    return self.source[region.start.offset..region.end.offset];
+    const src = self.source.bytes();
+    return src[region.start.offset..region.end.offset];
 }
 
 /// Get the source line for a given region
@@ -274,9 +281,10 @@ pub fn getSourceLine(self: *const CommonEnv, region: Region) ![]const u8 {
     const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)
         self.line_starts.items.items[region_info.start_line_idx + 1]
     else
-        self.source.len;
+        @as(usize, @intCast(self.source.len));
 
-    return self.source[line_start..line_end];
+    const src = self.source.bytes();
+    return src[line_start..line_end];
 }
 
 test "CommonEnv.Serialized roundtrip" {
@@ -284,9 +292,11 @@ test "CommonEnv.Serialized roundtrip" {
     const gpa = testing.allocator;
 
     const source = "hello world\ntest line 2\n";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with some test data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add some test data
@@ -325,7 +335,9 @@ test "CommonEnv.Serialized roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify the data was preserved
     try testing.expectEqualStrings("hello", env.getIdent(hello_idx));
@@ -345,9 +357,11 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     const gpa = testing.allocator;
 
     const source = "";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with no data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Create a CompactWriter
@@ -375,7 +389,9 @@ test "CommonEnv.Serialized roundtrip with empty data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify empty state is preserved
     try testing.expectEqual(@as(u32, 0), env.idents.interner.entry_count);
@@ -396,9 +412,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
         try source_builder.writer().print("Line {}: This is a test line with some content\n", .{i});
     }
     const source = source_builder.items;
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with large test data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add many identifiers
@@ -458,7 +476,9 @@ test "CommonEnv.Serialized roundtrip with large data" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify large data was preserved
     try testing.expectEqual(@as(u32, 50), env.idents.interner.entry_count);
@@ -489,9 +509,11 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     const gpa = testing.allocator;
 
     const source = "Hello\nWorld\nTest\nLine\n";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with special characters
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add identifiers with special characters
@@ -535,7 +557,9 @@ test "CommonEnv.Serialized roundtrip with special characters" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source);
+    const src_bytes_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer gpa.free(src_bytes_testing.src.ptr[0..@intCast(src_bytes_testing.src.len)]);
+    const env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), src_bytes_testing.src);
 
     // Verify special characters were preserved
     try testing.expectEqualStrings("café", env.getIdent(unicode_idx));

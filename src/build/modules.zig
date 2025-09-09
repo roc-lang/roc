@@ -20,6 +20,7 @@ pub const ModuleType = enum {
     builtins,
     compile,
     reporting,
+    tokens,
     parse,
     can,
     check,
@@ -47,15 +48,16 @@ pub const ModuleType = enum {
             .base => &.{.collections},
             .types => &.{ .base, .collections },
             .reporting => &.{ .collections, .base },
-            .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
+            .tokens => &.{ .collections, .base },
+            .parse => &.{ .tracy, .collections, .base, .reporting, .tokens },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .tokens },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .collections, .base, .types, .builtins, .can },
             .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval },
             .ipc => &.{},
             .repl => &.{ .base, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
-            .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
+            .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy, .tokens },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58 },
             .unbundle => &.{ .base, .collections, .base58 },
@@ -72,6 +74,7 @@ pub const RocModules = struct {
     builtins: *Module,
     compile: *Module,
     reporting: *Module,
+    tokens: *Module,
     parse: *Module,
     can: *Module,
     check: *Module,
@@ -99,6 +102,7 @@ pub const RocModules = struct {
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
             .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
+            .tokens = b.addModule("tokens", .{ .root_source_file = b.path("src/tokens/mod.zig") }),
             .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
             .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
             .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
@@ -139,6 +143,7 @@ pub const RocModules = struct {
             .builtins,
             .compile,
             .reporting,
+            .tokens,
             .parse,
             .can,
             .check,
@@ -174,6 +179,7 @@ pub const RocModules = struct {
         step.root_module.addImport("types", self.types);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
+        step.root_module.addImport("tokens", self.tokens);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
         step.root_module.addImport("check", self.check);
@@ -210,6 +216,7 @@ pub const RocModules = struct {
             .builtins => self.builtins,
             .compile => self.compile,
             .reporting => self.reporting,
+            .tokens => self.tokens,
             .parse => self.parse,
             .can => self.can,
             .check => self.check,

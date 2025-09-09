@@ -9,42 +9,57 @@ module []
 
 x = 0xFF
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),
-EndOfFile(4:1-4:1),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign IntBase ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.9
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-decl @3.1-3.9
-			(p-ident @3.1-3.2 (raw "x"))
-			(e-int @3.5-3.9 (raw "0xFF")))))
+(module-header)
+(block
+  (binop_equals
+    (lc "x")
+    (int_literal_big int:<idx:4>)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x = 0xFF
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**can_hex_integer.md:3:1:3:2:**
+```roc
+x = 0xFF
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-int @3.5-3.9 (value "255"))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.int_literal_big)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 -> #2)
+(var #2 I128)
+(var #3 _)
+(var #4 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.2 (type "Int(_size)")))
-	(expressions
-		(expr @3.5-3.9 (type "Int(_size)"))))
+~~~roc
+x : I128
 ~~~

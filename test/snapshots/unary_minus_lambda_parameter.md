@@ -7,42 +7,60 @@ type=expr
 ~~~roc
 (|x| -x)(5)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),LowerIdent(1:3-1:4),OpBar(1:4-1:5),OpUnaryMinus(1:6-1:7),LowerIdent(1:7-1:8),CloseRound(1:8-1:9),NoSpaceOpenRound(1:9-1:10),Int(1:10-1:11),CloseRound(1:11-1:12),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar LowerIdent OpBar OpUnaryMinus LowerIdent CloseRound OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.12
-	(e-tuple @1.1-1.9
-		(e-lambda @1.2-1.8
-			(args
-				(p-ident @1.3-1.4 (raw "x")))
-			(unary "-"
-				(e-ident @1.7-1.8 (raw "x")))))
-	(e-int @1.10-1.11 (raw "5")))
+(apply_anon
+  (lambda
+    (body
+      (unary_neg <unary_op>)
+    )
+    (args
+      (lc "x")
+    )
+  )
+  (num_literal_i32 5)
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|x| -x)(5)
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**unary_minus_lambda_parameter.md:1:7:1:9:**
+```roc
+(|x| -x)(5)
+```
+      ^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.12
-	(e-lambda @1.2-1.8
-		(args
-			(p-assign @1.3-1.4 (ident "x")))
-		(e-unary-minus @1.6-1.8
-			(e-lookup-local @1.7-1.8
-				(p-assign @1.3-1.4 (ident "x")))))
-	(e-int @1.10-1.11 (value "5")))
+(Expr.fn_call)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 10
+(var #0 _)
+(var #1 _)
+(var #2 -> #6)
+(var #3 -> #2)
+(var #4 -> #8)
+(var #5 Num *)
+(var #6 _)
+(var #7 -> #5)
+(var #8 -> #9)
+(var #9 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.12 (type "Num(_size)"))
+~~~roc
+x : _a
 ~~~

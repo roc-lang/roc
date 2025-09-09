@@ -11,65 +11,73 @@ import pf.Stdout exposing [line!, write!]
 
 main = 42
 ~~~
-# EXPECTED
-MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
-# PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**exposed_items_test.md:3:1:3:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:33),Comma(3:33-3:34),LowerIdent(3:35-3:41),CloseSquare(3:41-3:42),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),
-EndOfFile(6:1-6:1),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine KwImport LowerIdent Dot UpperIdent KwExposing OpenSquare LowerIdent OpBang Comma LowerIdent OpBang CloseSquare BlankLine LowerIdent OpAssign Int ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.10
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "main"))))
-	(statements
-		(s-import @3.1-3.42 (raw "pf.Stdout")
-			(exposing
-				(exposed-lower-ident @3.28-3.33
-					(text "line!"))
-				(exposed-lower-ident @3.35-3.41
-					(text "write!"))))
-		(s-decl @5.1-5.10
-			(p-ident @5.1-5.5 (raw "main"))
-			(e-int @5.8-5.10 (raw "42")))))
+(module-header
+  (exposes
+    (lc "main")
+))
+(block
+  (import
+    (binop_exposing
+      (binop_dot
+        (lc "pf")
+        (uc "Stdout")
+      )
+      (list_literal
+        (not_lc "line")
+        (not_lc "write")
+      )
+    )
+  )
+  (binop_equals
+    (lc "main")
+    (num_literal_i32 42)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [main]
+
+import pf.Stdout exposing [line!, write!]
+main = 42
 ~~~
+# EXPECTED
+MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @5.1-5.5 (ident "main"))
-		(e-int @5.8-5.10 (value "42")))
-	(s-import @3.1-3.42 (module "pf.Stdout") (qualifier "pf")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false)))))
+(Expr.block
+  (Stmt.import)
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.num_literal_i32 42)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #11)
+(var #11 Num *)
+(var #12 _)
+(var #13 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @5.1-5.5 (type "Num(_size)")))
-	(expressions
-		(expr @5.8-5.10 (type "Num(_size)"))))
+~~~roc
 ~~~

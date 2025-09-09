@@ -7,45 +7,55 @@ type=expr
 ~~~roc
 [1u8, 2u8, 300]
 ~~~
-# EXPECTED
-NUMBER DOES NOT FIT IN TYPE - can_list_number_doesnt_fit.md:1:12:1:15
-# PROBLEMS
-**NUMBER DOES NOT FIT IN TYPE**
-The number **300** does not fit in its inferred type:
-**can_list_number_doesnt_fit.md:1:12:1:15:**
-```roc
-[1u8, 2u8, 300]
-```
-           ^^^
-
-Its inferred type is:
-    _U8_
-
 # TOKENS
-~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenSquare Int LowerIdent Comma Int LowerIdent Comma Int CloseSquare ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.16
-	(e-int @1.2-1.5 (raw "1u8"))
-	(e-int @1.7-1.10 (raw "2u8"))
-	(e-int @1.12-1.15 (raw "300")))
+(malformed)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+u8
 ~~~
+# EXPECTED
+NUMBER DOES NOT FIT IN TYPE - can_list_number_doesnt_fit.md:1:12:1:15
+# PROBLEMS
+**LIST NOT CLOSED**
+This list is not properly closed.
+Expected either a comma **,** to continue the list or a closing bracket **]** to end it.
+
+**can_list_number_doesnt_fit.md:1:1:1:3:**
+```roc
+[1u8, 2u8, 300]
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **u8** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**can_list_number_doesnt_fit.md:1:3:1:5:**
+```roc
+[1u8, 2u8, 300]
+```
+  ^^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.16
-	(elems
-		(e-int @1.2-1.5 (value "1"))
-		(e-int @1.7-1.10 (value "2"))
-		(e-int @1.12-1.15 (value "300"))))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.16 (type "List(Error)"))
+~~~roc
 ~~~

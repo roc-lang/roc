@@ -7,12 +7,23 @@ type=expr
 ~~~roc
 -foo
 ~~~
+# TOKENS
+~~~text
+OpUnaryMinus LowerIdent ~~~
+# PARSE
+~~~clojure
+(unary_neg <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+-foo
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - unary_negation.md:1:2:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **foo** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **unary_negation.md:1:2:1:5:**
 ```roc
@@ -21,26 +32,17 @@ Is there an `import` or `exposing` missing up-top?
  ^^^
 
 
-# TOKENS
-~~~zig
-OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:5),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(unary "-"
-	(e-ident @1.2-1.5 (raw "foo")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.5
-	(e-runtime-error (tag "ident_not_in_scope")))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 _)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.5 (type "Error"))
+~~~roc
 ~~~

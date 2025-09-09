@@ -7,42 +7,56 @@ type=expr
 ~~~roc
 1 ++ 2
 ~~~
+# TOKENS
+~~~text
+Int OpPlus OpPlus Int ~~~
+# PARSE
+~~~clojure
+(malformed)
+~~~
+# FORMATTED
+~~~roc
+2
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
+The token **+ ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unknown_operator.md:1:4:1:5:**
+**unknown_operator.md:1:4:1:6:**
 ```roc
 1 ++ 2
 ```
-   ^
+   ^^
 
 
-# TOKENS
-~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-binop @1.1-1.5 (op "+")
-	(e-int @1.1-1.2 (raw "1"))
-	(e-malformed @1.4-1.5 (reason "expr_unexpected_token")))
-~~~
-# FORMATTED
-~~~roc
-1 + 
-~~~
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **2** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unknown_operator.md:1:6:1:7:**
+```roc
+1 ++ 2
+```
+     ^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 6
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

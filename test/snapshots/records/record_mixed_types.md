@@ -7,68 +7,103 @@ type=expr
 ~~~roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_mixed_types.md:1:35:1:44:**
-```roc
-{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
-```
-                                  ^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:21),OpColon(1:21-1:22),Int(1:23-1:25),Comma(1:25-1:26),LowerIdent(1:27-1:33),OpColon(1:33-1:34),UpperIdent(1:35-1:39),NoSpaceDotLowerIdent(1:39-1:44),Comma(1:44-1:45),LowerIdent(1:46-1:52),OpColon(1:52-1:53),OpenSquare(1:54-1:55),Int(1:55-1:57),Comma(1:57-1:58),Int(1:59-1:61),Comma(1:61-1:62),Int(1:63-1:65),CloseSquare(1:65-1:66),Comma(1:66-1:67),LowerIdent(1:68-1:75),OpColon(1:75-1:76),Float(1:77-1:84),CloseCurly(1:85-1:86),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenCurly LowerIdent OpColon String Comma LowerIdent OpColon Int Comma LowerIdent OpColon UpperIdent Dot LowerIdent Comma LowerIdent OpColon OpenSquare Int Comma Int Comma Int CloseSquare Comma LowerIdent OpColon Float CloseCurly ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.86
-	(field (field "name")
-		(e-string @1.9-1.16
-			(e-string-part @1.10-1.15 (raw "Alice"))))
-	(field (field "age")
-		(e-int @1.23-1.25 (raw "30")))
-	(field (field "active")
-		(e-ident @1.35-1.44 (raw "Bool.true")))
-	(field (field "scores")
-		(e-list @1.54-1.66
-			(e-int @1.55-1.57 (raw "95"))
-			(e-int @1.59-1.61 (raw "87"))
-			(e-int @1.63-1.65 (raw "92"))))
-	(field (field "balance")
-		(e-frac @1.77-1.84 (raw "1250.75"))))
+(record_literal
+  (binop_colon
+    (lc "name")
+    (str_literal_big "Alice")
+  )
+  (binop_colon
+    (lc "age")
+    (num_literal_i32 30)
+  )
+  (binop_colon
+    (lc "active")
+    (binop_dot
+      (uc "Bool")
+      (dot_lc "true")
+    )
+  )
+  (binop_colon
+    (lc "scores")
+    (list_literal
+      (num_literal_i32 95)
+      (num_literal_i32 87)
+      (num_literal_i32 92)
+    )
+  )
+  (binop_colon
+    (lc "balance")
+    (frac_literal_big frac:<idx:20>)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{ name: "Alice", age: 30, active: Bool..true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.86
-	(fields
-		(field (name "name")
-			(e-string @1.9-1.16
-				(e-literal @1.10-1.15 (string "Alice"))))
-		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))
-		(field (name "active")
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(field (name "scores")
-			(e-list @1.54-1.66
-				(elems
-					(e-int @1.55-1.57 (value "95"))
-					(e-int @1.59-1.61 (value "87"))
-					(e-int @1.63-1.65 (value "92")))))
-		(field (name "balance")
-			(e-frac-dec @1.77-1.84 (value "1250.75")))))
+(Expr.record_literal
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.str_literal_big)
+  )
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.num_literal_i32 30)
+  )
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.record_access)
+  )
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.list_literal)
+  )
+  (Expr.record_field
+    (Expr.malformed)
+    (Expr.frac_literal_big big:<idx:20>)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 25
+(var #0 _)
+(var #1 _)
+(var #2 Str)
+(var #3 _)
+(var #4 _)
+(var #5 Num *)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 Num *)
+(var #14 -> #13)
+(var #15 -> #13)
+(var #16 -> #22)
+(var #17 _)
+(var #18 _)
+(var #19 F64)
+(var #20 _)
+(var #21 -> #24)
+(var #22 List #13)
+(var #23 {})
+(var #24 record)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.86 (type "{ name: Str, age: Num(_size), active: Error, scores: List(Num(_size2)), balance: Frac(_size3) }"))
+~~~roc
 ~~~

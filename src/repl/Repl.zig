@@ -85,7 +85,7 @@ pub fn getDebugTypesHtml(self: *Repl) []const []const u8 {
 }
 
 /// Allocate a new ModuleEnv and save it
-fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
+fn allocateModuleEnv(self: *Repl, src: base.SrcBytes) !*ModuleEnv {
     // Clean up previous ModuleEnv if it exists
     if (self.last_module_env) |old_env| {
         old_env.deinit();
@@ -94,7 +94,7 @@ fn allocateModuleEnv(self: *Repl, source: []const u8) !*ModuleEnv {
 
     // Allocate new ModuleEnv on heap
     const new_env = try self.allocator.create(ModuleEnv);
-    new_env.* = try ModuleEnv.init(self.allocator, source);
+    new_env.* = try ModuleEnv.init(self.allocator, src);
     self.last_module_env = new_env;
     return new_env;
 }
@@ -205,19 +205,43 @@ pub fn step(self: *Repl, line: []const u8) ![]const u8 {
         return try self.allocator.dupe(u8, "Goodbye!");
     }
 
+    // Create SrcBytes from input with single allocation
+    const total_size = trimmed.len + base.SrcBytes.suffix.len;
+    
+    if (total_size > std.math.maxInt(u31)) {
+        return error.InputTooBig;
+    }
+    
+    // Single allocation with proper alignment and space for suffix
+    const allocation = try self.allocator.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+    defer self.allocator.free(allocation);
+    
+    // Copy trimmed input
+    @memcpy(allocation[0..trimmed.len], trimmed);
+    
+    // Add the suffix
+    @memcpy(allocation[trimmed.len..], &base.SrcBytes.suffix);
+    
+    // Create SrcBytes
+    const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
+
     // Process the input
-    return try self.processInput(trimmed);
+    return try self.processInput(src);
 }
 
 /// Process regular input (not special commands)
-fn processInput(self: *Repl, input: []const u8) ![]const u8 {
+fn processInput(self: *Repl, src: base.SrcBytes) ![]const u8 {
     // Try to parse as a statement first
-    const parse_result = try self.tryParseStatement(input);
+    const parse_result = try self.tryParseStatement(src);
+    const input = src.bytes();
 
     switch (parse_result) {
         .assignment => |info| {
             // Add or replace definition (duplicates the strings for ownership)
             try self.addOrReplaceDefinition(info.source, info.var_name);
+
+            // Free the allocated var_name after using it
+            defer self.allocator.free(info.var_name);
 
             // Return descriptive output for assignments
             return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
@@ -227,8 +251,10 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
             return try self.allocator.dupe(u8, "Imports not yet supported");
         },
         .expression => {
-            // Evaluate expression with all past definitions
-            const full_source = try self.buildFullSource(input);
+            // Evaluate expression with all past definitions  
+            // Remove suffix from input to get the original expression
+            const expr_without_suffix = input[0..input.len - base.SrcBytes.suffix.len];
+            const full_source = try self.buildFullSource(expr_without_suffix);
             defer self.allocator.free(full_source);
 
             return try self.evaluateSource(full_source);
@@ -247,7 +273,7 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
 const ParseResult = union(enum) {
     assignment: struct {
         source: []const u8, // Borrowed from input
-        var_name: []const u8, // Borrowed from input
+        var_name: []const u8, // Must be allocator.dupe'd
     },
     import,
     expression,
@@ -256,57 +282,58 @@ const ParseResult = union(enum) {
 };
 
 /// Try to parse input as a statement
-fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
-    var module_env = try ModuleEnv.init(self.allocator, input);
+fn tryParseStatement(self: *Repl, src: base.SrcBytes) !ParseResult {
+    var module_env = try ModuleEnv.init(self.allocator, src);
     defer module_env.deinit();
 
-    // Try statement parsing
-    if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
+    // Try parsing as an expression (since parseStatement uses parseFile which is wrong)
+    if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
         var ast = ast_const;
         defer ast.deinit(self.allocator);
 
+        // Check if we have a valid root node
         if (ast.root_node_idx != 0) {
-            const stmt_idx: AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
-            const stmt = ast.store.getStatement(stmt_idx);
+            const root_node_idx = @as(AST.Node.Idx, @enumFromInt(ast.root_node_idx));
+            const first_node = ast.nodes.get(@enumFromInt(@intFromEnum(root_node_idx)));
 
-            switch (stmt) {
-                .decl => |decl| {
-                    const pattern = ast.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        // Extract the identifier name from the pattern
-                        const ident_tok = pattern.ident.ident_tok;
-                        const token_region = ast.tokens.resolve(ident_tok);
-                        const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
+            // Check the node tag to determine what was parsed
+            switch (first_node.tag) {
+                .binop_equals => {
+                    // This is an assignment like `x = 42`
+                    const binop = ast.node_slices.binOp(first_node.payload.binop);
+                    const lhs_node = ast.nodes.get(@enumFromInt(@intFromEnum(binop.lhs)));
 
-                        // Return borrowed strings (no duplication needed)
+                    // Check if LHS is an identifier
+                    if (lhs_node.tag == .lc or lhs_node.tag == .var_lc) {
+                        const ident = lhs_node.payload.ident;
+                        const ident_name = module_env.common.getIdent(ident);
+
+                        // Duplicate the identifier name since module_env will be deinitialized
+                        const owned_name = try self.allocator.dupe(u8, ident_name);
+                        
+                        // Get the source without suffix for the assignment
+                        const bytes = src.bytes();
+                        const source_without_suffix = bytes[0..bytes.len - base.SrcBytes.suffix.len];
+
                         return ParseResult{ .assignment = .{
-                            .source = input,
-                            .var_name = ident_name,
+                            .source = source_without_suffix,
+                            .var_name = owned_name,
                         } };
                     }
                     return ParseResult.expression;
                 },
                 .import => return ParseResult.import,
-                .type_decl => return ParseResult.type_decl,
+                .binop_colon => return ParseResult.type_decl,
+                .binop_colon_equals => return ParseResult.type_decl,
                 else => return ParseResult.expression,
             }
         }
+        // If we didn't match any special forms, treat it as an expression
+        return ParseResult.expression;
     } else |_| {
-        // Statement parse failed, continue to try expression parsing
+        // Parse failed
+        return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
     }
-
-    // Try expression parsing
-    if (parse.parseExpr(&module_env.common, self.allocator)) |ast_const| {
-        var ast = ast_const;
-        defer ast.deinit(self.allocator);
-        if (ast.root_node_idx != 0) {
-            return ParseResult.expression;
-        }
-    } else |_| {
-        // Expression parse failed too
-    }
-
-    return ParseResult{ .parse_error = try self.allocator.dupe(u8, "Failed to parse input") };
 }
 
 /// Build full source including all definitions wrapped in block syntax
@@ -317,7 +344,7 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
     }
 
     var buffer = std.ArrayList(u8).init(self.allocator);
-    defer buffer.deinit();
+    errdefer buffer.deinit();
 
     // Start block
     try buffer.appendSlice("{\n");
@@ -338,12 +365,32 @@ pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
     // End block
     try buffer.append('}');
 
-    return try buffer.toOwnedSlice();
+    return buffer.toOwnedSlice();
 }
 
 /// Evaluate source code
 fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-    const module_env = try self.allocateModuleEnv(source);
+    // Create SrcBytes from source with single allocation
+    const total_size = source.len + base.SrcBytes.suffix.len;
+    
+    if (total_size > std.math.maxInt(u31)) {
+        return error.InputTooBig;
+    }
+    
+    // Single allocation with proper alignment and space for suffix
+    const allocation = try self.allocator.allocWithOptions(u8, total_size, base.SrcBytes.alignment, null);
+    // Note: allocation will be freed when module_env is deinitialized
+    
+    // Copy source
+    @memcpy(allocation[0..source.len], source);
+    
+    // Add the suffix
+    @memcpy(allocation[source.len..], &base.SrcBytes.suffix);
+    
+    // Create SrcBytes
+    const src = base.SrcBytes{ .ptr = allocation.ptr, .len = @intCast(total_size) };
+    
+    const module_env = try self.allocateModuleEnv(src);
     return try self.evaluatePureExpression(module_env);
 }
 
@@ -366,35 +413,32 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
         };
     defer parse_ast.deinit(self.allocator);
 
-    // Empty scratch space
-    parse_ast.store.emptyScratch();
+    // The new AST doesn't have a store that needs emptying
 
-    // Create CIR
-    const cir = module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(self.allocator, "repl");
+    // Create CIR/canonicalizer (which mutates AST in place)
+    var cir = can.CIR.init(&parse_ast, &module_env.types);
+    defer cir.deinit(self.allocator);
 
-    // Create canonicalizer
-    var czer = Can.init(cir, &parse_ast, null) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
-    };
-    defer czer.deinit();
+    // Set the CIR and AST on module_env so the interpreter can access them
+    module_env.cir = &cir;
+    module_env.ast = &parse_ast;
 
-    // Since we're always parsing as expressions now, handle them the same way
-    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    // In AST, we need to find the expression differently
+    // For now, use the first node as a placeholder
+    const expr_idx: AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
 
-    const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
-        return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
-    };
-    const final_expr_idx = canonical_expr.get_idx();
+    const canonical_expr = try cir.canonicalizeExpr(self.allocator, expr_idx, module_env.common.source.bytes(), &module_env.common.idents);
 
     // Type check
-    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+    // Check.initForCIR needs different parameters for new architecture
+    var regions = base.Region.List{};
+    var checker = Check.initForCIR(self.allocator, &module_env.types, &regions) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
     };
     defer checker.deinit();
 
     // Check the expression (no need to check defs since we're parsing as expressions)
-    _ = checker.checkExpr(final_expr_idx) catch |err| {
+    _ = checker.checkCIRExpr(can.CIR, &cir, canonical_expr) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
     };
 
@@ -408,7 +452,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     self.eval_stack.used = 0;
 
     // Create interpreter
-    var interpreter = eval_mod.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+    var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit(self.roc_ops);
@@ -418,7 +462,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
         interpreter.startTrace(trace_writer);
     }
 
-    const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| {
+    const result = interpreter.eval(canonical_expr, self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
@@ -431,7 +475,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
 
     // Generate debug HTML if enabled
     if (self.debug_store_snapshots) {
-        try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+        try self.generateAndStoreDebugHtml(module_env, canonical_expr);
     }
 
     // Format the result immediately while memory is still valid

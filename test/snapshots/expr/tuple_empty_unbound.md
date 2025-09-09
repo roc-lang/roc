@@ -7,37 +7,33 @@ type=expr
 ~~~roc
 ()
 ~~~
-# EXPECTED
-EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
-# PROBLEMS
-**EMPTY TUPLE NOT ALLOWED**
-I am part way through parsing this tuple, but it is empty:
-**tuple_empty_unbound.md:1:1:1:3:**
-```roc
-()
-```
-^^
-
-If you want to represent nothing, try using an empty record: `{}`.
-
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),CloseRound(1:2-1:3),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-tuple @1.1-1.3)
+(tuple_literal)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+()
 ~~~
+# EXPECTED
+EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "empty_tuple"))
+(Expr.tuple_literal
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 -> #2)
+(var #2 tuple)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.3 (type "Error"))
+~~~roc
 ~~~

@@ -5,6 +5,8 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const layout = @import("layout");
+const base = @import("base");
+const SrcBytes = base.SrcBytes;
 
 const Repl = @import("Repl.zig");
 
@@ -69,6 +71,7 @@ test "Repl - string expressions" {
 
     const result = try repl.step("\"Hello, World!\"");
     defer std.testing.allocator.free(result);
+
     try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 
@@ -184,51 +187,48 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
+    var module_env = try ModuleEnv.init(gpa, src_testing.src);
     defer module_env.deinit();
 
     // Step 2: Parse as expression
     var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
     defer parse_ast.deinit(gpa);
 
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
+    // Step 3: Canonicalize
+    var czer = Can.init(&parse_ast, &module_env.types);
+    defer czer.deinit(gpa);
 
-    // Step 3: Create CIR
-    const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(gpa, "test");
+    // Set the CIR pointer so the interpreter can access it
+    module_env.cir = &czer;
+    module_env.ast = &parse_ast;
 
-    // Step 4: Canonicalize
-    var czer = try Can.init(cir, &parse_ast, null);
-    defer czer.deinit();
+    const expr_idx: parse.AST.Node.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const canonical_expr_idx = try czer.canonicalizeExpr(gpa, expr_idx, module_env.common.source.bytes(), &module_env.common.idents);
 
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeError;
-    };
-
-    // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
+    // Step 4: Type check
+    var checker = try Check.initForCIR(gpa, &module_env.types, &module_env.store.regions);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
+    _ = try checker.checkCIRExpr(can.CIR, &czer, canonical_expr_idx);
 
-    // Step 6: Create evaluation stack
+    // Step 5: Create evaluation stack
     var eval_stack = try Stack.initCapacity(gpa, 1024);
     defer eval_stack.deinit();
 
-    // Step 7: Create layout cache
+    // Step 6: Create layout cache
     var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
     defer layout_cache.deinit();
 
-    // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
+    // Step 7: Create interpreter
+    var interpreter = try eval.Interpreter.init(gpa, &module_env, &eval_stack, &layout_cache, &module_env.types);
     defer interpreter.deinit(test_env.get_ops());
 
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
+    // Step 8: Evaluate
+    const result = try interpreter.eval(canonical_expr_idx, test_env.get_ops());
 
-    // Step 10: Verify result
+    // Step 9: Verify result
     try testing.expect(result.layout.tag == .scalar);
     try testing.expect(result.layout.data.scalar.tag == .int);
 

@@ -8,37 +8,49 @@ type=file
 app[]{f:platform""}{
 o:0)
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly OpenCurly LowerIdent OpColon Int CloseRound ~~~
+# PARSE
+~~~clojure
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
+    )
+))
+(block
+  (block
+    (binop_colon
+      (lc "o")
+      (num_literal_i32 0)
+    )
+    (malformed)
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+app { f: "" platform [] }
+
+{
+	o : 0
+	)
+}
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_040.md:1:20:1:21
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_040.md:2:3:2:4
 PARSE ERROR - fuzz_crash_040.md:2:4:2:5
 MALFORMED TYPE - fuzz_crash_040.md:2:3:2:4
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_040.md:1:20:1:21:**
-```roc
-app[]{f:platform""}{
-```
-                   ^
-
-
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **0** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**fuzz_crash_040.md:2:3:2:4:**
-```roc
-o:0)
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **fuzz_crash_040.md:2:4:2:5:**
 ```roc
@@ -47,8 +59,20 @@ o:0)
    ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_040.md:1:20:2:5:**
+```roc
+app[]{f:platform""}{
+o:0)
+```
+
+
+**EXPRESSION IN TYPE CONTEXT**
+Found an expression where a type was expected.
+Types must be type identifiers, type applications, or type expressions.
 
 **fuzz_crash_040.md:2:3:2:4:**
 ```roc
@@ -57,43 +81,36 @@ o:0)
   ^
 
 
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpenCurly(1:20-1:21),
-LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseRound(2:4-2:5),
-EndOfFile(3:1-3:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-2.5
-	(app @1.1-1.20
-		(provides @1.4-1.6)
-		(record-field @1.7-1.19 (name "f")
-			(e-string @1.17-1.19
-				(e-string-part @1.18-1.18 (raw ""))))
-		(packages @1.6-1.20
-			(record-field @1.7-1.19 (name "f")
-				(e-string @1.17-1.19
-					(e-string-part @1.18-1.18 (raw ""))))))
-	(statements
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-type-anno @2.1-2.4 (name "o")
-			(ty-malformed @2.3-2.4 (tag "ty_anno_unexpected_token")))
-		(s-malformed @2.4-2.5 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-app [] { f: platform "" }
-
-o : 
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.block
+    (Stmt.standalone_type_anno
+      (pattern (Patt.ident "o"))
+      (type type_7)
+    )
+    (Expr.malformed)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 13
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+o : _a
 ~~~

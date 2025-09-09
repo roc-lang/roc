@@ -12,125 +12,187 @@ processNested = |_list| ["one","two"]
 
 main! = |_| processNested([])
 ~~~
-# EXPECTED
-UNDECLARED TYPE - type_app_nested.md:3:34:3:37
-# PROBLEMS
-**UNDECLARED TYPE**
-The type _Err_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_nested.md:3:34:3:37:**
-```roc
-processNested : List(Result(Str, Err)) -> List(Str)
-```
-                                 ^^^
-
-
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:14),OpColon(3:15-3:16),UpperIdent(3:17-3:21),NoSpaceOpenRound(3:21-3:22),UpperIdent(3:22-3:28),NoSpaceOpenRound(3:28-3:29),UpperIdent(3:29-3:32),Comma(3:32-3:33),UpperIdent(3:34-3:37),CloseRound(3:37-3:38),CloseRound(3:38-3:39),OpArrow(3:40-3:42),UpperIdent(3:43-3:47),NoSpaceOpenRound(3:47-3:48),UpperIdent(3:48-3:51),CloseRound(3:51-3:52),
-LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),NamedUnderscore(4:18-4:23),OpBar(4:23-4:24),OpenSquare(4:25-4:26),StringStart(4:26-4:27),StringPart(4:27-4:30),StringEnd(4:30-4:31),Comma(4:31-4:32),StringStart(4:32-4:33),StringPart(4:33-4:36),StringEnd(4:36-4:37),CloseSquare(4:37-4:38),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:26),NoSpaceOpenRound(6:26-6:27),OpenSquare(6:27-6:28),CloseSquare(6:28-6:29),CloseRound(6:29-6:30),
-EndOfFile(7:1-7:1),
-~~~
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine LowerIdent OpColon UpperIdent OpenRound UpperIdent OpenRound UpperIdent Comma UpperIdent CloseRound CloseRound OpArrow UpperIdent OpenRound UpperIdent CloseRound LowerIdent OpAssign OpBar LowerIdent OpBar OpenSquare String Comma String CloseSquare BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound OpenSquare CloseSquare CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.30
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-anno @3.1-3.52 (name "processNested")
-			(ty-fn @3.17-3.52
-				(ty-apply @3.17-3.39
-					(ty @3.17-3.21 (name "List"))
-					(ty-apply @3.22-3.38
-						(ty @3.22-3.28 (name "Result"))
-						(ty @3.29-3.32 (name "Str"))
-						(ty @3.34-3.37 (name "Err"))))
-				(ty-apply @3.43-3.52
-					(ty @3.43-3.47 (name "List"))
-					(ty @3.48-3.51 (name "Str")))))
-		(s-decl @4.1-4.38
-			(p-ident @4.1-4.14 (raw "processNested"))
-			(e-lambda @4.17-4.38
-				(args
-					(p-ident @4.18-4.23 (raw "_list")))
-				(e-list @4.25-4.38
-					(e-string @4.26-4.31
-						(e-string-part @4.27-4.30 (raw "one")))
-					(e-string @4.32-4.37
-						(e-string-part @4.33-4.36 (raw "two"))))))
-		(s-decl @6.1-6.30
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.30
-				(args
-					(p-underscore))
-				(e-apply @6.13-6.30
-					(e-ident @6.13-6.26 (raw "processNested"))
-					(e-list @6.27-6.29))))))
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (lc "processNested")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (apply_uc
+          (uc "Result")
+          (tuple_literal
+            (uc "Str")
+            (uc "Err")
+          )
+        )
+      )
+      (apply_uc
+        (uc "List")
+        (uc "Str")
+      )
+    )
+  )
+  (binop_equals
+    (lc "processNested")
+    (lambda
+      (body
+        (list_literal
+          (str_literal_small "one")
+          (str_literal_small "two")
+        )
+      )
+      (args
+        (lc "_list")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "processNested")
+          (list_literal)
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
 
-processNested : List(Result(Str, Err)) -> List(Str)
+processNested : List Result(Str, Err) -> List Str
 processNested = |_list| ["one", "two"]
-
 main! = |_| processNested([])
 ~~~
+# EXPECTED
+UNDECLARED TYPE - type_app_nested.md:3:34:3:37
+# PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:3:1:3:14:**
+```roc
+processNested : List(Result(Str, Err)) -> List(Str)
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:4:1:4:14:**
+```roc
+processNested = |_list| ["one","two"]
+```
+^^^^^^^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_app_nested.md:6:1:6:6:**
+```roc
+main! = |_| processNested([])
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.14 (ident "processNested"))
-		(e-lambda @4.17-4.38
-			(args
-				(p-assign @4.18-4.23 (ident "_list")))
-			(e-list @4.25-4.38
-				(elems
-					(e-string @4.26-4.31
-						(e-literal @4.27-4.30 (string "one")))
-					(e-string @4.32-4.37
-						(e-literal @4.33-4.36 (string "two"))))))
-		(annotation @4.1-4.14
-			(declared-type
-				(ty-fn @3.17-3.52 (effectful false)
-					(ty-apply @3.17-3.39 (symbol "List")
-						(ty-apply @3.22-3.38 (symbol "Result")
-							(ty @3.29-3.32 (name "Str"))
-							(ty @3.34-3.37 (name "Err"))))
-					(ty-apply @3.43-3.52 (symbol "List")
-						(ty @3.48-3.51 (name "Str")))))))
-	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.30
-			(captures
-				(capture @4.1-4.14 (ident "processNested")))
-			(e-lambda @6.9-6.30
-				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.30
-					(e-lookup-local @6.13-6.26
-						(p-assign @4.1-4.14 (ident "processNested")))
-					(e-empty_list @6.27-6.29))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "processNested"))
+    (type type_18)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "processNested"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 43
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 -> #37)
+(var #21 _)
+(var #22 Str)
+(var #23 -> #22)
+(var #24 -> #36)
+(var #25 -> #37)
+(var #26 _)
+(var #27 -> #42)
+(var #28 _)
+(var #29 -> #41)
+(var #30 -> #40)
+(var #31 _)
+(var #32 -> #42)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 List #22)
+(var #37 fn_pure)
+(var #38 _)
+(var #39 _)
+(var #40 List #39)
+(var #41 fn_pure)
+(var #42 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.14 (type "List(Result(ok, err)) -> List(Str)"))
-		(patt @6.1-6.6 (type "_arg -> List(Str)")))
-	(expressions
-		(expr @4.17-4.38 (type "List(Result(ok, err)) -> List(Str)"))
-		(expr @6.9-6.30 (type "_arg -> List(Str)"))))
+~~~roc
+processNested : _arg -> List(Str)
+main : _arg -> _ret
+_list : _a
 ~~~

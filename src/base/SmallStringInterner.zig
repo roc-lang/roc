@@ -175,6 +175,16 @@ pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
     const start = @intFromEnum(idx);
 
+    // Debug check for invalid indices
+    if (start >= bytes_slice.len) {
+        std.debug.print("ERROR: Invalid string interner index: start={} len={}\n", .{ start, bytes_slice.len });
+        if (start == 358) {
+            std.debug.print("NOTE: This looks like an uninitialized var_ident pattern!\n", .{});
+        }
+        // Return empty string instead of panicking
+        return "";
+    }
+
     return std.mem.sliceTo(bytes_slice[start..], 0);
 }
 

@@ -7,35 +7,40 @@ type=expr
 ~~~roc
 (True, False)
 ~~~
+# TOKENS
+~~~text
+OpenRound UpperIdent Comma UpperIdent CloseRound ~~~
+# PARSE
+~~~clojure
+(tuple_literal
+  (uc "True")
+  (uc "False")
+)
+~~~
+# FORMATTED
+~~~roc
+(True, False)
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-OpenRound(1:1-1:2),UpperIdent(1:2-1:6),Comma(1:6-1:7),UpperIdent(1:8-1:13),CloseRound(1:13-1:14),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-tuple @1.1-1.14
-	(e-tag @1.2-1.6 (raw "True"))
-	(e-tag @1.8-1.13 (raw "False")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.14
-	(elems
-		(e-nominal @1.2-1.6 (nominal "Bool")
-			(e-tag @1.2-1.6 (name "True")))
-		(e-nominal @1.8-1.13 (nominal "Bool")
-			(e-tag @1.8-1.13 (name "False")))))
+(Expr.tuple_literal
+  (Expr.tag_no_args)
+  (Expr.tag_no_args)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 5
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 -> #4)
+(var #4 tuple)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.14 (type "(Bool, Bool)"))
+~~~roc
 ~~~

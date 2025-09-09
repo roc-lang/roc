@@ -7,63 +7,101 @@ type=expr
 ~~~roc
 (|{ x, y }| x * y)({ x: 10, y: 20 })
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-OpenRound(1:1-1:2),OpBar(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:5-1:6),Comma(1:6-1:7),LowerIdent(1:8-1:9),CloseCurly(1:10-1:11),OpBar(1:11-1:12),LowerIdent(1:13-1:14),OpStar(1:15-1:16),LowerIdent(1:17-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),OpenCurly(1:20-1:21),LowerIdent(1:22-1:23),OpColon(1:23-1:24),Int(1:25-1:27),Comma(1:27-1:28),LowerIdent(1:29-1:30),OpColon(1:30-1:31),Int(1:32-1:34),CloseCurly(1:35-1:36),CloseRound(1:36-1:37),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+OpenRound OpBar OpenCurly LowerIdent Comma LowerIdent CloseCurly OpBar LowerIdent OpStar LowerIdent CloseRound OpenRound OpenCurly LowerIdent OpColon Int Comma LowerIdent OpColon Int CloseCurly CloseRound ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.37
-	(e-tuple @1.1-1.19
-		(e-lambda @1.2-1.18
-			(args
-				(p-record @1.3-1.11
-					(field @1.5-1.6 (name "x") (rest false))
-					(field @1.8-1.9 (name "y") (rest false))))
-			(e-binop @1.13-1.18 (op "*")
-				(e-ident @1.13-1.14 (raw "x"))
-				(e-ident @1.17-1.18 (raw "y")))))
-	(e-record @1.20-1.36
-		(field (field "x")
-			(e-int @1.25-1.27 (raw "10")))
-		(field (field "y")
-			(e-int @1.32-1.34 (raw "20")))))
+(apply_anon
+  (lambda
+    (body
+      (binop_star
+        (lc "x")
+        (lc "y")
+      )
+    )
+    (args
+      (record_literal
+        (lc "x")
+        (binop_colon
+          (lc "y")
+          (lc "y")
+        )
+      )
+    )
+  )
+  (record_literal
+    (binop_colon
+      (lc "x")
+      (num_literal_i32 10)
+    )
+    (binop_colon
+      (lc "y")
+      (num_literal_i32 20)
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|{ x, y: y }| x * y)({ x: 10, y: 20 })
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**PARSE ERROR**
+A parsing error occurred: **application_with_whitespace**
+This is an unexpected parsing error. Please check your syntax.
+
+**record_argument_closure.md:1:18:1:19:**
+```roc
+(|{ x, y }| x * y)({ x: 10, y: 20 })
+```
+                 ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **y** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**record_argument_closure.md:1:17:1:18:**
+```roc
+(|{ x, y }| x * y)({ x: 10, y: 20 })
+```
+                ^
+
+
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.37
-	(e-lambda @1.2-1.18
-		(args
-			(p-record-destructure @1.3-1.11
-				(destructs
-					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required
-							(p-assign @1.5-1.6 (ident "x"))))
-					(record-destruct @1.8-1.9 (label "y") (ident "y")
-						(required
-							(p-assign @1.8-1.9 (ident "y")))))))
-		(e-binop @1.13-1.18 (op "mul")
-			(e-lookup-local @1.13-1.14
-				(p-assign @1.5-1.6 (ident "x")))
-			(e-lookup-local @1.17-1.18
-				(p-assign @1.8-1.9 (ident "y")))))
-	(e-record @1.20-1.36
-		(fields
-			(field (name "x")
-				(e-int @1.25-1.27 (value "10")))
-			(field (name "y")
-				(e-int @1.32-1.34 (value "20"))))))
+(Expr.fn_call)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 22
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 -> #6)
+(var #6 -> #7)
+(var #7 -> #16)
+(var #8 -> #18)
+(var #9 _)
+(var #10 Num *)
+(var #11 _)
+(var #12 _)
+(var #13 Num *)
+(var #14 _)
+(var #15 -> #20)
+(var #16 _)
+(var #17 -> #20)
+(var #18 -> #21)
+(var #19 {})
+(var #20 record)
+(var #21 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.37 (type "Num(_size)"))
+~~~roc
+x : _a
 ~~~

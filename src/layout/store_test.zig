@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const SrcBytes = base.SrcBytes;
 const types = @import("types");
 const layout = @import("layout.zig");
 const layout_store_ = @import("store.zig");
@@ -36,7 +37,9 @@ const LayoutTest = struct {
 
 test "addTypeVar - basic scalar types" {
     const gpa = testing.allocator;
-    var module_env = try ModuleEnv.init(gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, "");
+    defer src_testing.deinit(gpa);
+    var module_env = try ModuleEnv.init(gpa, src_testing.src);
     defer module_env.deinit();
 
     var type_store = try types_store.Store.init(gpa);
@@ -59,7 +62,9 @@ test "addTypeVar - basic scalar types" {
 test "addTypeVar - bool type" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -77,7 +82,9 @@ test "addTypeVar - bool type" {
 test "addTypeVar - default layouts for polymorphic types" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -111,7 +118,9 @@ test "addTypeVar - default layouts for polymorphic types" {
 test "addTypeVar - host opaque types compile to opaque_ptr" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -138,7 +147,9 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
 test "addTypeVar - scalar optimization for containers" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -172,7 +183,9 @@ test "addTypeVar - scalar optimization for containers" {
 test "addTypeVar - zero-sized types (ZST)" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -198,7 +211,9 @@ test "addTypeVar - zero-sized types (ZST)" {
 test "addTypeVar - record with dropped zero-sized fields" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -225,7 +240,9 @@ test "addTypeVar - record with dropped zero-sized fields" {
 test "addTypeVar - record with only zero-sized fields errors" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -250,7 +267,9 @@ test "addTypeVar - record with only zero-sized fields errors" {
 test "record field sorting by alignment then name" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -285,7 +304,9 @@ test "record field sorting by alignment then name" {
 test "record size and alignment calculation" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -321,7 +342,9 @@ test "record size and alignment calculation" {
 test "record with chained extensions" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -359,7 +382,9 @@ test "record with chained extensions" {
 test "record extension with non-record type fails" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
@@ -376,7 +401,9 @@ test "record extension with non-record type fails" {
 test "deeply nested containers with inner ZST" {
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
-    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    var src_testing = try SrcBytes.Testing.initFromSlice(lt.gpa, "");
+    defer src_testing.deinit(lt.gpa);
+    lt.module_env = try ModuleEnv.init(lt.gpa, src_testing.src);
     lt.type_store = try types_store.Store.init(lt.gpa);
     lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);

@@ -7,13 +7,41 @@ type=expr
 ~~~roc
 |x| |y| x + z
 ~~~
+# TOKENS
+~~~text
+OpBar LowerIdent OpBar OpBar LowerIdent OpBar LowerIdent OpPlus LowerIdent ~~~
+# PARSE
+~~~clojure
+(lambda
+  (body
+    (lambda
+      (body
+        (binop_plus
+          (lc "x")
+          (lc "z")
+        )
+      )
+      (args
+        (lc "y")
+      )
+    )
+  )
+  (args
+    (lc "x")
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+|x| |y| x + z
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - lambda_invalid_references.md:1:13:1:14
 UNUSED VARIABLE - lambda_invalid_references.md:1:6:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `z` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Nothing is named **z** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
 **lambda_invalid_references.md:1:13:1:14:**
 ```roc
@@ -22,56 +50,28 @@ Is there an `import` or `exposing` missing up-top?
             ^
 
 
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**lambda_invalid_references.md:1:6:1:7:**
-```roc
-|x| |y| x + z
-```
-     ^
-
-
-# TOKENS
-~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),OpBar(1:5-1:6),LowerIdent(1:6-1:7),OpBar(1:7-1:8),LowerIdent(1:9-1:10),OpPlus(1:11-1:12),LowerIdent(1:13-1:14),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-lambda @1.1-1.14
-	(args
-		(p-ident @1.2-1.3 (raw "x")))
-	(e-lambda @1.5-1.14
-		(args
-			(p-ident @1.6-1.7 (raw "y")))
-		(e-binop @1.9-1.14 (op "+")
-			(e-ident @1.9-1.10 (raw "x"))
-			(e-ident @1.13-1.14 (raw "z")))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.14
-	(args
-		(p-assign @1.2-1.3 (ident "x")))
-	(e-closure @1.5-1.14
-		(captures
-			(capture @1.2-1.3 (ident "x")))
-		(e-lambda @1.5-1.14
-			(args
-				(p-assign @1.6-1.7 (ident "y")))
-			(e-binop @1.9-1.14 (op "add")
-				(e-lookup-local @1.9-1.10
-					(p-assign @1.2-1.3 (ident "x")))
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+(Expr.lambda (canonicalized))
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 12
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 -> #4)
+(var #4 -> #5)
+(var #5 _)
+(var #6 -> #10)
+(var #7 -> #11)
+(var #8 _)
+(var #9 _)
+(var #10 fn_pure)
+(var #11 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.14 (type "Num(_size) -> _arg -> Num(_size2)"))
+~~~roc
+x : _a
+y : _a
 ~~~

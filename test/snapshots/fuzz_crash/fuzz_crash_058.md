@@ -8,55 +8,106 @@ type=file
 app[]{f:platform"",r:"
 }
 ~~~
-# EXPECTED
-UNCLOSED STRING - :0:0:0:0
-# PROBLEMS
-**UNCLOSED STRING**
-This string is missing a closing quote.
-
-```roc
-app[]{f:platform"",r:"
-```
-                     ^
-
-
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),Comma(1:19-1:20),LowerIdent(1:20-1:21),OpColon(1:21-1:22),StringStart(1:22-1:23),StringPart(1:23-1:23),StringEnd(1:23-1:23),
-CloseCurly(2:1-2:2),
-EndOfFile(3:1-3:1),
-~~~
+~~~text
+KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String Comma LowerIdent OpColon MalformedString CloseCurly ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.2
-	(app @1.1-2.2
-		(provides @1.4-1.6)
-		(record-field @1.7-1.19 (name "f")
-			(e-string @1.17-1.19
-				(e-string-part @1.18-1.18 (raw ""))))
-		(packages @1.6-2.2
-			(record-field @1.7-1.19 (name "f")
-				(e-string @1.17-1.19
-					(e-string-part @1.18-1.18 (raw ""))))
-			(record-field @1.20-1.23 (name "r")
-				(e-string @1.22-1.23
-					(e-string-part @1.23-1.23 (raw ""))))))
-	(statements))
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
+    )
+))
+(block
+  (malformed)
+  (malformed)
+)
 ~~~
 # FORMATTED
 ~~~roc
-app [] {
-	f: platform "",
-	r: "",
+app
+{
+	f: "" platform [],
+}
+
+"
 }
 ~~~
+# EXPECTED
+UNCLOSED STRING - :0:0:0:0
+# PROBLEMS
+**EXPECTED STRING**
+A parsing error occurred: **expected_package_or_platform_string**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_058.md:1:1:1:22:**
+```roc
+app[]{f:platform"",r:"
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
+**EXPECTED CLOSE CURLY BRACE**
+A parsing error occurred: **expected_package_platform_close_curly**
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_058.md:1:1:1:22:**
+```roc
+app[]{f:platform"",r:"
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_058.md:1:22:2:1:**
+```roc
+app[]{f:platform"",r:"
+}
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **}** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_058.md:2:1:2:2:**
+```roc
+}
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Expr.malformed)
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 11
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

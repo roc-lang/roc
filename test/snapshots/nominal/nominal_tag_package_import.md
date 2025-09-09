@@ -14,46 +14,50 @@ import styles.Color as CC
 blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
-# EXPECTED
-MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
-# PROBLEMS
-**MODULE NOT FOUND**
-The module `styles.Color` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_tag_package_import.md:4:1:4:26:**
-```roc
-import styles.Color as CC
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-KwImport(4:1-4:7),LowerIdent(4:8-4:14),NoSpaceDotUpperIdent(4:14-4:20),KwAs(4:21-4:23),UpperIdent(4:24-4:26),
-LowerIdent(7:1-7:5),OpColon(7:6-7:7),UpperIdent(7:8-7:10),NoSpaceDotUpperIdent(7:10-7:16),
-LowerIdent(8:1-8:5),OpAssign(8:6-8:7),UpperIdent(8:8-8:10),NoSpaceDotUpperIdent(8:10-8:16),NoSpaceDotUpperIdent(8:16-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:22),Comma(8:22-8:23),Int(8:23-8:24),Comma(8:24-8:25),Int(8:25-8:28),CloseRound(8:28-8:29),
-EndOfFile(9:1-9:1),
-~~~
+~~~text
+KwModule OpenSquare LowerIdent CloseSquare BlankLine LineComment KwImport LowerIdent Dot UpperIdent KwAs UpperIdent BlankLine LineComment LowerIdent OpColon UpperIdent Dot UpperIdent LowerIdent OpAssign UpperIdent Dot UpperIdent Dot UpperIdent OpenRound Int Comma Int Comma Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.29
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "blue"))))
-	(statements
-		(s-import @4.1-4.26 (raw "styles.Color") (alias "CC"))
-		(s-type-anno @7.1-7.16 (name "blue")
-			(ty @7.8-7.16 (name "CC.Color")))
-		(s-decl @8.1-8.29
-			(p-ident @8.1-8.5 (raw "blue"))
-			(e-apply @8.8-8.29
-				(e-tag @8.8-8.20 (raw "CC.Color.RGB"))
-				(e-int @8.21-8.22 (raw "0"))
-				(e-int @8.23-8.24 (raw "0"))
-				(e-int @8.25-8.28 (raw "255"))))))
+(module-header
+  (exposes
+    (lc "blue")
+))
+(block
+  (import
+    (binop_as
+      (binop_dot
+        (lc "styles")
+        (uc "Color")
+      )
+      (uc "CC")
+    )
+  )
+  (binop_colon
+    (lc "blue")
+    (binop_dot
+      (uc "CC")
+      (uc "Color")
+    )
+  )
+  (binop_equals
+    (lc "blue")
+    (apply_anon
+      (binop_dot
+        (binop_dot
+          (uc "CC")
+          (uc "Color")
+        )
+        (uc "RGB")
+      )
+      (tuple_literal
+        (num_literal_i32 0)
+        (num_literal_i32 0)
+        (num_literal_i32 255)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,37 +65,71 @@ module [blue]
 
 # import the Color module from styles package as CC
 import styles.Color as CC
-
 # instantiating an RGB nominal tab union from the styles.Color module
 blue : CC.Color
-blue = CC.Color.RGB(0, 0, 255)
+blue = CC.Color.RGB((0, 0, 255))
 ~~~
+# EXPECTED
+MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
+# PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**nominal_tag_package_import.md:8:1:8:5:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+^^^^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @8.1-8.5 (ident "blue"))
-		(e-nominal-external @8.8-8.29
-			(module-idx "0")
-			(target-node-idx "0")
-			(e-tag @8.8-8.29 (name "RGB")
-				(args
-					(e-int @8.21-8.22 (value "0"))
-					(e-int @8.23-8.24 (value "0"))
-					(e-int @8.25-8.28 (value "255")))))
-		(annotation @8.1-8.5
-			(declared-type
-				(ty-lookup-external @7.8-7.16
-					(module-idx "0")
-					(target-node-idx "0")))))
-	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
-		(exposes)))
+(Expr.block
+  (Stmt.import)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "blue"))
+    (type type_11)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "blue"))
+    (Expr.fn_call)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 29
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 -> #23)
+(var #14 _)
+(var #15 _)
+(var #16 -> #26)
+(var #17 _)
+(var #18 -> #28)
+(var #19 Num *)
+(var #20 Num *)
+(var #21 Num *)
+(var #22 -> #27)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 tuple)
+(var #28 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @8.1-8.5 (type "Error")))
-	(expressions
-		(expr @8.8-8.29 (type "Error"))))
+~~~roc
+blue : _a
 ~~~

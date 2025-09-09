@@ -7,38 +7,36 @@ type=expr
 ~~~roc
 Json.utf8
 ~~~
-# EXPECTED
-UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
-# PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**external_lookup_expr.md:1:1:1:10:**
-```roc
-Json.utf8
-```
-^^^^^^^^^
-
-
 # TOKENS
-~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),
-EndOfFile(2:1-2:1),
-~~~
+~~~text
+UpperIdent Dot LowerIdent ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.10 (raw "Json.utf8"))
+(binop_dot
+  (uc "Json")
+  (dot_lc "utf8")
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Json..utf8
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
+# PROBLEMS
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(Expr.record_access)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 4
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.10 (type "Error"))
+~~~roc
 ~~~

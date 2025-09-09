@@ -29,6 +29,117 @@ y = 'u
 # Test backslash before EOF
 '\
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpAssign OpenRound SingleQuote Comma MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed MalformedUnknownToken MalformedUnknownToken MalformedUnknownToken MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence Comma MalformedSingleQuoteInvalidEscapeSequence CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound Int UpperIdent CloseRound MalformedSingleQuoteUnclosed MalformedSingleQuoteInvalidEscapeSequence OpenRound UpperIdent CloseRound MalformedSingleQuoteUnclosed SingleQuote Comma SingleQuote Comma MalformedSingleQuoteEmpty Comma MalformedSingleQuoteUnclosed LowerIdent MalformedSingleQuoteUnclosed MalformedSingleQuoteUnclosed Comma CloseRound BlankLine LowerIdent OpAssign MalformedSingleQuoteUnclosed BlankLine LineComment MalformedSingleQuoteUnclosed ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (binop_equals
+    (lc "x")
+    (tuple_literal
+      (str_literal_small "a")
+      (malformed)
+    )
+  )
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (apply_anon
+    (malformed)
+    (malformed)
+  )
+  (apply_anon
+    (malformed)
+  )
+  (malformed)
+  (apply_anon
+    (malformed)
+    (num_literal_i32 1)
+  )
+  (uc "F680")
+  (malformed)
+  (malformed)
+  (apply_anon
+    (malformed)
+    (uc "K")
+  )
+  (malformed)
+  (str_literal_small "\")
+  (malformed)
+  (str_literal_small "'")
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (lc "ong")
+  (malformed)
+  (malformed)
+  (malformed)
+  (malformed)
+  (binop_equals
+    (lc "y")
+    (malformed)
+  )
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+x = ('a')
+©
+',
+'ð
+Ÿ
+š
+€
+',
+'\u'
+,
+'\u
+)
+',
+'\u(',
+)
+'\u()
+',
+'\u(1F680)
+F680
+)
+',
+'\u(K)
+',
+'\\'
+,
+'\'
+,
+''
+,
+'l
+ong
+',
+'\'
+,
+)
+
+y = 'u
+
+# Test backslash before EOF
+
+'\
+~~~
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
 INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
@@ -56,57 +167,99 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:20:5:20:7
 # PROBLEMS
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'Ã** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
+**unicode_single_quotes.md:5:5:5:7:**
 ```roc
+    'Ã©',
+```
+    ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_close_round_or_comma**
+This is an unexpected parsing error. Please check your syntax.
+
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **©** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:5:7:5:8:**
+```roc
+    'Ã©',
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:5:8:6:5:**
+```roc
+    'Ã©',
+    'ðŸš€',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'ð** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:6:5:6:7:**
+```roc
+    'ðŸš€',
+```
+    ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **Ÿ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:6:7:6:8:**
+```roc
+    'ðŸš€',
+```
+      ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **š** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:6:8:6:9:**
+```roc
+    'ðŸš€',
+```
+       ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **€** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:6:9:6:10:**
+```roc
+    'ðŸš€',
+```
+        ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:6:10:7:5:**
+```roc
+    'ðŸš€',
     '\u',
-```
-     ^^
-
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-```roc
-    '\u)',
-```
-     ^^
-
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-```roc
-    '\u(',
-```
-     ^^^
-
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-```roc
-    '\u()',
-```
-     ^^^^
-
-
-**INVALID UNICODE ESCAPE SEQUENCE**
-This Unicode escape sequence is not valid.
-
-```roc
-    '\u(K)',
-```
-     ^^^^^
-
-
-**INVALID ESCAPE SEQUENCE**
-This escape sequence is not recognized.
-
-```roc
-'\
-
 ```
 
 
@@ -122,47 +275,198 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u)'** is not expected in an expression.
+The token **,
+    ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:8:5:8:10:**
+**unicode_single_quotes.md:7:9:8:5:**
+```roc
+    '\u',
+    '\u)',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:8:5:8:8:**
 ```roc
     '\u)',
 ```
-    ^^^^^
+    ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u('** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:9:5:9:10:**
+**unicode_single_quotes.md:8:8:8:9:**
+```roc
+    '\u)',
+```
+       ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:8:9:9:5:**
+```roc
+    '\u)',
+    '\u(',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:9:5:9:8:**
 ```roc
     '\u(',
 ```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:9:9:10:5:**
+```roc
+    '\u(',
+    '\u()',
+```
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**unicode_single_quotes.md:9:5:10:5:**
+```roc
+    '\u(',
+    '\u()',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:10:5:10:8:**
+```roc
+    '\u()',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:10:10:11:5:**
+```roc
+    '\u()',
+    '\u(1F680)',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:11:5:11:8:**
+```roc
+    '\u(1F680)',
+```
+    ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: **expected_expr_apply_close_round**
+This is an unexpected parsing error. Please check your syntax.
+
+**unicode_single_quotes.md:11:5:11:10:**
+```roc
+    '\u(1F680)',
+```
     ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u()'** is not expected in an expression.
+The token **)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:10:5:10:11:**
+**unicode_single_quotes.md:11:14:11:15:**
 ```roc
-    '\u()',
+    '\u(1F680)',
 ```
-    ^^^^^^
+             ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(K)'** is not expected in an expression.
+The token **',
+    ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:12:5:12:12:**
+**unicode_single_quotes.md:11:15:12:5:**
+```roc
+    '\u(1F680)',
+    '\u(K)',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\u** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:12:5:12:8:**
 ```roc
     '\u(K)',
 ```
-    ^^^^^^^
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:12:11:13:5:**
+```roc
+    '\u(K)',
+    '\\',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:13:9:14:5:**
+```roc
+    '\\',
+    '\'',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:14:9:15:5:**
+```roc
+    '\'',
+    '',
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -177,41 +481,96 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'long'** is not expected in an expression.
+The token **,
+    ** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:16:5:16:11:**
+**unicode_single_quotes.md:15:7:16:5:**
 ```roc
+    '',
     'long',
 ```
-    ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\',** is not expected in an expression.
+The token **'l** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**unicode_single_quotes.md:17:5:17:9:**
+**unicode_single_quotes.md:16:5:16:7:**
 ```roc
-    '\',
-```
-    ^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'u** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**unicode_single_quotes.md:20:5:20:7:**
-```roc
-y = 'u
+    'long',
 ```
     ^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **',
+    ** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:16:10:17:5:**
+```roc
+    'long',
+    '\',
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\'** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:17:5:17:8:**
+```roc
+    '\',
+```
+    ^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:17:8:18:1:**
+```roc
+    '\',
+)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **)
+
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:18:1:20:1:**
+```roc
+)
+
+y = 'u
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'u
+
+# Test backslash before EOF
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**unicode_single_quotes.md:20:5:23:1:**
+```roc
+y = 'u
+
+# Test backslash before EOF
+'\
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **'\** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 **unicode_single_quotes.md:23:1:23:3:**
 ```roc
@@ -220,149 +579,182 @@ This is an unexpected parsing error. Please check your syntax.
 ^^
 
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**SHADOWING**
+This definition shadows an existing one.
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**unicode_single_quotes.md:3:1:3:2:**
+```roc
+x = (
+```
+^
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**UNDEFINED VARIABLE**
+Nothing is named **ong** in this scope.
+Is there an **import** or **exposing** missing up-top?
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**unicode_single_quotes.md:16:7:16:10:**
+```roc
+    'long',
+```
+      ^^^
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
+**SHADOWING**
+This definition shadows an existing one.
 
-**INVALID TUPLE ELEMENT**
-This tuple element is malformed or contains invalid syntax.
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**unicode_single_quotes.md:20:5:20:7:**
+**unicode_single_quotes.md:20:1:20:2:**
 ```roc
 y = 'u
 ```
-    ^^
+^
 
-This might be a syntax error, an unsupported language feature, or a typo.
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),OpenRound(3:5-3:6),
-SingleQuote(4:5-4:8),Comma(4:8-4:9),
-SingleQuote(5:5-5:9),Comma(5:9-5:10),
-SingleQuote(6:5-6:11),Comma(6:11-6:12),
-MalformedSingleQuoteInvalidEscapeSequence(7:5-7:9),Comma(7:9-7:10),
-MalformedSingleQuoteInvalidEscapeSequence(8:5-8:10),Comma(8:10-8:11),
-MalformedSingleQuoteInvalidEscapeSequence(9:5-9:10),Comma(9:10-9:11),
-MalformedSingleQuoteInvalidEscapeSequence(10:5-10:11),Comma(10:11-10:12),
-SingleQuote(11:5-11:16),Comma(11:16-11:17),
-MalformedSingleQuoteInvalidEscapeSequence(12:5-12:12),Comma(12:12-12:13),
-SingleQuote(13:5-13:9),Comma(13:9-13:10),
-SingleQuote(14:5-14:9),Comma(14:9-14:10),
-MalformedSingleQuoteEmpty(15:5-15:7),Comma(15:7-15:8),
-MalformedSingleQuoteTooLong(16:5-16:11),Comma(16:11-16:12),
-MalformedSingleQuoteUnclosed(17:5-17:9),
-CloseRound(18:1-18:2),
-LowerIdent(20:1-20:2),OpAssign(20:3-20:4),MalformedSingleQuoteUnclosed(20:5-20:7),
-MalformedSingleQuoteUnclosed(23:1-23:3),
-EndOfFile(24:1-24:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-23.3
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-decl @3.1-18.2
-			(p-ident @3.1-3.2 (raw "x"))
-			(e-tuple @3.5-18.2
-				(e-single-quote @4.5-4.8 (raw "'a'"))
-				(e-single-quote @5.5-5.9 (raw "'Ã©'"))
-				(e-single-quote @6.5-6.11 (raw "'ðŸš€'"))
-				(e-malformed @7.5-7.9 (reason "expr_unexpected_token"))
-				(e-malformed @8.5-8.10 (reason "expr_unexpected_token"))
-				(e-malformed @9.5-9.10 (reason "expr_unexpected_token"))
-				(e-malformed @10.5-10.11 (reason "expr_unexpected_token"))
-				(e-single-quote @11.5-11.16 (raw "'\u(1F680)'"))
-				(e-malformed @12.5-12.12 (reason "expr_unexpected_token"))
-				(e-single-quote @13.5-13.9 (raw "'\\'"))
-				(e-single-quote @14.5-14.9 (raw "'\''"))
-				(e-malformed @15.5-15.7 (reason "expr_unexpected_token"))
-				(e-malformed @16.5-16.11 (reason "expr_unexpected_token"))
-				(e-malformed @17.5-17.9 (reason "expr_unexpected_token"))))
-		(s-decl @20.1-20.7
-			(p-ident @20.1-20.2 (raw "y"))
-			(e-malformed @20.5-20.7 (reason "expr_unexpected_token")))
-		(s-malformed @23.1-23.3 (tag "statement_unexpected_token"))))
-~~~
-# FORMATTED
-~~~roc
-module []
-
-x = (
-	'a',
-	'Ã©',
-	'ðŸš€',
-	,
-	,
-	,
-	,
-	'\u(1F680)',
-	,
-	'\\',
-	'\'',
-	,
-	,
-	,
-)
-
-y = 
-
-# Test backslash before EOF
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-tuple @3.5-18.2
-			(elems
-				(e-int @4.5-4.8 (value "97"))
-				(e-int @5.5-5.9 (value "233"))
-				(e-int @6.5-6.11 (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @11.5-11.16 (value "128640"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @13.5-13.9 (value "92"))
-				(e-int @14.5-14.9 (value "39"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
-	(d-let
-		(p-assign @20.1-20.2 (ident "y"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+(Expr.block
+  (Stmt.assign
+    (pattern (Patt.ident "x"))
+    (Expr.tuple_literal
+      (Expr.str_literal_small)
+      (Expr.malformed)
+    )
+  )
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.tag_no_args)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.fn_call)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.str_literal_small)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.lookup "ong")
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Expr.malformed)
+  (Stmt.assign
+    (pattern (Patt.ident "y"))
+    (Expr.malformed)
+  )
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 89
+(var #0 _)
+(var #1 -> #52)
+(var #2 Str)
+(var #3 _)
+(var #4 -> #52)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 Num *)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 Str)
+(var #35 _)
+(var #36 Str)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
+(var #45 _)
+(var #46 -> #87)
+(var #47 _)
+(var #48 _)
+(var #49 _)
+(var #50 _)
+(var #51 _)
+(var #52 tuple)
+(var #53 _)
+(var #54 _)
+(var #55 _)
+(var #56 _)
+(var #57 _)
+(var #58 _)
+(var #59 _)
+(var #60 _)
+(var #61 _)
+(var #62 _)
+(var #63 _)
+(var #64 _)
+(var #65 -> #67)
+(var #66 _)
+(var #67 fn_pure)
+(var #68 -> #69)
+(var #69 fn_pure)
+(var #70 _)
+(var #71 -> #72)
+(var #72 fn_pure)
+(var #73 _)
+(var #74 _)
+(var #75 -> #76)
+(var #76 fn_pure)
+(var #77 _)
+(var #78 _)
+(var #79 _)
+(var #80 _)
+(var #81 _)
+(var #82 _)
+(var #83 _)
+(var #84 _)
+(var #85 _)
+(var #86 _)
+(var #87 _)
+(var #88 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @3.1-3.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
-		(patt @20.1-20.2 (type "Error")))
-	(expressions
-		(expr @3.5-18.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
-		(expr @20.5-20.7 (type "Error"))))
+~~~roc
+x : (Str, _field)
+y : _a
 ~~~

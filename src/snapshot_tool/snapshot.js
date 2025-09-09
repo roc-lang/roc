@@ -283,7 +283,7 @@ function getTokenClass(tokenKind) {
     "OpSlash",
     "OpDoubleQuestion",
     "OpBackArrow",
-    "OpFatArrow",
+    "OpThinArrow",
     "NoSpaceOpQuestion",
   ];
   const brackets = [

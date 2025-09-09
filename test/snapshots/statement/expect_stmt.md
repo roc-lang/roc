@@ -7,34 +7,29 @@ type=statement
 ~~~roc
 expect Bool.True
 ~~~
+# TOKENS
+~~~text
+KwExpect UpperIdent Dot UpperIdent ~~~
+# PARSE
+~~~clojure
+(empty)
+~~~
+# FORMATTED
+~~~roc
+
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-KwExpect(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(s-expect @1.1-1.17
-	(e-tag @1.8-1.17 (raw "Bool.True")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-expect @1.1-1.17
-		(e-nominal @1.8-1.17 (nominal "Bool")
-			(e-tag @1.8-1.17 (name "True")))))
+(empty)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 0
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~

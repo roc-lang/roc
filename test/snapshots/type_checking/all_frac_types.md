@@ -16,78 +16,169 @@ b = 2.71828
 c : Dec
 c = 123.456
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),
-LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:9),
-LowerIdent(6:1-6:2),OpColon(6:3-6:4),UpperIdent(6:5-6:8),
-LowerIdent(7:1-7:2),OpAssign(7:3-7:4),Float(7:5-7:12),
-LowerIdent(9:1-9:2),OpColon(9:3-9:4),UpperIdent(9:5-9:8),
-LowerIdent(10:1-10:2),OpAssign(10:3-10:4),Float(10:5-10:12),
-EndOfFile(11:1-11:1),
-~~~
+~~~text
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float BlankLine LowerIdent OpColon UpperIdent LowerIdent OpAssign Float ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.12
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-type-anno @3.1-3.8 (name "a")
-			(ty @3.5-3.8 (name "F32")))
-		(s-decl @4.1-4.9
-			(p-ident @4.1-4.2 (raw "a"))
-			(e-frac @4.5-4.9 (raw "3.14")))
-		(s-type-anno @6.1-6.8 (name "b")
-			(ty @6.5-6.8 (name "F64")))
-		(s-decl @7.1-7.12
-			(p-ident @7.1-7.2 (raw "b"))
-			(e-frac @7.5-7.12 (raw "2.71828")))
-		(s-type-anno @9.1-9.8 (name "c")
-			(ty @9.5-9.8 (name "Dec")))
-		(s-decl @10.1-10.12
-			(p-ident @10.1-10.2 (raw "c"))
-			(e-frac @10.5-10.12 (raw "123.456")))))
+(module-header)
+(block
+  (binop_colon
+    (lc "a")
+    (uc "F32")
+  )
+  (binop_equals
+    (lc "a")
+    (frac_literal_small 3.14)
+  )
+  (binop_colon
+    (lc "b")
+    (uc "F64")
+  )
+  (binop_equals
+    (lc "b")
+    (frac_literal_big frac:<idx:16>)
+  )
+  (binop_colon
+    (lc "c")
+    (uc "Dec")
+  )
+  (binop_equals
+    (lc "c")
+    (frac_literal_big frac:<idx:24>)
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+a : F32
+a = 3.14
+b : F64
+b = 2.71828
+c : Dec
+c = 123.456
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:3:1:3:2:**
+```roc
+a : F32
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:4:1:4:2:**
+```roc
+a = 3.14
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:6:1:6:2:**
+```roc
+b : F64
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:7:1:7:2:**
+```roc
+b = 2.71828
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:9:1:9:2:**
+```roc
+c : Dec
+```
+^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**all_frac_types.md:10:1:10:2:**
+```roc
+c = 123.456
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @4.1-4.2 (ident "a"))
-		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
-		(annotation @4.1-4.2
-			(declared-type
-				(ty @3.5-3.8 (name "F32")))))
-	(d-let
-		(p-assign @7.1-7.2 (ident "b"))
-		(e-frac-dec @7.5-7.12 (value "2.71828"))
-		(annotation @7.1-7.2
-			(declared-type
-				(ty @6.5-6.8 (name "F64")))))
-	(d-let
-		(p-assign @10.1-10.2 (ident "c"))
-		(e-frac-dec @10.5-10.12 (value "123.456"))
-		(annotation @10.1-10.2
-			(declared-type
-				(ty @9.5-9.8 (name "Dec"))))))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "a"))
+    (type type_2)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "a"))
+    (Expr.frac_literal_small 3.14)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "b"))
+    (type type_8)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "b"))
+    (Expr.frac_literal_big big:<idx:16>)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "c"))
+    (type type_14)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "c"))
+    (Expr.frac_literal_big big:<idx:24>)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 20
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 -> #5)
+(var #5 F64)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 -> #11)
+(var #11 F64)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 -> #17)
+(var #17 F64)
+(var #18 _)
+(var #19 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @4.1-4.2 (type "F32"))
-		(patt @7.1-7.2 (type "F64"))
-		(patt @10.1-10.2 (type "Dec")))
-	(expressions
-		(expr @4.5-4.9 (type "F32"))
-		(expr @7.5-7.12 (type "F64"))
-		(expr @10.5-10.12 (type "Dec"))))
+~~~roc
+a : F64
+c : F64
+b : F64
 ~~~

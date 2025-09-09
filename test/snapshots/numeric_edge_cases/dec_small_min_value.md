@@ -7,28 +7,32 @@ type=expr
 ~~~roc
 -327.68
 ~~~
+# TOKENS
+~~~text
+OpUnaryMinus Float ~~~
+# PARSE
+~~~clojure
+(unary_neg <unary_op>)
+~~~
+# FORMATTED
+~~~roc
+-327.68
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
-# TOKENS
-~~~zig
-Float(1:1-1:8),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-frac @1.1-1.8 (raw "-327.68"))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1.1-1.8 (numerator "-32768") (denominator-power-of-ten "2") (value "-327.68"))
+(Expr.unary_neg)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 F64)
+(var #2 -> #1)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.8 (type "Frac(_size)"))
+~~~roc
 ~~~

@@ -14,120 +14,183 @@ getUser = |id| if (id > 10) "big" else "small"
 
 main! = |_| getUser(100)
 ~~~
-# EXPECTED
-NIL
-# PROBLEMS
-NIL
 # TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),
-LowerIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:17),OpArrow(5:18-5:20),UpperIdent(5:21-5:24),
-LowerIdent(6:1-6:8),OpAssign(6:9-6:10),OpBar(6:11-6:12),LowerIdent(6:12-6:14),OpBar(6:14-6:15),KwIf(6:16-6:18),OpenRound(6:19-6:20),LowerIdent(6:20-6:22),OpGreaterThan(6:23-6:24),Int(6:25-6:27),CloseRound(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:33),StringEnd(6:33-6:34),KwElse(6:35-6:39),StringStart(6:40-6:41),StringPart(6:41-6:46),StringEnd(6:46-6:47),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),
-EndOfFile(9:1-9:1),
-~~~
+~~~text
+KwApp OpenSquare LowerIdent OpBang CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly BlankLine UpperIdent OpColon UpperIdent BlankLine LowerIdent OpColon UpperIdent OpArrow UpperIdent LowerIdent OpAssign OpBar LowerIdent OpBar KwIf OpenRound LowerIdent OpGreaterThan Int CloseRound String KwElse String BlankLine LowerIdent OpBang OpAssign OpBar Underscore OpBar LowerIdent OpenRound Int CloseRound ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.25
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
-	(statements
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.7 (name "UserId")
-				(args))
-			(ty @3.10-3.13 (name "U64")))
-		(s-type-anno @5.1-5.24 (name "getUser")
-			(ty-fn @5.11-5.24
-				(ty @5.11-5.17 (name "UserId"))
-				(ty @5.21-5.24 (name "Str"))))
-		(s-decl @6.1-6.47
-			(p-ident @6.1-6.8 (raw "getUser"))
-			(e-lambda @6.11-6.47
-				(args
-					(p-ident @6.12-6.14 (raw "id")))
-				(e-if-then-else @6.16-6.47
-					(e-tuple @6.19-6.28
-						(e-binop @6.20-6.27 (op ">")
-							(e-ident @6.20-6.22 (raw "id"))
-							(e-int @6.25-6.27 (raw "10"))))
-					(e-string @6.29-6.34
-						(e-string-part @6.30-6.33 (raw "big")))
-					(e-string @6.40-6.47
-						(e-string-part @6.41-6.46 (raw "small"))))))
-		(s-decl @8.1-8.25
-			(p-ident @8.1-8.6 (raw "main!"))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore))
-				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "100")))))))
+(app-header
+  (exposes
+    (not_lc "main")
+)
+  (packages
+    (binop_colon
+      (lc "pf")
+      (binop_platform
+        (str_literal_big "../basic-cli/main.roc")
+        (block)
+      )
+    )
+))
+(block
+  (binop_colon
+    (uc "UserId")
+    (uc "U64")
+  )
+  (binop_colon
+    (lc "getUser")
+    (binop_arrow_call
+      (uc "UserId")
+      (uc "Str")
+    )
+  )
+  (binop_equals
+    (lc "getUser")
+    (lambda
+      (body
+        (if_else
+          (condition             (binop_gt
+              (lc "id")
+              (num_literal_i32 10)
+            )
+)
+          (then             (str_literal_small "big")
+)
+          (else             (str_literal_big "small")
+))
+      )
+      (args
+        (lc "id")
+      )
+    )
+  )
+  (binop_equals
+    (not_lc "main")
+    (lambda
+      (body
+        (apply_lc
+          (lc "getUser")
+          (num_literal_i32 100)
+        )
+      )
+      (args
+        (underscore)
+      )
+    )
+  )
+)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: "../basic-cli/main.roc" platform [] }
+
+UserId : U64
+getUser : UserId -> Str
+getUser = |id| if id > 10 "big" else "small"
+main! = |_| getUser(100)
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:5:1:5:8:**
+```roc
+getUser : UserId -> Str
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:6:1:6:8:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_alias_simple.md:8:1:8:6:**
+```roc
+main! = |_| getUser(100)
+```
+^^^^^
+
+
+**EXPOSED BUT NOT IMPLEMENTED**
+This value is exposed in the module header but not defined in the module.
+
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.47
-			(args
-				(p-assign @6.12-6.14 (ident "id")))
-			(e-if @6.16-6.47
-				(if-branches
-					(if-branch
-						(e-binop @6.20-6.27 (op "gt")
-							(e-lookup-local @6.20-6.22
-								(p-assign @6.12-6.14 (ident "id")))
-							(e-int @6.25-6.27 (value "10")))
-						(e-string @6.29-6.34
-							(e-literal @6.30-6.33 (string "big")))))
-				(if-else
-					(e-string @6.40-6.47
-						(e-literal @6.41-6.46 (string "small"))))))
-		(annotation @6.1-6.8
-			(declared-type
-				(ty-fn @5.11-5.24 (effectful false)
-					(ty @5.11-5.17 (name "UserId"))
-					(ty @5.21-5.24 (name "Str"))))))
-	(d-let
-		(p-assign @8.1-8.6 (ident "main!"))
-		(e-closure @8.9-8.25
-			(captures
-				(capture @6.1-6.8 (ident "getUser")))
-			(e-lambda @8.9-8.25
-				(args
-					(p-underscore @8.10-8.11))
-				(e-call @8.13-8.25
-					(e-lookup-local @8.13-8.20
-						(p-assign @6.1-6.8 (ident "getUser")))
-					(e-int @8.21-8.24 (value "100"))))))
-	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64"))))
+(Expr.block
+  (Stmt.type_alias)
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "getUser"))
+    (type type_13)
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "getUser"))
+    (Expr.lambda (canonicalized))
+  )
+  (Stmt.assign
+    (pattern (Patt.ident "main"))
+    (Expr.lambda (canonicalized))
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 39
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 -> #35)
+(var #16 _)
+(var #17 -> #18)
+(var #18 -> #19)
+(var #19 -> #34)
+(var #20 -> #21)
+(var #21 Str)
+(var #22 -> #21)
+(var #23 -> #35)
+(var #24 _)
+(var #25 -> #38)
+(var #26 _)
+(var #27 -> #37)
+(var #28 Num *)
+(var #29 _)
+(var #30 -> #38)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 Num *)
+(var #35 fn_pure)
+(var #36 _)
+(var #37 fn_pure)
+(var #38 fn_pure)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs
-		(patt @6.1-6.8 (type "UserId -> Str"))
-		(patt @8.1-8.6 (type "_arg -> Str")))
-	(type_decls
-		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId"))))
-	(expressions
-		(expr @6.11-6.47 (type "UserId -> Str"))
-		(expr @8.9-8.25 (type "_arg -> Str"))))
+~~~roc
+main : _arg -> _ret
+getUser : _arg -> Str
+id : _a
 ~~~

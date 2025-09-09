@@ -19,91 +19,69 @@ type=expr
     0xDeAdBeEf,
 )
 ~~~
+# TOKENS
+~~~text
+OpenRound IntBase Comma IntBase Comma IntBase Comma IntBase Comma IntBase Comma IntBase Comma Float Comma Float Comma IntBase Comma IntBase Comma IntBase Comma CloseRound ~~~
+# PARSE
+~~~clojure
+(tuple_literal
+  (int_literal_big int:<idx:63>)
+  (int_literal_big int:<idx:66>)
+  (int_literal_big int:<idx:69>)
+  (int_literal_big int:<idx:71>)
+  (int_literal_big int:<idx:73>)
+  (int_literal_big int:<idx:76>)
+  (frac_literal_big frac:<idx:79>)
+  (frac_literal_big frac:<idx:86>)
+  (int_literal_big int:<idx:93>)
+  (int_literal_big int:<idx:104>)
+  (int_literal_big int:<idx:115>)
+)
+~~~
+# FORMATTED
+~~~roc
+(0x42, 0x42, 0b01, 0b01, 0o42, 0o42, 0.1e42, 0.1E42, 0xDEADBEEF, 0xdeadbeef, 0xDeAdBeEf)
+~~~
 # EXPECTED
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
 UPPERCASE BASE - :0:0:0:0
 # PROBLEMS
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-
-
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-
-
-**UPPERCASE BASE**
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-
-
-# TOKENS
-~~~zig
-OpenRound(1:1-1:2),
-Int(2:5-2:9),Comma(2:9-2:10),
-Int(3:5-3:9),Comma(3:9-3:10),
-Int(4:5-4:9),Comma(4:9-4:10),
-Int(5:5-5:9),Comma(5:9-5:10),
-Int(6:5-6:9),Comma(6:9-6:10),
-Int(7:5-7:9),Comma(7:9-7:10),
-Float(8:5-8:11),Comma(8:11-8:12),
-Float(9:5-9:11),Comma(9:11-9:12),
-Int(10:5-10:15),Comma(10:15-10:16),
-Int(11:5-11:15),Comma(11:15-11:16),
-Int(12:5-12:15),Comma(12:15-12:16),
-CloseRound(13:1-13:2),
-EndOfFile(14:1-14:1),
-~~~
-# PARSE
-~~~clojure
-(e-tuple @1.1-13.2
-	(e-int @2.5-2.9 (raw "0X42"))
-	(e-int @3.5-3.9 (raw "0x42"))
-	(e-int @4.5-4.9 (raw "0B01"))
-	(e-int @5.5-5.9 (raw "0b01"))
-	(e-int @6.5-6.9 (raw "0O42"))
-	(e-int @7.5-7.9 (raw "0o42"))
-	(e-frac @8.5-8.11 (raw "0.1e42"))
-	(e-frac @9.5-9.11 (raw "0.1E42"))
-	(e-int @10.5-10.15 (raw "0xDEADBEEF"))
-	(e-int @11.5-11.15 (raw "0xdeadbeef"))
-	(e-int @12.5-12.15 (raw "0xDeAdBeEf")))
-~~~
-# FORMATTED
-~~~roc
-(
-	0X42,
-	0x42,
-	0B01,
-	0b01,
-	0O42,
-	0o42,
-	0.1e42,
-	0.1E42,
-	0xDEADBEEF,
-	0xdeadbeef,
-	0xDeAdBeEf,
-)
-~~~
+NIL
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-13.2
-	(elems
-		(e-int @2.5-2.9 (value "66"))
-		(e-int @3.5-3.9 (value "66"))
-		(e-int @4.5-4.9 (value "1"))
-		(e-int @5.5-5.9 (value "1"))
-		(e-int @6.5-6.9 (value "34"))
-		(e-int @7.5-7.9 (value "34"))
-		(e-frac-f64 @8.5-8.11 (value "1e41"))
-		(e-frac-f64 @9.5-9.11 (value "1e41"))
-		(e-int @10.5-10.15 (value "3735928559"))
-		(e-int @11.5-11.15 (value "3735928559"))
-		(e-int @12.5-12.15 (value "3735928559"))))
+(Expr.tuple_literal
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.frac_literal_big big:<idx:79>)
+  (Expr.frac_literal_big big:<idx:86>)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+  (Expr.int_literal_big)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 14
+(var #0 _)
+(var #1 I128)
+(var #2 I128)
+(var #3 I128)
+(var #4 I128)
+(var #5 I128)
+(var #6 I128)
+(var #7 F64)
+(var #8 F64)
+(var #9 I128)
+(var #10 I128)
+(var #11 I128)
+(var #12 -> #13)
+(var #13 tuple)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-13.2 (type "(Int(_size), Int(_size2), Int(_size3), Int(_size4), Int(_size5), Int(_size6), Frac(_size7), Frac(_size8), Int(_size9), Int(_size10), Int(_size11))"))
+~~~roc
 ~~~

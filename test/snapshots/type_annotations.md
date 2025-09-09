@@ -14,107 +14,235 @@ add_one : (U8, U16 -> U32)
 main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare BlankLine LowerIdent OpColon UpperIdent LowerIdent OpColon UpperIdent OpenRound LowerIdent Comma LowerIdent Comma Underscore CloseRound LowerIdent OpColon OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound LowerIdent OpColon OpenRound UpperIdent Comma UpperIdent OpArrow UpperIdent CloseRound LowerIdent OpBang OpColon UpperIdent OpenRound UpperIdent CloseRound OpArrow UpperIdent OpenRound OpenCurly CloseCurly Comma Underscore CloseRound LowerIdent OpColon UpperIdent OpenRound OpenRound LowerIdent Comma LowerIdent Comma LowerIdent CloseRound CloseRound ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (binop_colon
+    (lc "foo")
+    (uc "U64")
+  )
+  (binop_colon
+    (lc "bar")
+    (apply_uc
+      (uc "Thing")
+      (tuple_literal
+        (lc "_a")
+        (lc "_b")
+        (underscore)
+      )
+    )
+  )
+  (binop_colon
+    (lc "baz")
+    (tuple_literal
+      (lc "_a")
+      (lc "_b")
+      (lc "_c")
+    )
+  )
+  (binop_colon
+    (lc "add_one")
+    (binop_arrow_call
+      (uc "U8")
+      (binop_arrow_call
+        (uc "U16")
+        (uc "U32")
+      )
+    )
+  )
+  (binop_colon
+    (not_lc "main")
+    (binop_arrow_call
+      (apply_uc
+        (uc "List")
+        (uc "String")
+      )
+      (apply_uc
+        (uc "Result")
+        (tuple_literal
+          (record_literal)
+          (underscore)
+        )
+      )
+    )
+  )
+  (binop_colon
+    (lc "tag_tuple")
+    (apply_uc
+      (uc "Value")
+      (tuple_literal
+        (lc "_a")
+        (lc "_b")
+        (lc "_c")
+      )
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+foo : U64
+bar : Thing(_a, _b, _)
+baz : (_a, _b, _c)
+add_one : U8 -> U16 -> U32
+main! : List String -> Result({}, _)
+tag_tuple : Value(_a, _b, _c)
+~~~
 # EXPECTED
 UNDECLARED TYPE - type_annotations.md:4:7:4:12
 UNDECLARED TYPE - type_annotations.md:7:14:7:20
 UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Thing_ is not declared in this scope.
+**SHADOWING**
+This definition shadows an existing one.
 
-This type is referenced here:
-**type_annotations.md:4:7:4:12:**
+**type_annotations.md:3:1:3:4:**
+```roc
+foo : U64
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:4:1:4:4:**
 ```roc
 bar : Thing(_a, _b, _)
 ```
-      ^^^^^
+^^^
 
 
-**UNDECLARED TYPE**
-The type _String_ is not declared in this scope.
+**SHADOWING**
+This definition shadows an existing one.
 
-This type is referenced here:
-**type_annotations.md:7:14:7:20:**
+**type_annotations.md:5:1:5:4:**
+```roc
+baz : (_a, _b, _c)
+```
+^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:6:1:6:8:**
+```roc
+add_one : (U8, U16 -> U32)
+```
+^^^^^^^
+
+
+**SHADOWING**
+This definition shadows an existing one.
+
+**type_annotations.md:7:1:7:6:**
 ```roc
 main! : List(String) -> Result({}, _)
 ```
-             ^^^^^^
+^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Value_ is not declared in this scope.
+**SHADOWING**
+This definition shadows an existing one.
 
-This type is referenced here:
-**type_annotations.md:8:13:8:18:**
+**type_annotations.md:8:1:8:10:**
 ```roc
 tag_tuple : Value((_a, _b, _c))
 ```
-            ^^^^^
+^^^^^^^^^
 
 
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
-LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),NamedUnderscore(4:13-4:15),Comma(4:15-4:16),NamedUnderscore(4:17-4:19),Comma(4:19-4:20),Underscore(4:21-4:22),CloseRound(4:22-4:23),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),NamedUnderscore(5:8-5:10),Comma(5:10-5:11),NamedUnderscore(5:12-5:14),Comma(5:14-5:15),NamedUnderscore(5:16-5:18),CloseRound(5:18-5:19),
-LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14),Comma(6:14-6:15),UpperIdent(6:16-6:19),OpArrow(6:20-6:22),UpperIdent(6:23-6:26),CloseRound(6:26-6:27),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),
-LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8:18-8:19),NoSpaceOpenRound(8:19-8:20),NamedUnderscore(8:20-8:22),Comma(8:22-8:23),NamedUnderscore(8:24-8:26),Comma(8:26-8:27),NamedUnderscore(8:28-8:30),CloseRound(8:30-8:31),CloseRound(8:31-8:32),
-EndOfFile(9:1-9:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-8.32
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-type-anno @3.1-3.10 (name "foo")
-			(ty @3.7-3.10 (name "U64")))
-		(s-type-anno @4.1-4.23 (name "bar")
-			(ty-apply @4.7-4.23
-				(ty @4.7-4.12 (name "Thing"))
-				(underscore-ty-var @4.13-4.15 (raw "_a"))
-				(underscore-ty-var @4.17-4.19 (raw "_b"))
-				(_)))
-		(s-type-anno @5.1-5.19 (name "baz")
-			(ty-tuple @5.7-5.19
-				(underscore-ty-var @5.8-5.10 (raw "_a"))
-				(underscore-ty-var @5.12-5.14 (raw "_b"))
-				(underscore-ty-var @5.16-5.18 (raw "_c"))))
-		(s-type-anno @6.1-6.27 (name "add_one")
-			(ty-fn @6.12-6.26
-				(ty @6.12-6.14 (name "U8"))
-				(ty @6.16-6.19 (name "U16"))
-				(ty @6.23-6.26 (name "U32"))))
-		(s-type-anno @7.1-7.38 (name "main!")
-			(ty-fn @7.9-7.38
-				(ty-apply @7.9-7.21
-					(ty @7.9-7.13 (name "List"))
-					(ty @7.14-7.20 (name "String")))
-				(ty-apply @7.25-7.38
-					(ty @7.25-7.31 (name "Result"))
-					(ty-record @7.32-7.34)
-					(_))))
-		(s-type-anno @8.1-8.32 (name "tag_tuple")
-			(ty-apply @8.13-8.32
-				(ty @8.13-8.18 (name "Value"))
-				(ty-tuple @8.19-8.31
-					(underscore-ty-var @8.20-8.22 (raw "_a"))
-					(underscore-ty-var @8.24-8.26 (raw "_b"))
-					(underscore-ty-var @8.28-8.30 (raw "_c")))))))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(Expr.block
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "foo"))
+    (type type_2)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "bar"))
+    (type type_10)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "baz"))
+    (type type_16)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "add_one"))
+    (type type_23)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "main"))
+    (type type_34)
+  )
+  (Stmt.standalone_type_anno
+    (pattern (Patt.ident "tag_tuple"))
+    (type type_42)
+  )
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 45
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
+(var #40 _)
+(var #41 _)
+(var #42 _)
+(var #43 _)
+(var #44 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
+baz : _a
+tag_tuple : _a
+foo : _a
+bar : _a
+add_one : _a
+main : _a
 ~~~

@@ -1,7 +1,7 @@
-# Parse
+# AST
 
-Converts Roc source code into an Abstract Syntax Tree (AST) through tokenization and parsing.
+This module parses a flat stream of tokens into an Abstract Syntax Tree (AST).
 
 ## Purpose
 
-The parse module is the first stage of the Roc compiler pipeline, transforming raw source code into a structured representation that can be processed by subsequent stages (canonicalization, type checking, etc.).
+Parsing is the second stage of the Roc compiler pipeline, transforming a flat stream of tokens into a tree structure that can be processed by subsequent stages (canonicalization, type checking, etc.).

@@ -21,6 +21,80 @@ TupleType := (_, U32, _)
 
 TagType := [Some(_), None]
 ~~~
+# TOKENS
+~~~text
+KwModule OpenSquare CloseSquare BlankLine UpperIdent OpColon Underscore BlankLine UpperIdent OpColonEqual Underscore BlankLine UpperIdent OpColonEqual UpperIdent OpenRound Underscore CloseRound BlankLine UpperIdent OpColonEqual OpenCurly LowerIdent OpColon Underscore Comma LowerIdent OpColon UpperIdent CloseCurly BlankLine UpperIdent OpColonEqual Underscore OpArrow Underscore BlankLine UpperIdent OpColonEqual OpenRound Underscore Comma UpperIdent Comma Underscore CloseRound BlankLine UpperIdent OpColonEqual OpenSquare UpperIdent OpenRound Underscore CloseRound Comma UpperIdent CloseSquare ~~~
+# PARSE
+~~~clojure
+(module-header)
+(block
+  (binop_colon
+    (uc "MyType")
+    (underscore)
+  )
+  (binop_colon_equals
+    (uc "OtherType")
+    (underscore)
+  )
+  (binop_colon_equals
+    (uc "ComplexType")
+    (apply_uc
+      (uc "List")
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "RecordType")
+    (record_literal
+      (binop_colon
+        (lc "field")
+        (underscore)
+      )
+      (binop_colon
+        (lc "other")
+        (uc "U32")
+      )
+    )
+  )
+  (binop_colon_equals
+    (uc "FunctionType")
+    (binop_arrow_call
+      (underscore)
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "TupleType")
+    (tuple_literal
+      (underscore)
+      (uc "U32")
+      (underscore)
+    )
+  )
+  (binop_colon_equals
+    (uc "TagType")
+    (list_literal
+      (apply_uc
+        (uc "Some")
+        (underscore)
+      )
+      (uc "None")
+    )
+  )
+)
+~~~
+# FORMATTED
+~~~roc
+module []
+
+MyType : _
+OtherType := _
+ComplexType := List _
+RecordType := {field: _, other: U32}
+FunctionType := _ -> _
+TupleType := (_, U32, _)
+TagType := [Some(_), None]
+~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
@@ -32,242 +106,63 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:7:21:7:21:**
-```roc
-ComplexType := List(_)
-```
-                    ^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:13:15:13:15:**
-```roc
-TupleType := (_, U32, _)
-```
-              ^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-module []
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:15:18:15:18:**
-```roc
-TagType := [Some(_), None]
-```
-                 ^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-# TOKENS
-~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),Underscore(3:10-3:11),
-UpperIdent(5:1-5:10),OpColonEqual(5:11-5:13),Underscore(5:14-5:15),
-UpperIdent(7:1-7:12),OpColonEqual(7:13-7:15),UpperIdent(7:16-7:20),NoSpaceOpenRound(7:20-7:21),Underscore(7:21-7:22),CloseRound(7:22-7:23),
-UpperIdent(9:1-9:11),OpColonEqual(9:12-9:14),OpenCurly(9:15-9:16),LowerIdent(9:17-9:22),OpColon(9:22-9:23),Underscore(9:24-9:25),Comma(9:25-9:26),LowerIdent(9:27-9:32),OpColon(9:32-9:33),UpperIdent(9:34-9:37),CloseCurly(9:38-9:39),
-UpperIdent(11:1-11:13),OpColonEqual(11:14-11:16),Underscore(11:17-11:18),OpArrow(11:19-11:21),Underscore(11:22-11:23),
-UpperIdent(13:1-13:10),OpColonEqual(13:11-13:13),OpenRound(13:14-13:15),Underscore(13:15-13:16),Comma(13:16-13:17),UpperIdent(13:18-13:21),Comma(13:21-13:22),Underscore(13:23-13:24),CloseRound(13:24-13:25),
-UpperIdent(15:1-15:8),OpColonEqual(15:9-15:11),OpenSquare(15:12-15:13),UpperIdent(15:13-15:17),NoSpaceOpenRound(15:17-15:18),Underscore(15:18-15:19),CloseRound(15:19-15:20),Comma(15:20-15:21),UpperIdent(15:22-15:26),CloseSquare(15:26-15:27),
-EndOfFile(16:1-16:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-15.27
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
-	(statements
-		(s-type-decl @3.1-3.11
-			(header @3.1-3.7 (name "MyType")
-				(args))
-			(_))
-		(s-type-decl @5.1-5.15
-			(header @5.1-5.10 (name "OtherType")
-				(args))
-			(_))
-		(s-type-decl @7.1-7.23
-			(header @7.1-7.12 (name "ComplexType")
-				(args))
-			(ty-apply @7.16-7.23
-				(ty @7.16-7.20 (name "List"))
-				(_)))
-		(s-type-decl @9.1-9.39
-			(header @9.1-9.11 (name "RecordType")
-				(args))
-			(ty-record @9.15-9.39
-				(anno-record-field @9.17-9.25 (name "field")
-					(_))
-				(anno-record-field @9.27-9.37 (name "other")
-					(ty @9.34-9.37 (name "U32")))))
-		(s-type-decl @11.1-11.23
-			(header @11.1-11.13 (name "FunctionType")
-				(args))
-			(ty-fn @11.17-11.23
-				(_)
-				(_)))
-		(s-type-decl @13.1-13.25
-			(header @13.1-13.10 (name "TupleType")
-				(args))
-			(ty-tuple @13.14-13.25
-				(_)
-				(ty @13.18-13.21 (name "U32"))
-				(_)))
-		(s-type-decl @15.1-15.27
-			(header @15.1-15.8 (name "TagType")
-				(args))
-			(ty-tag-union @15.12-15.27
-				(tags
-					(ty-apply @15.13-15.20
-						(ty @15.13-15.17 (name "Some"))
-						(_))
-					(ty @15.22-15.26 (name "None")))))))
-~~~
-# FORMATTED
-~~~roc
-module []
-
-MyType : _
-
-OtherType := _
-
-ComplexType := List(_)
-
-RecordType := { field : _, other : U32 }
-
-FunctionType := _ -> _
-
-TupleType := (_, U32, _)
-
-TagType := [Some(_), None]
-~~~
+NIL
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-alias-decl @3.1-3.11
-		(ty-header @3.1-3.7 (name "MyType"))
-		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @5.1-5.15
-		(ty-header @5.1-5.10 (name "OtherType"))
-		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @7.1-7.23
-		(ty-header @7.1-7.12 (name "ComplexType"))
-		(ty-apply @7.16-7.23 (symbol "List")
-			(ty-underscore @7.21-7.21)))
-	(s-nominal-decl @9.1-9.39
-		(ty-header @9.1-9.11 (name "RecordType"))
-		(ty-record @9.15-9.39
-			(field (field "field")
-				(ty-underscore @1.1-1.1))
-			(field (field "other")
-				(ty @9.34-9.37 (name "U32")))))
-	(s-nominal-decl @11.1-11.23
-		(ty-header @11.1-11.13 (name "FunctionType"))
-		(ty-fn @11.17-11.23 (effectful false)
-			(ty-underscore @1.1-1.1)
-			(ty-underscore @1.1-1.1)))
-	(s-nominal-decl @13.1-13.25
-		(ty-header @13.1-13.10 (name "TupleType"))
-		(ty-tuple @13.14-13.25
-			(ty-underscore @13.15-13.15)
-			(ty @13.18-13.21 (name "U32"))
-			(ty-underscore @1.1-1.1)))
-	(s-nominal-decl @15.1-15.27
-		(ty-header @15.1-15.8 (name "TagType"))
-		(ty-tag-union @15.12-15.27
-			(ty-apply @15.13-15.20 (symbol "Some")
-				(ty-underscore @15.18-15.18))
-			(ty @15.22-15.26 (name "None")))))
+(Expr.block
+  (Stmt.type_alias)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+  (Stmt.opaque_type)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 40
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
+(var #17 _)
+(var #18 _)
+(var #19 _)
+(var #20 _)
+(var #21 _)
+(var #22 _)
+(var #23 _)
+(var #24 _)
+(var #25 _)
+(var #26 _)
+(var #27 _)
+(var #28 _)
+(var #29 _)
+(var #30 _)
+(var #31 _)
+(var #32 _)
+(var #33 _)
+(var #34 _)
+(var #35 _)
+(var #36 _)
+(var #37 _)
+(var #38 _)
+(var #39 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(type_decls
-		(alias @3.1-3.11 (type "Error")
-			(ty-header @3.1-3.7 (name "MyType")))
-		(nominal @5.1-5.15 (type "Error")
-			(ty-header @5.1-5.10 (name "OtherType")))
-		(nominal @7.1-7.23 (type "Error")
-			(ty-header @7.1-7.12 (name "ComplexType")))
-		(nominal @9.1-9.39 (type "Error")
-			(ty-header @9.1-9.11 (name "RecordType")))
-		(nominal @11.1-11.23 (type "Error")
-			(ty-header @11.1-11.13 (name "FunctionType")))
-		(nominal @13.1-13.25 (type "Error")
-			(ty-header @13.1-13.10 (name "TupleType")))
-		(nominal @15.1-15.27 (type "Error")
-			(ty-header @15.1-15.8 (name "TagType"))))
-	(expressions))
+~~~roc
 ~~~

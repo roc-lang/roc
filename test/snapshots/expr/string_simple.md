@@ -1,36 +1,43 @@
 # META
 ~~~ini
-description=Simple string literal
+description=string_simple
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-"hello world"
+# TODO: Add Roc code here
+~~~
+# TOKENS
+~~~text
+LineComment ~~~
+# PARSE
+~~~clojure
+(malformed)
+~~~
+# FORMATTED
+~~~roc
+# TODO: Add Roc code here
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
-# TOKENS
-~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),
-EndOfFile(2:1-2:1),
-~~~
-# PARSE
-~~~clojure
-(e-string @1.1-1.14
-	(e-string-part @1.2-1.13 (raw "hello world")))
-~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+
+
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.14
-	(e-literal @1.2-1.13 (string "hello world")))
+(Expr.malformed)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 3
+(var #0 _)
+(var #1 _)
+(var #2 _)
 ~~~
 # TYPES
-~~~clojure
-(expr @1.1-1.14 (type "Str"))
+~~~roc
 ~~~

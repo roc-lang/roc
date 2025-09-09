@@ -8,62 +8,111 @@ type=file
 app[]{f:platform""}import S exposing[c as
 f]
 ~~~
+# TOKENS
+~~~text
+KwApp OpenSquare CloseSquare OpenCurly LowerIdent OpColon KwPlatform String CloseCurly KwImport UpperIdent KwExposing OpenSquare LowerIdent KwAs LowerIdent CloseSquare ~~~
+# PARSE
+~~~clojure
+(app-header
+  (packages
+    (binop_colon
+      (lc "f")
+      (binop_platform
+        (str_literal_small "")
+        (block)
+      )
+    )
+))
+(block
+  (import
+    (binop_exposing
+      (uc "S")
+      (list_literal
+        (lc "c")
+      )
+    )
+  )
+  (malformed)
+  (lc "f")
+  (malformed)
+)
+~~~
+# FORMATTED
+~~~roc
+app { f: "" platform [] }
+
+import S exposing [c]
+as
+f
+]
+~~~
 # EXPECTED
 MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `S` was not found in this Roc project.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **as
+** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-You're attempting to use this module here:
-**fuzz_crash_054.md:1:20:2:3:**
+**fuzz_crash_054.md:1:40:2:1:**
 ```roc
 app[]{f:platform""}import S exposing[c as
 f]
 ```
 
 
-# TOKENS
-~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),KwImport(1:20-1:26),UpperIdent(1:27-1:28),KwExposing(1:29-1:37),OpenSquare(1:37-1:38),LowerIdent(1:38-1:39),KwAs(1:40-1:42),
-LowerIdent(2:1-2:2),CloseSquare(2:2-2:3),
-EndOfFile(3:1-3:1),
-~~~
-# PARSE
-~~~clojure
-(file @1.1-2.3
-	(app @1.1-1.20
-		(provides @1.4-1.6)
-		(record-field @1.7-1.19 (name "f")
-			(e-string @1.17-1.19
-				(e-string-part @1.18-1.18 (raw ""))))
-		(packages @1.6-1.20
-			(record-field @1.7-1.19 (name "f")
-				(e-string @1.17-1.19
-					(e-string-part @1.18-1.18 (raw ""))))))
-	(statements
-		(s-import @1.20-2.3 (raw "S")
-			(exposing
-				(exposed-lower-ident @1.38-2.2
-					(text "c")
-					(as "f"))))))
-~~~
-# FORMATTED
-~~~roc
-app [] { f: platform "" }
-import S exposing [
-	c as f,
-]
-~~~
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **]** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_054.md:2:2:2:3:**
+```roc
+f]
+```
+ ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named **f** in this scope.
+Is there an **import** or **exposing** missing up-top?
+
+**fuzz_crash_054.md:2:1:2:2:**
+```roc
+f]
+```
+^
+
+
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-import @1.20-2.3 (module "S")
-		(exposes
-			(exposed (name "c") (alias "f") (wildcard false)))))
+(Expr.block
+  (Stmt.import)
+  (Expr.malformed)
+  (Expr.lookup "f")
+  (Expr.malformed)
+)
+~~~
+# SOLVED
+~~~clojure
+; Total type variables: 17
+(var #0 _)
+(var #1 _)
+(var #2 _)
+(var #3 _)
+(var #4 _)
+(var #5 _)
+(var #6 _)
+(var #7 _)
+(var #8 _)
+(var #9 _)
+(var #10 _)
+(var #11 _)
+(var #12 _)
+(var #13 _)
+(var #14 _)
+(var #15 _)
+(var #16 _)
 ~~~
 # TYPES
-~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+~~~roc
 ~~~
