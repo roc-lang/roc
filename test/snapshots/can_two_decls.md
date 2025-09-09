@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app [] { pf: platform "../basic-cli/platform.roc" }
 
 a = 5
 b = a + 1
@@ -16,7 +16,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),CloseSquare(1:6-1:7),OpenCurly(1:8-1:9),LowerIdent(1:10-1:12),OpColon(1:12-1:13),KwPlatform(1:14-1:22),StringStart(1:23-1:24),StringPart(1:24-1:49),StringEnd(1:49-1:50),CloseCurly(1:51-1:52),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:6),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:9-4:10),
 EndOfFile(5:1-5:1),
@@ -24,17 +24,15 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.10
-	(app @1.1-1.57
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
-				(text "main!")))
-		(record-field @1.15-1.55 (name "pf")
-			(e-string @1.28-1.55
-				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
-		(packages @1.13-1.57
-			(record-field @1.15-1.55 (name "pf")
-				(e-string @1.28-1.55
-					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
+	(app @1.1-1.52
+		(provides @1.5-1.7)
+		(record-field @1.10-1.50 (name "pf")
+			(e-string @1.23-1.50
+				(e-string-part @1.24-1.49 (raw "../basic-cli/platform.roc"))))
+		(packages @1.8-1.52
+			(record-field @1.10-1.50 (name "pf")
+				(e-string @1.23-1.50
+					(e-string-part @1.24-1.49 (raw "../basic-cli/platform.roc"))))))
 	(statements
 		(s-decl @3.1-3.6
 			(p-ident @3.1-3.2 (raw "a"))

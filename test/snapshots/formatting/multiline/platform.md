@@ -22,10 +22,10 @@ platform "pf"
 		pa2: "pa2",
 	}
 	# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
-	provides [
-		pr1,
-		pr2,
-	]
+	provides {
+		pr1: "not implemented",
+		pr2: "not implemented",
+	}
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform.md:10:3:10:5
@@ -69,10 +69,10 @@ KwPackages(13:2-13:10),OpenCurly(13:11-13:12),
 LowerIdent(14:3-14:6),OpColon(14:6-14:7),StringStart(14:8-14:9),StringPart(14:9-14:12),StringEnd(14:12-14:13),Comma(14:13-14:14),
 LowerIdent(15:3-15:6),OpColon(15:6-15:7),StringStart(15:8-15:9),StringPart(15:9-15:12),StringEnd(15:12-15:13),Comma(15:13-15:14),
 CloseCurly(16:2-16:3),
-KwProvides(18:2-18:10),OpenSquare(18:11-18:12),
-LowerIdent(19:3-19:6),Comma(19:6-19:7),
-LowerIdent(20:3-20:6),Comma(20:6-20:7),
-CloseSquare(21:2-21:3),
+KwProvides(18:2-18:10),OpenCurly(18:11-18:12),
+LowerIdent(19:3-19:6),OpColon(19:6-19:7),StringStart(19:8-19:9),StringPart(19:9-19:24),StringEnd(19:24-19:25),Comma(19:25-19:26),
+LowerIdent(20:3-20:6),OpColon(20:6-20:7),StringStart(20:8-20:9),StringPart(20:9-20:24),StringEnd(20:24-20:25),Comma(20:25-20:26),
+CloseCurly(21:2-21:3),
 EndOfFile(22:1-22:1),
 ~~~
 # PARSE
@@ -102,10 +102,12 @@ EndOfFile(22:1-22:1),
 				(e-string @15.8-15.13
 					(e-string-part @15.9-15.12 (raw "pa2")))))
 		(provides @18.11-21.3
-			(exposed-lower-ident @19.3-19.6
-				(text "pr1"))
-			(exposed-lower-ident @20.3-20.6
-				(text "pr2"))))
+			(record-field @19.3-19.25 (name "pr1")
+				(e-string @19.8-19.25
+					(e-string-part @19.9-19.24 (raw "not implemented"))))
+			(record-field @20.3-20.25 (name "pr2")
+				(e-string @20.8-20.25
+					(e-string-part @20.9-20.24 (raw "not implemented"))))))
 	(statements))
 ~~~
 # FORMATTED

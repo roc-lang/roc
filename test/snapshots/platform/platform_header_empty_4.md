@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-platform "foo" requires {} {} exposes [] packages {} provides []
+platform "foo" requires {} {} exposes [] packages {} provides {}
 ~~~
 # EXPECTED
 NIL
@@ -13,7 +13,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-1:15),KwRequires(1:16-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),OpenCurly(1:28-1:29),CloseCurly(1:29-1:30),KwExposes(1:31-1:38),OpenSquare(1:39-1:40),CloseSquare(1:40-1:41),KwPackages(1:42-1:50),OpenCurly(1:51-1:52),CloseCurly(1:52-1:53),KwProvides(1:54-1:62),OpenSquare(1:63-1:64),CloseSquare(1:64-1:65),
+KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-1:15),KwRequires(1:16-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),OpenCurly(1:28-1:29),CloseCurly(1:29-1:30),KwExposes(1:31-1:38),OpenSquare(1:39-1:40),CloseSquare(1:40-1:41),KwPackages(1:42-1:50),OpenCurly(1:51-1:52),CloseCurly(1:52-1:53),KwProvides(1:54-1:62),OpenCurly(1:63-1:64),CloseCurly(1:64-1:65),
 EndOfFile(2:1-2:1),
 ~~~
 # PARSE
@@ -33,7 +33,7 @@ platform "foo"
 	requires {} {}
 	exposes []
 	packages {}
-	provides []
+	provides {}
 ~~~
 # CANONICALIZE
 ~~~clojure

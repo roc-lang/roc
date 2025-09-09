@@ -23,9 +23,9 @@ platform # Comment after platform keyword
 			some_pkg: "../some_pkg.roc", # Comment after package
 		} # Comment after packages close
 	provides # Comment after provides keyword
-		[ # Comment after provides open
-			bar, # Comment after exposed item
-		]
+		{ # Comment after provides open
+			bar: "roc__bar", # Comment after provides entry
+		}
 ~~~
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform_header_nonempty_1.md:12:4:12:7
@@ -60,9 +60,9 @@ OpenCurly(15:3-15:4),
 LowerIdent(16:4-16:12),OpColon(16:12-16:13),StringStart(16:14-16:15),StringPart(16:15-16:30),StringEnd(16:30-16:31),Comma(16:31-16:32),
 CloseCurly(17:3-17:4),
 KwProvides(18:2-18:10),
-OpenSquare(19:3-19:4),
-LowerIdent(20:4-20:7),Comma(20:7-20:8),
-CloseSquare(21:3-21:4),
+OpenCurly(19:3-19:4),
+LowerIdent(20:4-20:7),OpColon(20:7-20:8),StringStart(20:9-20:10),StringPart(20:10-20:18),StringEnd(20:18-20:19),Comma(20:19-20:20),
+CloseCurly(21:3-21:4),
 EndOfFile(22:1-22:1),
 ~~~
 # PARSE
@@ -86,8 +86,9 @@ EndOfFile(22:1-22:1),
 				(e-string @16.14-16.31
 					(e-string-part @16.15-16.30 (raw "../some_pkg.roc")))))
 		(provides @19.3-21.4
-			(exposed-lower-ident @20.4-20.7
-				(text "bar"))))
+			(record-field @20.4-20.19 (name "bar")
+				(e-string @20.9-20.19
+					(e-string-part @20.10-20.18 (raw "roc__bar"))))))
 	(statements))
 ~~~
 # FORMATTED
