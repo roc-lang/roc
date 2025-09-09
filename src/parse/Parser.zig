@@ -1906,29 +1906,22 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
                     // Check for effectful suffix
                     const effectful = self.eat(.OpBang);
 
-                    const ident_idx: base.Ident.Idx = switch (ident_token.payload) {
-                        .interned => |idx| blk: {
-                            // Update attributes if effectful
-                            if (effectful) {
-                                break :blk .{
-                                    .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
-                                    .idx = idx.idx,
-                                };
-                            } else {
-                                break :blk idx;
-                            }
-                        },
-                        .ident_with_flags => |iwf| blk: {
-                            if (effectful) {
-                                break :blk .{
-                                    .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
-                                    .idx = iwf.ident.idx,
-                                };
-                            } else {
-                                break :blk iwf.ident;
-                            }
-                        },
-                        else => .{ .attributes = .{ .effectful = effectful, .ignored = false, .reassignable = false }, .idx = 0 },
+                    const ident_idx: base.Ident.Idx = blk: {
+                        switch (ident_token.tag) {
+                            .LowerIdent, .UpperIdent, .NamedUnderscore => {
+                                const idx = ident_token.payload.interned;
+                                // Update attributes if effectful
+                                if (effectful) {
+                                    break :blk .{
+                                        .attributes = .{ .effectful = true, .ignored = false, .reassignable = false },
+                                        .idx = idx.idx,
+                                    };
+                                } else {
+                                    break :blk idx;
+                                }
+                            },
+                            else => unreachable, // We already checked is_lower or is_upper above
+                        }
                     };
 
                     const node_idx = try self.ast.appendNode(
@@ -1988,27 +1981,27 @@ fn processState(self: *Parser, state: ParseState) !StateAction {
 
                         // Create string node for path
                         const path_region = self.currentRegion();
-                        const str_val = switch (path_token.payload) {
-                            .bytes_idx => |idx| idx,
-                            else => blk: {
-                                // If we don't have a valid bytes_idx, create an empty string
-                                // This is safer than using a dummy index
-                                const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
-                                    // If we can't even create an empty string, report error
-                                    try self.pushDiagnostic(.internal_parser_error, path_region.start, path_region.end);
-                                    return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
-                                };
-                                break :blk empty_idx;
-                            },
+                        // String tokens should have bytes_idx payload
+                        const str_val = if (path_token.tag == .String or path_token.tag == .StringPart or path_token.tag == .MultilineString)
+                            path_token.payload.bytes_idx
+                        else blk: {
+                            // If we don't have a valid string token, create an empty string
+                            // This is safer than using a dummy index
+                            const empty_idx = self.byte_slices.append(self.gpa, "") catch |err| {
+                                // If we can't even create an empty string, report error
+                                try self.pushDiagnostic(.internal_parser_error, path_region.start, path_region.end);
+                                return if (err == error.OutOfMemory) error.OutOfMemory else .continue_processing;
+                            };
+                            break :blk empty_idx;
                         };
                         const path_node = try self.ast.appendNode(self.gpa, path_region, .str_literal_big, .{ .str_literal_big = str_val });
 
                         // Create package field node
-                        const pkg_ident_idx: base.Ident.Idx = switch (pkg_name_token.payload) {
-                            .interned => |idx| idx,
-                            .ident_with_flags => |iwf| iwf.ident,
-                            else => .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-                        };
+                        // Package name should be an identifier
+                        const pkg_ident_idx: base.Ident.Idx = if (pkg_name_token.tag == .LowerIdent or pkg_name_token.tag == .UpperIdent)
+                            pkg_name_token.payload.interned
+                        else
+                            .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 };
 
                         const pkg_field_node = try self.ast.appendNode(self.gpa, pkg_region, .lc, .{ .ident = pkg_ident_idx });
 
@@ -3296,10 +3289,10 @@ fn currentPosition(self: *Parser) Position {
 /// Get the identifier at the current position (if it's an identifier token)
 fn currentIdent(self: *Parser) ?Ident.Idx {
     if (self.currentToken()) |token| {
-        return switch (token.payload) {
-            .interned => |idx| idx,
-            else => null,
-        };
+        // Check if token is an identifier type that has interned payload
+        if (token.tag == .LowerIdent or token.tag == .UpperIdent or token.tag == .NamedUnderscore) {
+            return token.payload.interned;
+        }
     }
     return null;
 }
