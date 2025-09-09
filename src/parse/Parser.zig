@@ -3479,14 +3479,14 @@ pub fn parseHeader(self: *Parser) Error!void {
 
     // Create tokenizer using the shared environment
     // Create SrcBytes from source
-    const src_bytes = SrcBytes{ .ptr = self.source.ptr, .len = @intCast(self.source.len) };
-    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, &messages, self.byte_slices);
+    const src_bytes = SrcBytes{ .ptr = @alignCast(self.source.ptr), .len = @intCast(self.source.len) };
+    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, &self.env.idents, &messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two non-comment tokens to start
     var first: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => {
                 // No tokens at all - no header
@@ -3502,7 +3502,7 @@ pub fn parseHeader(self: *Parser) Error!void {
 
     var second: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => break,
             .LineComment, .DocComment, .BlankLine => continue,
@@ -4488,14 +4488,14 @@ pub fn parseExpr(self: *Parser) Error!Node.Idx {
 /// Parse an expression from source text (sets up tokenizer)
 pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) Error!Node.Idx {
     // Create tokenizer using the shared environment
-    const src_bytes = SrcBytes{ .ptr = self.source.ptr, .len = @intCast(self.source.len) };
-    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, messages, self.byte_slices);
+    const src_bytes = SrcBytes{ .ptr = @alignCast(self.source.ptr), .len = @intCast(self.source.len) };
+    var token_iter = try tokenize_iter.TokenIterator.init(self.gpa, src_bytes, &self.env.idents, messages, self.byte_slices);
     defer token_iter.deinit(self.gpa);
 
     // Get first two non-comment tokens to start
     var first: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => {
                 // No tokens found - create a malformed node instead of returning dummy index
@@ -4513,7 +4513,7 @@ pub fn parseExprFromSource(self: *Parser, messages: []tokenize_iter.Diagnostic) 
 
     var second: ?Token = null;
     while (true) {
-        const token = try token_iter.next(self.gpa);
+        const token = try token_iter.next();
         switch (token.tag) {
             .EndOfFile => break,
             .LineComment, .DocComment, .BlankLine => continue,
@@ -4557,54 +4557,22 @@ fn parseNumLiteral(self: *Parser) Error!Node.Idx {
 
     self.advance();
 
-    // Handle different number literal types based on token tag and extra data
+    // Handle different number literal types based on token tag
     switch (tag) {
         .Int, .IntBase => {
-            // Integer literals (base-10 or other bases)
-            switch (extra) {
-                .num_literal_i32 => |value| {
-                    // Small integer that fits in i32
-                    // Small integer that fits in i32
-                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = value });
-                },
-                .bytes_idx => |idx| {
-                    // Big integer stored in ByteSlices
-                    // For IntBase, it's stored as base-10 in ByteSlices
-                    const ast_tag: Node.Tag = if (tag == .IntBase) .int_literal_big else .num_literal_big;
-                    const payload = if (tag == .IntBase)
-                        Node.Payload{ .int_literal_big = idx }
-                    else
-                        Node.Payload{ .num_literal_big = idx };
-                    return try self.ast.appendNode(self.gpa, region, ast_tag, payload);
-                },
-                else => {
-                    // Shouldn't happen with well-formed tokens
-                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
-                },
-            }
+            // Integer literals - Int/IntBase tokens have bytes_idx payload
+            const idx = extra.bytes_idx;
+            const ast_tag: Node.Tag = if (tag == .IntBase) .int_literal_big else .num_literal_big;
+            const payload = if (tag == .IntBase)
+                Node.Payload{ .int_literal_big = idx }
+            else
+                Node.Payload{ .num_literal_big = idx };
+            return try self.ast.appendNode(self.gpa, region, ast_tag, payload);
         },
         .Float => {
-            // Floating point literals
-            // Floating point literals
-            switch (extra) {
-                .frac_literal_small => |small_dec| {
-                    // Small fraction that fits in SmallDec - convert from Token.SmallDec to AST.SmallDec
-                    const ast_small_dec = AST.Node.SmallDec{
-                        .numerator = small_dec.numerator,
-                        .denominator_power_of_ten = small_dec.denominator_power_of_ten,
-                    };
-                    return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = ast_small_dec });
-                },
-                .bytes_idx => |idx| {
-                    // Big fraction stored in ByteSlices
-                    // Big fraction stored in ByteSlices
-                    return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
-                },
-                else => {
-                    // Shouldn't happen with well-formed tokens
-                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
-                },
-            }
+            // Float tokens have bytes_idx payload
+            const idx = extra.bytes_idx;
+            return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
         },
         else => {
             // Not a number literal token
@@ -4656,8 +4624,9 @@ fn parseStoredStringExpr(self: *Parser) Error!Node.Idx {
     }
 
     // The string content is stored in ByteSlices with escapes already resolved
-    switch (extra) {
-        .bytes_idx => |idx| {
+    switch (tag) {
+        .String, .MultilineString => {
+            const idx = extra.bytes_idx;
             // Get the string from ByteSlices
             // Check if ByteSlices is empty (can happen with certain parsing scenarios)
             if (self.byte_slices.entries.items.items.len == 0) {
@@ -4709,20 +4678,13 @@ fn parseStringExpr(self: *Parser) Error!Node.Idx {
             .StringPart => {
                 // Get the string content from the token's ByteSlices
                 const extra = self.currentExtra();
-                switch (extra) {
-                    .bytes_idx => |idx| {
-                        // Check if ByteSlices is empty (can happen with certain parsing scenarios)
-                        if (self.byte_slices.entries.items.items.len == 0) {
-                            // ByteSlices is empty - skip this part
-                        } else {
-                            const str_content = self.byte_slices.slice(idx);
-                            try self.scratch_bytes.appendSlice(self.gpa, str_content);
-                        }
-                    },
-                    else => {
-                        // Shouldn't happen - StringPart should always have bytes_idx
-                        try self.scratch_bytes.appendSlice(self.gpa, "");
-                    },
+                const idx = extra.bytes_idx;
+                // Check if ByteSlices is empty (can happen with certain parsing scenarios)
+                if (self.byte_slices.entries.items.items.len == 0) {
+                    // ByteSlices is empty - skip this part
+                } else {
+                    const str_content = self.byte_slices.slice(idx);
+                    try self.scratch_bytes.appendSlice(self.gpa, str_content);
                 }
                 self.advance();
             },
@@ -5420,48 +5382,48 @@ fn parsePatternPrimary(self: *Parser) Error!Node.Idx {
         },
 
         // Literal patterns
-        .Int, .IntBase => {
-            const token = self.currentToken() orelse return self.pushMalformed(.expr_unexpected_token, self.getCurrentErrorPos());
+        .Int => {
             const extra = self.currentExtra();
             const region = self.currentRegion();
             self.advance();
 
-            // Handle different integer literal formats
-            switch (extra) {
-                .num_literal_i32 => |value| {
-                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = value });
-                },
-                .bytes_idx => |idx| {
-                    const ast_tag: Node.Tag = if (token.tag == .IntBase) .int_literal_big else .num_literal_big;
-                    const payload = if (token.tag == .IntBase)
-                        Node.Payload{ .int_literal_big = idx }
-                    else
-                        Node.Payload{ .num_literal_big = idx };
-                    return try self.ast.appendNode(self.gpa, region, ast_tag, payload);
-                },
-                else => {
-                    return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = 0 });
-                },
+            // Try to get the value as i32 first (most common case)
+            // If the tokenizer stored it as i32, use that
+            // Otherwise it must be stored as bytes_idx for big numbers
+            const source_slice = self.source[region.start.offset..region.end.offset];
+            if (std.fmt.parseInt(i32, source_slice, 10)) |value| {
+                return try self.ast.appendNode(self.gpa, region, .num_literal_i32, .{ .num_literal_i32 = value });
+            } else |_| {
+                // Must be a big number stored in bytes_idx
+                const idx = extra.bytes_idx;
+                return try self.ast.appendNode(self.gpa, region, .num_literal_big, .{ .num_literal_big = idx });
             }
+        },
+        .IntBase => {
+            const extra = self.currentExtra();
+            const region = self.currentRegion();
+            self.advance();
+
+            // IntBase tokens always use bytes_idx
+            const idx = extra.bytes_idx;
+            return try self.ast.appendNode(self.gpa, region, .int_literal_big, .{ .int_literal_big = idx });
         },
         .Float => {
             const extra = self.currentExtra();
             const region = self.currentRegion();
             self.advance();
 
-            switch (extra) {
-                .frac_literal_small => |frac| {
-                    return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = .{
-                        .numerator = frac.numerator,
-                        .denominator_power_of_ten = frac.denominator_power_of_ten,
-                    } });
-                },
-                .bytes_idx => |idx| {
-                    return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
-                },
-                else => {
-                    return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = .{ .numerator = 0, .denominator_power_of_ten = 0 } });
-                },
+            // Try to parse as SmallDec first
+            const source_slice = self.source[region.start.offset..region.end.offset];
+            if (base.SmallDec.parse(source_slice)) |small_dec| {
+                return try self.ast.appendNode(self.gpa, region, .frac_literal_small, .{ .frac_literal_small = .{
+                    .numerator = small_dec.numerator,
+                    .denominator_power_of_ten = small_dec.denominator_power_of_ten,
+                } });
+            } else {
+                // Must be stored as bytes_idx for big floats
+                const idx = extra.bytes_idx;
+                return try self.ast.appendNode(self.gpa, region, .frac_literal_big, .{ .frac_literal_big = idx });
             }
         },
         .String => {

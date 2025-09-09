@@ -72,8 +72,6 @@ pub fn next(self: *Self) Allocator.Error!Token {
     const src = self.src_bytes.bytes();
 
     while (true) { // We keep checking the byte until we hit the null terminator
-        std.debug.assert(self.pos < src.len); // We should have exited via null terminator before this ended
-
         const start: u32 = @intCast(self.pos);
         const byte = src[self.pos];
 
@@ -139,7 +137,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
             },
             '0'...'9' => return try self.tokenizeNumber(self.gpa, start),
             '/' => return chompOneOfTwo(&self.pos, src, '/', .OpSlash, .OpDoubleSlash),
-            '-' => return chompOneOfTwo(&self.pos, src, '>', .OpMinus, .OpThinArrow), // TODO handle unary minus here by checking for preceding whitespace
+            '-' => return chompOneOfTwo(&self.pos, src, '>', .OpBinaryMinus, .OpThinArrow), // TODO handle unary minus here by checking for preceding whitespace
             '=' => return chompOneOfThree(&self.pos, src, '=', '>', .OpAssign, .OpEquals, .OpThickArrow),
             '(' => return chompOne(&self.pos, .OpenRound),
             ')' => return chompOne(&self.pos, .CloseRound),
@@ -192,9 +190,9 @@ pub fn next(self: *Self) Allocator.Error!Token {
                 // TODO should treat both of these as malformed, report diagnostic, etc.
                 return chompOneOfTwo(&self.pos, src, '&', .OpBar, .OpOr);
             },
-            '?' => return chompOneOfTwo(&self.pos, src, '?', .OpDouble, .OpDoubleQuestion),
+            '?' => return chompOneOfTwo(&self.pos, src, '?', .OpQuestion, .OpDoubleQuestion),
             '\\' => return chompOne(&self.pos, .OpBackslash),
-            '\'' => return try self.tokenizeSingleQuote(self.gpa, start),
+            '\'' => return try self.tokenizeSingleQuote(start),
             else => { // Anything else is an unsupported  token
                 self.pos += 1;
                 // TODO Keep chomping until we hit a valid token, then report *one* diagnostic spanning the chomped region
@@ -213,7 +211,7 @@ pub fn next(self: *Self) Allocator.Error!Token {
     return Token{
         .tag = .EndOfFile,
         .region = Region.from_raw_offsets(@intCast(self.pos), @intCast(self.pos)),
-        .payload = .none,
+        .payload = .{ .none = {} },
     };
 }
 
@@ -593,7 +591,7 @@ inline fn chompEscapedChar(self: *Self, escaped: u8, bytes_idx: ByteSlices.Idx) 
         else => {
             // Report the invalid escape sequence
             const start: u32 = @intCast(self.pos - 1); // Include the backslash in the region
-            try self.problems.append(self.gpa, Diagnostic{
+            _ = try self.problems.append(self.gpa, Diagnostic{
                 .region = Region.from_raw_offsets(start, @intCast(self.pos)),
                 .tag = .InvalidEscapeSequence,
             });
@@ -698,7 +696,7 @@ fn tokenizeSingleQuote(self: *Self, start_pos: usize) std.mem.Allocator.Error!To
             .start = Region.Position{ .offset = @intCast(start_pos) },
             .end = Region.Position{ .offset = @intCast(self.pos) },
         },
-        .payload = .{ .none = char_value },
+        .payload = .{ .none = {} },
     };
 }
 
@@ -809,7 +807,7 @@ fn tokenizeSingleQuoteString(self: *Self) std.mem.Allocator.Error!Token {
 
     return Token{
         .tag = tag,
-        .region = Region.from_raw_offset(start, @intCast(end)),
+        .region = Region.from_raw_offsets(start, @intCast(end)),
         .payload = .{ .bytes_idx = bytes_idx },
     };
 }
@@ -1091,58 +1089,58 @@ pub const keywords = std.StaticStringMap(Token.Tag).initComptime(.{
 });
 
 inline fn chompOne(pos: *usize, tag: Token.Tag) Token {
-    const start: u32 = @intCast(*pos);
+    const start: u32 = @intCast(pos.*);
     const end: u32 = start + 1;
 
-    pos.? = @intCast(end); // Chomp the byte
+    pos.* = @intCast(end); // Chomp the byte
 
     return Token{
         .tag = tag,
         .region = Region.from_raw_offsets(start, end),
-        .payload = .none,
+        .payload = .{ .none = {} },
     };
 }
 
 inline fn chompOneOfTwo(
     pos: *usize,
-    src: [:0]const u8,
+    src: []const u8,
     snd: u8,
     fst_tag: Token.Tag,
     snd_tag: Token.Tag,
 ) Token {
-    const start: u32 = @intCast(*pos);
-    pos.? = *pos + 1; // Chomp the first byte
+    const start: u32 = @intCast(pos.*);
+    pos.* = pos.* + 1; // Chomp the first byte
 
     // Branchlessly check for the second tag
-    const has_snd = src[*pos] == snd; // Safe bc we early returned if we were on the last byte
-    pos.? = *pos + has_snd; // Branchlessly chomp the second char
+    const has_snd = src[pos.*] == snd; // Safe bc we early returned if we were on the last byte
+    pos.* = pos.* + @intFromBool(has_snd); // Branchlessly chomp the second char
 
-    return Token.no_payload(if (has_snd) snd_tag else fst_tag, start, @intCast(*pos));
+    return Token.no_payload(if (has_snd) snd_tag else fst_tag, start, @intCast(pos.*));
 }
 
 inline fn chompOneOfThree(
     pos: *usize,
-    src: [:0]const u8,
+    src: []const u8,
     snd: u8,
     thd: u8,
     fst_tag: Token.Tag,
     snd_tag: Token.Tag,
     thd_tag: Token.Tag,
 ) Token {
-    const start: u32 = @intCast(*pos);
+    const start: u32 = @intCast(pos.*);
 
-    pos.? = *pos + 1; // Chomp the first byte
+    pos.* = pos.* + 1; // Chomp the first byte
 
     // Check for the second and third tags. This won't be out-of-bounds bc src is guaranteed to end in "\n\0"
-    const has_snd = src[*pos] == snd;
-    const has_thd = src[*pos] == thd;
+    const has_snd = src[pos.*] == snd;
+    const has_thd = src[pos.*] == thd;
 
-    pos.? = *pos + (has_snd or has_thd); // Branchlessly chomp the second char
+    pos.* = pos.* + @intFromBool(has_snd or has_thd); // Branchlessly chomp the second char
 
     return Token{
         .tag = if (has_snd) snd_tag else (if (has_thd) thd_tag else fst_tag),
-        .region = Region.from_raw_offsets(start, @intCast(*pos)),
-        .payload = .none,
+        .region = Region.from_raw_offsets(start, @intCast(pos.*)),
+        .payload = .{ .none = {} },
     };
 }
 
