@@ -1528,7 +1528,7 @@ fn processSnapshotContent(
     }
 
     // Create Parser
-    var parser = try Parser.init(&env, allocator, src_testing.src, &messages, &ast, &byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(&env, allocator, src_testing.src, &ast, &byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     // Parse based on node type

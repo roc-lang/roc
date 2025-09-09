@@ -832,7 +832,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     var byte_slices = collections.ByteSlices{ .entries = .{} };
     defer byte_slices.entries.deinit(gpa);
 
-    var tokenizer = try Self.init(&env, gpa, src_testing.src, &messages, &byte_slices);
+    var tokenizer = try Self.init(gpa, src_testing.src, &messages, &byte_slices);
     defer tokenizer.deinit(gpa);
 
     // Collect all tokens
@@ -937,7 +937,7 @@ test "tokenizer with invalid UTF-8" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(gpa);
 
-        var tokenizer = try Self.init(&env, gpa, src_testing.src, &diagnostics, &byte_slices);
+        var tokenizer = try Self.init(gpa, src_testing.src, &diagnostics, &byte_slices);
         defer tokenizer.deinit(gpa);
 
         // Tokenize all tokens
@@ -960,7 +960,7 @@ test "tokenizer with invalid UTF-8" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(gpa);
 
-        var tokenizer = try Self.init(&env, gpa, src_testing.src, &diagnostics, &byte_slices);
+        var tokenizer = try Self.init(gpa, src_testing.src, &diagnostics, &byte_slices);
         defer tokenizer.deinit(gpa);
 
         // Tokenize all tokens
@@ -987,7 +987,7 @@ test "non-printable characters in string literal" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(gpa);
 
-        var tokenizer = try Self.init(&env, gpa, src_testing.src, &diagnostics, &byte_slices);
+        var tokenizer = try Self.init(gpa, src_testing.src, &diagnostics, &byte_slices);
         defer tokenizer.deinit(gpa);
 
         // Tokenize all tokens
@@ -1010,7 +1010,7 @@ test "non-printable characters in string literal" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(gpa);
 
-        var tokenizer = try Self.init(&env, gpa, src_testing.src, &diagnostics, &byte_slices);
+        var tokenizer = try Self.init(gpa, src_testing.src, &diagnostics, &byte_slices);
         defer tokenizer.deinit(gpa);
 
         // Tokenize all tokens
@@ -1032,7 +1032,7 @@ test "non-printable characters in string literal" {
         var byte_slices = collections.ByteSlices{ .entries = .{} };
         defer byte_slices.entries.deinit(gpa);
 
-        var tokenizer = try Self.init(&env, gpa, src_testing.src, &diagnostics, &byte_slices);
+        var tokenizer = try Self.init(gpa, src_testing.src, &diagnostics, &byte_slices);
         defer tokenizer.deinit(gpa);
 
         // Tokenize all tokens

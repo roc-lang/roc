@@ -199,7 +199,7 @@ pub const StateValue = union(enum) {
     precedence: u8,
 };
 /// Initialize a state machine parser
-fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, ast: *AST, byte_slices: *collections.ByteSlices) !Parser {
+pub fn init(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: SrcBytes, ast: *AST, byte_slices: *collections.ByteSlices, diagnostics: *collections.SafeList(AST.Diagnostic)) !Parser {
     const source = src_bytes.bytes();
     return Parser{
         .gpa = gpa,
@@ -212,110 +212,11 @@ fn initStateMachine(env: *base.CommonEnv, gpa: std.mem.Allocator, src_bytes: Src
         .scratch_nodes = .{},
         .scratch_op_stack = .{},
         .scratch_bytes = .{},
-        .diagnostics = undefined, // Will be set by init()
+        .diagnostics = diagnostics
         .state_stack = .{},
         .value_stack = .{},
         .min_bp_stack = .{},
     };
-}
-
-/// Parse and collect tokens - this is the main driver for token-fed parsing
-/// Returns all tokens encountered during parsing (including comments)
-pub fn parseAndCollectTokens(
-    env: *base.CommonEnv,
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    messages: []tokenize_iter.Diagnostic,
-    ast: *AST,
-    byte_slices: *collections.ByteSlices,
-    diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic),
-) !struct { tokens: std.ArrayList(Token), root: ?Node.Idx } {
-    // Initialize the parser in token-fed mode
-    var parser = try initStateMachine(env, allocator, source, ast, byte_slices);
-    parser.diagnostics = diagnostics;
-    defer parser.deinit();
-
-    // Create tokenizer
-    var token_iter = try tokenize_iter.TokenIterator.init(env, allocator, source, messages, byte_slices);
-    defer token_iter.deinit(allocator);
-
-    // Collect all tokens including comments
-    // Pre-allocate based on source size heuristic (roughly 1 token per 10 bytes)
-    var tokens = std.ArrayList(Token).init(allocator);
-    errdefer tokens.deinit();
-    try tokens.ensureTotalCapacity(@max(256, source.len / 10));
-
-    // Helper to get next non-comment token while saving all tokens
-    const getNextNonComment = struct {
-        fn next(iter: *tokenize_iter.TokenIterator, alloc: std.mem.Allocator, tokens_list: *std.ArrayList(Token)) !?Token {
-            while (true) {
-                const token = try iter.next(alloc);
-                try tokens_list.append(token);
-
-                switch (token.tag) {
-                    .EndOfFile => return null,
-                    .LineComment, .DocComment, .BlankLine => continue, // Skip comments and blank lines for parsing
-                    else => return token,
-                }
-            }
-        }
-    }.next;
-
-    // Get first two NON-COMMENT tokens to start
-    const first = try getNextNonComment(&token_iter, allocator, &token_list) orelse
-        return .{ .tokens = token_list, .root = null };
-
-    const second = try getNextNonComment(&token_iter, allocator, &token_list);
-
-    var current = first;
-    var lookahead = second;
-
-    // Simple driver loop: feed current+lookahead, advance, repeat
-    while (true) {
-        // Feed current and lookahead to parser (only non-comment tokens)
-        const needs_more = try parser.chompToken(current, lookahead);
-
-        if (!needs_more) {
-            // Parsing complete
-            break;
-        }
-
-        // Check if we're at EOF
-        if (lookahead == null or lookahead.?.tag == .EndOfFile) {
-            // Feed EOF one more time to complete parsing
-            _ = try parser.chompToken(current, lookahead);
-            break;
-        }
-
-        // Advance: current becomes lookahead, get new non-comment lookahead
-        current = lookahead.?;
-        lookahead = try getNextNonComment(&token_iter, allocator, &token_list);
-    }
-
-    // Get the root node from the value stack (if any)
-    const root = if (parser.value_stack.items.len > 0)
-        parser.value_stack.items[parser.value_stack.items.len - 1]
-    else
-        null;
-
-    return .{ .tokens = token_list, .root = root };
-}
-
-/// Compatibility init function for existing code
-/// Creates a parser that expects to be used with parseAndCollectTokens
-pub fn init(
-    env: *base.CommonEnv,
-    allocator: std.mem.Allocator,
-    src_bytes: SrcBytes,
-    messages: []tokenize_iter.Diagnostic,
-    ast: *AST,
-    byte_slices: *collections.ByteSlices,
-    diagnostics: *std.ArrayListUnmanaged(AST.Diagnostic),
-) !Parser {
-    _ = messages;
-    var parser = try initStateMachine(env, allocator, src_bytes, ast, byte_slices);
-    parser.diagnostics = diagnostics;
-    return parser;
 }
 
 // Helper functions for type conversions

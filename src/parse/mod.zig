@@ -33,11 +33,8 @@ pub fn parse(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 100);
     errdefer ast.deinit(gpa);
 
-    // Placeholder for tokenizer diagnostics
-    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
-
     // Create parser and parse the file
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(env, gpa, env.source, &ast, &ast.byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     // Parse the entire file
@@ -56,13 +53,11 @@ pub fn parseExpr(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Placeholder for tokenizer diagnostics
-    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
-
     // Create parser and parse expression
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(env, gpa, env.source, &ast, &ast.byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
+    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
     ast.root_node_idx = @intCast(@intFromEnum(try parser.parseExprFromSource(messages[0..])));
 
     return ast;
@@ -78,11 +73,8 @@ pub fn parseHeader(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Placeholder for tokenizer diagnostics
-    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
-
     // Create parser and parse header
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(env, gpa, env.source, &ast, &ast.byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     _ = try parser.parseHeader();
@@ -100,11 +92,8 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) !AST {
     var ast = try AST.initCapacity(gpa, 50);
     errdefer ast.deinit(gpa);
 
-    // Placeholder for tokenizer diagnostics
-    var messages: [128]tokens.Tokenizer.Diagnostic = undefined;
-
     // Create parser and parse statement
-    var parser = try Parser.init(env, gpa, env.source, messages[0..], &ast, &ast.byte_slices, &ast.parse_diagnostics);
+    var parser = try Parser.init(env, gpa, env.source, &ast, &ast.byte_slices, &ast.parse_diagnostics);
     defer parser.deinit();
 
     _ = try parser.parseStmt();

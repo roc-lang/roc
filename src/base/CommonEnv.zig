@@ -79,7 +79,7 @@ pub fn serialize(
         .strings = (try self.strings.serialize(allocator, writer)).*,
         .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
         .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
+        .source = undefined, // Will be set when deserializing
     };
 
     return @constCast(offset_self);
@@ -290,9 +290,11 @@ test "CommonEnv.Serialized roundtrip" {
     const gpa = testing.allocator;
 
     const source = "hello world\ntest line 2\n";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with some test data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add some test data
@@ -351,9 +353,11 @@ test "CommonEnv.Serialized roundtrip with empty data" {
     const gpa = testing.allocator;
 
     const source = "";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with no data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Create a CompactWriter
@@ -402,9 +406,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
         try source_builder.writer().print("Line {}: This is a test line with some content\n", .{i});
     }
     const source = source_builder.items;
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with large test data
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add many identifiers
@@ -495,9 +501,11 @@ test "CommonEnv.Serialized roundtrip with special characters" {
     const gpa = testing.allocator;
 
     const source = "Hello\nWorld\nTest\nLine\n";
+    var src_testing = try SrcBytes.Testing.initFromSlice(gpa, source);
+    defer src_testing.deinit(gpa);
 
     // Create original CommonEnv with special characters
-    var original = try CommonEnv.init(gpa, source);
+    var original = try CommonEnv.init(gpa, src_testing.src);
     defer original.deinit(gpa);
 
     // Add identifiers with special characters

@@ -58,8 +58,8 @@ pub const Testing = struct {
     pub fn initFromSlice(gpa: Allocator, slice: []const u8) (error{TooBig} || Allocator.Error)!SrcBytes.Testing {
         const allocation = try gpa.allocWithOptions(u8, slice.len + suffix.len, alignment, null);
 
-        if (allocation.len > @as(usize, @intCast(std.math.maxInt(@sizeOf(SrcBytes.len))))) {
-            return .TooBig;
+        if (allocation.len > @as(usize, @intCast(std.math.maxInt(u31)))) {
+            return error.TooBig;
         }
 
         @memcpy(allocation[0..slice.len], slice);
