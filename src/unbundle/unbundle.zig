@@ -23,10 +23,8 @@ const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
 pub const UnbundleError = error{
     DecompressionFailed,
     InvalidTarHeader,
-    UnexpectedEndOfStream,
     FileCreateFailed,
     DirectoryCreateFailed,
-    FileWriteFailed,
     HashMismatch,
     InvalidFilename,
     FileTooLarge,
@@ -36,6 +34,8 @@ pub const UnbundleError = error{
     DictionaryIdFlagUnsupported,
     MalformedBlock,
     MalformedFrame,
+    StreamError,
+    WriteFailed,
 } || std.mem.Allocator.Error;
 
 /// Context for error reporting during unbundle operations
@@ -95,13 +95,13 @@ pub const ExtractWriter = struct {
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    open_files: std.ArrayList(std.fs.File),
+    open_files: std.array_list.Managed(std.fs.File),
 
     pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
-            .open_files = std.ArrayList(std.fs.File).init(allocator),
+            .open_files = std.array_list.Managed(std.fs.File).init(allocator),
         };
     }
 
@@ -170,15 +170,15 @@ pub const DirExtractWriter = struct {
 /// Buffer-based extract writer for in-memory extraction
 pub const BufferExtractWriter = struct {
     allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.ArrayList(u8)),
-    directories: std.ArrayList([]u8),
-    current_file: ?*std.ArrayList(u8) = null,
+    files: std.StringHashMap(std.array_list.Managed(u8)),
+    directories: std.array_list.Managed([]u8),
+    current_file: ?*std.array_list.Managed(u8) = null,
 
     pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
-            .directories = std.ArrayList([]u8).init(allocator),
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+            .directories = std.array_list.Managed([]u8).init(allocator),
         };
     }
 
@@ -220,7 +220,7 @@ pub const BufferExtractWriter = struct {
             self.allocator.free(key);
             result.value_ptr.clearRetainingCapacity();
         } else {
-            result.value_ptr.* = std.ArrayList(u8).init(self.allocator);
+            result.value_ptr.* = std.array_list.Managed(u8).init(self.allocator);
         }
 
         self.current_file = result.value_ptr;
@@ -231,7 +231,7 @@ pub const BufferExtractWriter = struct {
     }
 
     fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const list: *std.ArrayList(u8) = @ptrCast(@alignCast(@constCast(context)));
+        const list: *std.array_list.Managed(u8) = @ptrCast(@alignCast(@constCast(context)));
         try list.appendSlice(bytes);
         return bytes.len;
     }
@@ -388,7 +388,7 @@ fn HashingReader(comptime ReaderType: type) type {
 
         const Self = @This();
         pub const Error = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, Error, read);
+        pub const Reader = std.Io.GenericReader(*Self, Error, read);
 
         pub fn read(self: *Self, buffer: []u8) Error!usize {
             const n = try self.child_reader.read(buffer);
@@ -425,14 +425,13 @@ pub fn unbundleStream(
     };
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
-        .window_buffer = &window_buffer,
-    });
-    const decompressed_reader = zstd_stream.reader();
+    var reader_buffer: [4096]u8 = undefined;
+    var reader = hashing_reader.reader().adaptToNewApi(&reader_buffer).new_interface;
+    var zstd_stream = std.compress.zstd.Decompress.init(&reader, &window_buffer, .{});
 
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{
+    var tar_iterator = std.tar.Iterator.init(&zstd_stream.reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -462,18 +461,13 @@ pub fn unbundleStream(
                 data_extracted = true;
             },
             .file => {
-                const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile(file_writer);
-
                 var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
-                    bytes_remaining -= bytes_read;
-                }
+                const old_writer = try extract_writer.createFile(file_path);
+                var file_writer = old_writer.adaptToNewApi(&buffer).new_interface;
+                defer extract_writer.finishFile(old_writer);
+
+                tar_iterator.streamRemaining(entry, &file_writer) catch return error.StreamError;
+                try file_writer.flush();
 
                 data_extracted = true;
             },
@@ -507,14 +501,6 @@ pub fn unbundleStream(
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    bytes_remaining -= bytes_read;
-                }
-
                 data_extracted = true;
             },
         }

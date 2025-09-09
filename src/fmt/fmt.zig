@@ -32,7 +32,7 @@ pub const FormattingResult = struct {
     success: usize,
     failure: usize,
     /// Only relevant when using `roc format --check`
-    unformatted_files: ?std.ArrayList([]const u8),
+    unformatted_files: ?std.array_list.Managed([]const u8),
 
     pub fn deinit(self: *@This()) void {
         if (self.unformatted_files) |files| {
@@ -47,12 +47,12 @@ pub const FormattingResult = struct {
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
     // Only used for `roc format --check`. If we aren't doing check, don't bother allocating
-    var unformatted_files = if (check) std.ArrayList([]const u8).init(gpa) else null;
+    var unformatted_files = if (check) std.array_list.Managed([]const u8).init(gpa) else null;
 
     // First try as a directory.
     if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
@@ -124,7 +124,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, unformatted_files: ?*std.ArrayList([]const u8)) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8)) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -171,14 +171,14 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
-        var formatted = std.ArrayList(u8).init(gpa);
+        var formatted = std.array_list.Managed(u8).init(gpa);
         defer formatted.deinit();
         try formatAst(parse_ast, formatted.writer().any());
         if (!std.mem.eql(u8, formatted.items, module_env.common.source)) {
@@ -194,7 +194,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
 /// Format the contents of stdin and output the result to stdout
 pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
+    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, Filesystem.max_file_size);
 
     // ModuleEnv takes ownership of contents
     var module_env = try ModuleEnv.init(gpa, contents);
@@ -205,12 +205,12 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
 
-    try formatAst(parse_ast, std.io.getStdOut().writer().any());
+    try formatAst(parse_ast, std.fs.File.stdout().deprecatedWriter().any());
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
@@ -224,7 +224,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -1394,7 +1394,7 @@ const Formatter = struct {
                 }
 
                 var platform_field: ?AST.RecordField.Idx = null;
-                var package_fields_list = try std.ArrayListUnmanaged(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
+                var package_fields_list = try std.ArrayList(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
                     if (package_idx == a.platform_idx) {
@@ -2300,7 +2300,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 
@@ -2308,7 +2308,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         return error.ParseFailed;
     };
 
-    var result = std.ArrayList(u8).init(gpa);
+    var result = std.array_list.Managed(u8).init(gpa);
     try formatAst(parse_ast, result.writer().any());
 
     if (debug) {

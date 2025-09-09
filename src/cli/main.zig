@@ -375,8 +375,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     const parsed_args = try cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
@@ -493,7 +493,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
-        var extra_args = std.ArrayList([]const u8).init(gpa);
+        var extra_args = std.array_list.Managed([]const u8).init(gpa);
         defer extra_args.deinit();
 
         // Add system libraries for macOS
@@ -597,7 +597,7 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
 
     // Create command line with handle and size as arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintZ(gpa, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    const cmd_line = try std.fmt.allocPrint(gpa, "\"{s}\" {} {}\x00", .{ exe_path, handle_uint, shm_handle.size });
     defer gpa.free(cmd_line);
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(gpa, cmd_line);
     defer gpa.free(cmd_line_w);
@@ -1121,8 +1121,8 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     // Use arena allocator for all bundle operations
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -1150,7 +1150,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).init(arena_allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(arena_allocator);
     defer file_paths.deinit();
 
     var uncompressed_size: u64 = 0;
@@ -1281,8 +1281,8 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
 }
 
 fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -1436,7 +1436,7 @@ const TestOpsEnv = struct {
     }
 };
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
@@ -1450,7 +1450,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
@@ -1462,7 +1462,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void 
     test_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
@@ -1478,19 +1478,19 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = dbg_args;
     _ = env;
     @panic("testRocDbg not implemented yet");
 }
 
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = expect_args;
     _ = env;
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
     if (test_env.interpreter) |interp| {
@@ -1511,8 +1511,8 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Start timing
     const start_time = std.time.nanoTimestamp();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
@@ -1577,7 +1577,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Find all expect statements
     const statements = env.store.sliceStatements(env.all_statements);
-    var expects = std.ArrayList(ExpectTest).init(gpa);
+    var expects = std.array_list.Managed(ExpectTest).init(gpa);
     defer expects.deinit();
 
     for (statements) |stmt_idx| {
@@ -1626,7 +1626,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         error_msg: ?[]const u8 = null,
     };
 
-    var test_results = std.ArrayList(TestResult).init(gpa);
+    var test_results = std.array_list.Managed(TestResult).init(gpa);
     defer test_results.deinit();
 
     // Evaluate each expect statement
@@ -1718,7 +1718,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
     if (args.stdin) {
         fmt.formatStdin(gpa) catch std.process.exit(1);
         return;
@@ -1730,7 +1730,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.ArrayList([]const u8).init(gpa);
+        var unformatted_files = std.array_list.Managed([]const u8).init(gpa);
         defer unformatted_files.deinit();
 
         for (args.paths) |path| {
@@ -1744,17 +1744,17 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
 
         elapsed = timer.read();
         if (unformatted_files.items.len > 0) {
-            try stdout.writer().print("The following file(s) failed `roc format --check`:\n", .{});
+            try stdout.print("The following file(s) failed `roc format --check`:\n", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.writer().print("    {s}\n", .{file_name});
+                try stdout.print("    {s}\n", .{file_name});
             }
-            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            try stdout.print("You can fix this with `roc format FILENAME.roc`.\n", .{});
             exit_code = 1;
         } else {
-            try stdout.writer().print("All formatting valid\n", .{});
+            try stdout.print("All formatting valid\n", .{});
         }
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to check {} files.\n", .{failure_count});
+            try stdout.print("Failed to check {} files.\n", .{failure_count});
             exit_code = 1;
         }
     } else {
@@ -1765,16 +1765,16 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
             failure_count += result.failure;
         }
         elapsed = timer.read();
-        try stdout.writer().print("Successfully formatted {} files\n", .{success_count});
+        try stdout.print("Successfully formatted {} files\n", .{success_count});
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to format {} files.\n", .{failure_count});
+            try stdout.print("Failed to format {} files.\n", .{failure_count});
             exit_code = 1;
         }
     }
 
-    try stdout.writer().print("Took ", .{});
-    try formatElapsedTime(stdout.writer(), elapsed);
-    try stdout.writer().print(".\n", .{});
+    try stdout.print("Took ", .{});
+    try formatElapsedTime(stdout, elapsed);
+    try stdout.print(".\n", .{});
 
     std.process.exit(exit_code);
 }
@@ -1939,8 +1939,8 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stderr = std.fs.File.stderr().deprecatedWriter();
     const stderr_writer = stderr.any();
 
     var timer = try std.time.Timer.start();
@@ -2057,7 +2057,7 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    std.fs.File.stderr().deprecatedWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

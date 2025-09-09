@@ -14,7 +14,7 @@ test "bundle paths - empty list defaults to main.roc" {
 test "bundle paths - single file unchanged" {
     const allocator = testing.allocator;
 
-    var file_paths = std.ArrayList([]const u8).init(allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(allocator);
     defer file_paths.deinit();
 
     try file_paths.append("app.roc");
@@ -26,7 +26,7 @@ test "bundle paths - single file unchanged" {
 test "bundle paths - sorting and deduplication" {
     const allocator = testing.allocator;
 
-    var file_paths = std.ArrayList([]const u8).init(allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(allocator);
     defer file_paths.deinit();
 
     // Add paths in non-sorted order with duplicates
@@ -85,7 +85,7 @@ test "bundle paths - sorting and deduplication" {
 test "bundle paths - preserves first CLI arg with many files" {
     const allocator = testing.allocator;
 
-    var file_paths = std.ArrayList([]const u8).init(allocator);
+    var file_paths = std.array_list.Managed([]const u8).init(allocator);
     defer file_paths.deinit();
 
     // Add 8 paths with specific first

@@ -7,10 +7,10 @@ const DataSpan = @import("DataSpan.zig");
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
     return struct {
-        items: std.ArrayListUnmanaged(T),
+        items: std.ArrayList(T),
 
         const Self = @This();
-        const ArrayList = std.ArrayListUnmanaged(T);
+        const ArrayList = std.ArrayList(T);
 
         pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
             const items = try ArrayList.initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64));
@@ -45,7 +45,7 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!DataSpan {
+        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayList(u32)) std.mem.Allocator.Error!DataSpan {
             const end = self.items.len;
             defer self.items.shrinkRetainingCapacity(start);
             var i = @as(usize, @intCast(start));

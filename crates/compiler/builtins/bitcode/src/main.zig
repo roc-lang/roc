@@ -285,22 +285,22 @@ pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
 pub extern fn longjmperror() void;
 
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
-fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
+fn __roc_force_setjmp(it: [*c]c_int) callconv(.c) c_int {
     return setjmp(it);
 }
 
-fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.c) noreturn {
     longjmp(a0, a1);
 }
 
 pub extern fn windows_setjmp([*c]c_int) c_int;
 pub extern fn windows_longjmp([*c]c_int, c_int) noreturn;
 
-fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.C) c_int {
+fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.c) c_int {
     return windows_setjmp(it);
 }
 
-fn __roc_force_longjmp_windows(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+fn __roc_force_longjmp_windows(a0: [*c]c_int, a1: c_int) callconv(.c) noreturn {
     windows_longjmp(a0, a1);
 }
 

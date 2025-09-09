@@ -280,10 +280,13 @@ const TestData = struct {
 /// Helper to send a message to the WASM Playground and get a response.
 fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
     // Serialize message to JSON
-    var message_json_buffer = std.ArrayList(u8).init(allocator);
+    var message_json_buffer = std.array_list.Managed(u8).init(allocator);
     defer message_json_buffer.deinit();
-    try std.json.stringify(message, .{}, message_json_buffer.writer());
+    var buffer: [1024]u8 = undefined;
+    var json_writer = message_json_buffer.writer().adaptToNewApi(&buffer).new_interface;
+    try std.json.Stringify.value(message, .{}, &json_writer);
     const message_json = message_json_buffer.items;
+    try json_writer.flush();
 
     // Allocate a buffer in WASM for the message.
     // The WASM module's allocateMessageBuffer export handles this.
@@ -802,7 +805,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         .skipped = 0,
     };
 
-    var failures = std.ArrayList(TestFailure).init(arena);
+    var failures = std.array_list.Managed(TestFailure).init(arena);
     defer failures.deinit();
 
     for (test_cases) |case| {
@@ -889,7 +892,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);
@@ -902,16 +905,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: playground-test [options] [wasm-path]\n", .{});
-            try stdout.writer().print("Options:\n", .{});
-            try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.writer().print("  --help              Display this help message\n", .{});
+            try stdout.print("Usage: playground-test [options] [wasm-path]\n", .{});
+            try stdout.print("Options:\n", .{});
+            try stdout.print("  --verbose           Enable verbose mode\n", .{});
+            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            try stdout.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.writer().print("Error: --wasm-path requires a path argument\n", .{});
+                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];
@@ -925,7 +928,7 @@ pub fn main() !void {
     const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
-    var test_cases = std.ArrayList(TestCase).init(allocator);
+    var test_cases = std.array_list.Managed(TestCase).init(allocator);
     defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test

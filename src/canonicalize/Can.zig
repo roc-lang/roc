@@ -59,7 +59,7 @@ const TypeVarProblem = struct {
 
 env: *ModuleEnv,
 parse_ir: *AST,
-scopes: std.ArrayListUnmanaged(Scope) = .{},
+scopes: std.ArrayList(Scope) = .{},
 /// Special scope for tracking exposed items from module header
 exposed_scope: Scope = undefined,
 /// Track exposed identifiers by text to handle changing indices
@@ -69,7 +69,7 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Special scope for unqualified nominal tags (e.g., True, False)
 unqualified_nominal_tags: std.StringHashMapUnmanaged(Statement.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
-function_regions: std.ArrayListUnmanaged(Region),
+function_regions: std.ArrayList(Region),
 /// Maps var patterns to the function region they were declared in
 var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 /// Set of pattern indices that are vars
@@ -198,7 +198,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .{},
-        .function_regions = std.ArrayListUnmanaged(Region){},
+        .function_regions = std.ArrayList(Region){},
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
@@ -5737,7 +5737,7 @@ const CanonicalizedStatement = struct {
 /// A statement type annotation
 pub const StmtTypeAnno = struct {
     anno_idx: Statement.Idx,
-    anno: std.meta.FieldType(Statement, .s_type_anno),
+    anno: @FieldType(Statement, "s_type_anno"),
 };
 
 // The result of canonicalizing a statement
@@ -6065,7 +6065,7 @@ pub fn canonicalizeStatement(
             } else null;
 
             // Create a type annotation statement
-            const type_anno_stmt: std.meta.FieldType(Statement, .s_type_anno) = .{
+            const type_anno_stmt: @FieldType(Statement, "s_type_anno") = .{
                 .name = name_ident,
                 .anno = type_anno_idx,
                 .where = where_clauses,
@@ -6502,7 +6502,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
     const UnusedVar = struct { ident: base.Ident.Idx, region: Region };
 
     // Collect all unused variables first so we can sort them
-    var unused_vars = std.ArrayList(UnusedVar).init(self.env.gpa);
+    var unused_vars = std.array_list.Managed(UnusedVar).init(self.env.gpa);
     defer unused_vars.deinit();
 
     // Iterate through all identifiers in this scope

@@ -111,10 +111,10 @@ pub fn process(
         var index = AtomicUsize.init(0);
         const fixed_stack_thread_count: usize = 16;
         var threads: [fixed_stack_thread_count]Thread = undefined;
-        var extra_threads: std.ArrayList(Thread) = undefined;
+        var extra_threads: std.array_list.Managed(Thread) = undefined;
 
         if (thread_count > fixed_stack_thread_count) {
-            extra_threads = std.ArrayList(Thread).init(allocator);
+            extra_threads = std.array_list.Managed(Thread).init(allocator);
         }
 
         // Start worker threads

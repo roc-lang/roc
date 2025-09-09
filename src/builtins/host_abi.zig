@@ -25,7 +25,7 @@ pub const RocCall = fn (
     ///
     /// For a zig host use an `extern struct` for well-defined in-memory layout matching the C ABI for the target
     *anyopaque,
-) callconv(.C) void;
+) callconv(.c) void;
 
 /// The operations (in the form of function pointers) that a running Roc program
 /// needs the host to provide.
@@ -39,18 +39,18 @@ pub const RocOps = extern struct {
     /// The pointer can be to absolutely anything the host likes, or null if unused.
     env: *anyopaque,
     /// Similar to  _aligned_malloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
-    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.C) void,
+    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.c) void,
     /// Similar to  _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
-    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.C) void,
+    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.c) void,
     /// Similar to  _aligned_realloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
-    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.C) void,
+    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.c) void,
     /// Called when the Roc program has called `dbg` on something.
-    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.C) void,
+    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.c) void,
     /// Called when the Roc program has run an `expect` which failed.
-    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.C) void,
+    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.c) void,
     /// Called when the Roc program crashes, e.g. due to integer overflow.
     /// The host should handle this gracefully and stop execution of the Roc program.
-    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.C) void,
+    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.c) void,
     /// At the end of this struct, the host must include all the functions
     /// it wants to provide to the Roc program for the Roc program to call
     /// (e.g. I/O operations and such).

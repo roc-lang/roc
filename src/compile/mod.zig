@@ -36,7 +36,7 @@ pub const BuildEnv = build.BuildEnv;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     const stderr = std.io.getStdErr().writer();
+//     const stderr = std.fs.File.stderr().deprecatedWriter();
 //     try global_stats.print(stderr.any());
 // }
 
