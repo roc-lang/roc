@@ -85,8 +85,7 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C)
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
 
     test_env.interpreter.has_crashed = true;
-    const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
-        std.log.err("Failed to allocate crash message: {}", .{err});
+    const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch {
         test_env.interpreter.crash_message = "Failed to store crash message";
         return;
     };
@@ -136,6 +135,11 @@ pub const TestRunner = struct {
         return runner;
     }
 
+    pub fn deinit(self: *TestRunner) void {
+        self.interpreter.deinit(self.get_ops());
+        self.test_results.deinit();
+    }
+
     fn get_ops(self: *TestRunner) *RocOps {
         if (self.roc_ops == null) {
             self.roc_ops = RocOps{
@@ -166,7 +170,7 @@ pub const TestRunner = struct {
         }
     }
 
-    pub fn eval_all(self: *TestRunner) std.fmt.AllocPrintError!TestSummary {
+    pub fn eval_all(self: *TestRunner) !TestSummary {
         var passed: u32 = 0;
         var failed: u32 = 0;
         self.test_results.clearAndFree();
@@ -209,8 +213,24 @@ pub const TestRunner = struct {
         };
     }
 
-    pub fn deinit(self: *TestRunner) void {
-        self.interpreter.deinit(self.get_ops());
-        self.test_results.deinit();
+    /// Write a html report of the test results to the given writer.
+    ///
+    /// TODO: clean this up and add classes so it can be styled in the UI
+    pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
+        try writer.writeAll("<h2>Test Results</h2>\n");
+        if (self.test_results.items.len > 0) {
+            try writer.writeAll("<table>\n");
+            try writer.writeAll("<tr><th>Line</th><th>Result</th><th>Error Message</th></tr>\n");
+            for (self.test_results.items) |result| {
+                if (result.passed) {
+                    try writer.print("<tr><td>{}</td><td style=\"color: green;\">Passed</td><td></td></tr>\n", .{result.line_number});
+                } else if (result.error_msg) |msg| {
+                    try writer.print("<tr><td>{}</td><td style=\"color: red;\">Failed</td><td>{s}</td></tr>\n", .{ result.line_number, msg });
+                } else {
+                    try writer.print("<tr><td>{}</td><td style=\"color: red;\">Failed</td><td></td></tr>\n", .{result.line_number});
+                }
+            }
+            try writer.writeAll("</table>\n");
+        }
     }
 };

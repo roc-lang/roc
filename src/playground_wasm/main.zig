@@ -21,6 +21,7 @@ const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const repl = @import("repl");
+const eval = @import("eval");
 const types = @import("types");
 const compile = @import("compile");
 const can = @import("can");
@@ -28,6 +29,7 @@ const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
+const layout = @import("layout");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -38,6 +40,7 @@ const problem = check.problem;
 const AST = parse.AST;
 const Repl = repl.Repl;
 const RocOps = builtins.host_abi.RocOps;
+const TestRunner = eval.TestRunner;
 
 // A fixed-size buffer to act as the heap inside the WASM linear memory.
 var wasm_heap_memory: [64 * 1024 * 1024]u8 = undefined; // 64MB heap
@@ -61,6 +64,7 @@ const MessageType = enum {
     QUERY_TYPES,
     QUERY_FORMATTED,
     GET_HOVER_INFO,
+    EVALUATE_TESTS,
     RESET,
     INIT_REPL,
     REPL_STEP,
@@ -75,6 +79,7 @@ const MessageType = enum {
         if (std.mem.eql(u8, str, "QUERY_TYPES")) return .QUERY_TYPES;
         if (std.mem.eql(u8, str, "QUERY_FORMATTED")) return .QUERY_FORMATTED;
         if (std.mem.eql(u8, str, "GET_HOVER_INFO")) return .GET_HOVER_INFO;
+        if (std.mem.eql(u8, str, "EVALUATE_TESTS")) return .EVALUATE_TESTS;
         if (std.mem.eql(u8, str, "RESET")) return .RESET;
         if (std.mem.eql(u8, str, "INIT_REPL")) return .INIT_REPL;
         if (std.mem.eql(u8, str, "REPL_STEP")) return .REPL_STEP;
@@ -648,6 +653,9 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
         },
         .GET_HOVER_INFO => {
             try writeHoverInfoResponse(response_buffer, data, message_json);
+        },
+        .EVALUATE_TESTS => {
+            try writeEvaluateTestsResponse(response_buffer, data);
         },
         .RESET => {
             resetGlobalState();
@@ -1331,6 +1339,56 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try writeJsonString(w, sexpr_buffer.items);
     try w.writeAll("\"}");
     try resp_writer.finalize();
+}
+
+fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+
+    // use arena for test evaluation
+    var env = data.module_env;
+    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    defer local_arena.deinit();
+
+    // Create interpreter infrastructure for test evaluation
+    var stack_memory = eval.Stack.initCapacity(local_arena.allocator(), 1024) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to create stack memory.");
+        return;
+    };
+
+    var layout_cache = layout.Store.init(env, &env.types) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "FFailed to create layout cache.");
+        return;
+    };
+
+    var test_runner = TestRunner.init(local_arena.allocator(), env, &stack_memory, &layout_cache, &env.types) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
+        return;
+    };
+    defer test_runner.deinit();
+
+    _ = test_runner.eval_all() catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to evaluate tests.");
+        return;
+    };
+
+    var html_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    const html_writer = html_buffer.writer().any();
+
+    test_runner.write_html_report(html_writer) catch {
+        try writeErrorResponse(response_buffer, .ERROR, "Failed to generate test report.");
+        return;
+    };
+
+    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    resp_writer.pos = @sizeOf(u32);
+    const w = resp_writer.writer();
+
+    try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
+
+    try writeJsonString(w, html_buffer.items);
+
+    try w.writeAll("\"}");
+    try resp_writer.finalize();
+    return;
 }
 
 const HoverInfo = struct {
