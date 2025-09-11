@@ -246,7 +246,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
         _ = try self.buf.writer().write("invalid_type");
     } else {
         const resolved = self.types.resolveVar(var_);
-        if (self.hasSeenVar(var_)) {
+        if (self.hasSeenVar(resolved.var_)) {
             _ = try self.buf.writer().write("...");
         } else {
             try self.seen.append(var_);

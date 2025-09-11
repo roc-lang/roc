@@ -22,6 +22,7 @@ const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
 const Rank = @import("types.zig").Rank;
+const Mark = @import("types.zig").Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -39,7 +40,7 @@ pub const Instantiate = struct {
     const Self = @This();
 
     pub const IdentVar = struct { ident: []const u8, var_: Var };
-    pub const RigidToFlexSubs = base.Scratch(IdentVar);
+    pub const RigidSubstitutions = base.Scratch(IdentVar);
 
     pub const SeenVars = std.AutoHashMap(Var, Var);
 
@@ -59,7 +60,7 @@ pub const Instantiate = struct {
     // rigid vars //
 
     /// Check if, for the provided rigid var ident, we have a variable to substitute
-    fn getRigidVarSub(rigid_vars_subs: *RigidToFlexSubs, ident: []const u8) ?Var {
+    fn getRigidVarSub(rigid_vars_subs: *RigidSubstitutions, ident: []const u8) ?Var {
         for (rigid_vars_subs.items.items) |elem| {
             if (std.mem.eql(u8, ident, elem.ident)) {
                 return elem.var_;
@@ -71,7 +72,7 @@ pub const Instantiate = struct {
     // instantiation //
 
     pub const Ctx = struct {
-        rigid_var_subs: *RigidToFlexSubs,
+        rigid_var_subs: *RigidSubstitutions,
         current_rank: Rank = Rank.top_level,
     };
 
@@ -101,7 +102,10 @@ pub const Instantiate = struct {
                     return existing_flex_var;
                 } else {
                     // Create a new flex variable for this rigid variable name
-                    const fresh_var = try self.store.freshFromContentWithRank(Content{ .flex_var = ident }, ctx.current_rank);
+                    const fresh_var = try self.store.freshFromContentWithRank(
+                        Content{ .flex_var = ident },
+                        ctx.current_rank,
+                    );
                     try ctx.rigid_var_subs.append(self.store.gpa, .{ .ident = ident_bytes, .var_ = fresh_var });
 
                     // Remember this substitution for recursive references
@@ -111,13 +115,23 @@ pub const Instantiate = struct {
                 }
             },
             else => {
+                // Remember this substitution for recursive references
+                // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
+                const fresh_var = try self.store.fresh();
+                try self.seen_vars_subs.put(resolved_var, fresh_var);
+
+                // Generate the content
                 const fresh_content = try self.instantiateContent(resolved.desc.content, ctx);
 
-                // Create a fresh variable with the instantiated content
-                const fresh_var = try self.store.freshFromContentWithRank(fresh_content, ctx.current_rank);
-
-                // Remember this substitution for recursive references
-                try self.seen_vars_subs.put(resolved_var, fresh_var);
+                // Update the placeholder fresh var with the real content
+                try self.store.setVarDesc(
+                    fresh_var,
+                    .{
+                        .content = fresh_content,
+                        .rank = ctx.current_rank,
+                        .mark = Mark.none,
+                    },
+                );
 
                 return fresh_var;
             },

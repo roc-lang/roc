@@ -17,7 +17,7 @@ const TestEnv = struct {
     module_env: *ModuleEnv,
     store: *TypesStore,
     var_subs: *Instantiate.SeenVars,
-    rigid_var_subs: *Instantiate.RigidToFlexSubs,
+    rigid_var_subs: *Instantiate.RigidSubstitutions,
 
     fn init(allocator: std.mem.Allocator) !TestEnv {
         const module_env = try allocator.create(ModuleEnv);
@@ -29,8 +29,8 @@ const TestEnv = struct {
         const var_subs = try allocator.create(Instantiate.SeenVars);
         var_subs.* = Instantiate.SeenVars.init(allocator);
 
-        const rigid_var_subs = try allocator.create(Instantiate.RigidToFlexSubs);
-        rigid_var_subs.* = try Instantiate.RigidToFlexSubs.init(allocator);
+        const rigid_var_subs = try allocator.create(Instantiate.RigidSubstitutions);
+        rigid_var_subs.* = try Instantiate.RigidSubstitutions.init(allocator);
 
         return .{
             .module_env = module_env,
