@@ -307,7 +307,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
     defer checker.deinit();
 
-    _ = checker.checkExpr(canonical_expr_idx.get_idx()) catch |err| {
+    _ = checker.checkExprRepl(canonical_expr_idx.get_idx()) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
     };
 

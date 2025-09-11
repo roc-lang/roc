@@ -1135,9 +1135,9 @@ fn processSnapshotContent(
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx.idx);
+        _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
-        try solver.checkDefs();
+        try solver.checkFile();
     }
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works

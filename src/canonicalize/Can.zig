@@ -441,10 +441,10 @@ pub fn canonicalizeFile(
                     },
                 };
 
-                const placeholder_type_decl_idx = try self.env.addStatementAndTypeVar(placeholder_cir_type_decl, Content{ .flex_var = null }, region);
+                const type_decl_stmt_idx = try self.env.addStatementAndTypeVar(placeholder_cir_type_decl, .err, region);
 
                 // Introduce the type name into scope early to support recursive references
-                try self.scopeIntroduceTypeDecl(type_header.name, placeholder_type_decl_idx, region);
+                try self.scopeIntroduceTypeDecl(type_header.name, type_decl_stmt_idx, region);
 
                 // Process type parameters and annotation in a separate scope
                 const anno_idx = blk: {
@@ -459,19 +459,6 @@ pub fn canonicalizeFile(
                     break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
                 };
 
-                // Get type variables to args (lhs)
-                const header_arg_vars: []TypeVar = @ptrCast(self.env.store.sliceTypeAnnos(type_header.args));
-
-                // Get type variable to the backing type (rhs)
-                const anno_var = ModuleEnv.varFrom(anno_idx);
-
-                // Check if the backing type is already an error type
-                const backing_resolved = self.env.types.resolveVar(anno_var);
-                const backing_is_error = backing_resolved.desc.content == .err;
-
-                // The identified of the type
-                const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
-
                 // Canonicalize where clauses if present
                 if (type_decl.where) |_| {
                     try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
@@ -480,58 +467,35 @@ pub fn canonicalizeFile(
                 }
 
                 // Create the real CIR type declaration statement with the canonicalized annotation
-                const real_cir_type_decl, const type_decl_content = blk: {
+                const type_decl_stmt = blk: {
                     switch (type_decl.kind) {
                         .alias => {
-                            const alias_content = if (backing_is_error)
-                                types.Content{ .err = {} }
-                            else
-                                try self.env.types.mkAlias(type_ident, anno_var, header_arg_vars);
-
-                            break :blk .{
-                                Statement{
-                                    .s_alias_decl = .{
-                                        .header = header_idx,
-                                        .anno = anno_idx,
-                                    },
+                            break :blk Statement{
+                                .s_alias_decl = .{
+                                    .header = header_idx,
+                                    .anno = anno_idx,
                                 },
-                                alias_content,
                             };
                         },
                         .nominal => {
-                            const nominal_content = if (backing_is_error)
-                                types.Content{ .err = {} }
-                            else
-                                try self.env.types.mkNominal(
-                                    type_ident,
-                                    anno_var,
-                                    header_arg_vars,
-                                    try self.env.insertIdent(base.Ident.for_text(self.env.module_name)),
-                                );
-
-                            break :blk .{
-                                Statement{
-                                    .s_nominal_decl = .{
-                                        .header = header_idx,
-                                        .anno = anno_idx,
-                                    },
+                            break :blk Statement{
+                                .s_nominal_decl = .{
+                                    .header = header_idx,
+                                    .anno = anno_idx,
                                 },
-                                nominal_content,
                             };
                         },
                     }
                 };
 
                 // Create the real statement and add it to scratch statements
-                const type_decl_stmt_idx = try self.env.addStatementAndTypeVar(real_cir_type_decl, type_decl_content, region);
+                try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
                 try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-                // Update the scope to point to the real statement instead of the placeholder
-                try self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
-
+                // TODO: is this needed?
                 // Remove from exposed_type_texts since the type is now fully defined
-                const type_text = self.env.getIdent(type_header.name);
-                _ = self.exposed_type_texts.remove(type_text);
+                // const type_text = self.env.getIdent(type_header.name);
+                // _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -5311,6 +5275,15 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
             .args = .{ .span = .{ .start = 0, .len = 0 } },
         }, Content{ .flex_var = null }, region);
     };
+
+    // Check if this is a builtin type
+    // TODO: Can we compare idents or something here? The byte slice comparison is ineffecient
+    if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(name_ident))) |_| {
+        return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
+            .ident = name_ident,
+            .region = region,
+        } });
+    }
 
     // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.env.store.scratchTypeAnnoTop();
