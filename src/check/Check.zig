@@ -43,23 +43,34 @@ cir: *ModuleEnv,
 regions: *Region.List,
 other_modules: []const *ModuleEnv,
 common_idents: CommonIdents,
-// owned
-snapshots: SnapshotStore,
-problems: ProblemStore,
-unify_scratch: unifier.Scratch,
-occurs_scratch: occurs.Scratch,
-// annos - new
-anno_free_vars: base.Scratch(FreeVar),
-decl_free_vars: base.Scratch(FreeVar),
-scratch_vars: base.Scratch(Var),
-scratch_tags: base.Scratch(types_mod.Tag),
-scratch_record_fields: base.Scratch(types_mod.RecordField),
-var_pool: VarPool,
-generalizer: Generalizer,
 
-// annos/instantiation - old
+/// type snapshots used in error messages
+snapshots: SnapshotStore,
+/// type problems
+problems: ProblemStore,
+/// reusable scratch arrays used in unification
+unify_scratch: unifier.Scratch,
+/// reusable scratch arrays used in occurs check
+occurs_scratch: occurs.Scratch,
+/// free vars collected when generation types from annotation
+anno_free_vars: base.Scratch(FreeVar),
+/// free vars collected when generation types from type decls
+decl_free_vars: base.Scratch(FreeVar),
+/// stmts we've already seen when generation a type from an annotation
+seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
+/// pool of variables that need to be generalized, built up during checking
+var_pool: VarPool,
+/// wrapper around generalization, contains some internal state used to do it's work
+generalizer: Generalizer,
+/// scratch vars used to build up intermediate lists, used for various things
+scratch_vars: base.Scratch(Var),
+/// scratch tags used to build up intermediate lists, used for various things
+scratch_tags: base.Scratch(types_mod.Tag),
+/// scratch record fields used to build up intermediate lists, used for various things
+scratch_record_fields: base.Scratch(types_mod.RecordField),
+/// used in instantiation. TODO: Move into something like Instantiator
 var_map: std.AutoHashMap(Var, Var),
-annotation_rigid_var_subs: Instantiate.RigidToFlexSubs,
+/// used in instantiation. TODO: Move into something like Instantiator
 anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
@@ -101,10 +112,10 @@ pub fn init(
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
         .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
         .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
+        .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
-        .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
@@ -122,7 +133,7 @@ pub fn deinit(self: *Self) void {
     self.var_map.deinit();
     self.anno_free_vars.deinit(self.gpa);
     self.decl_free_vars.deinit(self.gpa);
-    self.annotation_rigid_var_subs.deinit(self.gpa);
+    self.seen_annos.deinit();
     self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.scratch_vars.deinit(self.gpa);
     self.scratch_tags.deinit(self.gpa);
@@ -457,10 +468,28 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkDefs();
 }
 
+// repl //
+
+/// Check an expr for the repl
+pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    // Push the rank for this definitoin
+    try self.var_pool.pushRank();
+    defer self.var_pool.popRank();
+
+    // Ensure that the current rank in the pool is top-level
+    const rank = types_mod.Rank.top_level;
+    std.debug.assert(rank == self.var_pool.current_rank);
+
+    _ = try self.checkExprNew(expr_idx, rank, .no_expectation);
+
+    // Now that we are existing the scope, we must generalize then pop this rank
+    try self.generalizer.generalize(&self.var_pool, rank);
+}
+
 // defs //
 
 /// Check the types for all defs
-pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
+fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -477,6 +506,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
     // Push the rank for this definitoin
     try self.var_pool.pushRank();
+    defer self.var_pool.popRank();
 
     // Ensure that the current rank in the pool is top-level
     const rank = types_mod.Rank.top_level;
@@ -516,7 +546,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
     // Now that we are existing the scope, we must generalize then pop this rank
     try self.generalizer.generalize(&self.var_pool, rank);
-    self.var_pool.popRank();
 }
 
 // annotations //
@@ -541,227 +570,243 @@ fn generateAnnoType(self: *Self, free_vars_ctx: FreeVarCtx, anno_idx: CIR.TypeAn
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // First, check if we've seen this anno before
+    // This guards against recursive types
+    if (self.seen_annos.get(anno_idx)) |var_| {
+        return var_;
+    }
+
+    // Get the annotation
     const anno = self.cir.store.getTypeAnno(anno_idx);
     const anno_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_idx));
 
-    switch (anno) {
-        .rigid_var => |rigid| {
-            // If we have a rigid var, first check if we've seen it before
-            // If so, we redirect this instance to the previously seen instance
-            for (free_vars_ctx.sliceFreeVars()) |cached_var| {
-                if (cached_var.ident.idx == rigid.name.idx) {
-                    return try self.freshRedirect(cached_var.var_, anno_region);
+    // Create a placeholder and put it into the seen variables
+    const placeholder_var = try self.fresh(Rank.generalized, anno_region);
+    try self.seen_annos.put(anno_idx, placeholder_var);
+
+    const anno_var = blk: {
+        switch (anno) {
+            .rigid_var => |rigid| {
+                // If we have a rigid var, first check if we've seen it before
+                // If so, we redirect this instance to the previously seen instance
+                for (free_vars_ctx.sliceFreeVars()) |cached_var| {
+                    if (cached_var.ident.idx == rigid.name.idx) {
+                        break :blk try self.freshRedirect(cached_var.var_, anno_region);
+                    }
                 }
-            }
 
-            // If this is the first time we've seen this var, create it and add
-            // it to the cache
-            const var_ = blk: {
-                switch (free_vars_ctx.mode) {
-                    .rigid => break :blk try self.freshFromContent(.{ .rigid_var = rigid.name }, Rank.generalized, anno_region),
-                    .flex => break :blk try self.fresh(Rank.generalized, anno_region),
+                // If this is the first time we've seen this var, create it and add
+                // it to the cache
+                const var_ = inner_blk: {
+                    switch (free_vars_ctx.mode) {
+                        .rigid => break :inner_blk try self.freshFromContent(.{ .rigid_var = rigid.name }, Rank.generalized, anno_region),
+                        .flex => break :inner_blk try self.fresh(Rank.generalized, anno_region),
+                    }
+                };
+                try free_vars_ctx.scratch.append(self.gpa, .{ .ident = rigid.name, .var_ = var_ });
+                break :blk var_;
+            },
+            .underscore => {
+                break :blk try self.fresh(Rank.generalized, anno_region);
+            },
+            .lookup => |lookup| {
+                switch (lookup.base) {
+                    .builtin => |builtin_type| {
+                        break :blk try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region);
+                    },
+                    .local => |local| {
+                        break :blk try self.generateTypeDeclInstance(&.{}, anno_region, local.decl_idx);
+                    },
+                    .external => |_| {
+                        @panic("TODO: External type lookups");
+                        // // TODO External
+                        // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                        //     // TODO?
+                        //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+                        // };
+                        // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                    },
                 }
-            };
-            try free_vars_ctx.scratch.append(self.gpa, .{ .ident = rigid.name, .var_ = var_ });
-            return var_;
-        },
-        .underscore => {
-            return try self.fresh(Rank.generalized, anno_region);
-        },
-        .lookup => |lookup| {
-            switch (lookup.base) {
-                .builtin => |builtin_type| {
-                    return try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region);
-                },
-                .local => |local| {
-                    return try self.generateTypeDeclInstance(&.{}, anno_region, local.decl_idx);
-                },
-                .external => |_| {
-                    @panic("TODO: External type lookups");
-                    // // TODO External
-                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
-                    //     // TODO?
-                    //     return try self.freshFromContent(.err, Rank.generalized, anno_region);
-                    // };
-                    // return try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
-                },
-            }
-        },
-        .apply => |a| {
-            const scratch_vars_top = self.scratch_vars.top();
-            defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-            // Generate the types for the arguments
-            const anno_args = self.cir.store.sliceTypeAnnos(a.args);
-            for (anno_args) |anno_arg| {
-                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
-                    free_vars_ctx,
-                    anno_arg,
-                ));
-            }
-            const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
-
-            switch (a.base) {
-                .builtin => |builtin_type| {
-                    return try self.generateBuiltinTypeInstance(a.name, builtin_type, args_var_slice, anno_region);
-                },
-                .local => |local| {
-                    return try self.generateTypeDeclInstance(args_var_slice, anno_region, local.decl_idx);
-                },
-                .external => |_| {
-                    @panic("TODO: External type apply");
-                    // // TODO External
-                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
-                    //     // TODO?
-                    //     return try self.freshFromContent(.err, Rank.generalized, anno_region);
-                    // };
-                    // return try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
-                },
-            }
-        },
-        .@"fn" => |func| {
-            const scratch_vars_top = self.scratch_vars.top();
-            defer self.scratch_vars.clearFrom(scratch_vars_top);
-
-            const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
-            for (args_anno_slice) |arg_anno_idx| {
-                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
-                    free_vars_ctx,
-                    arg_anno_idx,
-                ));
-            }
-            const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
-
-            const fn_ret_var = try self.generateAnnoType(free_vars_ctx, func.ret);
-
-            const fn_type = blk: {
-                if (func.effectful) {
-                    break :blk try self.types.mkFuncEffectful(args_var_slice, fn_ret_var);
-                } else {
-                    break :blk try self.types.mkFuncPure(args_var_slice, fn_ret_var);
-                }
-            };
-            return try self.freshFromContent(fn_type, Rank.generalized, anno_region);
-        },
-        .tag_union => |tag_union| {
-            const scratch_tags_top = self.scratch_tags.top();
-            defer self.scratch_tags.clearFrom(scratch_tags_top);
-
-            const tag_anno_slices = self.cir.store.sliceTypeAnnos(tag_union.tags);
-            for (tag_anno_slices) |tag_anno_idx| {
-                // Get the tag anno
-                const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
-                std.debug.assert(tag_type_anno == .tag);
-                const tag = tag_type_anno.tag;
-
+            },
+            .apply => |a| {
                 const scratch_vars_top = self.scratch_vars.top();
                 defer self.scratch_vars.clearFrom(scratch_vars_top);
 
-                // Generate the types for each tag arg
-                const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
-                for (tag_anno_args_slice) |tag_arg_idx| {
+                // Generate the types for the arguments
+                const anno_args = self.cir.store.sliceTypeAnnos(a.args);
+                for (anno_args) |anno_arg| {
                     try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
                         free_vars_ctx,
-                        tag_arg_idx,
+                        anno_arg,
                     ));
                 }
-                const tag_vars_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
+                const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
 
-                // Add the processed tag to scratch
-                try self.scratch_tags.append(self.gpa, try self.types.mkTag(
-                    tag.name,
-                    tag_vars_slice,
-                ));
-            }
-
-            // Get the slice of tags
-            const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
-            std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
-
-            // Process the ext if it exists. Absence means it's a closed union
-            const ext_var = blk: {
-                if (tag_union.ext) |ext_anno_idx| {
-                    break :blk try self.generateAnnoType(free_vars_ctx, ext_anno_idx);
-                } else {
-                    break :blk try self.freshFromContent(.{ .structure = .empty_tag_union }, Rank.generalized, anno_region);
+                switch (a.base) {
+                    .builtin => |builtin_type| {
+                        break :blk try self.generateBuiltinTypeInstance(a.name, builtin_type, args_var_slice, anno_region);
+                    },
+                    .local => |local| {
+                        break :blk try self.generateTypeDeclInstance(args_var_slice, anno_region, local.decl_idx);
+                    },
+                    .external => |_| {
+                        @panic("TODO: External type apply");
+                        // // TODO External
+                        // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                        //     // TODO?
+                        //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+                        // };
+                        // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                    },
                 }
-            };
+            },
+            .@"fn" => |func| {
+                const scratch_vars_top = self.scratch_vars.top();
+                defer self.scratch_vars.clearFrom(scratch_vars_top);
 
-            // Create the type for the anno in the store
-            return try self.freshFromContent(try self.types.mkTagUnion(tags_slice, ext_var), Rank.generalized, anno_region);
-        },
-        .tag => {
-            // This indicates a malformed type annotation. Tags should only
-            // exist as direct childen of tag_unions
-            std.debug.assert(false);
-            return try self.freshFromContent(.err, Rank.generalized, anno_region);
-        },
-        .record => |rec| {
-            const scratch_record_fields_top = self.scratch_record_fields.top();
-            defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
+                const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
+                for (args_anno_slice) |arg_anno_idx| {
+                    try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                        free_vars_ctx,
+                        arg_anno_idx,
+                    ));
+                }
+                const args_var_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
 
-            const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
+                const fn_ret_var = try self.generateAnnoType(free_vars_ctx, func.ret);
 
-            for (recs_anno_slice) |rec_anno_idx| {
-                const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
+                const fn_type = inner_blk: {
+                    if (func.effectful) {
+                        break :inner_blk try self.types.mkFuncEffectful(args_var_slice, fn_ret_var);
+                    } else {
+                        break :inner_blk try self.types.mkFuncPure(args_var_slice, fn_ret_var);
+                    }
+                };
+                break :blk try self.freshFromContent(fn_type, Rank.generalized, anno_region);
+            },
+            .tag_union => |tag_union| {
+                const scratch_tags_top = self.scratch_tags.top();
+                defer self.scratch_tags.clearFrom(scratch_tags_top);
 
-                const record_field_var = try self.generateAnnoType(free_vars_ctx, rec_field.ty);
+                const tag_anno_slices = self.cir.store.sliceTypeAnnos(tag_union.tags);
+                for (tag_anno_slices) |tag_anno_idx| {
+                    // Get the tag anno
+                    const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
+                    std.debug.assert(tag_type_anno == .tag);
+                    const tag = tag_type_anno.tag;
 
-                // Add the processed tag to scratch
-                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
-                    .name = rec_field.name,
-                    .var_ = record_field_var,
-                });
-            }
+                    const scratch_vars_top = self.scratch_vars.top();
+                    defer self.scratch_vars.clearFrom(scratch_vars_top);
 
-            // Get the slice of record_fields
-            const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
-            std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
-            const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
+                    // Generate the types for each tag arg
+                    const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
+                    for (tag_anno_args_slice) |tag_arg_idx| {
+                        try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                            free_vars_ctx,
+                            tag_arg_idx,
+                        ));
+                    }
+                    const tag_vars_slice = self.scratch_vars.sliceFromStart(scratch_vars_top);
 
-            // Process the ext if it exists. Absence means it's a closed union
-            // TODO: Capture ext in record field CIR
-            // const ext_var = blk: {
-            //     if (rec.ext) |ext_anno_idx| {
-            //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
-            //         break :blk ModuleEnv.varFrom(ext_anno_idx);
-            //     } else {
-            //         break :blk try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
-            //     }
-            // };
-            const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
+                    // Add the processed tag to scratch
+                    try self.scratch_tags.append(self.gpa, try self.types.mkTag(
+                        tag.name,
+                        tag_vars_slice,
+                    ));
+                }
 
-            // Create the type for the anno in the store
-            return try self.freshFromContent(
-                .{ .structure = types_mod.FlatType{ .record = .{
-                    .fields = fields_type_range,
-                    .ext = ext_var,
-                } } },
-                Rank.generalized,
-                anno_region,
-            );
-        },
-        .tuple => |tuple| {
-            const scratch_vars_top = self.scratch_vars.top();
-            defer self.scratch_vars.clearFrom(scratch_vars_top);
+                // Get the slice of tags
+                const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+                std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
 
-            const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
-            for (elems_anno_slice) |arg_anno_idx| {
-                try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
-                    free_vars_ctx,
-                    arg_anno_idx,
-                ));
-            }
-            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
-            return try self.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } }, Rank.generalized, anno_region);
-        },
-        .parens => |parens| {
-            return try self.generateAnnoType(free_vars_ctx, parens.anno);
-        },
-        .malformed => {
-            return try self.freshFromContent(.err, Rank.generalized, anno_region);
-        },
-    }
+                // Process the ext if it exists. Absence means it's a closed union
+                const ext_var = inner_blk: {
+                    if (tag_union.ext) |ext_anno_idx| {
+                        break :inner_blk try self.generateAnnoType(free_vars_ctx, ext_anno_idx);
+                    } else {
+                        break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, Rank.generalized, anno_region);
+                    }
+                };
+
+                // Create the type for the anno in the store
+                break :blk try self.freshFromContent(try self.types.mkTagUnion(tags_slice, ext_var), Rank.generalized, anno_region);
+            },
+            .tag => {
+                // This indicates a malformed type annotation. Tags should only
+                // exist as direct childen of tag_unions
+                std.debug.assert(false);
+                break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+            },
+            .record => |rec| {
+                const scratch_record_fields_top = self.scratch_record_fields.top();
+                defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
+
+                const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
+
+                for (recs_anno_slice) |rec_anno_idx| {
+                    const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
+
+                    const record_field_var = try self.generateAnnoType(free_vars_ctx, rec_field.ty);
+
+                    // Add the processed tag to scratch
+                    try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                        .name = rec_field.name,
+                        .var_ = record_field_var,
+                    });
+                }
+
+                // Get the slice of record_fields
+                const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
+                std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+                const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
+
+                // Process the ext if it exists. Absence means it's a closed union
+                // TODO: Capture ext in record field CIR
+                // const ext_var = inner_blk: {
+                //     if (rec.ext) |ext_anno_idx| {
+                //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
+                //         break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
+                //     } else {
+                //         break :inner_blk try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
+                //     }
+                // };
+                const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
+
+                // Create the type for the anno in the store
+                break :blk try self.freshFromContent(
+                    .{ .structure = types_mod.FlatType{ .record = .{
+                        .fields = fields_type_range,
+                        .ext = ext_var,
+                    } } },
+                    Rank.generalized,
+                    anno_region,
+                );
+            },
+            .tuple => |tuple| {
+                const scratch_vars_top = self.scratch_vars.top();
+                defer self.scratch_vars.clearFrom(scratch_vars_top);
+
+                const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+                for (elems_anno_slice) |arg_anno_idx| {
+                    try self.scratch_vars.append(self.gpa, try self.generateAnnoType(
+                        free_vars_ctx,
+                        arg_anno_idx,
+                    ));
+                }
+                const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+                break :blk try self.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } }, Rank.generalized, anno_region);
+            },
+            .parens => |parens| {
+                break :blk try self.generateAnnoType(free_vars_ctx, parens.anno);
+            },
+            .malformed => {
+                break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+            },
+        }
+    };
+
+    try self.types.setVarRedirect(placeholder_var, anno_var);
+    return placeholder_var;
 }
 
 /// Generate a type variable from the provided type declaration, substituting
@@ -864,6 +909,8 @@ fn generateTypeDeclInstance(
             // name, args, and origin module, if the rhs of the nominal type is
             // invalid (ie an .err) then that error must propgate "through" the
             // nominal type. So the whole thing must be  materialized here.
+            //
+            // TODO: Should this be flex instead of rigid?
             const backing_var = try self.generateAnnoType(
                 FreeVarCtx{ .scratch = &self.decl_free_vars, .start = decl_free_vars_top, .mode = .rigid },
                 nominal.anno,
@@ -1023,7 +1070,7 @@ pub const Expected = union(enum) {
     expected: struct { var_: Var, from_annotation: bool },
 };
 
-pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!bool {
+fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1402,8 +1449,10 @@ pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, e
             defer self.anno_free_vars.clearFrom(anno_free_vars_top);
 
             // Enter a new rank
-            const next_rank = rank.next();
             try self.var_pool.pushRank();
+            defer self.var_pool.popRank();
+
+            const next_rank = rank.next();
             std.debug.assert(next_rank == self.var_pool.current_rank);
 
             // Check all statements in the block
@@ -1457,7 +1506,6 @@ pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, e
 
             // Now that we are existing the scope, we must generalize then pop this rank
             try self.generalizer.generalize(&self.var_pool, next_rank);
-            self.var_pool.popRank();
         },
         // function //
         .e_lambda => |lambda| {
@@ -1503,8 +1551,11 @@ pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, e
             // Check the argument patterns
             const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
 
-            const next_rank = rank.next();
+            // Enter the next rank
             try self.var_pool.pushRank();
+            defer self.var_pool.popRank();
+
+            const next_rank = rank.next();
             std.debug.assert(next_rank == self.var_pool.current_rank);
 
             // Now, check if the expected function has the the same number of
@@ -1563,7 +1614,6 @@ pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, e
 
             // Now that we are existing the scope, we must generalize then pop this rank
             try self.generalizer.generalize(&self.var_pool, next_rank);
-            self.var_pool.popRank();
         },
         .e_closure => |closure| {
             does_fx = try self.checkExprNew(closure.lambda_idx, rank, expected) or does_fx;
@@ -1788,7 +1838,7 @@ pub fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, e
 // pattern //
 
 /// Check the types for the provided pattern
-pub fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!void {
+fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 

@@ -388,12 +388,12 @@ test "check type - nominal recursive type" {
     const source =
         \\module []
         \\
-        \\List(a) := [Nil, Cons(a, List(a))]
+        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
         \\
-        \\x : List(Str)
-        \\x = List.Cons("hello", List.Nil)
+        \\x : ConsList(Str)
+        \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "List(Str)");
+    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Str)");
 }
 
 // helpers - expr //
@@ -463,7 +463,7 @@ fn assertFileTypeCheckPass(allocator: std.mem.Allocator, source: []const u8, exp
     // Type check
     var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
     defer checker.deinit();
-    try checker.checkDefs();
+    try checker.checkFile();
 
     // Assert no problems
     var report_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -528,7 +528,7 @@ fn assertFileTypeCheckFail(allocator: std.mem.Allocator, source: []const u8, exp
     // Type check
     var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
     defer checker.deinit();
-    try checker.checkDefs();
+    try checker.checkFile();
 
     // Assert no problems
     try testing.expectEqual(1, checker.problems.problems.items.len);

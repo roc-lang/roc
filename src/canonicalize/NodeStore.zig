@@ -1155,6 +1155,29 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) std.mem.Allocator.Error!CIR.Statement.Idx {
+    const node = try store.makeStatementNode(statement);
+    const node_idx = try store.nodes.append(store.gpa, node);
+    _ = try store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(node_idx));
+}
+
+/// Set a statement idx to the provided statement
+///
+/// This is used when defininig recursive type declarations:
+/// 1. Make the placeholder node
+/// 2. Introduce to scope
+/// 3. Canonicalize the annotation
+/// 4. Update the placeholder node with the actual annotation
+pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) std.mem.Allocator.Error!void {
+    const node = try store.makeStatementNode(statement);
+    store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
+}
+
+/// Creates a statement node, but does not append to the store.
+/// IMPORTANT: It *does* append to extra_data though
+///
+/// See `setStatementNode` to see why this exists
+fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) std.mem.Allocator.Error!Node {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1285,9 +1308,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
         },
     }
 
-    const node_idx = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
-    return @enumFromInt(@intFromEnum(node_idx));
+    return node;
 }
 
 /// Adds an expression node to the store.

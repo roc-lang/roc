@@ -401,7 +401,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     defer checker.deinit();
 
     // Check the expression (no need to check defs since we're parsing as expressions)
-    _ = checker.checkExpr(final_expr_idx) catch |err| {
+    _ = checker.checkExprRepl(final_expr_idx) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
     };
 
