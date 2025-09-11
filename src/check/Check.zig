@@ -56,7 +56,7 @@ occurs_scratch: occurs.Scratch,
 anno_free_vars: base.Scratch(FreeVar),
 /// free vars collected when generation types from type decls
 decl_free_vars: base.Scratch(FreeVar),
-/// stmts we've already seen when generation a type from an annotation
+/// annos we've already seen when generation a type from an annotation
 seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
 /// pool of variables that need to be generalized, built up during checking
 var_pool: VarPool,
@@ -71,7 +71,7 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// used in instantiation. TODO: Move into something like Instantiator
 var_map: std.AutoHashMap(Var, Var),
 /// used in instantiation. TODO: Move into something like Instantiator
-anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
+anonymous_rigid_var_subs: Instantiate.RigidSubstitutions,
 /// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -116,7 +116,7 @@ pub fn init(
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
-        .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
+        .anonymous_rigid_var_subs = try Instantiate.RigidSubstitutions.init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .var_pool = try VarPool.init(gpa),
@@ -332,20 +332,28 @@ const InstantiateRegionBehavior = union(enum) {
 };
 
 /// Instantiate a variable
-fn instantiateVarWithRank(
+fn instantiateVar(
     self: *Self,
     var_to_instantiate: Var,
     rank: types_mod.Rank,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    self.var_map.clearRetainingCapacity();
     self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
+    return self.instantiateVarWithSubs(var_to_instantiate, &self.anonymous_rigid_var_subs, rank, region_behavior);
+}
+
+/// Instantiate a variable
+fn instantiateVarWithSubs(
+    self: *Self,
+    var_to_instantiate: Var,
+    subs: *Instantiate.RigidSubstitutions,
+    rank: types_mod.Rank,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    self.var_map.clearRetainingCapacity();
 
     var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), &self.var_map);
-    var instantiate_ctx = Instantiate.Ctx{
-        .rigid_var_subs = &self.anonymous_rigid_var_subs,
-        .current_rank = rank,
-    };
+    var instantiate_ctx = Instantiate.Ctx{ .rigid_var_subs = subs, .current_rank = rank };
     const instantiated_var = try instantiate.instantiateVar(var_to_instantiate, &instantiate_ctx);
 
     // If we had to insert any new type variables, ensure that we have
@@ -449,23 +457,18 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.all_statements);
-    for (stms_slice) |stm_idx| {
-        const stmt = self.cir.store.getStatement(stm_idx);
-        switch (stmt) {
-            .s_alias_decl => {
-                // TODO: Check decl and cache type?
-
-            },
-            .s_nominal_decl => {
-                // TODO: Check decl and cache type?
-
-            },
-            else => {},
-        }
+    for (stms_slice) |stmt_idx| {
+        // If the statement is a type declaration, then generate the it's type
+        // The resulting generalized type is saved at the type var slot at `stmt_idx`
+        try self.generateStmtTypeDeclType(stmt_idx);
     }
 
-    try self.checkDefs();
+    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
+    for (defs_slice) |def_idx| {
+        try self.checkDef(def_idx);
+    }
 }
 
 // repl //
@@ -487,17 +490,6 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 }
 
 // defs //
-
-/// Check the types for all defs
-fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
-    for (defs_slice) |def_idx| {
-        try self.checkDef(def_idx);
-    }
-}
 
 /// Check the types for a single definition
 fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
@@ -525,10 +517,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         const annotation = self.cir.store.getAnnotation(anno_idx);
 
         self.anno_free_vars.items.clearRetainingCapacity();
-        const anno_var = try self.generateAnnoType(
-            FreeVarCtx{ .scratch = &self.anno_free_vars, .start = 0, .mode = .rigid },
-            annotation.type_anno,
-        );
+        try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
+        const anno_var = ModuleEnv.varFrom(annotation.type_anno);
 
         _ = try self.checkExprNew(def.expr, rank, .{
             .expected = .{ .var_ = anno_var, .from_annotation = true },
@@ -548,15 +538,524 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     try self.generalizer.generalize(&self.var_pool, rank);
 }
 
+// create types for type decls //
+
+/// Generate a type variable from the provided type statement.
+/// If the stmt is not an alias or nominal dec, then do nothing
+///
+/// The created variable is put in-place at the var slot at `decl_idx`
+/// The created variable will be generalized
+fn generateStmtTypeDeclType(
+    self: *Self,
+    decl_idx: CIR.Statement.Idx,
+) std.mem.Allocator.Error!void {
+    const decl_free_vars_top = self.decl_free_vars.top();
+    defer self.decl_free_vars.clearFrom(decl_free_vars_top);
+
+    const decl = self.cir.store.getStatement(decl_idx);
+    const decl_var = ModuleEnv.varFrom(decl_idx);
+
+    switch (decl) {
+        .s_alias_decl => |alias| {
+            // Get the type header's args
+            const header = self.cir.store.getTypeHeader(alias.header);
+            const header_args = self.cir.store.sliceTypeAnnos(header.args);
+
+            // Next, generate the provided arg types and build the map of rigid variables in the header
+            for (header_args) |header_arg_idx| {
+                const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
+                const header_var = ModuleEnv.varFrom(header_arg_idx);
+                switch (header_arg) {
+                    .rigid_var => |rigid| {
+                        try self.updateVar(header_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+                    },
+                    .underscore, .malformed => {
+                        try self.updateVar(header_var, .err, Rank.generalized);
+                    },
+                    else => {
+                        // This should never be possible
+                        std.debug.assert(false);
+                        try self.updateVar(header_var, .err, Rank.generalized);
+                    },
+                }
+            }
+
+            const header_vars: []Var = @ptrCast(header_args);
+
+            // Now we have a built of list of rigid variables for the decl lhs (header).
+            // With this in hand, we can now generate the type for the lhs (body).
+            self.seen_annos.clearRetainingCapacity();
+            const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+            try self.generateAnnoTypeInPlace(alias.anno, .{ .type_decl = .{
+                .idx = decl_idx,
+                .name = header.name,
+                .type_ = .alias,
+                .backing_var = backing_var,
+                .num_args = @intCast(header_args.len),
+            } });
+
+            try self.updateVar(
+                decl_var,
+                try self.types.mkAlias(
+                    .{ .ident_idx = header.name },
+                    backing_var,
+                    header_vars,
+                ),
+                Rank.generalized,
+            );
+        },
+        .s_nominal_decl => |nominal| {
+            // Get the type header's args
+            const header = self.cir.store.getTypeHeader(nominal.header);
+            const header_args = self.cir.store.sliceTypeAnnos(header.args);
+
+            // Next, generate the provided arg types and build the map of rigid variables in the header
+            for (header_args) |header_arg_idx| {
+                const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
+                const header_var = ModuleEnv.varFrom(header_arg_idx);
+                switch (header_arg) {
+                    .rigid_var => |rigid| {
+                        try self.updateVar(header_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+                    },
+                    .underscore, .malformed => {
+                        try self.updateVar(header_var, .err, Rank.generalized);
+                    },
+                    else => {
+                        // This should never be possible
+                        std.debug.assert(false);
+                        try self.updateVar(header_var, .err, Rank.generalized);
+                    },
+                }
+            }
+
+            const header_vars: []Var = @ptrCast(header_args);
+
+            // Now we have a built of list of rigid variables for the decl lhs (header).
+            // With this in hand, we can now generate the type for the lhs (body).
+            self.seen_annos.clearRetainingCapacity();
+            const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
+            try self.generateAnnoTypeInPlace(nominal.anno, .{ .type_decl = .{
+                .idx = decl_idx,
+                .name = header.name,
+                .type_ = .nominal,
+                .backing_var = backing_var,
+                .num_args = @intCast(header_args.len),
+            } });
+
+            try self.updateVar(
+                decl_var,
+                try self.types.mkNominal(
+                    .{ .ident_idx = header.name },
+                    backing_var,
+                    header_vars,
+                    self.common_idents.module_name,
+                ),
+                Rank.generalized,
+            );
+        },
+        .s_runtime_error => {
+            try self.updateVar(decl_var, .err, Rank.generalized);
+        },
+        else => {
+            // Do nothing
+        },
+    }
+}
+
 // annotations //
+
+/// The context use for free var generation
+const GenTypeAnnoCtx = union(enum) {
+    annotation,
+    type_decl: struct {
+        idx: CIR.Statement.Idx,
+        name: Ident.Idx,
+        type_: enum { nominal, alias },
+        backing_var: Var,
+        num_args: u32,
+    },
+};
+
+/// Given an annotation, generate the corrosponding type based on the CIR
+///
+/// This function will write the type into the type var node at `anno_idx`
+fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // First, check if we've seen this anno before
+    // This guards against recursive types
+    if (self.seen_annos.get(anno_idx)) |_| {
+        return;
+    }
+
+    // Get the annotation
+    const anno = self.cir.store.getTypeAnno(anno_idx);
+    const anno_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(anno_idx));
+    const anno_var = ModuleEnv.varFrom(anno_idx);
+
+    // Put this anno in the "seen" map immediately, to support recursive references
+    try self.seen_annos.put(anno_idx, anno_var);
+
+    switch (anno) {
+        .rigid_var => |rigid| {
+            try self.updateVar(anno_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+        },
+        .rigid_var_lookup => |rigid_lookup| {
+            try self.types.setVarRedirect(anno_var, ModuleEnv.varFrom(rigid_lookup.ref));
+        },
+        .underscore => {
+            try self.updateVar(anno_var, .{ .flex_var = null }, Rank.generalized);
+        },
+        .lookup => |lookup| {
+            switch (lookup.base) {
+                .builtin => |builtin_type| {
+                    // TODO: Don't generate a new type var here, reuse anno var
+                    const builtin_var = try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region);
+                    try self.types.setVarRedirect(anno_var, builtin_var);
+                },
+                .local => |local| {
+                    // Check if we're in a declaration or an annotation
+                    switch (ctx) {
+                        .type_decl => |this_decl| {
+                            // If so, check if this is a recursive reference
+                            if (this_decl.idx == local.decl_idx) {
+
+                                // If it is a recursive ref, check that there are
+                                // no arguments (since this is a lookup, not an apply)
+                                if (this_decl.num_args != 0) {
+                                    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                        .type_name = this_decl.name,
+                                        .region = anno_region,
+                                        .num_expected_args = this_decl.num_args,
+                                        .num_actual_args = 0,
+                                    } });
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                }
+
+                                // If so, then update this annotation to be an instance
+                                // of this type using the same backing variable
+                                try self.updateVar(anno_var, blk: {
+                                    switch (this_decl.type_) {
+                                        .alias => {
+                                            break :blk try self.types.mkAlias(
+                                                .{ .ident_idx = this_decl.name },
+                                                this_decl.backing_var,
+                                                &.{},
+                                            );
+                                        },
+                                        .nominal => {
+                                            break :blk try self.types.mkNominal(
+                                                .{ .ident_idx = this_decl.name },
+                                                this_decl.backing_var,
+                                                &.{},
+                                                self.common_idents.module_name,
+                                            );
+                                        },
+                                    }
+                                }, Rank.generalized);
+
+                                return;
+                            }
+                        },
+                        .annotation => {
+                            // Otherwise, we're in an annotation and this cannot
+                            // be recursive
+
+                        },
+                    }
+
+                    const instantiated_var = try self.instantiateVar(
+                        ModuleEnv.varFrom(local.decl_idx),
+                        Rank.generalized,
+                        .{ .explicit = anno_region },
+                    );
+                    try self.types.setVarRedirect(anno_var, instantiated_var);
+                },
+                .external => |_| {
+                    @panic("TODO: External type lookups");
+                    // // TODO External
+                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                    //     // TODO?
+                    //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+                    // };
+                    // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                },
+            }
+        },
+        .apply => |a| {
+            // Generate the types for the arguments
+            const anno_args = self.cir.store.sliceTypeAnnos(a.args);
+            for (anno_args) |anno_arg| {
+                try self.generateAnnoTypeInPlace(anno_arg, ctx);
+            }
+            const anno_arg_vars: []Var = @ptrCast(anno_args);
+
+            switch (a.base) {
+                .builtin => |builtin_type| {
+                    // TODO: Don't generate a new type var here, reuse anno var
+                    const builtin_var = try self.generateBuiltinTypeInstance(a.name, builtin_type, anno_arg_vars, anno_region);
+                    try self.types.setVarRedirect(anno_var, builtin_var);
+                },
+                .local => |local| {
+                    // Check if we're in a declaration or an annotation
+                    switch (ctx) {
+                        .type_decl => |this_decl| {
+                            // If so, check if this is a recursive reference
+                            if (this_decl.idx == local.decl_idx) {
+
+                                // If it is a recursive ref, check that the args being
+                                // applied here match the number of args of the decl
+                                if (anno_arg_vars.len != this_decl.num_args) {
+                                    _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                        .type_name = this_decl.name,
+                                        .region = anno_region,
+                                        .num_expected_args = this_decl.num_args,
+                                        .num_actual_args = @intCast(anno_args.len),
+                                    } });
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                }
+
+                                // If so, then update this annotation to be an instance
+                                // of this type using the same backing variable
+                                try self.updateVar(anno_var, blk: {
+                                    switch (this_decl.type_) {
+                                        .alias => {
+                                            break :blk try self.types.mkAlias(
+                                                .{ .ident_idx = this_decl.name },
+                                                this_decl.backing_var,
+                                                anno_arg_vars,
+                                            );
+                                        },
+                                        .nominal => {
+                                            break :blk try self.types.mkNominal(
+                                                .{ .ident_idx = this_decl.name },
+                                                this_decl.backing_var,
+                                                anno_arg_vars,
+                                                self.common_idents.module_name,
+                                            );
+                                        },
+                                    }
+                                }, Rank.generalized);
+
+                                return;
+                            }
+                        },
+                        .annotation => {
+                            // Otherwise, we're in an annotation and this cannot
+                            // be recursive
+                        },
+                    }
+
+                    // Resolve the type that's being referenced
+                    const decl_var = ModuleEnv.varFrom(local.decl_idx);
+                    const decl_resolved = self.types.resolveVar(decl_var).desc.content;
+
+                    // Get the arguments & name of this declaration
+                    const decl_arg_vars, const decl_name = blk: {
+                        if (decl_resolved == .alias) {
+                            const decl_alias = decl_resolved.alias;
+                            break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                        } else if (decl_resolved == .structure and decl_resolved.structure == .nominal_type) {
+                            const decl_nominal = decl_resolved.structure.nominal_type;
+                            break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+                        } else if (decl_resolved == .err) {
+                            try self.updateVar(anno_var, .err, Rank.generalized);
+                            return;
+                        } else {
+                            std.debug.assert(false);
+                            try self.updateVar(anno_var, .err, Rank.generalized);
+                            return;
+                        }
+                    };
+
+                    // Check for an arity mismatch
+                    if (decl_arg_vars.len != anno_arg_vars.len) {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                            .type_name = decl_name,
+                            .region = anno_region,
+                            .num_expected_args = @intCast(decl_arg_vars.len),
+                            .num_actual_args = @intCast(anno_args.len),
+                        } });
+                        try self.updateVar(anno_var, .err, Rank.generalized);
+                        return;
+                    }
+
+                    // Then, built the map of applied variables
+                    // TODO: Recursive rigid vars subs
+                    self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
+                    for (decl_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
+                        const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
+                        std.debug.assert(decl_arg_resolved == .rigid_var);
+                        const decl_arg_rigid_ident = decl_arg_resolved.rigid_var;
+                        try self.anonymous_rigid_var_subs.append(
+                            self.gpa,
+                            .{
+                                .ident = self.cir.getIdentText(decl_arg_rigid_ident),
+                                .var_ = anno_arg_var,
+                            },
+                        );
+                    }
+
+                    // Then instantiate the variable, substituting the rigid
+                    // variables in the definition with the applied args from
+                    // the annotation
+                    const instantiated_var = try self.instantiateVarWithSubs(
+                        decl_var,
+                        &self.anonymous_rigid_var_subs,
+                        Rank.generalized,
+                        .{ .explicit = anno_region },
+                    );
+                    try self.types.setVarRedirect(anno_var, instantiated_var);
+                },
+                .external => |_| {
+                    @panic("TODO: External type apply");
+                    // // TODO External
+                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
+                    //     // TODO?
+                    //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
+                    // };
+                    // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                },
+            }
+        },
+        .@"fn" => |func| {
+            const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
+            for (args_anno_slice) |arg_anno_idx| {
+                try self.generateAnnoTypeInPlace(arg_anno_idx, ctx);
+            }
+            const args_var_slice: []Var = @ptrCast(args_anno_slice);
+
+            try self.generateAnnoTypeInPlace(func.ret, ctx);
+
+            const fn_type = inner_blk: {
+                if (func.effectful) {
+                    break :inner_blk try self.types.mkFuncEffectful(args_var_slice, ModuleEnv.varFrom(func.ret));
+                } else {
+                    break :inner_blk try self.types.mkFuncPure(args_var_slice, ModuleEnv.varFrom(func.ret));
+                }
+            };
+            try self.updateVar(anno_var, fn_type, Rank.generalized);
+        },
+        .tag_union => |tag_union| {
+            const scratch_tags_top = self.scratch_tags.top();
+            defer self.scratch_tags.clearFrom(scratch_tags_top);
+
+            const tag_anno_slices = self.cir.store.sliceTypeAnnos(tag_union.tags);
+            for (tag_anno_slices) |tag_anno_idx| {
+                // Get the tag anno
+                const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
+                std.debug.assert(tag_type_anno == .tag);
+                const tag = tag_type_anno.tag;
+
+                // Generate the types for each tag arg
+                const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
+                for (tag_anno_args_slice) |tag_arg_idx| {
+                    try self.generateAnnoTypeInPlace(tag_arg_idx, ctx);
+                }
+                const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
+
+                // Add the processed tag to scratch
+                try self.scratch_tags.append(self.gpa, try self.types.mkTag(
+                    tag.name,
+                    tag_vars_slice,
+                ));
+            }
+
+            // Get the slice of tags
+            const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+            std.mem.sort(types_mod.Tag, tags_slice, self.cir.common.getIdentStore(), comptime types_mod.Tag.sortByNameAsc);
+
+            // Process the ext if it exists. Absence means it's a closed union
+            const ext_var = inner_blk: {
+                if (tag_union.ext) |ext_anno_idx| {
+                    try self.generateAnnoTypeInPlace(ext_anno_idx, ctx);
+                    break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
+                } else {
+                    break :inner_blk try self.freshFromContent(.{ .structure = .empty_tag_union }, Rank.generalized, anno_region);
+                }
+            };
+
+            // Set the anno's type
+            try self.updateVar(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), Rank.generalized);
+        },
+        .tag => {
+            // This indicates a malformed type annotation. Tags should only
+            // exist as direct childen of tag_unions
+            std.debug.assert(false);
+            try self.updateVar(anno_var, .err, Rank.generalized);
+        },
+        .record => |rec| {
+            const scratch_record_fields_top = self.scratch_record_fields.top();
+            defer self.scratch_record_fields.clearFrom(scratch_record_fields_top);
+
+            const recs_anno_slice = self.cir.store.sliceAnnoRecordFields(rec.fields);
+
+            for (recs_anno_slice) |rec_anno_idx| {
+                const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
+
+                try self.generateAnnoTypeInPlace(rec_field.ty, ctx);
+                const record_field_var = ModuleEnv.varFrom(rec_field.ty);
+
+                // Add the processed tag to scratch
+                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                    .name = rec_field.name,
+                    .var_ = record_field_var,
+                });
+            }
+
+            // Get the slice of record_fields
+            const record_fields_slice = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
+            std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
+
+            // Process the ext if it exists. Absence means it's a closed union
+            // TODO: Capture ext in record field CIR
+            // const ext_var = inner_blk: {
+            //     if (rec.ext) |ext_anno_idx| {
+            //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
+            //         break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
+            //     } else {
+            //         break :inner_blk try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
+            //     }
+            // };
+            const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, Rank.generalized, anno_region);
+
+            // Create the type for the anno in the store
+            try self.updateVar(
+                anno_var,
+                .{ .structure = types_mod.FlatType{ .record = .{
+                    .fields = fields_type_range,
+                    .ext = ext_var,
+                } } },
+                Rank.generalized,
+            );
+        },
+        .tuple => |tuple| {
+            const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
+            for (elems_anno_slice) |arg_anno_idx| {
+                try self.generateAnnoTypeInPlace(arg_anno_idx, ctx);
+            }
+            const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+            try self.updateVar(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, Rank.generalized);
+        },
+        .parens => |parens| {
+            try self.generateAnnoTypeInPlace(parens.anno, ctx);
+            try self.types.setVarRedirect(anno_var, ModuleEnv.varFrom(parens.anno));
+        },
+        .malformed => {
+            try self.updateVar(anno_var, .err, Rank.generalized);
+        },
+    }
+}
 
 /// The context use for free var generation
 const FreeVarCtx = struct {
     scratch: *base.Scratch(FreeVar),
     start: usize,
     mode: enum { flex, rigid },
-
-    // TODO: Do we need rank here?
 
     pub fn sliceFreeVars(self: *const @This()) []FreeVar {
         return self.scratch.items.items[self.start..];
@@ -587,16 +1086,6 @@ fn generateAnnoType(self: *Self, free_vars_ctx: FreeVarCtx, anno_idx: CIR.TypeAn
     const anno_var = blk: {
         switch (anno) {
             .rigid_var => |rigid| {
-                // If we have a rigid var, first check if we've seen it before
-                // If so, we redirect this instance to the previously seen instance
-                for (free_vars_ctx.sliceFreeVars()) |cached_var| {
-                    if (cached_var.ident.idx == rigid.name.idx) {
-                        break :blk try self.freshRedirect(cached_var.var_, anno_region);
-                    }
-                }
-
-                // If this is the first time we've seen this var, create it and add
-                // it to the cache
                 const var_ = inner_blk: {
                     switch (free_vars_ctx.mode) {
                         .rigid => break :inner_blk try self.freshFromContent(.{ .rigid_var = rigid.name }, Rank.generalized, anno_region),
@@ -605,6 +1094,17 @@ fn generateAnnoType(self: *Self, free_vars_ctx: FreeVarCtx, anno_idx: CIR.TypeAn
                 };
                 try free_vars_ctx.scratch.append(self.gpa, .{ .ident = rigid.name, .var_ = var_ });
                 break :blk var_;
+            },
+            .rigid_var_lookup => |rigid_lookup| {
+                const rigid_ref = self.cir.store.getTypeAnno(rigid_lookup.ref);
+                std.debug.assert(rigid_ref == .rigid_var);
+                const rigid = rigid_ref.rigid_var;
+                for (free_vars_ctx.sliceFreeVars()) |cached_var| {
+                    if (cached_var.ident.idx == rigid.name.idx) {
+                        break :blk try self.freshRedirect(cached_var.var_, anno_region);
+                    }
+                }
+                unreachable;
             },
             .underscore => {
                 break :blk try self.fresh(Rank.generalized, anno_region);
@@ -793,7 +1293,10 @@ fn generateAnnoType(self: *Self, free_vars_ctx: FreeVarCtx, anno_idx: CIR.TypeAn
                         arg_anno_idx,
                     ));
                 }
-                const elems_range = try self.types.appendVars(@ptrCast(elems_anno_slice));
+
+                const elems_range = try self.types.appendVars(
+                    self.scratch_vars.sliceFromStart(scratch_vars_top),
+                );
                 break :blk try self.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } }, Rank.generalized, anno_region);
             },
             .parens => |parens| {
@@ -1336,97 +1839,59 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             try self.updateVar(expr_var, tag_union_content, rank);
         },
         // nominal //
-        .e_nominal => |nominal| blk: {
+        .e_nominal => |nominal| {
             // First, check the type inside the expr
             does_fx = try self.checkExprNew(nominal.backing_expr, rank, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
-            // Then, we need to generate an instnace of the type of the nominal
-            // type that this expr is referencing
-            const nominal_backing_var, const nominal_var = inner_blk: {
-                const stmt = self.cir.store.getStatement(nominal.nominal_type_decl);
-                std.debug.assert(stmt == .s_nominal_decl);
-                const nominal_stmt = stmt.s_nominal_decl;
+            // Then, we need an instance of the nominal type being refereneced
+            // E.g. ConList.Cons(...)
+            //      ^^^^^^^
+            const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), rank, .{ .explicit = expr_region });
+            const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
-                // Then, get the headers
-                const nominal_header = self.cir.store.getTypeHeader(nominal_stmt.header);
-                const nominal_header_args = self.cir.store.sliceTypeAnnos(nominal_header.args);
+            if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                // Then, we extract the variable of the nominal type
+                // E.g. ConList(a) := [Cons(a, ConstList), Nil]
+                //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+                const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
 
-                // Setup our scratch arrays
-                const decl_free_vars_top = self.decl_free_vars.top();
-                defer self.decl_free_vars.clearFrom(decl_free_vars_top);
+                // Now we unify what the user wrote with the backing type of the nominal vas
+                // E.g. ConList.Cons(...) <-> [Cons(a, ConstList), Nil]
+                //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
+                const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
 
-                const scratch_vars_top = self.scratch_vars.top();
-                defer self.scratch_vars.clearFrom(scratch_vars_top);
+                // Then, we handle the result of unification
+                switch (result) {
+                    .ok => {
+                        // If that unify call succeeded, then we this is a valid instance
+                        // of this nominal type. So we set the expr's type to be the
+                        // nominal type
+                        try self.types.setVarRedirect(expr_var, nominal_var);
+                    },
+                    .problem => |problem_idx| {
+                        // Unification failed - the constructor is incompatible with the nominal type
+                        // Set a specific error message based on the backing type kind
+                        switch (nominal.backing_type) {
+                            .tag => {
+                                // Constructor doesn't exist or has wrong arity/types
+                                self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                            },
+                            else => {
+                                // TODO: Add specific error messages for records, tuples, etc.
+                            },
+                        }
 
-                // Next, create a map of header variables to flex vars
-                // We want flex var here because the actual arguments will be inferred from use
-                for (nominal_header_args) |header_arg_idx| {
-                    const header_arg = self.cir.store.getTypeAnno(header_arg_idx);
-                    switch (header_arg) {
-                        .rigid_var => |rigid| {
-                            // Then, if it is a rigid var, add to our mapping
-                            const arg_var = try self.fresh(rank, expr_region);
-                            try self.var_pool.addVarToRank(arg_var, rank);
-
-                            try self.decl_free_vars.append(self.gpa, .{ .ident = rigid.name, .var_ = arg_var });
-                            try self.scratch_vars.append(self.gpa, arg_var);
-                        },
-                        else => {
-                            // If we had anything else as a header var, this nominal
-                            // type is malformed. Canonicalization should have found
-                            // this and reported a diagnostic. So here, we just set
-                            // the entire expr to be an error and break.
-                            try self.updateVar(expr_var, .err, rank);
-                            break :blk;
-                        },
-                    }
+                        // Mark the entire expression as having a type error
+                        try self.updateVar(expr_var, .err, rank);
+                    },
                 }
-
-                // Now, create the actual backing variable
-                const backing_var = try self.generateAnnoType(
-                    FreeVarCtx{ .scratch = &self.decl_free_vars, .start = decl_free_vars_top, .mode = .rigid },
-                    nominal_stmt.anno,
-                );
-                const nominal_var = try self.freshFromContent(try self.types.mkNominal(
-                    .{ .ident_idx = nominal_header.name },
-                    backing_var,
-                    self.scratch_vars.sliceFromStart(scratch_vars_top),
-                    self.common_idents.module_name,
-                ), rank, expr_region);
-                try self.var_pool.addVarToRank(nominal_var, rank);
-
-                break :inner_blk .{ backing_var, nominal_var };
-            };
-
-            // Now, we unify what's inside the nominal type with what's inside
-            // the nominal expr
-            const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
-
-            // Step 4: Handle the unification result
-            switch (result) {
-                .ok => {
-                    // If that unify call succeeded, then we this is a valid instance
-                    // of this nominal type. So we set the expr's type to be the
-                    // nominal type
-                    try self.types.setVarRedirect(expr_var, nominal_var);
-                },
-                .problem => |problem_idx| {
-                    // Unification failed - the constructor is incompatible with the nominal type
-                    // Set a specific error message based on the backing type kind
-                    switch (nominal.backing_type) {
-                        .tag => {
-                            // Constructor doesn't exist or has wrong arity/types
-                            self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                        },
-                        else => {
-                            // TODO: Add specific error messages for records, tuples, etc.
-                        },
-                    }
-
-                    // Mark the entire expression as having a type error
-                    try self.updateVar(expr_var, .err, rank);
-                },
+            } else {
+                // If the nominal type is actually something else, then set the
+                // whole expression to be an error.
+                //
+                // TODO: Report a nice problem here
+                try self.updateVar(expr_var, .err, rank);
             }
         },
         // lookup //
@@ -1435,7 +1900,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
             if (resolved_pat.rank == Rank.generalized) {
-                const instantiated = try self.instantiateVarWithRank(pat_var, rank, .use_last_var);
+                const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
                 _ = try self.types.setVarRedirect(expr_var, instantiated);
             } else {
                 _ = try self.types.setVarRedirect(expr_var, pat_var);
@@ -1469,10 +1934,8 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                         const check_mode = blk: {
                             if (decl_stmt.anno) |anno_idx| {
                                 const annotation = self.cir.store.getAnnotation(anno_idx);
-                                const anno_var = try self.generateAnnoType(
-                                    FreeVarCtx{ .scratch = &self.anno_free_vars, .start = 0, .mode = .rigid },
-                                    annotation.type_anno,
-                                );
+                                try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
+                                const anno_var = ModuleEnv.varFrom(anno_idx);
                                 break :blk Expected{
                                     .expected = .{ .var_ = anno_var, .from_annotation = true },
                                 };
@@ -3957,7 +4420,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 // fn instantiateVar(
 //     self: *Self,
 //     var_to_instantiate: Var,
-//     rigid_to_flex_subs: *Instantiate.RigidToFlexSubs,
+//     rigid_to_flex_subs: *Instantiate.RigidSubstitutions,
 //     region_behavior: InstantiateRegionBehavior,
 // ) std.mem.Allocator.Error!Var {
 //     self.var_map.clearRetainingCapacity();

@@ -88,6 +88,7 @@ pub const Tag = enum {
     ty_apply,
     ty_apply_external,
     ty_rigid_var,
+    ty_rigid_var_lookup,
     ty_lookup,
     ty_underscore,
     ty_tag_union,

@@ -4574,8 +4574,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Track this type variable for underscore validation
                     try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
 
-                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var = .{
-                        .name = name_ident,
+                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var_lookup = .{
+                        .ref = found_anno_idx,
                     } }, ModuleEnv.varFrom(found_anno_idx), region);
                 },
                 .not_found => {
@@ -4632,8 +4632,8 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     // Track this type variable for underscore validation
                     try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
 
-                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var = .{
-                        .name = name_ident,
+                    return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var_lookup = .{
+                        .ref = found_anno_idx,
                     } }, ModuleEnv.varFrom(found_anno_idx), region);
                 },
                 .not_found => {

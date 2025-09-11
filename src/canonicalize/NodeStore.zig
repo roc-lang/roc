@@ -112,7 +112,7 @@ pub const MODULEENV_EXPR_NODE_COUNT = 34;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
-pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 11;
+pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
 pub const MODULEENV_PATTERN_NODE_COUNT = 16;
 
@@ -1029,6 +1029,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_rigid_var => return CIR.TypeAnno{ .rigid_var = .{
             .name = @bitCast(node.data_1),
+        } },
+        .ty_rigid_var_lookup => return CIR.TypeAnno{ .rigid_var_lookup = .{
+            .ref = @enumFromInt(node.data_1),
         } },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_lookup => {
@@ -1975,6 +1978,10 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .rigid_var => |tv| {
             node.data_1 = @bitCast(tv.name);
             node.tag = .ty_rigid_var;
+        },
+        .rigid_var_lookup => |tv| {
+            node.data_1 = @intFromEnum(tv.ref);
+            node.tag = .ty_rigid_var_lookup;
         },
         .underscore => |_| {
             node.tag = .ty_underscore;

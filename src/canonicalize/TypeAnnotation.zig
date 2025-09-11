@@ -39,6 +39,18 @@ pub const TypeAnno = union(enum) {
     rigid_var: struct {
         name: Ident.Idx, // The variable name (e.g., "a", "b")
     },
+    /// A rigid var that references another
+    ///
+    /// Examples:
+    ///
+    ///   MyAlias(a) = List(a)
+    /// rigid_var ^         ^ rigid_var_lookup
+    ///
+    /// myFunction : a -> a
+    ///    rigid_var ^    ^ rigid_var_lookup
+    rigid_var_lookup: struct {
+        ref: TypeAnno.Idx, // The variable name (e.g., "a", "b")
+    },
     /// Inferred type `_`
     underscore: void,
     /// Basic type identifier: a concrete type name without arguments.
@@ -144,6 +156,9 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStringPair("name", ir.getIdentText(tv.name));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
+            },
+            .rigid_var_lookup => |rv_lookup| {
+                try ir.store.getTypeAnno(rv_lookup.ref).pushToSExprTree(ir, tree, rv_lookup.ref);
             },
             .underscore => |_| {
                 const begin = tree.beginNode();

@@ -316,6 +316,18 @@ test "check type - alias with arg" {
         \\
         \\MyListAlias(a) : List(a)
         \\
+        \\x : MyListAlias(Num(size))
+        \\x = [15]
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "MyListAlias(Num(size))");
+}
+
+test "check type - alias with mismatch arg" {
+    const source =
+        \\module []
+        \\
+        \\MyListAlias(a) : List(a)
+        \\
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
@@ -394,6 +406,55 @@ test "check type - nominal recursive type" {
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
     try assertFileTypeCheckPass(test_allocator, source, "ConsList(Str)");
+}
+
+test "check type - nominal recursive type anno mismatch" {
+    const source =
+        \\module []
+        \\
+        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
+        \\
+        \\x : ConsList(Num(size))
+        \\x = ConsList.Cons("hello", ConsList.Nil)
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+}
+
+test "check type - two nominal types" {
+    const source =
+        \\module []
+        \\
+        \\Elem(a) := [Elem(a)]
+        \\
+        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
+        \\
+        \\x = ConsList.Cons(Elem.Elem("hello"), ConsList.Nil)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Elem(Str))");
+}
+
+test "check type - nominal recursive type no args" {
+    const source =
+        \\module []
+        \\
+        \\StrConsList := [Nil, Cons(Str, StrConsList)]
+        \\
+        \\x : StrConsList
+        \\x = StrConsList.Cons("hello", StrConsList.Nil)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "StrConsList");
+}
+
+test "check type - nominal recursive type wrong type" {
+    const source =
+        \\module []
+        \\
+        \\StrConsList := [Nil, Cons(Str, StrConsList)]
+        \\
+        \\x : StrConsList
+        \\x = StrConsList.Cons(10, StrConsList.Nil)
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
 }
 
 // helpers - expr //
@@ -530,7 +591,7 @@ fn assertFileTypeCheckFail(allocator: std.mem.Allocator, source: []const u8, exp
     defer checker.deinit();
     try checker.checkFile();
 
-    // Assert no problems
+    // Assert 1 problem
     try testing.expectEqual(1, checker.problems.problems.items.len);
     const problem = checker.problems.problems.items[0];
 

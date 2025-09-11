@@ -23,7 +23,7 @@ test "rigid variables need instantiation - multiple type parameters" {
     var var_subs = Instantiate.SeenVars.init(gpa);
     defer var_subs.deinit();
 
-    var rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa);
+    var rigid_var_subs = try Instantiate.RigidSubstitutions.init(gpa);
     defer rigid_var_subs.deinit(gpa);
 
     var instantiate = Instantiate.init(&store, &idents, &var_subs);
@@ -85,7 +85,7 @@ test "needsInstantiation" {
     var var_subs = Instantiate.SeenVars.init(gpa);
     defer var_subs.deinit();
 
-    var rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa);
+    var rigid_var_subs = try Instantiate.RigidSubstitutions.init(gpa);
     defer rigid_var_subs.deinit(gpa);
 
     const a_ident = try idents.insert(gpa, base.Ident.for_text("a"));
