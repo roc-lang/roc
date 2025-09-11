@@ -3,6 +3,7 @@
 //! This module is a wrapper around the interpreter used to simplify evaluating expect expressions.
 
 const std = @import("std");
+const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
 const stack = @import("stack.zig");
@@ -100,8 +101,14 @@ const Evaluation = enum {
 
 // Track test results
 const TestResult = struct {
+    passed: bool,
     line_number: u32,
-    evaluation: Evaluation,
+    error_msg: ?[]const u8 = null,
+};
+
+const TestSummary = struct {
+    passed: u32,
+    failed: u32,
 };
 
 pub const TestRunner = struct {
@@ -157,6 +164,49 @@ pub const TestRunner = struct {
         } else {
             return Evaluation.not_a_bool;
         }
+    }
+
+    pub fn eval_all(self: *TestRunner) std.fmt.AllocPrintError!TestSummary {
+        var passed: u32 = 0;
+        var failed: u32 = 0;
+        self.test_results.clearAndFree();
+
+        const statements = self.env.store.sliceStatements(self.env.all_statements);
+        for (statements) |stmt_idx| {
+            const stmt = self.env.store.getStatement(stmt_idx);
+            if (stmt == .s_expect) {
+                const region = self.env.store.getStatementRegion(stmt_idx);
+                const region_info = self.env.calcRegionInfo(region);
+                const line_number = region_info.start_line_idx + 1;
+                // TODO this can probably be optimized. Maybe run tests in parallel?
+                const result = self.eval(stmt.s_expect.body) catch |err| {
+                    failed += 1;
+                    const error_msg = try std.fmt.allocPrint(self.allocator, "Test evaluation failed: {}", .{err});
+                    try self.test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+                    continue;
+                };
+                switch (result) {
+                    .not_a_bool => {
+                        failed += 1;
+                        const error_msg = try std.fmt.allocPrint(self.allocator, "Test did not evaluate to a boolean", .{});
+                        try self.test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+                    },
+                    .failed => {
+                        failed += 1;
+                        try self.test_results.append(.{ .line_number = line_number, .passed = false });
+                    },
+                    .passed => {
+                        passed += 1;
+                        try self.test_results.append(.{ .line_number = line_number, .passed = true });
+                    },
+                }
+            }
+        }
+
+        return .{
+            .passed = passed,
+            .failed = failed,
+        };
     }
 
     pub fn deinit(self: *TestRunner) void {
