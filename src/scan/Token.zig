@@ -5,7 +5,7 @@ const Region = base.Region;
 const num_one_byte_ops = 20;
 const lowest_binop_char = '!';
 
-const ascii_byte_type: [127 - 32]Token.Type = .{
+const ascii_byte_type: [127 - 32]Token.StartsWith = .{
     // DO NOT REORDER THESE! They are carefully ordered to line up with UTF-8 bytes
 
     // We skip the first 32 because they're all either invalid or whitespace.
@@ -42,7 +42,7 @@ const ascii_byte_type: [127 - 32]Token.Type = .{
     // .invalid, // 30 Record Separator
     // .invalid, // 31 Unit Separator
     // .invalid, // 32 Space
-    .bang, // 33 ! - bang is special bc it's either a prefix unary op, or if it's followed by `=`, an infix binary op.
+    .unary, // 33 ! - bang is special bc it's either a prefix unary op, or if it's followed by `=`, an infix binary op.
     .double_quote, // 34 "
     .comment, // 35 #
     .underscore_or_dollar, // 36 $
@@ -54,7 +54,7 @@ const ascii_byte_type: [127 - 32]Token.Type = .{
     .infix, // 42 *
     .infix, // 43 +
     .comma, // 44 ,
-    .digit, // 45 - we start out assuming minus is a digit. however, if it's not followed by another digit, we reclassify.
+    .minus, // 45 - we start out assuming minus is a digit. however, if it's not followed by another digit, we reclassify.
     .infix, // 46 . (note: we assume infix, and in error cases may reinterpret as prefix, e.g. `x * .5` or `(.foo)`)
     .infix, // 47 /
     .digit, // 48 0
@@ -72,7 +72,7 @@ const ascii_byte_type: [127 - 32]Token.Type = .{
     .infix, // 60 <
     .infix, // 61 =
     .infix, // 62 >
-    .question, // 63 ? - question mark is special bc it's either a postfix unary op, or if it's followed by '?', infix binary.
+    .invalid, // 63 ? - question mark is special bc it's either a postfix unary op, or if it's followed by '?', infix binary.
     .invalid, // 64 @
     .uc, // 65 A
     .uc, // 66 B
@@ -101,7 +101,7 @@ const ascii_byte_type: [127 - 32]Token.Type = .{
     .uc, // 89 Y
     .uc, // 90 Z
     .delimiter, // 91 [
-    .multiline_str, // 92 \
+    .invalid, // 92 \ - backslash
     .delimiter, // 93 ]
     .invalid, // 94 ^
     .underscore_or_dollar, // 95 _

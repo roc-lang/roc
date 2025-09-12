@@ -16,7 +16,7 @@ bytes_chomped: usize = 0,
 masks: [std.meta.fields(Bitmask).len]u64 = .{0} ** std.meta.fields(Bitmask).len,
 
 /// UTF-8 validation state that persists across page boundaries
-pub const Utf8State = @import("simd_utf8_faithful.zig").Utf8State;
+pub const Utf8State = @import("utf8_validation.zig").Utf8State;
 
 /// If any invalid UTF-8 characters are found, they will be marked using the given
 /// u64 bitmap (0-bits mean valid UTF-8 bytes, 1-bits mean invalid UTF-8 found there).
@@ -56,7 +56,7 @@ fn initExact(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
     const last_byte_starts_interpolation: u64 = @as(u64, @intFromBool(first_in_next_page == '{')) << 63;
 
     // UTF-8 validation state
-    const utf8_validation = @import("simd_utf8_faithful.zig");
+    const utf8_validation = @import("utf8_validation.zig");
     var utf8_state = utf8_validation.initState();
     var utf8_error_mask: u64 = 0;
 
@@ -228,7 +228,7 @@ pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, inva
         const chunk_vec: @Vector(16, u8) = chunk_ptr.*;
 
         // UTF-8 validation
-        const utf8_validation = @import("simd_utf8_faithful.zig");
+        const utf8_validation = @import("utf8_validation.zig");
         const utf8_errors = utf8_validation.validateUtf8ChunkStateful(chunk_vec, utf8_state);
         const utf8_error_bits = vectorToBitmask(utf8_errors);
         utf8_error_mask |= @as(u64, utf8_error_bits) << @intCast(offset);

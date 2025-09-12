@@ -23,7 +23,7 @@ pages_processed: usize = 0,
 str_interpolation_level: usize = 0,
 
 /// UTF-8 validation state that persists across page boundaries
-utf8_state: Bitmasks.Utf8State = @import("simd_utf8_faithful.zig").initState(),
+utf8_state: Bitmasks.Utf8State = @import("utf8_validation.zig").initState(),
 
 /// Bitmap of invalid UTF-8 locations in current page
 invalid_utf8_locs: u64 = 0,
@@ -39,31 +39,8 @@ pub fn parse(self: *Self) void {
         @panic("TODO: report an error; newlines are disallowed inside string interpolations!");
     }
 
-    switch (token) {
-        .str_start => {
-            if (current_byte == '\n' and token.typ != .multiline_str) {
-                self.advance(1); // Skip past the newline
-                @panic("TODO: The single-line string ended prematurely on a newline, so report an error and early return");
-            }
-
-            if (current_byte == '\\') {
-                self.advance(1); // Skip past the backslash
-                @panic("TODO: handle the backslash fully, then have scanner advance to next str seg end and GOTO .str_start =>");
-            }
-
-            // We only ever stop segments on "${", not "$" alone, so if we stopped on "$" that means it's interpolation.
-            const is_interpolation_start = current_byte == '$';
-
-            // Skip past the segment end, whatever it was (newline, quote, backslash, or interpolation start).
-            // Advance an extra byte if this was a string interpolation (so, consume the '{' in "${")
-            self.advance(1 + @intFromBool(is_interpolation_start));
-
-            // Increment interpolation level if appropriate.
-            self.str_interpolation_level += @intFromBool(is_interpolation_start);
-
-            @panic("TODO: copy over the segment bytes, add segment to AST, proceed as normal");
-        },
-    }
+    // TODO: Implement string handling when token types are properly integrated
+    _ = token;
 }
 
 /// Advance to the next token, skipping over whitespace. Returns null if we reached the end of the
@@ -77,18 +54,16 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     const current_byte = self.src_bytes[start];
     // It's safe to access idx + 1 bc we guarantee there's a newline at the end of src, and
     // we know current is not a newline. So if nothing else, idx + 1 will point to a newline.
-    const next_byte = self.src_bytes[start + 1];
+    _ = self.src_bytes[start + 1]; // next_byte - will be used for 2-byte token detection
     // The first byte determines which bitmask we'll use to find the end
     const starts_with = TokenModule.Token.StartsWith.fromUtf8Byte(current_byte);
-    // Branchlessly determine full token type, including 2-byte tokens (e.g. `:=` or `""`).
-    // TODO need to inline this and do it with seamless advancing.
-    const tokenAndLen = Token.fromBytePair(current_byte, next_byte);
-    // Chomp either either 1 or 2 bytes depending on how many we matched.
-    self.advance(tokenAndLen.len);
+    // TODO: Implement fromBytePair for Token
+    // For now, just advance by 1 byte
+    self.advance(1);
     // Branchlessly determine the bitmask that tells us where the end of this token is
     // TODO: properly implement this mapping based on actual token scanning needs
     const bitmasks_by_starts_with = comptime blk: {
-        const len = @typeInfo(TokenModule.Token.StartsWith).Enum.fields.len;
+        const len = @typeInfo(TokenModule.Token.StartsWith).@"enum".fields.len;
         var arr: [len]Bitmasks.Bitmask = undefined;
 
         // Default all to non_whitespace for now - TODO: set proper masks
@@ -113,8 +88,9 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     // Should only mispredict at 64B "page" boundaries.
     _ = self.chompUntilNonzero(mask) orelse return null;
 
-    // TODO: Track span information when needed
-    return tokenAndLen.token;
+    // TODO: Implement proper token creation
+    // For now, return a placeholder token
+    return .num_or_ident;
 }
 
 /// These are all 1 or 2 source bytes. Since the parser gets a lookahead of 1 token,
