@@ -203,11 +203,11 @@ const masks_by_starts_with = .{
     .non_ws, // .invalid
 };
 
-const Token = struct {
+pub const Token = struct {
     starts_with: StartsWith,
     region: Region,
 
-    const StartsWith = enum {
+    pub const StartsWith = enum {
         unary, // unary op, e.g. `!` or `-` or `$` (parser converts prefix $ and postfix ! into modifiers on adjacent idents.)
         infix, // infix binary operator, e.g. `+`, `or`, `and`, etc.
         single_quote, // Includes both `'` and `''`

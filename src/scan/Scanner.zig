@@ -23,14 +23,13 @@ pages_processed: usize = 0,
 str_interpolation_level: usize = 0,
 
 /// UTF-8 validation state that persists across page boundaries
-utf8_state: Bitmasks.Utf8State = .{},
+utf8_state: Bitmasks.Utf8State = @import("simd_utf8_faithful.zig").initState(),
 
 /// Bitmap of invalid UTF-8 locations in current page
 invalid_utf8_locs: u64 = 0,
 
 pub fn parse(self: *Self) void {
-    const token = self.nextToken(false);
-    _ = token.span; // TODO: use this
+    const token = self.nextToken(false) orelse return;
     const current_byte = self.currentSrcByte();
     const is_interpolating = self.str_interpolation_level > 0;
 
@@ -40,7 +39,7 @@ pub fn parse(self: *Self) void {
         @panic("TODO: report an error; newlines are disallowed inside string interpolations!");
     }
 
-    switch (token.category) {
+    switch (token) {
         .str_start => {
             if (current_byte == '\n' and token.typ != .multiline_str) {
                 self.advance(1); // Skip past the newline
@@ -80,7 +79,7 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     // we know current is not a newline. So if nothing else, idx + 1 will point to a newline.
     const next_byte = self.src_bytes[start + 1];
     // The first byte determines which bitmask we'll use to find the end
-    const starts_with = TokenModule.StartsWith.fromUtf8Byte(current_byte);
+    const starts_with = TokenModule.Token.StartsWith.fromUtf8Byte(current_byte);
     // Branchlessly determine full token type, including 2-byte tokens (e.g. `:=` or `""`).
     // TODO need to inline this and do it with seamless advancing.
     const tokenAndLen = Token.fromBytePair(current_byte, next_byte);
@@ -89,7 +88,7 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     // Branchlessly determine the bitmask that tells us where the end of this token is
     // TODO: properly implement this mapping based on actual token scanning needs
     const bitmasks_by_starts_with = comptime blk: {
-        const len = @typeInfo(TokenModule.StartsWith).Enum.fields.len;
+        const len = @typeInfo(TokenModule.Token.StartsWith).Enum.fields.len;
         var arr: [len]Bitmasks.Bitmask = undefined;
 
         // Default all to non_whitespace for now - TODO: set proper masks
@@ -98,12 +97,12 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
         }
 
         // Override specific cases
-        arr[@intFromEnum(TokenModule.StartsWith.comment)] = .newlines;
-        arr[@intFromEnum(TokenModule.StartsWith.double_quote)] = .single_str_seg_ends;
-        arr[@intFromEnum(TokenModule.StartsWith.digit)] = .num_or_ident;
-        arr[@intFromEnum(TokenModule.StartsWith.uc)] = .num_or_ident;
-        arr[@intFromEnum(TokenModule.StartsWith.lc)] = .num_or_ident;
-        arr[@intFromEnum(TokenModule.StartsWith.underscore_or_dollar)] = .num_or_ident;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.comment)] = .newlines;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.double_quote)] = .single_str_seg_ends;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.digit)] = .num_or_ident;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.uc)] = .num_or_ident;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.lc)] = .num_or_ident;
+        arr[@intFromEnum(TokenModule.Token.StartsWith.underscore_or_dollar)] = .num_or_ident;
 
         break :blk arr;
     };
@@ -112,10 +111,10 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     // TODO: incorporate stop_on_newline into the mask, so if we're in string interpolation we fail on newlines.
 
     // Should only mispredict at 64B "page" boundaries.
-    const bytes_chomped = self.chompUntilNonzero(mask) orelse return null;
-    const span = Span{ .start = start, .len = bytes_chomped };
+    _ = self.chompUntilNonzero(mask) orelse return null;
 
-    return .{ .token = tokenAndLen.token, .len = tokenAndLen.len, .span = span };
+    // TODO: Track span information when needed
+    return tokenAndLen.token;
 }
 
 /// These are all 1 or 2 source bytes. Since the parser gets a lookahead of 1 token,
@@ -202,8 +201,8 @@ pub fn skip(_: *Self, _: usize) void {
 /// Used inside string interpolation, since interpolation may not contain newlines.
 /// Also used by the formatter, which detects and preserves blank lines sometimes.
 pub fn nextNonWhitespaceOrNewline(self: *Self) TokenWithRegion {
-    const non_whitespace = self.mask(.non_whitespace);
-    const newlines = self.mask(.newlines);
+    const non_whitespace = self.bitmask(.non_whitespace);
+    const newlines = self.bitmask(.newlines);
     const non_ws_or_newline = non_whitespace | newlines;
     _ = non_ws_or_newline;
     // TODO: implement
@@ -224,7 +223,7 @@ pub fn nextNewline(_: *Self) void {
 }
 
 pub fn nextNonWhitespace(self: *Self) void {
-    _ = self.mask(.non_whitespace);
+    _ = self.bitmask(.non_whitespace);
 
     // TODO:
     // - bit shift by index_in_page
