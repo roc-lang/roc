@@ -154,7 +154,7 @@ const op_second_byte: [num_one_byte_ops]u8 = .{
     unsupported, // '$'
     unsupported, // '%'
     unsupported, // '&'
-    '"', // `\` becomes `\"` (multiline string)
+    '\\', // `\` becomes `\\` (multiline string)
     unsupported, // '('
     unsupported, // ')'
     unsupported, // '*'

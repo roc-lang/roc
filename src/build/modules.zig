@@ -48,7 +48,7 @@ pub const ModuleType = enum {
             .collections => &.{},
             .base => &.{.collections},
             .roc_src => &.{},
-            .scan => &.{.roc_src},
+            .scan => &.{ .roc_src, .base },
             .types => &.{ .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
@@ -247,10 +247,11 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [19]ModuleTest {
+    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [20]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
+            .scan,
             .types,
             .builtins,
             .compile,

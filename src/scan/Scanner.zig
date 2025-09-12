@@ -22,6 +22,12 @@ pages_processed: usize = 0,
 /// Tracks how deep we are in string interpolation nesting
 str_interpolation_level: usize = 0,
 
+/// UTF-8 validation state that persists across page boundaries
+utf8_state: Bitmasks.Utf8State = .{},
+
+/// Bitmap of invalid UTF-8 locations in current page
+invalid_utf8_locs: u64 = 0,
+
 pub fn parse(self: *Self) void {
     const token = self.nextToken(false);
     _ = token.span; // TODO: use this
@@ -251,8 +257,8 @@ fn nextPage(self: *Self) void {
     self.pages_processed = completed; // Increment this for the future.
     const page_bytes = self.src_bytes[completed * Bitmasks.page_size ..];
 
-    // Load the bitmasks
-    self.bitmasks.load(@alignCast(page_bytes));
+    // Load the bitmasks with UTF-8 validation
+    self.bitmasks.load(@alignCast(page_bytes), &self.utf8_state, &self.invalid_utf8_locs);
     // TODO: if we are on the last page, need to fill the end of the 64B page with spaces.
     // We just discard them; they're harmless.
 
@@ -276,6 +282,7 @@ pub fn advance(self: *Self, n: usize) void {
 /// Returns the number of bytes chomped, or null if we hit the end.
 pub fn chompUntilNonzero(self: *Self, mask: u64) ?usize {
     // TODO: implement this properly
+    _ = self;
     _ = mask;
     return 0;
 }

@@ -5,6 +5,10 @@ const std = @import("std");
 pub const Token = @import("Token.zig");
 pub const Scanner = @import("Scanner.zig");
 
-test "scanner tests" {
+test {
     std.testing.refAllDecls(@import("Scanner.zig"));
+    std.testing.refAllDecls(@import("Bitmasks.zig"));
+    std.testing.refAllDecls(@import("utf8_validation.zig"));
+
+    _ = @import("test_utf8_validation.zig");
 }
