@@ -68,13 +68,12 @@ pub fn prev1(input: @Vector(16, u8), prev_input: @Vector(16, u8)) @Vector(16, u8
 }
 
 fn lookup_16(vec: @Vector(16, u8), table: [16]u8) @Vector(16, u8) {
-    // Use the nibbles as indices to look up values from the table
-    var result: @Vector(16, u8) = undefined;
-    inline for (0..16) |i| {
-        const idx = vec[i] & 0x0F;
-        result[i] = table[idx];
-    }
-    return result;
+    // Convert table array to vector for SIMD shuffle
+    const table_vec: @Vector(16, u8) = table;
+
+    // Use SIMD shuffle to perform parallel table lookup
+    // The vec values (already masked to 0-15) are used as indices into table_vec
+    return @shuffle(u8, table_vec, undefined, vec);
 }
 
 // Maximum values for detecting incomplete sequences at end
