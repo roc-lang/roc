@@ -7,6 +7,7 @@ pub const Stack = @import("stack.zig").Stack;
 pub const StackOverflow = @import("stack.zig").StackOverflow;
 pub const StackValue = @import("StackValue.zig");
 pub const EvalError = @import("interpreter.zig").EvalError;
+pub const TestRunner = @import("test_runner.zig").TestRunner;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
