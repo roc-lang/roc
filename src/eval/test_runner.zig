@@ -101,7 +101,7 @@ const Evaluation = enum {
 // Track test results
 const TestResult = struct {
     passed: bool,
-    line_number: u32,
+    region: base.Region,
     error_msg: ?[]const u8 = null,
 };
 
@@ -180,28 +180,26 @@ pub const TestRunner = struct {
             const stmt = self.env.store.getStatement(stmt_idx);
             if (stmt == .s_expect) {
                 const region = self.env.store.getStatementRegion(stmt_idx);
-                const region_info = self.env.calcRegionInfo(region);
-                const line_number = region_info.start_line_idx + 1;
                 // TODO this can probably be optimized. Maybe run tests in parallel?
                 const result = self.eval(stmt.s_expect.body) catch |err| {
                     failed += 1;
                     const error_msg = try std.fmt.allocPrint(self.allocator, "Test evaluation failed: {}", .{err});
-                    try self.test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+                    try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
                     continue;
                 };
                 switch (result) {
                     .not_a_bool => {
                         failed += 1;
                         const error_msg = try std.fmt.allocPrint(self.allocator, "Test did not evaluate to a boolean", .{});
-                        try self.test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
+                        try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
                     },
                     .failed => {
                         failed += 1;
-                        try self.test_results.append(.{ .line_number = line_number, .passed = false });
+                        try self.test_results.append(.{ .region = region, .passed = false });
                     },
                     .passed => {
                         passed += 1;
-                        try self.test_results.append(.{ .line_number = line_number, .passed = true });
+                        try self.test_results.append(.{ .region = region, .passed = true });
                     },
                 }
             }
@@ -217,20 +215,24 @@ pub const TestRunner = struct {
     ///
     /// TODO: clean this up and add classes so it can be styled in the UI
     pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
-        try writer.writeAll("<h2>Test Results</h2>\n");
         if (self.test_results.items.len > 0) {
-            try writer.writeAll("<table>\n");
-            try writer.writeAll("<tr><th>Line</th><th>Result</th><th>Error Message</th></tr>\n");
+            try writer.writeAll("<div class=\"test-results\">\n");
             for (self.test_results.items) |result| {
+                const region_info = self.env.calcRegionInfo(result.region);
+                const line_number = region_info.start_line_idx + 1;
+                try writer.writeAll("<span class=\"test-evaluation\">");
+                try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}</span>\n", .{ result.region.start.offset, result.region.end.offset, line_number });
                 if (result.passed) {
-                    try writer.print("<tr><td>{}</td><td style=\"color: green;\">Passed</td><td></td></tr>\n", .{result.line_number});
-                } else if (result.error_msg) |msg| {
-                    try writer.print("<tr><td>{}</td><td style=\"color: red;\">Failed</td><td>{s}</td></tr>\n", .{ result.line_number, msg });
+                    try writer.writeAll("<span class=\"test-passed\">PASSED</span>");
                 } else {
-                    try writer.print("<tr><td>{}</td><td style=\"color: red;\">Failed</td><td></td></tr>\n", .{result.line_number});
+                    try writer.writeAll("<span class=\"test-passed\">FAILED</span>");
+                    if (result.error_msg) |msg| {
+                        try writer.print("<span class=\"test-message\">{s}</span>\n", .{msg});
+                    }
                 }
+                try writer.writeAll("</span>\n");
             }
-            try writer.writeAll("</table>\n");
+            try writer.writeAll("</div>\n");
         }
     }
 };

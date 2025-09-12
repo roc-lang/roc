@@ -2445,7 +2445,8 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         if (args.verbose) {
             try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
             for (test_runner.test_results.items) |test_result| {
-                try stdout.print("PASS: line {}\n", .{test_result.line_number});
+                const region_info = env.calcRegionInfo(test_result.region);
+                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
             }
         }
         // Otherwise print nothing at all
@@ -2456,13 +2457,14 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
         if (args.verbose) {
             for (test_runner.test_results.items) |test_result| {
+                const region_info = env.calcRegionInfo(test_result.region);
                 if (test_result.passed) {
-                    try stderr.print("PASS: line {}\n", .{test_result.line_number});
+                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 } else {
                     if (test_result.error_msg) |msg| {
-                        try stderr.print("FAIL: line {} - {s}\n", .{ test_result.line_number, msg });
+                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{} - {s}\n", .{ args.path, region_info.start_line_idx + 1, msg });
                     } else {
-                        try stderr.print("FAIL: line {}\n", .{test_result.line_number});
+                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                     }
                 }
             }
