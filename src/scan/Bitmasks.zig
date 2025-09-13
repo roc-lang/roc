@@ -15,9 +15,6 @@ bytes_chomped: usize = 0,
 /// The 64-bit masks, with each bit representing a byte in a 64B page.
 masks: [std.meta.fields(Bitmask).len]u64 = .{0} ** std.meta.fields(Bitmask).len,
 
-/// UTF-8 validation state that persists across page boundaries
-pub const Utf8State = @import("utf8_validation.zig").Utf8State;
-
 /// If any invalid UTF-8 characters are found, they will be marked using the given
 /// u64 bitmap (0-bits mean valid UTF-8 bytes, 1-bits mean invalid UTF-8 found there).
 pub fn init(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
