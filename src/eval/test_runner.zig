@@ -225,7 +225,7 @@ pub const TestRunner = struct {
                 if (result.passed) {
                     try writer.writeAll("<span class=\"test-passed\">PASSED</span>");
                 } else {
-                    try writer.writeAll("<span class=\"test-passed\">FAILED</span>");
+                    try writer.writeAll("<span class=\"test-failed\">FAILED</span>");
                     if (result.error_msg) |msg| {
                         try writer.print("<span class=\"test-message\">{s}</span>\n", .{msg});
                     }
