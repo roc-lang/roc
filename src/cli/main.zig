@@ -2408,7 +2408,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
-    // Create interpreter infrastructure for test evaluation
+    // Create test runner infrastructure for test evaluation
     var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
         try stderr.print("Failed to create stack memory: {}", .{err});
         std.process.exit(1);
@@ -2422,7 +2422,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     defer layout_cache.deinit();
 
     var test_runner = TestRunner.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
-        try stderr.print("Failed to create interpreter: {}\n", .{err});
+        try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };
     defer test_runner.deinit();

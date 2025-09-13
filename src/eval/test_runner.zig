@@ -110,6 +110,7 @@ const TestSummary = struct {
     failed: u32,
 };
 
+/// A test runner that can evaluate expect expressions in a module.
 pub const TestRunner = struct {
     allocator: Allocator,
     env: *const ModuleEnv,
@@ -156,6 +157,7 @@ pub const TestRunner = struct {
         return &(self.roc_ops.?);
     }
 
+    /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
         const result = try self.interpreter.eval(expr_idx, self.get_ops());
         if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
@@ -170,6 +172,8 @@ pub const TestRunner = struct {
         }
     }
 
+    /// Evaluates all expect statements in the module, returning a summary of the results.
+    /// Detailed results can be found in `test_results`.
     pub fn eval_all(self: *TestRunner) !TestSummary {
         var passed: u32 = 0;
         var failed: u32 = 0;
@@ -212,8 +216,6 @@ pub const TestRunner = struct {
     }
 
     /// Write a html report of the test results to the given writer.
-    ///
-    /// TODO: clean this up and add classes so it can be styled in the UI
     pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
         if (self.test_results.items.len > 0) {
             try writer.writeAll("<div class=\"test-results\">\n");
