@@ -2,4 +2,4 @@
 const std = @import("std");
 
 pub const Span = @import("Span.zig");
-pub const Bytes = [:'\n']align(16) u8;
+pub const Bytes = [:'\n']align(16) const u8;
