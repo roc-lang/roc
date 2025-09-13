@@ -1,5 +1,11 @@
 //! This efficiently stores byte slices for literals (strings, arbitrarily-long numbers, etc.)
-//! in a single contiguous buffer, with each slice prefixed by its length.
+//! in a single contiguous buffer, with each slice followed by its length.
+//!
+//! Length is stored *after* the bytes because a common use case is to extend
+//! the most recent addition - specifically because we are encountering multiple
+//! segments of a string, separated by backslash-escapes - and this way if the
+//! variable-length encoding described below needs to jump into a higher size
+//! category, no reallocation and resizing is necessary.
 //!
 //! The lengths are stored in a simple variable-length encoding that assumes lengths under
 //! 250 will be by far the most common. (Some string literals will be more than 250B, but
@@ -27,8 +33,9 @@ pub const Idx = enum(u32) {
     }
 };
 
-const ByteMarker = enum {
-    u16 = 254,
+const ByteMarker = enum(u8) {
+    u16 = 253,
+    u24 = 254,
     u32 = 255,
 };
 
@@ -42,27 +49,37 @@ fn lenHeaderSize(self: *const Self, idx: Self.Idx, slice_len: *usize) usize {
     if (first_byte < @intFromEnum(ByteMarker.u16)) {
         // Length fits in a single byte
         slice_len.* = @intCast(first_byte);
-        return idx_usize + 1;
+        // Return where the data starts (idx_usize is the length position, data is before it)
+        return idx_usize - slice_len.*;
     } else if (first_byte == @intFromEnum(ByteMarker.u16)) {
         // Length fits in u16
         const len_bytes = items[idx_usize + 1 .. idx_usize + 3];
         slice_len.* = @intCast(std.mem.readInt(u16, len_bytes[0..2], .little));
-        return idx_usize + 3;
+        // Data starts before the length header (3 bytes for u16 header)
+        return idx_usize - slice_len.*;
+    } else if (first_byte == @intFromEnum(ByteMarker.u24)) {
+        // Length fits in u24
+        const len_bytes = items[idx_usize + 1 .. idx_usize + 4];
+        var buf: [4]u8 = .{0} ** 4;
+        @memcpy(buf[0..3], len_bytes[0..3]);
+        slice_len.* = std.mem.readInt(u32, &buf, .little);
+        // Data starts before the length header
+        return idx_usize - slice_len.*;
     } else {
         // Length fits in u32
         const len_bytes = items[idx_usize + 1 .. idx_usize + 5];
         slice_len.* = std.mem.readInt(u32, len_bytes[0..4], .little);
-        return idx_usize + 5;
+        // Data starts before the length header
+        return idx_usize - slice_len.*;
     }
 }
 
 pub fn slice(self: *const Self, idx: Self.Idx) []const u8 {
-    const idx_usize = idx.asUsize();
     const items = self.entries.items.items;
-    var slice_len = undefined;
+    var slice_len: usize = undefined;
     const slice_start = self.lenHeaderSize(idx, &slice_len);
 
-    return items[slice_start .. slice_start + @as(usize, @intCast(*slice_len))];
+    return items[slice_start .. slice_start + slice_len];
 }
 
 /// Appends the given slice inline to the bytes, with the length written using
@@ -87,7 +104,7 @@ fn appendInternal(
         const items_len = self.entries.items.items.len;
         self.entries.items.appendAssumeCapacity(@as(u8, @intCast(total_bytes_len)));
         break :blk items_len;
-    } else if (total_bytes_len < std.math.maxInt(u16)) blk: {
+    } else if (total_bytes_len <= std.math.maxInt(u16)) blk: {
         const len_size = 3; // 1 byte marker + 2 bytes for u16 length
         try self.entries.items.ensureUnusedCapacity(allocator, len_size + bytes.len);
         self.entries.items.appendSliceAssumeCapacity(bytes);
@@ -97,39 +114,29 @@ fn appendInternal(
         std.mem.writeInt(u16, &buf, @as(u16, @intCast(total_bytes_len)), .little);
         self.entries.items.appendSliceAssumeCapacity(&buf);
         break :blk items_len;
+    } else if (total_bytes_len <= 0xFFFFFF) blk: {
+        const len_size = 4; // 1 byte marker + 3 bytes for u24 length
+        try self.entries.items.ensureUnusedCapacity(allocator, len_size + bytes.len);
+        self.entries.items.appendSliceAssumeCapacity(bytes);
+        const items_len = self.entries.items.items.len;
+        self.entries.items.appendAssumeCapacity(@intFromEnum(ByteMarker.u24));
+        var buf: [4]u8 = .{0} ** 4;
+        std.mem.writeInt(u32, &buf, @as(u32, @intCast(total_bytes_len)), .little);
+        self.entries.items.appendSliceAssumeCapacity(buf[0..3]);
+        break :blk items_len;
     } else blk: {
         const len_size = 5; // 1 byte marker + 4 bytes for u32 length
         try self.entries.items.ensureUnusedCapacity(allocator, len_size + bytes.len);
         self.entries.items.appendSliceAssumeCapacity(bytes);
         const items_len = self.entries.items.items.len;
-        self.entries.items.appendAssumeCapacity(@intFromEnum(ByteMarker.u16));
+        self.entries.items.appendAssumeCapacity(@intFromEnum(ByteMarker.u32));
         var buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &buf, @as(u32, @intCast(total_bytes_len)), .little);
         self.entries.items.appendSliceAssumeCapacity(&buf);
         break :blk items_len;
     };
 
-    const idx = @as(Self.Idx, @enumFromInt(@as(u32, @intCast(len_idx))));
-
-    self.last_idx = @enumFromInt(idx);
-
-    return idx;
-}
-
-/// Appends the given bytes (just like append()) while also validating that they are
-/// valid UTF-8. Returns an error if they are not valid UTF-8.
-pub fn appendUtf8(
-    self: *Self,
-    allocator: Allocator,
-    bytes: []const u8,
-) (error{InvalidUtf8} || Allocator.Error)!Self.Idx {
-    if (std.unicode.utf8ValidateSlice(bytes)) {
-        // TODO in the future, we can use SIMD to validate UTF-8
-        // while also copying from the vectors we already have loaded.
-        return try self.append(allocator, bytes);
-    } else {
-        return .InvalidUtf8;
-    }
+    return @as(Self.Idx, @enumFromInt(@as(u32, @intCast(len_idx))));
 }
 
 /// We ask for old_last_idx as a pointer, and then write to that pointer,
@@ -144,11 +151,7 @@ pub fn extendLast(
     std.debug.assert(bytes.len > 0);
 
     var old_len: usize = undefined;
-    const header_size = self.lenHeaderSize(old_last_idx, &old_len);
-
-    // This should only ever be passed the last item in the list!
-    std.debug.assert(old_last_idx.asUsize() + header_size ==
-        @as(usize, @intCast(self.entries.len())));
+    _ = self.lenHeaderSize(old_last_idx.*, &old_len);
 
     // Write the bytes on top of the previous length entry, with the new
     // length at the end as usual. This is why we have the length at the
@@ -157,24 +160,9 @@ pub fn extendLast(
     // then we'd have to re-copy all of those bytes. This way we always just
     // overwrite and write a fresh length at the end, where there's always
     // enough space for it no matter what size it ended up being.
-    self.entries.items.items.len = @intCast(self.last_idx);
+    self.entries.items.items.len = old_last_idx.asUsize();
 
     old_last_idx.* = try self.appendInternal(allocator, bytes, old_len);
-}
-
-pub fn extendLastUtf8(
-    self: *Self,
-    allocator: Allocator,
-    bytes: []const u8,
-    old_last_idx: *Idx,
-) (error{InvalidUtf8} || Allocator.Error)!void {
-    if (std.unicode.utf8ValidateSlice(bytes)) {
-        // TODO in the future, we can use SIMD to validate UTF-8
-        // while also copying from the vectors we already have loaded.
-        return try self.extendLast(allocator, bytes, old_last_idx);
-    } else {
-        return .InvalidUtf8;
-    }
 }
 
 test "variable length encoding - single byte (< 253)" {
@@ -359,7 +347,7 @@ test "variable length encoding - edge cases" {
     }
 }
 
-test "ByteSlices: store and retrieve single slice" {
+test "Literals: store and retrieve single slice" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -373,7 +361,7 @@ test "ByteSlices: store and retrieve single slice" {
     try testing.expectEqualSlices(u8, data, retrieved);
 }
 
-test "ByteSlices: store and retrieve multiple slices" {
+test "Literals: store and retrieve multiple slices" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -393,7 +381,7 @@ test "ByteSlices: store and retrieve multiple slices" {
     try testing.expectEqualSlices(u8, data3, slices.slice(idx3));
 }
 
-test "ByteSlices: various lengths" {
+test "Literals: various lengths" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -428,7 +416,7 @@ test "ByteSlices: various lengths" {
     }
 }
 
-test "ByteSlices: variable length encoding layout" {
+test "Literals: variable length encoding layout" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -447,20 +435,20 @@ test "ByteSlices: variable length encoding layout" {
     try testing.expectEqualSlices(u8, first, slices.slice(idx1));
     try testing.expectEqualSlices(u8, second, slices.slice(idx2));
 
-    // Check the actual buffer layout with variable-length encoding
+    // Check the actual buffer layout - data comes first, then length
     const buffer = slices.entries.items.items;
 
-    // First entry: 1 byte for length (value 1) + 1 byte data = 2 bytes
-    try testing.expectEqual(@as(u8, 1), buffer[0]); // Length encoded as single byte
-    try testing.expectEqual(@as(u8, 'x'), buffer[1]);
+    // First entry: 1 byte data + 1 byte for length = 2 bytes total
+    try testing.expectEqual(@as(u8, 'x'), buffer[0]); // Data
+    try testing.expectEqual(@as(u8, 1), buffer[1]); // Length encoded as single byte
 
-    // Second entry starts at index 2: 1 byte for length (value 2) + 2 bytes data
-    try testing.expectEqual(@as(u8, 2), buffer[2]); // Length encoded as single byte
-    try testing.expectEqual(@as(u8, 'y'), buffer[3]);
-    try testing.expectEqual(@as(u8, 'y'), buffer[4]);
+    // Second entry: 2 bytes data + 1 byte for length = 3 bytes total
+    try testing.expectEqual(@as(u8, 'y'), buffer[2]); // First byte of data
+    try testing.expectEqual(@as(u8, 'y'), buffer[3]); // Second byte of data
+    try testing.expectEqual(@as(u8, 2), buffer[4]); // Length encoded as single byte
 }
 
-test "ByteSlices: large strings" {
+test "Literals: large strings" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -479,7 +467,7 @@ test "ByteSlices: large strings" {
     try testing.expectEqualSlices(u8, &large_data, retrieved);
 }
 
-test "ByteSlices: interleaved small and large" {
+test "Literals: interleaved small and large" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
