@@ -16,6 +16,7 @@ pub const ModuleTest = struct {
 pub const ModuleType = enum {
     collections,
     base,
+    roc_src,
     types,
     builtins,
     compile,
@@ -45,6 +46,7 @@ pub const ModuleType = enum {
             .tracy => &.{ .build_options, .builtins },
             .collections => &.{},
             .base => &.{.collections},
+            .roc_src => &.{},
             .types => &.{ .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
@@ -68,6 +70,7 @@ pub const ModuleType = enum {
 pub const RocModules = struct {
     collections: *Module,
     base: *Module,
+    roc_src: *Module,
     types: *Module,
     builtins: *Module,
     compile: *Module,
@@ -95,6 +98,7 @@ pub const RocModules = struct {
                 .{ .root_source_file = b.path("src/collections/mod.zig") },
             ),
             .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
+            .roc_src = b.addModule("roc_src", .{ .root_source_file = b.path("src/roc_src/mod.zig") }),
             .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
@@ -206,6 +210,7 @@ pub const RocModules = struct {
         return switch (module_type) {
             .collections => self.collections,
             .base => self.base,
+            .roc_src => self.roc_src,
             .types => self.types,
             .builtins => self.builtins,
             .compile => self.compile,
