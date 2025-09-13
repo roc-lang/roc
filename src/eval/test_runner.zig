@@ -221,15 +221,13 @@ pub const TestRunner = struct {
                 const region_info = self.env.calcRegionInfo(result.region);
                 const line_number = region_info.start_line_idx + 1;
                 try writer.writeAll("<span class=\"test-evaluation\">");
-                try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}</span>\n", .{ result.region.start.offset, result.region.end.offset, line_number });
                 if (result.passed) {
                     try writer.writeAll("<span class=\"test-passed\">PASSED</span>");
                 } else {
                     try writer.writeAll("<span class=\"test-failed\">FAILED</span>");
-                    if (result.error_msg) |msg| {
-                        try writer.print("<span class=\"test-message\">{s}</span>\n", .{msg});
-                    }
                 }
+                try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}</span>\n", .{ result.region.start.offset, result.region.end.offset, line_number });
+                try writer.print("<span class=\"test-message\">{s}</span>\n", .{result.error_msg orelse ""});
                 try writer.writeAll("</span>\n");
             }
             try writer.writeAll("</div>\n");
