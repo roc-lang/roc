@@ -228,10 +228,10 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
         if (b_origin) |origin| {
             try self.constraint_origins.put(a, origin);
         }
+    }
 
-        for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
-            try self.var_pool.addVarToRank(fresh_var, rank);
-        }
+    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+        try self.var_pool.addVarToRank(fresh_var, rank);
     }
 
     return result;
@@ -440,8 +440,8 @@ fn freshFromContent(self: *Self, content: Content, rank: types_mod.Rank, new_reg
 }
 
 /// The the region for a variable
-fn freshBool(self: *Self, new_region: Region) Allocator.Error!Var {
-    return try self.generateTypeDeclInstance(&.{}, new_region, can.Can.BUILTIN_BOOL);
+fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
+    return try self.instantiateVar(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL), rank, .{ .explicit = new_region });
 }
 
 // fresh vars //
@@ -2275,6 +2275,9 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 },
             }
         },
+        .e_if => |if_expr| {
+            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, rank, if_expr) or does_fx;
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
@@ -2330,6 +2333,109 @@ fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Ra
             }
         },
     }
+}
+
+// if-else //
+
+/// Check the types for an if-else expr
+fn checkIfElseExpr(
+    self: *Self,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    rank: types_mod.Rank,
+    if_: std.meta.FieldType(CIR.Expr, .e_if),
+) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+
+    // Should never be 0
+    std.debug.assert(branches.len > 0);
+
+    // Get the first branch
+    const first_branch_idx = branches[0];
+    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
+
+    // Check the condition of the 1st branch
+    var does_fx = try self.checkExprNew(first_branch.cond, rank, .no_expectation);
+    const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
+    const bool_var = try self.freshBool(rank, expr_region);
+    const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
+    self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
+
+    // Then we check the 1st branch's body
+    does_fx = try self.checkExprNew(first_branch.body, rank, .no_expectation) or does_fx;
+
+    // The 1st branch's body is the type all other branches must match
+    const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
+
+    // Total number of branches (including final else)
+    const num_branches: u32 = @intCast(branches.len + 1);
+
+    var last_if_branch = first_branch_idx;
+    for (branches[1..], 1..) |branch_idx, cur_index| {
+        // TODO: Each branch body get it's own rank??
+
+        const branch = self.cir.store.getIfBranch(branch_idx);
+
+        // Check the branches condition
+        does_fx = try self.checkExprNew(branch.cond, rank, .no_expectation) or does_fx;
+        const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+        const branch_bool_var = try self.freshBool(rank, expr_region);
+        const cond_result = try self.unify(branch_bool_var, cond_var, rank);
+        self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
+
+        // Check the branch body
+        does_fx = try self.checkExprNew(branch.body, rank, .no_expectation) or does_fx;
+        const body_var: Var = ModuleEnv.varFrom(branch.body);
+        const body_result = try self.unify(branch_var, body_var, rank);
+        self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = last_if_branch,
+            .num_branches = num_branches,
+            .problem_branch_index = @intCast(cur_index),
+        } });
+
+        if (!body_result.isOk()) {
+            // Check remaining branches to catch their individual errors
+            for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
+                const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
+
+                does_fx = try self.checkExprNew(remaining_branch.cond, rank, .no_expectation) or does_fx;
+                const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
+
+                const fresh_bool = try self.freshBool(rank, expr_region);
+                const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, rank);
+                self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
+
+                does_fx = try self.checkExprNew(remaining_branch.body, rank, .no_expectation) or does_fx;
+                try self.types.setVarContent(ModuleEnv.varFrom(remaining_branch.body), .err);
+            }
+
+            // Break to avoid cascading errors
+            break;
+        }
+
+        last_if_branch = branch_idx;
+    }
+
+    // Check the final else
+    does_fx = try self.checkExprNew(if_.final_else, rank, .no_expectation) or does_fx;
+    const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
+    const final_else_result = try self.unify(branch_var, final_else_var, rank);
+    self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+        .parent_if_expr = if_expr_idx,
+        .last_if_branch = last_if_branch,
+        .num_branches = num_branches,
+        .problem_branch_index = num_branches - 1,
+    } });
+
+    // Set the entire expr's type to be the type of the branch
+    const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
+    try self.types.setVarRedirect(if_expr_var, branch_var);
+
+    return does_fx;
 }
 
 // pattern OLD //
@@ -3628,106 +3734,6 @@ fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Ra
 //             try self.types.setVarContent(node_var, .err);
 //         },
 //     }
-// }
-
-// // if-else //
-
-// /// Check the types for an if-else expr
-// fn checkIfElseExpr(
-//     self: *Self,
-//     if_expr_idx: CIR.Expr.Idx,
-//     expr_region: Region,
-//     if_: std.meta.FieldType(CIR.Expr, .e_if),
-// ) std.mem.Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     const branches = self.cir.store.sliceIfBranches(if_.branches);
-
-//     // Should never be 0
-//     std.debug.assert(branches.len > 0);
-
-//     // Get the first branch
-//     const first_branch_idx = branches[0];
-//     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
-
-//     // Check the condition of the 1st branch
-//     var does_fx = try self.checkExpr(first_branch.cond);
-//     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-//     const bool_var = try self.freshBool(expr_region);
-//     const first_cond_result = try self.unify(bool_var, first_cond_var);
-//     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
-
-//     // Then we check the 1st branch's body
-//     does_fx = try self.checkExpr(first_branch.body) or does_fx;
-
-//     // The 1st branch's body is the type all other branches must match
-//     const branch_var = @as(Var, @enumFromInt(@intFromEnum(first_branch.body)));
-
-//     // Total number of branches (including final else)
-//     const num_branches: u32 = @intCast(branches.len + 1);
-
-//     var last_if_branch = first_branch_idx;
-//     for (branches[1..], 1..) |branch_idx, cur_index| {
-//         const branch = self.cir.store.getIfBranch(branch_idx);
-
-//         // Check the branches condition
-//         does_fx = try self.checkExpr(branch.cond) or does_fx;
-//         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-//         const branch_bool_var = try self.freshBool(expr_region);
-//         const cond_result = try self.unify(branch_bool_var, cond_var);
-//         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
-
-//         // Check the branch body
-//         does_fx = try self.checkExpr(branch.body) or does_fx;
-//         const body_var: Var = @enumFromInt(@intFromEnum(branch.body));
-//         const body_result = try self.unify(branch_var, body_var);
-//         self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
-//             .parent_if_expr = if_expr_idx,
-//             .last_if_branch = last_if_branch,
-//             .num_branches = num_branches,
-//             .problem_branch_index = @intCast(cur_index),
-//         } });
-
-//         if (!body_result.isOk()) {
-//             // Check remaining branches to catch their individual errors
-//             for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-//                 const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
-
-//                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
-//                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
-
-//                 const fresh_bool = try self.freshBool(expr_region);
-//                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var);
-//                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
-
-//                 does_fx = try self.checkExpr(remaining_branch.body) or does_fx;
-//                 try self.types.setVarContent(@enumFromInt(@intFromEnum(remaining_branch.body)), .err);
-//             }
-
-//             // Break to avoid cascading errors
-//             break;
-//         }
-
-//         last_if_branch = branch_idx;
-//     }
-
-//     // Check the final else
-//     does_fx = try self.checkExpr(if_.final_else) or does_fx;
-//     const final_else_var: Var = @enumFromInt(@intFromEnum(if_.final_else));
-//     const final_else_result = try self.unify(branch_var, final_else_var);
-//     self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
-//         .parent_if_expr = if_expr_idx,
-//         .last_if_branch = last_if_branch,
-//         .num_branches = num_branches,
-//         .problem_branch_index = num_branches - 1,
-//     } });
-
-//     // Unify the if expression's type variable with the branch type
-//     const if_expr_var: Var = @enumFromInt(@intFromEnum(if_expr_idx));
-//     _ = try self.unify(if_expr_var, branch_var);
-
-//     return does_fx;
 // }
 
 // // match //

@@ -204,6 +204,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
     try result.addBuiltinTypeBool(env);
     try result.addBuiltinTypeResult(env);
+    // Below, these are addded to the list of stmts in the file
 
     // Assert that the node store is completely empty
     env.debugAssertArraysInSync();
@@ -411,6 +412,10 @@ pub fn canonicalizeFile(
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.env.store.scratchDefTop();
     const scratch_statements_start = self.env.store.scratch_statements.top();
+
+    // Add builtins to scratch stmts
+    try self.env.store.addScratchStatement(BUILTIN_BOOL);
+    try self.env.store.addScratchStatement(BUILTIN_RESULT);
 
     // First pass: Process all type declarations to introduce them into scope
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
