@@ -457,6 +457,85 @@ test "check type - nominal recursive type wrong type" {
     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
 }
 
+// if-else
+
+test "check type - if else" {
+    const source =
+        \\module []
+        \\
+        \\x : Str
+        \\x = if True "true" else "false"
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - if else - qualified bool" {
+    const source =
+        \\module []
+        \\
+        \\x : Str
+        \\x = if Bool.True "true" else "false"
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - if else - invalid condition 1" {
+    const source =
+        \\module []
+        \\
+        \\x : Str
+        \\x = if Truee "true" else "false"
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+}
+
+test "check type - if else - invalid condition 2" {
+    const source =
+        \\module []
+        \\
+        \\x : Str
+        \\x = if Bool.Falsee "true" else "false"
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+}
+
+test "check type - if else - invalid condition 3" {
+    const source =
+        \\module []
+        \\
+        \\x : Str
+        \\x = if "True" "true" else "false"
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+}
+
+test "check type - if else - different branch types 1" {
+    const source =
+        \\module []
+        \\
+        \\x = if True "true" else 10
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+}
+
+test "check type - if else - different branch types 2" {
+    const source =
+        \\module []
+        \\
+        \\x = if True "true" else if False "false" else 10
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+}
+
+test "check type - if else - different branch types 3" {
+    const source =
+        \\module []
+        \\
+        \\x = if True "true" else if False 10 else "last"
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+}
+
 // helpers - expr //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
