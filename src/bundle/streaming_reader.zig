@@ -14,7 +14,7 @@ pub const DecompressingHashReader = struct {
     allocator_ptr: *std.mem.Allocator,
     dctx: *c.ZSTD_DCtx,
     hasher: std.crypto.hash.Blake3,
-    input_reader: std.io.AnyReader,
+    input_reader: std.io.Reader,
     expected_hash: [32]u8,
     in_buffer: []u8,
     out_buffer: []u8,
@@ -24,7 +24,6 @@ pub const DecompressingHashReader = struct {
     hash_verified: bool,
 
     const Self = @This();
-    const Reader = std.io.Reader(*Self, Error, read);
     const Error = error{
         DecompressionFailed,
         UnexpectedEndOfStream,
@@ -33,7 +32,7 @@ pub const DecompressingHashReader = struct {
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
-        input_reader: std.io.AnyReader,
+        input_reader: std.io.Reader,
         expected_hash: [32]u8,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
@@ -76,8 +75,22 @@ pub const DecompressingHashReader = struct {
         self.allocator_ptr.free(self.out_buffer);
     }
 
-    pub fn reader(self: *Self) Reader {
-        return .{ .context = self };
+    pub fn reader(self: *Self) std.io.Reader {
+
+        // TODO this probably needs to be a separate buffer
+        return .{
+            .vtable = &.{ .stream = stream },
+            .buffer = self.in_buffer,
+            .seek = 0,
+            .end = self.in_buffer.len,
+        };
+    }
+
+    fn stream(r: *std.io.Reader, w: *std.io.Writer, limit: std.io.Limit) std.io.Reader.StreamError!usize {
+        _ = r;
+        _ = w;
+        _ = limit;
+        std.debug.panic("TODO: implement me", .{});
     }
 
     fn read(self: *Self, dest: []u8) Error!usize {

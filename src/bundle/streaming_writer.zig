@@ -60,7 +60,7 @@ pub const CompressingHashWriter = struct {
         };
     }
 
-    pub fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Error!usize {
+    pub fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) std.io.Writer.Error!usize {
         // There is no need to splat
         std.debug.assert(splat == 0);
 
@@ -93,14 +93,10 @@ pub const CompressingHashWriter = struct {
         self.allocator_ptr.free(self.in_buffer);
     }
 
-    pub fn writer(self: *Self) std.io.Writer {
+    pub fn writer(self: *Self) *std.io.Writer {
         // TODO: Or should this be the out_buffer?
-        return .{ .buffer = self.in_buffer, .vtable = &vtable };
+        return &.{ .buffer = self.in_buffer, .vtable = &.{ .drain = drain } };
     }
-
-    const vtable: std.io.Writer.VTable = .{
-        .drain = @This().drain,
-    };
 
     fn compressBuffer(self: *Self, end_stream: bool) std.io.Writer.Error!void {
         if (self.in_pos == 0 and !end_stream) return;
