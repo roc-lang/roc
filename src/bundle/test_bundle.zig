@@ -247,10 +247,10 @@ test "path validation prevents directory traversal" {
     const allocator = testing.allocator;
 
     // Create a malicious tar with directory traversal attempt
-    var malicious_tar = std.array_list.Managed(u8).init(allocator);
+    var malicious_tar = std.io.Writer.Allocating.init(allocator);
     defer malicious_tar.deinit();
 
-    var tar_writer = std.tar.writer(malicious_tar.writer());
+    var tar_writer = std.tar.Writer{ .underlying_writer = &malicious_tar.writer };
 
     // Try to write a file with ".." in path
     const Options = @TypeOf(tar_writer).Options;
@@ -260,7 +260,7 @@ test "path validation prevents directory traversal" {
     };
 
     try tar_writer.writeFileBytes("../../../etc/passwd", "malicious content", options);
-    try tar_writer.finish();
+    try tar_writer.finishPedantically();
 
     // Compress it
     var compressed = std.array_list.Managed(u8).init(allocator);
@@ -276,7 +276,9 @@ test "path validation prevents directory traversal" {
     );
     defer writer.deinit();
 
-    try writer.writer().writeAll(malicious_tar.items);
+    const malicious_tar_data = malicious_tar.toArrayList();
+    defer allocator.free(malicious_tar_data);
+    try writer.writer().writeAll(malicious_tar_data.items);
     try writer.finish();
 
     const hash = writer.getHash();
@@ -482,7 +484,7 @@ test "bundle and unbundle over socket stream" {
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_file.writer(), src_dir, null, null);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_file.deprecatedWriter(), src_dir, null, null);
     defer allocator.free(filename);
 
     // Create socket in temp directory
@@ -550,11 +552,14 @@ test "bundle and unbundle over socket stream" {
     const dst_dir = dst_tmp.dir;
 
     // Connect to socket and unbundle
-    const stream = try std.net.connectUnixSocket(socket_path);
+    var stream = try std.net.connectUnixSocket(socket_path);
     defer stream.close();
 
     // Unbundle from socket stream
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+    var stream_buffer: [1024]u8 = undefined;
+    var stream_reader = stream.reader(&stream_buffer).file_reader.interface;
+    var adapted_stream_reader = stream_reader.adaptToOldInterface();
+    try bundle.unbundle(&adapted_stream_reader, dst_dir, &allocator, filename, null);
 
     // Wait for server to finish
     server_ctx.done.wait();
@@ -578,10 +583,10 @@ test "std.tar.writer creates valid tar" {
     const allocator = testing.allocator;
 
     // Create a tar in memory
-    var tar_buffer = std.array_list.Managed(u8).init(allocator);
-    defer tar_buffer.deinit();
+    var allocating_writer = std.io.Writer.Allocating.init(allocator);
+    defer allocating_writer.deinit();
 
-    var tar_writer = std.tar.writer(tar_buffer.writer());
+    var tar_writer = std.tar.Writer{ .underlying_writer = &allocating_writer.writer };
 
     // Write a simple file
     const content = "Hello tar world!";
@@ -591,13 +596,17 @@ test "std.tar.writer creates valid tar" {
         .mtime = 0,
     });
 
-    try tar_writer.finish();
+    try tar_writer.finishPedantically();
 
     // Now try to read it back
-    var stream = std.io.fixedBufferStream(tar_buffer.items);
+    const tar_data = allocating_writer.toArrayList();
+    defer allocator.free(tar_data);
+    var stream = std.io.fixedBufferStream(tar_data.items);
     var file_name_buffer: [256]u8 = undefined;
     var link_name_buffer: [256]u8 = undefined;
-    var tar_iter = std.tar.iterator(stream.reader(), .{
+    var stream_reader_buffer: [1024]u8 = undefined;
+    var adapted_stream_reader = stream.reader().adaptToNewApi(&stream_reader_buffer).new_interface;
+    var tar_iter = std.tar.Iterator.init(&adapted_stream_reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -838,7 +847,7 @@ test "unbundle with existing directory error" {
     defer bundle_file.close();
 
     // This should succeed but the CLI would error on existing directory
-    try bundle.unbundle(bundle_file.reader(), tmp_dir, &allocator, filename, null);
+    try bundle.unbundle(bundle_file.deprecatedReader(), tmp_dir, &allocator, filename, null);
 }
 
 test "unbundle multiple archives" {
@@ -911,7 +920,7 @@ test "unbundle multiple archives" {
         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, fname, null);
+        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, fname, null);
     }
 
     // Verify extraction
@@ -1046,7 +1055,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename1, null);
+        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -1085,7 +1094,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
 
-        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename2, null);
+        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, filename2, null);
     }
 
     // Verify all files match original content
@@ -1130,7 +1139,7 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
         {
             const file = try tmp_dir.createFile(filename, .{});
             defer file.close();
-            try file.writer().print("Content of {s}", .{filename});
+            try file.deprecatedWriter().print("Content of {s}", .{filename});
         }
 
         const archive_name = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
@@ -1380,7 +1389,7 @@ test "download from local server" {
 
     // Create HTTP server on port 0 (let OS assign available port)
     const loopback = try std.net.Address.parseIp("127.0.0.1", 0);
-    var server = try loopback.listen(.{ .reuse_port = true });
+    var server = try loopback.listen(.{ .reuse_address = true });
     defer server.deinit();
 
     // Get the actual port assigned by the OS

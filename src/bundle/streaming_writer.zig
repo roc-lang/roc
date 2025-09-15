@@ -21,7 +21,7 @@ pub const CompressingHashWriter = struct {
     finished: bool,
 
     const Self = @This();
-    const Writer = std.io.Writer(*Self, Error, write);
+    const Writer = std.io.GenericWriter(*Self, Error, write);
     const Error = error{
         CompressionFailed,
         WriteFailed,

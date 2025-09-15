@@ -24,7 +24,7 @@ pub const DecompressingHashReader = struct {
     hash_verified: bool,
 
     const Self = @This();
-    const Reader = std.io.Reader(*Self, Error, read);
+    const Reader = std.io.GenericReader(*Self, Error, read);
     const Error = error{
         DecompressionFailed,
         UnexpectedEndOfStream,

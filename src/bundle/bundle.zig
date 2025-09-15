@@ -128,8 +128,8 @@ pub fn bundle(
     error_context: ?*ErrorContext,
 ) BundleError![]u8 {
     // Create a buffered writer for the output
-    var buffered_writer = std.io.bufferedWriter(output_writer);
-    const buffered = buffered_writer.writer();
+    // NOTE: std.io.bufferedWriter was deleted in zig 0.15. Once this is code is upgraded to std.io.Writer, this will naturally be a buffered writer
+    var buffered = output_writer;
 
     // Create compressing hash writer that chains: tar → compress → hash → output
     var compress_writer = streaming_writer.CompressingHashWriter.init(
@@ -144,7 +144,9 @@ pub fn bundle(
     defer compress_writer.deinit();
 
     // Create tar writer that writes to the compressing writer
-    var tar_writer = std.tar.writer(compress_writer.writer());
+    var compress_writer_buffer: [4096]u8 = undefined;
+    var adapted_compress_writer = compress_writer.writer().adaptToNewApi(&compress_writer_buffer).new_interface;
+    var tar_writer = std.tar.Writer{ .underlying_writer = &adapted_compress_writer };
 
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
@@ -211,17 +213,17 @@ pub fn bundle(
         };
 
         // Create a reader for the file
-        const file_reader = file.reader();
+        var reader_buffer: [4096]u8 = undefined;
+        var file_reader = file.reader(&reader_buffer).interface;
 
         // Stream the file to tar
-        tar_writer.writeFileStream(tar_path, file_size, file_reader, options) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.TarWriteFailed,
+        tar_writer.writeFileStream(tar_path, file_size, &file_reader, options) catch {
+            return error.TarWriteFailed;
         };
     }
 
     // Finish the tar archive
-    tar_writer.finish() catch {
+    tar_writer.finishPedantically() catch {
         return error.TarWriteFailed;
     };
 
@@ -233,9 +235,8 @@ pub fn bundle(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    buffered_writer.flush() catch {
-        return error.FlushFailed;
-    };
+    // flush the adapted writer
+    try adapted_compress_writer.flush();
 
     // Get the blake3 hash and encode as base58
     const hash = compress_writer.getHash();
@@ -545,8 +546,8 @@ pub fn unbundleStream(
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
     // Buffered reader for input
-    var buffered_reader = std.io.bufferedReader(input_reader);
-    const buffered = buffered_reader.reader();
+    // NOTE: std.io.bufferedReader was deleted in zig 0.15. Once this is code is upgraded to std.io.Reader, this will naturally be buffered
+    var buffered = input_reader;
 
     // Create decompressing hash reader that chains: input → verify hash → decompress
     var decompress_reader = streaming_reader.DecompressingHashReader.init(
@@ -563,7 +564,10 @@ pub fn unbundleStream(
     // Use std.tar to parse the archive; allocate MAX_LENGTH + 1 for null terminator
     var file_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
     var link_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
-    var tar_iter = std.tar.iterator(decompress_reader.reader(), .{
+
+    var decompress_reader_buffer: [4096]u8 = undefined;
+    var adapted_decompress_reader = decompress_reader.reader().adaptToNewApi(&decompress_reader_buffer).new_interface;
+    var tar_iter = std.tar.Iterator.init(&adapted_decompress_reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
