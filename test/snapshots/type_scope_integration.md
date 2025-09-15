@@ -52,6 +52,26 @@ Bar : SomeUndeclaredType
       ^^^^^^^^^^^^^^^^^^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Foo` is exposed, but it is not defined anywhere in this module.
+
+**type_scope_integration.md:1:9:1:12:**
+```roc
+module [Foo, Bar]
+```
+        ^^^
+You can fix this by either defining `Foo` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Bar` is exposed, but it is not defined anywhere in this module.
+
+**type_scope_integration.md:1:14:1:17:**
+```roc
+module [Foo, Bar]
+```
+             ^^^
+You can fix this by either defining `Bar` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),
@@ -93,29 +113,49 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.10
 		(ty-header @4.1-4.4 (name "Foo"))
-		(ty @4.7-4.10 (name "U64")))
+		(ty-lookup @4.7-4.10 (name "U64") (builtin)))
 	(s-alias-decl @7.1-7.10
 		(ty-header @7.1-7.4 (name "Foo"))
-		(ty @7.7-7.10 (name "Str")))
+		(ty-lookup @7.7-7.10 (name "Str") (builtin)))
 	(s-alias-decl @10.1-10.25
 		(ty-header @10.1-10.4 (name "Bar"))
-		(ty @10.7-10.25 (name "SomeUndeclaredType")))
+		(ty-malformed @10.7-10.25))
 	(s-alias-decl @13.1-13.10
 		(ty-header @13.1-13.4 (name "Baz"))
-		(ty @13.7-13.10 (name "Foo"))))
+		(ty-lookup @13.7-13.10 (name "Foo") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.10 (type "Foo")
 			(ty-header @4.1-4.4 (name "Foo")))
 		(alias @7.1-7.10 (type "Foo")
 			(ty-header @7.1-7.4 (name "Foo")))
-		(alias @10.1-10.25 (type "Error")
+		(alias @10.1-10.25 (type "Bar")
 			(ty-header @10.1-10.4 (name "Bar")))
 		(alias @13.1-13.10 (type "Baz")
 			(ty-header @13.1-13.4 (name "Baz"))))

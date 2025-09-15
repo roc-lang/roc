@@ -89,25 +89,46 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
 					(ty-tuple @3.8-3.14
-						(ty-var @3.9-3.10 (name "a"))
-						(ty-var @3.12-3.13 (name "b")))
+						(ty-rigid-var @3.9-3.10 (name "a"))
+						(ty-rigid-var @3.12-3.13 (name "b")))
 					(ty-tuple @3.18-3.24
-						(ty-var @3.19-3.20 (name "b"))
-						(ty-var @3.22-3.23 (name "a")))))))
+						(ty-rigid-var @3.12-3.13 (name "b"))
+						(ty-rigid-var @3.9-3.10 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty_record @6.13-6.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "(a, b) -> (b, a)"))
+		(patt @4.1-4.5 (type "(Error, Error) -> (Error, Error)"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.8-4.23 (type "(a, b) -> (b, a)"))
+		(expr @4.8-4.23 (type "(Error, Error) -> (Error, Error)"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

@@ -42,7 +42,7 @@ process = |maybe| "result"
 
 
 **INCOMPATIBLE MATCH PATTERNS**
-The pattern in the first branch of this `match` differs from previous ones:
+The first pattern in this `match` is incompatible:
 **type_tag_union_basic.md:7:39:**
 ```roc
 is_ok_ret_unqualified_bool = |result| match result {
@@ -52,34 +52,13 @@ is_ok_ret_unqualified_bool = |result| match result {
 ```
     ^^^^^
 
-The first pattern has this type:
+The first pattern has the type:
     _Result(ok, err)_
 
-But the other pattern has this type:
-    _[Err(_err), Ok(_ok)]_
+But the expression right after `match` has the type:
+    _[Err(_a), Ok(_b)]_
 
-All patterns in an `match` must have compatible types.
-
-
-
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the first branch of this `match` differs from previous ones:
-**type_tag_union_basic.md:13:27:**
-```roc
-is_ok_ret_bool = |result| match result {
-    Ok(_) => Bool.True
-    Err(_) => Bool.False
-}
-```
-    ^^^^^
-
-The first pattern has this type:
-    _Result(ok, err)_
-
-But the other pattern has this type:
-    _[Err(_err2), Ok(_ok2)]_
-
-All patterns in an `match` must have compatible types.
+These two types can't never match!
 
 
 
@@ -228,10 +207,9 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @3.11-3.35 (effectful false)
 					(ty-tag-union @3.11-3.28
-						(ty-apply @3.12-3.21 (symbol "Some")
-							(ty @3.17-3.20 (name "Str")))
-						(ty @3.23-3.27 (name "None")))
-					(ty @3.32-3.35 (name "Str"))))))
+						(tag_name @3.12-3.21 (name "Some"))
+						(tag_name @3.23-3.27 (name "None")))
+					(ty-lookup @3.32-3.35 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @7.1-7.27 (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda @7.30-10.2
@@ -263,11 +241,9 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @6.30-6.58 (effectful false)
 					(ty-tag-union @6.30-6.50
-						(ty-apply @6.31-6.38 (symbol "Ok")
-							(ty-var @6.34-6.37 (name "_ok")))
-						(ty-apply @6.40-6.49 (symbol "Err")
-							(ty-var @6.44-6.48 (name "_err"))))
-					(ty @6.54-6.58 (name "Bool"))))))
+						(tag_name @6.31-6.38 (name "Ok"))
+						(tag_name @6.40-6.49 (name "Err")))
+					(ty-lookup @6.54-6.58 (name "Bool") (local))))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
 		(e-lambda @13.18-16.2
@@ -299,17 +275,28 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @12.18-12.48 (effectful false)
 					(ty-tag-union @12.18-12.40
-						(ty-apply @12.19-12.27 (symbol "Ok")
-							(ty-var @12.22-12.26 (name "_ok2")))
-						(ty-apply @12.29-12.39 (symbol "Err")
-							(ty-var @12.33-12.38 (name "_err2"))))
-					(ty @12.44-12.48 (name "Bool"))))))
+						(tag_name @12.19-12.27 (name "Ok"))
+						(tag_name @12.29-12.39 (name "Err")))
+					(ty-lookup @12.44-12.48 (name "Bool") (local))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
 		(e-lambda @18.9-18.15
 			(args
 				(p-underscore @18.10-18.11))
-			(e-empty_record @18.13-18.15))))
+			(e-empty_record @18.13-18.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -319,6 +306,14 @@ main! = |_| {}
 		(patt @7.1-7.27 (type "[Err(_err), Ok(_ok)] -> Bool"))
 		(patt @13.1-13.15 (type "[Err(_err2), Ok(_ok2)] -> Bool"))
 		(patt @18.1-18.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.27 (type "[None, Some(Str)] -> Str"))
 		(expr @7.30-10.2 (type "[Err(_err), Ok(_ok)] -> Bool"))

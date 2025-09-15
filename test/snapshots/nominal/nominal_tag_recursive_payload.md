@@ -15,7 +15,16 @@ empty = ConsList.Nil
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `ConsList` is exposed, but it is not defined anywhere in this module.
+
+**nominal_tag_recursive_payload.md:1:9:1:17:**
+```roc
+module [ConsList, empty]
+```
+        ^^^^^^^^
+You can fix this by either defining `ConsList` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),
@@ -66,28 +75,46 @@ NO CHANGE
 			(e-tag @6.9-6.21 (name "Nil")))
 		(annotation @6.1-6.6
 			(declared-type
-				(ty-apply @5.9-5.21 (symbol "ConsList")
-					(ty-var @5.18-5.20 (name "_a"))))))
+				(ty-apply @5.9-5.21 (name "ConsList") (local)
+					(ty-rigid-var @5.9-5.21 (name "_a"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.12 (name "ConsList")
 			(ty-args
-				(ty-var @3.10-3.11 (name "a"))))
+				(ty-rigid-var @3.10-3.11 (name "a"))))
 		(ty-tag-union @3.16-3.40
-			(ty @3.17-3.20 (name "Nil"))
-			(ty-apply @3.22-3.39 (symbol "Node")
-				(ty-apply @3.27-3.38 (symbol "ConsList")
-					(ty-var @3.36-3.37 (name "a")))))))
+			(tag_name @3.17-3.20 (name "Nil"))
+			(tag_name @3.22-3.39 (name "Node")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "ConsList(a)")))
+		(patt @6.1-6.6 (type "ConsList(_a)")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.40 (type "ConsList(a)")
 			(ty-header @3.1-3.12 (name "ConsList")
 				(ty-args
-					(ty-var @3.10-3.11 (name "a"))))))
+					(ty-rigid-var @3.10-3.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.21 (type "ConsList(a)"))))
+		(expr @6.9-6.21 (type "ConsList(_a)"))))
 ~~~

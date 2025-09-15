@@ -21,7 +21,16 @@ is_ok = |result| match result {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `MyResult` is exposed, but it is not defined anywhere in this module.
+
+**nominal_tag_payload_two.md:1:9:1:17:**
+```roc
+module [MyResult, ok, is_ok]
+```
+        ^^^^^^^^
+You can fix this by either defining `MyResult` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),
@@ -129,10 +138,10 @@ is_ok = |result| match result {
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
-					(ty-var @5.6-5.8 (name "ok"))
-					(ty-apply @5.12-5.27 (symbol "MyResult")
-						(ty-var @5.21-5.23 (name "ok"))
-						(ty-underscore @1.1-1.1))))))
+					(ty-rigid-var @5.6-5.8 (name "ok"))
+					(ty-apply @5.12-5.27 (name "MyResult") (local)
+						(ty-rigid-var @5.6-5.8 (name "ok"))
+						(ty-underscore @5.12-5.27))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "is_ok"))
 		(e-lambda @9.9-12.2
@@ -163,34 +172,52 @@ is_ok = |result| match result {
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-fn @8.9-8.36 (effectful false)
-					(ty-apply @8.9-8.28 (symbol "MyResult")
-						(ty-var @8.18-8.21 (name "_ok"))
-						(ty-var @8.23-8.27 (name "_err")))
-					(ty @8.32-8.36 (name "Bool"))))))
+					(ty-apply @8.9-8.28 (name "MyResult") (local)
+						(ty-rigid-var @8.9-8.28 (name "_ok"))
+						(ty-rigid-var @8.9-8.28 (name "_err")))
+					(ty-lookup @8.32-8.36 (name "Bool") (local))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
-				(ty-var @3.10-3.12 (name "ok"))
-				(ty-var @3.14-3.17 (name "err"))))
+				(ty-rigid-var @3.10-3.12 (name "ok"))
+				(ty-rigid-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
-			(ty-apply @3.23-3.29 (symbol "Ok")
-				(ty-var @3.26-3.28 (name "ok")))
-			(ty-apply @3.31-3.39 (symbol "Err")
-				(ty-var @3.35-3.38 (name "err"))))))
+			(tag_name @3.23-3.29 (name "Ok"))
+			(tag_name @3.31-3.39 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
+		(patt @6.1-6.3 (type "ok -> MyResult(ok, _b)"))
 		(patt @9.1-9.6 (type "MyResult(_ok, _err) -> Bool")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
-					(ty-var @3.10-3.12 (name "ok"))
-					(ty-var @3.14-3.17 (name "err"))))))
+					(ty-rigid-var @3.10-3.12 (name "ok"))
+					(ty-rigid-var @3.14-3.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
+		(expr @6.6-6.24 (type "ok -> MyResult(ok, _b)"))
 		(expr @9.9-12.2 (type "MyResult(_ok, _err) -> Bool"))))
 ~~~

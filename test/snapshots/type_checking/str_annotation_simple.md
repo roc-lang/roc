@@ -47,13 +47,34 @@ NO CHANGE
 			(e-literal @4.6-4.11 (string "hello")))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "Str"))))))
+				(ty-lookup @3.5-3.8 (name "Str") (builtin)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.2 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.12 (type "Str"))))
 ~~~

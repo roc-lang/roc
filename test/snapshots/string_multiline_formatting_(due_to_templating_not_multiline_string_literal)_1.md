@@ -77,7 +77,6 @@ EndOfFile(3:1-3:1),
 	(e-literal @1.2-1.24 (string "This is a string with "))
 	(e-call @1.26-2.3
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-literal @2.4-2.44 (string " lines of text due to the template parts")))
 ~~~

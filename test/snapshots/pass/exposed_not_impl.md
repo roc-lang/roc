@@ -53,6 +53,16 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
+The module header says that `MyType` is exposed, but it is not defined anywhere in this module.
+
+**exposed_not_impl.md:1:19:1:25:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                  ^^^^^^
+You can fix this by either defining `MyType` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
 The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
 
 **exposed_not_impl.md:1:27:1:36:**
@@ -105,13 +115,26 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @8.1-8.4 (ident "foo"))
-		(e-int @8.7-8.9 (value "42")))
+		(e-num @8.7-8.9 (value "42")))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @10.1-10.19
 		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
-			(ty @10.11-10.12 (name "A"))
-			(ty @10.14-10.15 (name "B"))
-			(ty @10.17-10.18 (name "C")))))
+			(tag_name @10.11-10.12 (name "A"))
+			(tag_name @10.14-10.15 (name "B"))
+			(tag_name @10.17-10.18 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -119,6 +142,13 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @10.1-10.19 (type "MyType")
 			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions

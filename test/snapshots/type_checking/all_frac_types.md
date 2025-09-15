@@ -65,19 +65,32 @@ NO CHANGE
 		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "F32")))))
+				(ty-lookup @3.5-3.8 (name "F32") (builtin)))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
 		(e-frac-dec @7.5-7.12 (value "2.71828"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty @6.5-6.8 (name "F64")))))
+				(ty-lookup @6.5-6.8 (name "F64") (builtin)))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
 		(e-frac-dec @10.5-10.12 (value "123.456"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty @9.5-9.8 (name "Dec"))))))
+				(ty-lookup @9.5-9.8 (name "Dec") (builtin)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -86,6 +99,14 @@ NO CHANGE
 		(patt @4.1-4.2 (type "F32"))
 		(patt @7.1-7.2 (type "F64"))
 		(patt @10.1-10.2 (type "Dec")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.9 (type "F32"))
 		(expr @7.5-7.12 (type "F64"))

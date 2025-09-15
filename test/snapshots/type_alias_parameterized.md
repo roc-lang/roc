@@ -19,19 +19,22 @@ test2 = |_| swapPair(1, 2)
 # EXPECTED
 TYPE MISMATCH - type_alias_parameterized.md:10:13:10:21
 # PROBLEMS
+**UNIMPLEMENTED**
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_alias_parameterized.md:10:13:10:21:**
+**type_alias_parameterized.md:10:13:10:27:**
 ```roc
 test2 = |_| swapPair(1, 2)
 ```
-            ^^^^^^^^
+            ^^^^^^^^^^^^^^
 
 It has the type:
-    _Pair(a, a) -> Pair(a, a)_
-
-But here it's being used as:
     _Num(_size), Num(_size2) -> _ret_
+
+But I expected it to be:
+    _Pair(Error) -> Pair(Error)_
 
 # TOKENS
 ~~~zig
@@ -130,12 +133,12 @@ NO CHANGE
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "Pair")
-						(ty-var @5.17-5.18 (name "a"))
-						(ty-var @5.20-5.21 (name "b")))
-					(ty-apply @5.26-5.36 (symbol "Pair")
-						(ty-var @5.31-5.32 (name "b"))
-						(ty-var @5.34-5.35 (name "a")))))))
+					(ty-apply @5.12-5.22 (name "Pair") (local)
+						(ty-rigid-var @5.12-5.22 (name "a"))
+						(ty-rigid-var @5.12-5.22 (name "b")))
+					(ty-apply @5.26-5.36 (name "Pair") (local)
+						(ty-rigid-var @5.12-5.22 (name "b"))
+						(ty-rigid-var @5.12-5.22 (name "a")))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "test1"))
 		(e-closure @8.9-8.29
@@ -145,12 +148,10 @@ NO CHANGE
 				(args
 					(p-underscore @8.10-8.11))
 				(e-call @8.13-8.29
-					(e-lookup-local @8.13-8.21
-						(p-assign @6.1-6.9 (ident "swapPair")))
 					(e-tuple @8.22-8.28
 						(elems
-							(e-int @8.23-8.24 (value "1"))
-							(e-int @8.26-8.27 (value "2"))))))))
+							(e-num @8.23-8.24 (value "1"))
+							(e-num @8.26-8.27 (value "2"))))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "test2"))
 		(e-closure @10.9-10.27
@@ -160,34 +161,52 @@ NO CHANGE
 				(args
 					(p-underscore @10.10-10.11))
 				(e-call @10.13-10.27
-					(e-lookup-local @10.13-10.21
-						(p-assign @6.1-6.9 (ident "swapPair")))
-					(e-int @10.22-10.23 (value "1"))
-					(e-int @10.25-10.26 (value "2"))))))
+					(e-num @10.22-10.23 (value "1"))
+					(e-num @10.25-10.26 (value "2"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.20
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))
-				(ty-var @3.9-3.10 (name "b"))))
+				(ty-rigid-var @3.6-3.7 (name "a"))
+				(ty-rigid-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
-			(ty-var @3.15-3.16 (name "a"))
-			(ty-var @3.18-3.19 (name "b")))))
+			(ty-rigid-var @3.6-3.7 (name "a"))
+			(ty-rigid-var @3.9-3.10 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Error"))
-		(patt @8.1-8.6 (type "_arg -> Pair(Num(_size), Num(_size2))"))
+		(patt @6.1-6.9 (type "Pair(Error, Error) -> Pair(Error, Error)"))
+		(patt @8.1-8.6 (type "_arg -> Error"))
 		(patt @10.1-10.6 (type "_arg -> _ret")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.20 (type "Pair(a, b)")
 			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a"))
-					(ty-var @3.9-3.10 (name "b"))))))
+					(ty-rigid-var @3.6-3.7 (name "a"))
+					(ty-rigid-var @3.9-3.10 (name "b"))))))
 	(expressions
-		(expr @6.12-6.27 (type "Error"))
-		(expr @8.9-8.29 (type "_arg -> Pair(Num(_size), Num(_size2))"))
+		(expr @6.12-6.27 (type "Pair(Error, Error) -> Pair(Error, Error)"))
+		(expr @8.9-8.29 (type "_arg -> Error"))
 		(expr @10.9-10.27 (type "_arg -> _ret"))))
 ~~~

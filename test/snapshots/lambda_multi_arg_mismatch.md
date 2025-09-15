@@ -214,26 +214,24 @@ result = multi_arg_fn(
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.57 (effectful false)
-					(ty-var @4.16-4.17 (name "a"))
-					(ty-var @4.19-4.20 (name "b"))
-					(ty-var @4.22-4.23 (name "a"))
-					(ty-var @4.25-4.26 (name "c"))
-					(ty-var @4.28-4.29 (name "a"))
-					(ty-var @4.31-4.32 (name "d"))
-					(ty-var @4.34-4.35 (name "a"))
-					(ty-var @4.37-4.38 (name "e"))
+					(ty-rigid-var @4.16-4.17 (name "a"))
+					(ty-rigid-var @4.19-4.20 (name "b"))
+					(ty-rigid-var @4.16-4.17 (name "a"))
+					(ty-rigid-var @4.25-4.26 (name "c"))
+					(ty-rigid-var @4.16-4.17 (name "a"))
+					(ty-rigid-var @4.31-4.32 (name "d"))
+					(ty-rigid-var @4.16-4.17 (name "a"))
+					(ty-rigid-var @4.37-4.38 (name "e"))
 					(ty-tuple @4.42-4.57
-						(ty-var @4.43-4.44 (name "a"))
-						(ty-var @4.46-4.47 (name "b"))
-						(ty-var @4.49-4.50 (name "c"))
-						(ty-var @4.52-4.53 (name "d"))
-						(ty-var @4.55-4.56 (name "e")))))))
+						(ty-rigid-var @4.16-4.17 (name "a"))
+						(ty-rigid-var @4.19-4.20 (name "b"))
+						(ty-rigid-var @4.25-4.26 (name "c"))
+						(ty-rigid-var @4.31-4.32 (name "d"))
+						(ty-rigid-var @4.37-4.38 (name "e")))))))
 	(d-let
 		(p-assign @10.1-10.7 (ident "result"))
 		(e-call @10.10-19.2
-			(e-lookup-local @10.10-10.22
-				(p-assign @5.1-5.13 (ident "multi_arg_fn")))
-			(e-int @11.5-11.7 (value "42"))
+			(e-num @11.5-11.7 (value "42"))
 			(e-string @12.5-12.12
 				(e-literal @12.6-12.11 (string "hello")))
 			(e-string @13.5-13.12
@@ -242,20 +240,41 @@ result = multi_arg_fn(
 			(e-dec-small @15.5-15.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 			(e-list @16.5-16.11
 				(elems
-					(e-int @16.6-16.7 (value "1"))
-					(e-int @16.9-16.10 (value "2"))))
+					(e-num @16.6-16.7 (value "1"))
+					(e-num @16.9-16.10 (value "2"))))
 			(e-nominal @17.5-17.9 (nominal "Bool")
 				(e-tag @17.5-17.9 (name "True")))
 			(e-string @18.5-18.11
-				(e-literal @18.6-18.10 (string "done"))))))
+				(e-literal @18.6-18.10 (string "done")))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @5.1-5.13 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(patt @10.1-10.7 (type "_f")))
+		(patt @10.1-10.7 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.16-6.25 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(expr @10.10-19.2 (type "_f"))))
+		(expr @10.10-19.2 (type "Error"))))
 ~~~

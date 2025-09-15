@@ -95,9 +95,9 @@ NO CHANGE
 				(e-binop @1.92-1.101 (op "ge")
 					(e-lookup-local @1.92-1.95
 						(p-assign @1.10-1.13 (ident "age")))
-					(e-int @1.99-1.101 (value "18")))))))
+					(e-num @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "_arg -> { greeting: Str, full_record: _field, is_adult: Bool }"))
+(expr @1.1-1.103 (type "b -> { greeting: Str, full_record: b, is_adult: Error }"))
 ~~~

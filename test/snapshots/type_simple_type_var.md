@@ -73,14 +73,27 @@ NO CHANGE
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
-					(ty-var @3.12-3.13 (name "a"))
-					(ty-var @3.17-3.18 (name "a"))))))
+					(ty-rigid-var @3.12-3.13 (name "a"))
+					(ty-rigid-var @3.12-3.13 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty_record @6.13-6.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -88,6 +101,14 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.9 (type "a -> a"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.12-4.17 (type "a -> a"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))

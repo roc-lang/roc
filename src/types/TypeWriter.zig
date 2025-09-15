@@ -601,9 +601,9 @@ fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!
 /// Convert a num type to a type string
 fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!void {
     switch (num) {
-        .num_poly => |poly| {
+        .num_poly => |poly_var| {
             _ = try self.buf.writer().write("Num(");
-            try self.writeVarWithContext(poly.var_, .NumContent, root_var);
+            try self.writeVarWithContext(poly_var, .NumContent, root_var);
             _ = try self.buf.writer().write(")");
         },
         .int_poly => |poly| {
@@ -656,16 +656,16 @@ fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision, num_type: NumPrecTyp
     switch (num_type) {
         .compacted => {
             _ = switch (prec) {
-                .u8 => try self.buf.writer().write("U8"),
-                .i8 => try self.buf.writer().write("I8"),
-                .u16 => try self.buf.writer().write("U16"),
-                .i16 => try self.buf.writer().write("I16"),
-                .u32 => try self.buf.writer().write("U32"),
-                .i32 => try self.buf.writer().write("I32"),
-                .u64 => try self.buf.writer().write("U64"),
-                .i64 => try self.buf.writer().write("I64"),
-                .u128 => try self.buf.writer().write("U128"),
-                .i128 => try self.buf.writer().write("I128"),
+                .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
+                .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
+                .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
+                .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
+                .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
+                .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
+                .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
+                .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
+                .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
+                .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
             };
         },
         .precision => {
@@ -689,9 +689,9 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecT
     switch (num_type) {
         .compacted => {
             _ = switch (prec) {
-                .f32 => try self.buf.writer().write("F32"),
-                .f64 => try self.buf.writer().write("F64"),
-                .dec => try self.buf.writer().write("Dec"),
+                .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
+                .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
+                .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
             };
         },
         .precision => {

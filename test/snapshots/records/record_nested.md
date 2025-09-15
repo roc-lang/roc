@@ -102,7 +102,7 @@ EndOfFile(13:1-13:1),
 						(e-string @2.21-2.28
 							(e-literal @2.22-2.27 (string "Alice"))))
 					(field (name "age")
-						(e-int @2.35-2.37 (value "30"))))))
+						(e-num @2.35-2.37 (value "30"))))))
 		(field (name "address")
 			(e-record @3.14-7.6
 				(fields
@@ -137,5 +137,5 @@ EndOfFile(13:1-13:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(_size) }, address: { street: Str, city: Str, coordinates: { lat: Frac(_size2), lng: Frac(_size3) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(_size) }, address: { street: Str, city: Str, coordinates: { lat: Num(Frac(_size2)), lng: Num(Frac(_size3)) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
 ~~~

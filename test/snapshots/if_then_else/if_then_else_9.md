@@ -29,19 +29,6 @@ if bool {
    ^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**if_then_else_9.md:3:11:**
-```roc
-} else if 10 { # Comment after else open
-```
-          ^^
-
-Right now, it has the type:
-    _Num(_size)_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
 **INCOMPATIBLE IF BRANCHES**
 The type of the second branch of this `if` does not match the previous branches:
 **if_then_else_9.md:1:1:**
@@ -105,14 +92,14 @@ NO CHANGE
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-block @1.9-3.2
-				(e-int @2.2-2.3 (value "1"))))
+				(e-num @2.2-2.3 (value "1"))))
 		(if-branch
-			(e-int @3.11-3.13 (value "10"))
+			(e-num @3.11-3.13 (value "10"))
 			(e-block @3.14-5.2
 				(e-tag @4.2-4.3 (name "A")))))
 	(if-else
 		(e-block @5.8-7.2
-			(e-int @6.2-6.3 (value "3")))))
+			(e-num @6.2-6.3 (value "3")))))
 ~~~
 # TYPES
 ~~~clojure

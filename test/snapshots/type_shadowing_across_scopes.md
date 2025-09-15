@@ -111,6 +111,16 @@ processData = |data|
                ^^^^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Result` is exposed, but it is not defined anywhere in this module.
+
+**type_shadowing_across_scopes.md:1:9:1:15:**
+```roc
+module [Result, processData]
+```
+        ^^^^^^
+You can fix this by either defining `Result` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:28),CloseSquare(1:28-1:29),
@@ -190,18 +200,29 @@ InnerModule :
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.25 (effectful false)
-					(ty @5.15-5.18 (name "Str"))
-					(ty @5.22-5.25 (name "Str"))))))
+					(ty-lookup @5.15-5.18 (name "Str") (builtin))
+					(ty-lookup @5.22-5.25 (name "Str") (builtin))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.31
 		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
-				(ty-var @3.8-3.9 (name "a"))
-				(ty-var @3.11-3.12 (name "b"))))
+				(ty-rigid-var @3.8-3.9 (name "a"))
+				(ty-rigid-var @3.11-3.12 (name "b"))))
 		(ty-tag-union @3.16-3.31
-			(ty-apply @3.17-3.22 (symbol "Ok")
-				(ty-var @3.20-3.21 (name "a")))
-			(ty-apply @3.24-3.30 (symbol "Err")
-				(ty-var @3.28-3.29 (name "b")))))
+			(tag_name @3.17-3.22 (name "Ok"))
+			(tag_name @3.24-3.30 (name "Err"))))
 	(s-alias-decl @10.1-11.31
 		(ty-header @10.1-10.12 (name "InnerModule"))
 		(ty-malformed @11.24-11.31)))
@@ -212,12 +233,19 @@ InnerModule :
 	(defs
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.31 (type "Result(a, b)")
 			(ty-header @3.1-3.13 (name "Result")
 				(ty-args
-					(ty-var @3.8-3.9 (name "a"))
-					(ty-var @3.11-3.12 (name "b")))))
-		(alias @10.1-11.31 (type "Error")
+					(ty-rigid-var @3.8-3.9 (name "a"))
+					(ty-rigid-var @3.11-3.12 (name "b")))))
+		(alias @10.1-11.31 (type "InnerModule")
 			(ty-header @10.1-10.12 (name "InnerModule"))))
 	(expressions
 		(expr @6.15-7.16 (type "Str -> Str"))))

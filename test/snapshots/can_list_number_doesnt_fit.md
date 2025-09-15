@@ -41,9 +41,9 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.16
 	(elems
-		(e-int @1.2-1.5 (value "1"))
-		(e-int @1.7-1.10 (value "2"))
-		(e-int @1.12-1.15 (value "300"))))
+		(e-int @1.2-1.5 (value "1") (suffix "u8"))
+		(e-int @1.7-1.10 (value "2") (suffix "u8"))
+		(e-num @1.12-1.15 (value "300"))))
 ~~~
 # TYPES
 ~~~clojure

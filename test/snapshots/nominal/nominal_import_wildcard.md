@@ -146,19 +146,32 @@ green = Green
 		(e-tag @6.7-6.10 (name "Red"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.12 (name "Color")))))
+				(ty-malformed @5.7-5.12))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "blue"))
 		(e-tag @9.8-9.12 (name "Blue"))
 		(annotation @9.1-9.5
 			(declared-type
-				(ty @8.8-8.13 (name "Color")))))
+				(ty-malformed @8.8-8.13))))
 	(d-let
 		(p-assign @12.1-12.6 (ident "green"))
 		(e-tag @12.9-12.14 (name "Green"))
 		(annotation @12.1-12.6
 			(declared-type
-				(ty @11.9-11.14 (name "Color")))))
+				(ty-malformed @11.9-11.14))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~
@@ -169,6 +182,14 @@ green = Green
 		(patt @6.1-6.4 (type "Error"))
 		(patt @9.1-9.5 (type "Error"))
 		(patt @12.1-12.6 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.7-6.10 (type "Error"))
 		(expr @9.8-9.12 (type "Error"))

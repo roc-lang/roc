@@ -58,12 +58,25 @@ NO CHANGE
 			(e-tag @6.9-6.20 (name "TagA")))
 		(annotation @6.1-6.6
 			(declared-type
-				(ty @5.9-5.15 (name "MyType")))))
+				(ty-lookup @5.9-5.15 (name "MyType") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
-			(ty @3.12-3.16 (name "TagA"))
-			(ty @3.18-3.22 (name "TagB")))))
+			(tag_name @3.12-3.16 (name "TagA"))
+			(tag_name @3.18-3.22 (name "TagB")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -71,6 +84,13 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.6 (type "MyType")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.23 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions

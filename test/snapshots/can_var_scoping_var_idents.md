@@ -82,7 +82,7 @@ NO CHANGE
 					(e-binop @6.13-6.22 (op "mul")
 						(e-lookup-local @6.13-6.18
 							(p-assign @4.13-4.18 (ident "input")))
-						(e-int @6.21-6.22 (value "2"))))
+						(e-num @6.21-6.22 (value "2"))))
 				(s-reassign @8.2-8.6
 					(p-assign @6.2-6.22 (ident "sum_"))
 					(e-binop @8.9-8.19 (op "add")
@@ -94,13 +94,34 @@ NO CHANGE
 					(e-lookup-local @9.2-9.5
 						(p-assign @5.2-5.5 (ident "sum")))
 					(e-lookup-local @9.8-9.12
-						(p-assign @6.2-6.22 (ident "sum_"))))))))
+						(p-assign @6.2-6.22 (ident "sum_")))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "Num(_size) -> Num(_size2)")))
+		(patt @4.1-4.9 (type "_arg -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.12-10.2 (type "Num(_size) -> Num(_size2)"))))
+		(expr @4.12-10.2 (type "_arg -> Error"))))
 ~~~

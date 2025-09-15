@@ -14,7 +14,16 @@ test = Color.Red
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Color` is exposed, but it is not defined anywhere in this module.
+
+**qualified_tag.md:1:9:1:14:**
+```roc
+module [Color]
+```
+        ^^^^^
+You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
@@ -51,11 +60,24 @@ NO CHANGE
 		(p-assign @5.1-5.5 (ident "test"))
 		(e-nominal @5.8-5.17 (nominal "Color")
 			(e-tag @5.8-5.17 (name "Red"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.21
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.21
-			(ty @3.11-3.14 (name "Red"))
-			(ty @3.16-3.20 (name "Blue")))))
+			(tag_name @3.11-3.14 (name "Red"))
+			(tag_name @3.16-3.20 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -63,6 +85,13 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.5 (type "Color")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.21 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

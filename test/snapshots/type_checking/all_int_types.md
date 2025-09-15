@@ -132,64 +132,77 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @4.1-4.2 (ident "a"))
-		(e-int @4.5-4.8 (value "255"))
+		(e-num @4.5-4.8 (value "255"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.7 (name "U8")))))
+				(ty-lookup @3.5-3.7 (name "U8") (builtin)))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
-		(e-int @7.5-7.10 (value "65535"))
+		(e-num @7.5-7.10 (value "65535"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty @6.5-6.8 (name "U16")))))
+				(ty-lookup @6.5-6.8 (name "U16") (builtin)))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
-		(e-int @10.5-10.15 (value "4294967295"))
+		(e-num @10.5-10.15 (value "4294967295"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty @9.5-9.8 (name "U32")))))
+				(ty-lookup @9.5-9.8 (name "U32") (builtin)))))
 	(d-let
 		(p-assign @13.1-13.2 (ident "d"))
-		(e-int @13.5-13.25 (value "18446744073709551615"))
+		(e-num @13.5-13.25 (value "18446744073709551615"))
 		(annotation @13.1-13.2
 			(declared-type
-				(ty @12.5-12.8 (name "U64")))))
+				(ty-lookup @12.5-12.8 (name "U64") (builtin)))))
 	(d-let
 		(p-assign @16.1-16.2 (ident "e"))
-		(e-int @16.5-16.44 (value "-1"))
+		(e-num @16.5-16.44 (value "-1"))
 		(annotation @16.1-16.2
 			(declared-type
-				(ty @15.5-15.9 (name "U128")))))
+				(ty-lookup @15.5-15.9 (name "U128") (builtin)))))
 	(d-let
 		(p-assign @19.1-19.2 (ident "f"))
-		(e-int @19.5-19.9 (value "-128"))
+		(e-num @19.5-19.9 (value "-128"))
 		(annotation @19.1-19.2
 			(declared-type
-				(ty @18.5-18.7 (name "I8")))))
+				(ty-lookup @18.5-18.7 (name "I8") (builtin)))))
 	(d-let
 		(p-assign @22.1-22.2 (ident "g"))
-		(e-int @22.5-22.11 (value "-32768"))
+		(e-num @22.5-22.11 (value "-32768"))
 		(annotation @22.1-22.2
 			(declared-type
-				(ty @21.5-21.8 (name "I16")))))
+				(ty-lookup @21.5-21.8 (name "I16") (builtin)))))
 	(d-let
 		(p-assign @25.1-25.2 (ident "h"))
-		(e-int @25.5-25.16 (value "-2147483648"))
+		(e-num @25.5-25.16 (value "-2147483648"))
 		(annotation @25.1-25.2
 			(declared-type
-				(ty @24.5-24.8 (name "I32")))))
+				(ty-lookup @24.5-24.8 (name "I32") (builtin)))))
 	(d-let
 		(p-assign @28.1-28.2 (ident "i"))
-		(e-int @28.5-28.25 (value "-9223372036854775808"))
+		(e-num @28.5-28.25 (value "-9223372036854775808"))
 		(annotation @28.1-28.2
 			(declared-type
-				(ty @27.5-27.8 (name "I64")))))
+				(ty-lookup @27.5-27.8 (name "I64") (builtin)))))
 	(d-let
 		(p-assign @31.1-31.2 (ident "j"))
-		(e-int @31.5-31.45 (value "-170141183460469231731687303715884105728"))
+		(e-num @31.5-31.45 (value "-170141183460469231731687303715884105728"))
 		(annotation @31.1-31.2
 			(declared-type
-				(ty @30.5-30.9 (name "I128"))))))
+				(ty-lookup @30.5-30.9 (name "I128") (builtin)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -205,6 +218,14 @@ NO CHANGE
 		(patt @25.1-25.2 (type "I32"))
 		(patt @28.1-28.2 (type "I64"))
 		(patt @31.1-31.2 (type "I128")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.8 (type "U8"))
 		(expr @7.5-7.10 (type "U16"))

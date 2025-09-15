@@ -193,8 +193,8 @@ pub const Store = struct {
 
     fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) std.mem.Allocator.Error!SnapshotNum {
         switch (num) {
-            .num_poly => |poly| {
-                const deep_poly = try self.deepCopyVar(store, poly.var_);
+            .num_poly => |poly_var| {
+                const deep_poly = try self.deepCopyVar(store, poly_var);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
             .int_poly => |poly_var| {
@@ -447,8 +447,8 @@ pub const SnapshotNum = union(enum) {
     int_poly: SnapshotContentIdx,
     frac_poly: SnapshotContentIdx,
     num_unbound: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
-    int_unbound,
-    frac_unbound,
+    int_unbound: types.Num.IntRequirements,
+    frac_unbound: types.Num.FracRequirements,
     int_precision: types.Num.Int.Precision,
     frac_precision: types.Num.Frac.Precision,
     num_compact: types.Num.Compact,
@@ -1046,16 +1046,16 @@ pub const SnapshotWriter = struct {
         switch (num_type) {
             .compacted => {
                 _ = switch (prec) {
-                    .u8 => try self.buf.writer().write("U8"),
-                    .i8 => try self.buf.writer().write("I8"),
-                    .u16 => try self.buf.writer().write("U16"),
-                    .i16 => try self.buf.writer().write("I16"),
-                    .u32 => try self.buf.writer().write("U32"),
-                    .i32 => try self.buf.writer().write("I32"),
-                    .u64 => try self.buf.writer().write("U64"),
-                    .i64 => try self.buf.writer().write("I64"),
-                    .u128 => try self.buf.writer().write("U128"),
-                    .i128 => try self.buf.writer().write("I128"),
+                    .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
+                    .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
+                    .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
+                    .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
+                    .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
+                    .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
+                    .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
+                    .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
+                    .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
+                    .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
                 };
             },
             .precision => {
@@ -1079,9 +1079,9 @@ pub const SnapshotWriter = struct {
         switch (num_type) {
             .compacted => {
                 _ = switch (prec) {
-                    .f32 => try self.buf.writer().write("F32"),
-                    .f64 => try self.buf.writer().write("F64"),
-                    .dec => try self.buf.writer().write("Dec"),
+                    .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
+                    .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
+                    .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
                 };
             },
             .precision => {

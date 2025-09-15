@@ -174,11 +174,7 @@ fn copyNum(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly| Num{ .num_poly = .{
-            .var_ = try copyVar(source_store, dest_store, poly.var_, var_mapping, source_idents, dest_idents, allocator),
-            .int_requirements = poly.int_requirements,
-            .frac_requirements = poly.frac_requirements,
-        } },
+        .num_poly => |poly_var| Num{ .num_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
         .num_unbound => |unbound| Num{ .num_unbound = unbound },

@@ -208,8 +208,8 @@ main! = |_| {
 		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
-					(ty @4.16-4.19 (name "U64"))
-					(ty @4.23-4.26 (name "U64"))))))
+					(ty-lookup @4.16-4.19 (name "U64") (builtin))
+					(ty-lookup @4.23-4.26 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "testCrash"))
 		(e-lambda @9.13-11.2
@@ -220,8 +220,8 @@ main! = |_| {
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
-					(ty @8.13-8.16 (name "U64"))
-					(ty @8.20-8.23 (name "U64"))))))
+					(ty-lookup @8.13-8.16 (name "U64") (builtin))
+					(ty-lookup @8.20-8.23 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.16 (ident "testCrashSimple"))
 		(e-lambda @15.19-17.2
@@ -232,15 +232,15 @@ main! = |_| {
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-fn @14.19-14.29 (effectful false)
-					(ty @14.19-14.22 (name "U64"))
-					(ty @14.26-14.29 (name "U64"))))))
+					(ty-lookup @14.19-14.22 (name "U64") (builtin))
+					(ty-lookup @14.26-14.29 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-24.2
 			(captures
+				(capture @5.1-5.13 (ident "testEllipsis"))
 				(capture @9.1-9.10 (ident "testCrash"))
-				(capture @15.1-15.16 (ident "testCrashSimple"))
-				(capture @5.1-5.13 (ident "testEllipsis")))
+				(capture @15.1-15.16 (ident "testCrashSimple")))
 			(e-lambda @19.9-24.2
 				(args
 					(p-underscore @19.10-19.11))
@@ -248,22 +248,29 @@ main! = |_| {
 					(s-let @20.5-20.31
 						(p-assign @20.5-20.12 (ident "result1"))
 						(e-call @20.15-20.31
-							(e-lookup-local @20.15-20.27
-								(p-assign @5.1-5.13 (ident "testEllipsis")))
-							(e-int @20.28-20.30 (value "42"))))
+							(e-num @20.28-20.30 (value "42"))))
 					(s-let @21.5-21.28
 						(p-assign @21.5-21.12 (ident "result2"))
 						(e-call @21.15-21.28
-							(e-lookup-local @21.15-21.24
-								(p-assign @9.1-9.10 (ident "testCrash")))
-							(e-int @21.25-21.27 (value "42"))))
+							(e-num @21.25-21.27 (value "42"))))
 					(s-let @22.5-22.34
 						(p-assign @22.5-22.12 (ident "result3"))
 						(e-call @22.15-22.34
-							(e-lookup-local @22.15-22.30
-								(p-assign @15.1-15.16 (ident "testCrashSimple")))
-							(e-int @22.31-22.33 (value "42"))))
-					(e-empty_list @23.5-23.7))))))
+							(e-num @22.31-22.33 (value "42"))))
+					(e-empty_list @23.5-23.7)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -273,6 +280,14 @@ main! = |_| {
 		(patt @9.1-9.10 (type "U64 -> U64"))
 		(patt @15.1-15.16 (type "U64 -> U64"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.16-5.23 (type "U64 -> U64"))
 		(expr @9.13-11.2 (type "U64 -> U64"))

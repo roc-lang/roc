@@ -1973,7 +1973,7 @@ pub fn canonicalizeExpr(
             const expr_idx = blk: {
                 const is_not_base10 = int_base != DEFAULT_BASE;
                 if (is_not_base10) {
-                    // For non-decimal integers (hex, binary, octal), use int_poly directly
+                    // For non-decimal integers (hex, binary, octal), set as an int
                     break :blk try self.env.addExprAndTypeVar(
                         CIR.Expr{ .e_int = .{
                             .value = CIR.IntValue{
@@ -1987,7 +1987,7 @@ pub fn canonicalizeExpr(
                         region,
                     );
                 } else {
-                    // For decimal integers, use num_poly so they can be either Int or Frac
+                    // For decimal (base 10), use as anum so it can be either Int or Frac
                     break :blk try self.env.addExprAndTypeVar(
                         CIR.Expr{ .e_num = .{
                             .value = CIR.IntValue{
@@ -2027,7 +2027,7 @@ pub fn canonicalizeExpr(
                             .value = @floatCast(f64_val),
                             .has_suffix = true,
                         } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
+                        .err,
                         region,
                     );
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
@@ -2037,7 +2037,7 @@ pub fn canonicalizeExpr(
                             .value = f64_val,
                             .has_suffix = true,
                         } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
+                        .err,
                         region,
                     );
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
@@ -2055,7 +2055,7 @@ pub fn canonicalizeExpr(
                             .value = dec_val,
                             .has_suffix = true,
                         } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
+                        .err,
                         region,
                     );
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };

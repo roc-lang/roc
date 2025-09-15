@@ -100,11 +100,9 @@ match person {
 				(value
 					(e-binop @2.33-2.80 (op "gt")
 						(e-call @2.33-2.52
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.41-2.51
 								(p-assign @2.7-2.17 (ident "first_name"))))
 						(e-call @2.55-2.80
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access @2.63-2.79 (field "last_name")
 								(receiver
 									(e-lookup-local @2.63-2.69
@@ -112,5 +110,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "Bool"))
+(expr @1.1-3.2 (type "Error"))
 ~~~

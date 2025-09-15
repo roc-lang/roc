@@ -17,17 +17,17 @@ TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_app_with_vars.md:6:13:6:20:**
+**type_app_with_vars.md:6:13:6:33:**
 ```roc
 main! = |_| mapList([1,2,3,4,5])
 ```
-            ^^^^^^^
+            ^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(a), a -> b -> List(b)_
-
-But here it's being used as:
     _List(Num(_size)) -> _ret_
+
+But I expected it to be:
+    _List(c), c -> _ret -> Error_
 
 # TOKENS
 ~~~zig
@@ -116,14 +116,14 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)
-					(ty-apply @3.11-3.18 (symbol "List")
-						(ty-var @3.16-3.17 (name "a")))
+					(ty-apply @3.11-3.18 (name "List") (builtin)
+						(ty-rigid-var @3.16-3.17 (name "a")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
-							(ty-var @3.21-3.22 (name "a"))
-							(ty-var @3.26-3.27 (name "b"))))
-					(ty-apply @3.32-3.39 (symbol "List")
-						(ty-var @3.37-3.38 (name "b")))))))
+							(ty-rigid-var @3.16-3.17 (name "a"))
+							(ty-rigid-var @3.26-3.27 (name "b"))))
+					(ty-apply @3.32-3.39 (name "List") (builtin)
+						(ty-rigid-var @3.26-3.27 (name "b")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.33
@@ -133,23 +133,42 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.33
-					(e-lookup-local @6.13-6.20
-						(p-assign @4.1-4.8 (ident "mapList")))
 					(e-list @6.21-6.32
 						(elems
-							(e-int @6.22-6.23 (value "1"))
-							(e-int @6.24-6.25 (value "2"))
-							(e-int @6.26-6.27 (value "3"))
-							(e-int @6.28-6.29 (value "4"))
-							(e-int @6.30-6.31 (value "5")))))))))
+							(e-num @6.22-6.23 (value "1"))
+							(e-num @6.24-6.25 (value "2"))
+							(e-num @6.26-6.27 (value "3"))
+							(e-num @6.28-6.29 (value "4"))
+							(e-num @6.30-6.31 (value "5"))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Error"))
+		(patt @4.1-4.8 (type "List(a), a -> b -> Error"))
 		(patt @6.1-6.6 (type "_arg -> _ret")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.11-4.34 (type "Error"))
+		(expr @4.11-4.34 (type "List(a), a -> b -> Error"))
 		(expr @6.9-6.33 (type "_arg -> _ret"))))
 ~~~
