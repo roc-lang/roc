@@ -347,9 +347,9 @@ main = |_| {
 		(p-assign @7.1-7.9 (ident "int_list"))
 		(e-list @7.12-7.21
 			(elems
-				(e-int @7.13-7.14 (value "1"))
-				(e-int @7.16-7.17 (value "2"))
-				(e-int @7.19-7.20 (value "3")))))
+				(e-num @7.13-7.14 (value "1"))
+				(e-num @7.16-7.17 (value "2"))
+				(e-num @7.19-7.20 (value "3")))))
 	(d-let
 		(p-assign @8.1-8.9 (ident "str_list"))
 		(e-list @8.12-8.30
@@ -383,23 +383,19 @@ main = |_| {
 	(d-let
 		(p-assign @20.1-20.15 (ident "empty_int_list"))
 		(e-call @20.18-20.31
-			(e-lookup-local @20.18-20.27
-				(p-assign @17.1-17.10 (ident "get_empty")))
-			(e-int @20.28-20.30 (value "42"))))
+			(e-num @20.28-20.30 (value "42"))))
 	(d-let
 		(p-assign @21.1-21.15 (ident "empty_str_list"))
 		(e-call @21.18-21.35
-			(e-lookup-local @21.18-21.27
-				(p-assign @17.1-17.10 (ident "get_empty")))
 			(e-string @21.28-21.34
 				(e-literal @21.29-21.33 (string "test")))))
 	(d-let
 		(p-assign @23.1-23.5 (ident "main"))
 		(e-closure @23.8-29.2
 			(captures
-				(capture @13.1-13.13 (ident "all_str_list"))
 				(capture @14.1-14.15 (ident "all_float_list"))
-				(capture @12.1-12.13 (ident "all_int_list")))
+				(capture @12.1-12.13 (ident "all_int_list"))
+				(capture @13.1-13.13 (ident "all_str_list")))
 			(e-lambda @23.8-29.2
 				(args
 					(p-underscore @23.9-23.10))
@@ -407,19 +403,16 @@ main = |_| {
 					(s-let @25.5-25.34
 						(p-assign @25.5-25.9 (ident "len1"))
 						(e-call @25.12-25.34
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @25.21-25.33
 								(p-assign @12.1-12.13 (ident "all_int_list")))))
 					(s-let @26.5-26.34
 						(p-assign @26.5-26.9 (ident "len2"))
 						(e-call @26.12-26.34
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @26.21-26.33
 								(p-assign @13.1-13.13 (ident "all_str_list")))))
 					(s-let @27.5-27.36
 						(p-assign @27.5-27.9 (ident "len3"))
 						(e-call @27.12-27.36
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @27.21-27.35
 								(p-assign @14.1-14.15 (ident "all_float_list")))))
 					(e-binop @28.5-28.23 (op "add")
@@ -429,7 +422,20 @@ main = |_| {
 							(e-lookup-local @28.12-28.16
 								(p-assign @26.5-26.9 (ident "len2"))))
 						(e-lookup-local @28.19-28.23
-							(p-assign @27.5-27.9 (ident "len3")))))))))
+							(p-assign @27.5-27.9 (ident "len3"))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -438,24 +444,32 @@ main = |_| {
 		(patt @4.1-4.14 (type "List(_elem)"))
 		(patt @7.1-7.9 (type "List(Num(_size))"))
 		(patt @8.1-8.9 (type "List(Str)"))
-		(patt @9.1-9.11 (type "List(Frac(_size))"))
+		(patt @9.1-9.11 (type "List(Num(Frac(_size)))"))
 		(patt @12.1-12.13 (type "Error"))
 		(patt @13.1-13.13 (type "Error"))
 		(patt @14.1-14.15 (type "Error"))
 		(patt @17.1-17.10 (type "_arg -> List(_elem)"))
 		(patt @20.1-20.15 (type "List(_elem)"))
 		(patt @21.1-21.15 (type "List(_elem)"))
-		(patt @23.1-23.5 (type "_arg -> Num(_size)")))
+		(patt @23.1-23.5 (type "_arg -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.17-4.19 (type "List(_elem)"))
 		(expr @7.12-7.21 (type "List(Num(_size))"))
 		(expr @8.12-8.30 (type "List(Str)"))
-		(expr @9.14-9.29 (type "List(Frac(_size))"))
+		(expr @9.14-9.29 (type "List(Num(Frac(_size)))"))
 		(expr @12.16-12.27 (type "Error"))
 		(expr @13.16-13.27 (type "Error"))
 		(expr @14.18-14.31 (type "Error"))
 		(expr @17.13-17.19 (type "_arg -> List(_elem)"))
 		(expr @20.18-20.31 (type "List(_elem)"))
 		(expr @21.18-21.35 (type "List(_elem)"))
-		(expr @23.8-29.2 (type "_arg -> Num(_size)"))))
+		(expr @23.8-29.2 (type "_arg -> Error"))))
 ~~~

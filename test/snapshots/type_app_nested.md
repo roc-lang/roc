@@ -105,12 +105,12 @@ main! = |_| processNested([])
 		(annotation @4.1-4.14
 			(declared-type
 				(ty-fn @3.17-3.52 (effectful false)
-					(ty-apply @3.17-3.39 (symbol "List")
-						(ty-apply @3.22-3.38 (symbol "Result")
-							(ty @3.29-3.32 (name "Str"))
-							(ty @3.34-3.37 (name "Err"))))
-					(ty-apply @3.43-3.52 (symbol "List")
-						(ty @3.48-3.51 (name "Str")))))))
+					(ty-apply @3.17-3.39 (name "List") (builtin)
+						(ty-apply @3.22-3.38 (name "Result") (local)
+							(ty-lookup @3.22-3.38 (name "Str") (builtin))
+							(ty-malformed @3.22-3.38)))
+					(ty-apply @3.43-3.52 (name "List") (builtin)
+						(ty-lookup @3.48-3.51 (name "Str") (builtin)))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.30
@@ -120,17 +120,36 @@ main! = |_| processNested([])
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.30
-					(e-lookup-local @6.13-6.26
-						(p-assign @4.1-4.14 (ident "processNested")))
-					(e-empty_list @6.27-6.29))))))
+					(e-empty_list @6.27-6.29)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "List(Result(ok, err)) -> List(Str)"))
+		(patt @4.1-4.14 (type "List(Result(Str, Error)) -> List(Str)"))
 		(patt @6.1-6.6 (type "_arg -> List(Str)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.17-4.38 (type "List(Result(ok, err)) -> List(Str)"))
+		(expr @4.17-4.38 (type "List(Result(Str, Error)) -> List(Str)"))
 		(expr @6.9-6.30 (type "_arg -> List(Str)"))))
 ~~~

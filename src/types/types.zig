@@ -285,14 +285,25 @@ pub const Tuple = struct {
 /// form always wins: we discard the polymorphic wrapper and store the
 /// concrete, memory-efficient version instead.
 pub const Num = union(enum) {
+    // These are Num(a)
+    //           ^^^
+    num_poly: Var,
     num_unbound: NumRequirements,
-    int_unbound,
-    frac_unbound,
-    num_poly: struct { var_: Var, int_requirements: IntRequirements, frac_requirements: FracRequirements },
+
+    // These are Num(int) or Num(frac)
+    //               ^^^         ^^^^
     int_poly: Var,
+    int_unbound: IntRequirements,
     frac_poly: Var,
-    int_precision: Int.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
-    frac_precision: Frac.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
+    frac_unbound: FracRequirements,
+
+    // These are Num(Int(Signed8)) or Num(Frac(Decimal))
+    //                   ^^^^^^^               ^^^^^^^
+    int_precision: Int.Precision,
+    frac_precision: Frac.Precision,
+
+    // This is the whole Num(Int(Signed8)), compacted into a single variable
+    //                   ^^^^^^^^^^^^^^^^
     num_compact: Compact,
 
     /// Represents requirements for number
@@ -374,7 +385,7 @@ pub const Num = union(enum) {
         fits_in_dec: bool,
 
         pub fn init() @This() {
-            return .{ .fits_in_f32 = true, .fits_in_dec = false };
+            return .{ .fits_in_f32 = true, .fits_in_dec = true };
         }
 
         /// Unifies two FracRequirements, returning the intersection of capabilities

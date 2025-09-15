@@ -41,14 +41,14 @@ NO CHANGE
 			(e-nominal @1.14-1.19 (nominal "Result")
 				(e-tag @1.14-1.19 (name "Ok")
 					(args
-						(e-int @1.17-1.18 (value "0")))))))
+						(e-num @1.17-1.18 (value "0")))))))
 	(if-else
 		(e-nominal @1.25-1.31 (nominal "Result")
 			(e-tag @1.25-1.31 (name "Err")
 				(args
-					(e-int @1.29-1.30 (value "1")))))))
+					(e-num @1.29-1.30 (value "1")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "Result(Num(_size), Num(_size2))"))
+(expr @1.1-1.31 (type "Error"))
 ~~~

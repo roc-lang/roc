@@ -338,23 +338,36 @@ y =
 		(p-assign @3.1-3.2 (ident "x"))
 		(e-tuple @3.5-18.2
 			(elems
-				(e-int @4.5-4.8 (value "97"))
-				(e-int @5.5-5.9 (value "233"))
-				(e-int @6.5-6.11 (value "128640"))
+				(e-num @4.5-4.8 (value "97"))
+				(e-num @5.5-5.9 (value "233"))
+				(e-num @6.5-6.11 (value "128640"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @11.5-11.16 (value "128640"))
+				(e-num @11.5-11.16 (value "128640"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
-				(e-int @13.5-13.9 (value "92"))
-				(e-int @14.5-14.9 (value "39"))
+				(e-num @13.5-13.9 (value "92"))
+				(e-num @14.5-14.9 (value "39"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized"))
 				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
 	(d-let
 		(p-assign @20.1-20.2 (ident "y"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -362,6 +375,14 @@ y =
 	(defs
 		(patt @3.1-3.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
 		(patt @20.1-20.2 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.5-18.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
 		(expr @20.5-20.7 (type "Error"))))

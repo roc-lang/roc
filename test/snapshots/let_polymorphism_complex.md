@@ -643,7 +643,7 @@ main = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "num"))
-		(e-int @4.7-4.9 (value "42")))
+		(e-num @4.7-4.9 (value "42")))
 	(d-let
 		(p-assign @5.1-5.5 (ident "frac"))
 		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
@@ -665,9 +665,9 @@ main = |_| {
 		(p-assign @14.1-14.9 (ident "int_list"))
 		(e-list @14.12-14.21
 			(elems
-				(e-int @14.13-14.14 (value "1"))
-				(e-int @14.16-14.17 (value "2"))
-				(e-int @14.19-14.20 (value "3")))))
+				(e-num @14.13-14.14 (value "1"))
+				(e-num @14.16-14.17 (value "2"))
+				(e-num @14.19-14.20 (value "3")))))
 	(d-let
 		(p-assign @15.1-15.9 (ident "str_list"))
 		(e-list @15.12-15.27
@@ -704,14 +704,14 @@ main = |_| {
 					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-list @20.29-20.35
 					(elems
-						(e-int @20.30-20.31 (value "1"))
-						(e-int @20.33-20.34 (value "2"))))
+						(e-num @20.30-20.31 (value "1"))
+						(e-num @20.33-20.34 (value "2"))))
 				(e-lookup-local @20.37-20.47
 					(p-assign @10.1-10.11 (ident "empty_list")))
 				(e-list @20.49-20.55
 					(elems
-						(e-int @20.50-20.51 (value "3"))
-						(e-int @20.53-20.54 (value "4")))))))
+						(e-num @20.50-20.51 (value "3"))
+						(e-num @20.53-20.54 (value "4")))))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "poly_record"))
 		(e-record @23.15-23.46
@@ -720,7 +720,7 @@ main = |_| {
 					(e-lookup-local @23.24-23.34
 						(p-assign @10.1-10.11 (ident "empty_list"))))
 				(field (name "count")
-					(e-int @23.43-23.44 (value "0"))))))
+					(e-num @23.43-23.44 (value "0"))))))
 	(d-let
 		(p-assign @24.1-24.17 (ident "use_poly_record1"))
 		(e-record @24.20-24.50
@@ -728,11 +728,11 @@ main = |_| {
 				(field (name "items")
 					(e-list @24.29-24.38
 						(elems
-							(e-int @24.30-24.31 (value "1"))
-							(e-int @24.33-24.34 (value "2"))
-							(e-int @24.36-24.37 (value "3")))))
+							(e-num @24.30-24.31 (value "1"))
+							(e-num @24.33-24.34 (value "2"))
+							(e-num @24.36-24.37 (value "3")))))
 				(field (name "count")
-					(e-int @24.47-24.48 (value "0"))))))
+					(e-num @24.47-24.48 (value "0"))))))
 	(d-let
 		(p-assign @25.1-25.17 (ident "use_poly_record2"))
 		(e-record @25.20-25.56
@@ -747,7 +747,7 @@ main = |_| {
 							(e-string @25.40-25.43
 								(e-literal @25.41-25.42 (string "z"))))))
 				(field (name "count")
-					(e-int @25.53-25.54 (value "0"))))))
+					(e-num @25.53-25.54 (value "0"))))))
 	(d-let
 		(p-assign @28.1-28.12 (ident "base_config"))
 		(e-record @28.15-35.2
@@ -774,11 +774,11 @@ main = |_| {
 				(field (name "data")
 					(e-list @39.11-39.26
 						(elems
-							(e-int @39.12-39.13 (value "1"))
-							(e-int @39.15-39.16 (value "2"))
-							(e-int @39.18-39.19 (value "3"))
-							(e-int @39.21-39.22 (value "4"))
-							(e-int @39.24-39.25 (value "5")))))
+							(e-num @39.12-39.13 (value "1"))
+							(e-num @39.15-39.16 (value "2"))
+							(e-num @39.18-39.19 (value "3"))
+							(e-num @39.21-39.22 (value "4"))
+							(e-num @39.24-39.25 (value "5")))))
 				(field (name "metadata")
 					(e-record @40.15-44.6
 						(fields
@@ -840,22 +840,16 @@ main = |_| {
 	(d-let
 		(p-assign @60.1-60.11 (ident "container1"))
 		(e-call @60.14-60.33
-			(e-lookup-local @60.14-60.28
-				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @60.29-60.32
 				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @61.1-61.11 (ident "container2"))
 		(e-call @61.14-61.33
-			(e-lookup-local @61.14-61.28
-				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @61.29-61.32
 				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @62.1-62.11 (ident "container3"))
 		(e-call @62.14-62.34
-			(e-lookup-local @62.14-62.28
-				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @62.29-62.33
 				(p-assign @5.1-5.5 (ident "frac")))))
 	(d-let
@@ -885,11 +879,11 @@ main = |_| {
 													(e-binop @72.26-72.33 (op "mul")
 														(e-lookup-local @72.26-72.29
 															(p-assign @4.1-4.4 (ident "num")))
-														(e-int @72.32-72.33 (value "2")))
+														(e-num @72.32-72.33 (value "2")))
 													(e-binop @72.35-72.42 (op "mul")
 														(e-lookup-local @72.35-72.38
 															(p-assign @4.1-4.4 (ident "num")))
-														(e-int @72.41-72.42 (value "3")))))))))
+														(e-num @72.41-72.42 (value "3")))))))))
 							(field (name "collection")
 								(e-lookup-local @74.21-74.31
 									(p-assign @10.1-10.11 (ident "empty_list")))))))
@@ -901,7 +895,7 @@ main = |_| {
 									(field (name "data")
 										(e-list @77.17-77.20
 											(elems
-												(e-int @77.18-77.19 (value "1")))))
+												(e-num @77.18-77.19 (value "1")))))
 									(field (name "tag")
 										(e-string @77.27-77.35
 											(e-literal @77.28-77.34 (string "single"))))))
@@ -910,8 +904,8 @@ main = |_| {
 									(field (name "data")
 										(e-list @78.17-78.23
 											(elems
-												(e-int @78.18-78.19 (value "1"))
-												(e-int @78.21-78.22 (value "2")))))
+												(e-num @78.18-78.19 (value "1"))
+												(e-num @78.21-78.22 (value "2")))))
 									(field (name "tag")
 										(e-string @78.30-78.36
 											(e-literal @78.31-78.35 (string "ints"))))))
@@ -920,9 +914,9 @@ main = |_| {
 									(field (name "data")
 										(e-list @79.17-79.26
 											(elems
-												(e-int @79.18-79.19 (value "1"))
-												(e-int @79.21-79.22 (value "2"))
-												(e-int @79.24-79.25 (value "3")))))
+												(e-num @79.18-79.19 (value "1"))
+												(e-num @79.21-79.22 (value "2"))
+												(e-num @79.24-79.25 (value "3")))))
 									(field (name "tag")
 										(e-string @79.33-79.39
 											(e-literal @79.34-79.38 (string "more"))))))))))))
@@ -931,13 +925,13 @@ main = |_| {
 		(e-binop @84.12-84.20 (op "add")
 			(e-lookup-local @84.12-84.15
 				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @84.18-84.20 (value "10"))))
+			(e-num @84.18-84.20 (value "10"))))
 	(d-let
 		(p-assign @85.1-85.9 (ident "compute2"))
 		(e-binop @85.12-85.19 (op "mul")
 			(e-lookup-local @85.12-85.15
 				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @85.18-85.19 (value "2"))))
+			(e-num @85.18-85.19 (value "2"))))
 	(d-let
 		(p-assign @86.1-86.9 (ident "compute3"))
 		(e-list @86.12-86.22
@@ -961,11 +955,11 @@ main = |_| {
 							(e-binop @87.40-87.47 (op "add")
 								(e-lookup-local @87.40-87.43
 									(p-assign @4.1-4.4 (ident "num")))
-								(e-int @87.46-87.47 (value "1")))
+								(e-num @87.46-87.47 (value "1")))
 							(e-binop @87.49-87.56 (op "add")
 								(e-lookup-local @87.49-87.52
 									(p-assign @4.1-4.4 (ident "num")))
-								(e-int @87.55-87.56 (value "2")))))))))
+								(e-num @87.55-87.56 (value "2")))))))))
 	(d-let
 		(p-assign @90.1-90.6 (ident "mixed"))
 		(e-record @90.9-103.2
@@ -1023,7 +1017,7 @@ main = |_| {
 								(e-binop @99.19-99.28 (op "mul")
 									(e-lookup-local @99.19-99.22
 										(p-assign @4.1-4.4 (ident "num")))
-									(e-int @99.25-99.28 (value "100"))))
+									(e-num @99.25-99.28 (value "100"))))
 							(field (name "from_frac")
 								(e-binop @100.20-100.31 (op "mul")
 									(e-lookup-local @100.20-100.24
@@ -1052,14 +1046,27 @@ main = |_| {
 							(receiver
 								(e-lookup-local @107.5-107.15
 									(p-assign @60.1-60.11 (ident "container1")))))
-						(e-int @107.24-107.26 (value "10"))))))))
+						(e-num @107.24-107.26 (value "10")))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(_size)"))
-		(patt @5.1-5.5 (type "Frac(_size)"))
+		(patt @4.1-4.4 (type "Error"))
+		(patt @5.1-5.5 (type "Num(Frac(_size))"))
 		(patt @6.1-6.4 (type "Str"))
 		(patt @7.1-7.5 (type "Bool"))
 		(patt @10.1-10.11 (type "List(Num(_size))"))
@@ -1072,23 +1079,31 @@ main = |_| {
 		(patt @23.1-23.12 (type "{ items: List(Num(_size)), count: Num(_size2) }"))
 		(patt @24.1-24.17 (type "{ items: List(Num(_size)), count: Num(_size2) }"))
 		(patt @25.1-25.17 (type "{ items: List(Str), count: Num(_size) }"))
-		(patt @28.1-28.12 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str } }"))
-		(patt @38.1-38.8 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str }, name: Str }"))
-		(patt @48.1-48.8 (type "{ data: List(Str), metadata: { version: Num(_size), ratio: Frac(_size2), description: Str }, name: Str }"))
-		(patt @59.1-59.15 (type "_arg -> { value: _field, wrapper: List(_elem) }"))
-		(patt @60.1-60.11 (type "{ value: Num(_size), wrapper: List(Num(_size2)) }"))
+		(patt @28.1-28.12 (type "{ data: List(Num(_size)), metadata: { version: Error, ratio: Num(Frac(_size2)), description: Str } }"))
+		(patt @38.1-38.8 (type "{ data: List(Num(_size)), metadata: { version: Error, ratio: Num(Frac(_size2)), description: Str }, name: Str }"))
+		(patt @48.1-48.8 (type "{ data: List(Str), metadata: { version: Error, ratio: Num(Frac(_size)), description: Str }, name: Str }"))
+		(patt @59.1-59.15 (type "a -> { value: a, wrapper: List(a) }"))
+		(patt @60.1-60.11 (type "{ value: Error, wrapper: List(Error) }"))
 		(patt @61.1-61.11 (type "{ value: Str, wrapper: List(Str) }"))
-		(patt @62.1-62.11 (type "{ value: Frac(_size), wrapper: List(Frac(_size2)) }"))
-		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))
-		(patt @84.1-84.9 (type "Num(_size)"))
-		(patt @85.1-85.9 (type "Num(_size)"))
-		(patt @86.1-86.9 (type "List(Num(_size))"))
-		(patt @87.1-87.9 (type "{ base: Num(_size), derived: List(Num(_size2)) }"))
-		(patt @90.1-90.6 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: Num(_size7), from_frac: Num(_size8), list_from_num: List(Num(_size9)) } }"))
-		(patt @105.1-105.5 (type "_arg -> Num(_size)")))
+		(patt @62.1-62.11 (type "{ value: Num(Frac(_size)), wrapper: List(Num(Frac(_size2))) }"))
+		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Error }, items: List(Error) }, collection: List(Num(_size2)) }, results: List({ data: List(Num(_size3)), tag: Str }) }"))
+		(patt @84.1-84.9 (type "Error"))
+		(patt @85.1-85.9 (type "Error"))
+		(patt @86.1-86.9 (type "List(Error)"))
+		(patt @87.1-87.9 (type "{ base: Error, derived: List(Error) }"))
+		(patt @90.1-90.6 (type "{ numbers: { value: Error, list: List(Error), float: Num(Frac(_size)) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size2)), in_list: List(List(Num(_size3))), in_record: { data: List(Num(_size4)) } }, computations: { from_num: Error, from_frac: Error, list_from_num: List(Error) } }"))
+		(patt @105.1-105.5 (type "_arg -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.7-4.9 (type "Num(_size)"))
-		(expr @5.8-5.11 (type "Frac(_size)"))
+		(expr @4.7-4.9 (type "Error"))
+		(expr @5.8-5.11 (type "Num(Frac(_size))"))
 		(expr @6.7-6.14 (type "Str"))
 		(expr @7.8-7.12 (type "Bool"))
 		(expr @10.14-10.16 (type "List(Num(_size))"))
@@ -1101,18 +1116,18 @@ main = |_| {
 		(expr @23.15-23.46 (type "{ items: List(Num(_size)), count: Num(_size2) }"))
 		(expr @24.20-24.50 (type "{ items: List(Num(_size)), count: Num(_size2) }"))
 		(expr @25.20-25.56 (type "{ items: List(Str), count: Num(_size) }"))
-		(expr @28.15-35.2 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str } }"))
-		(expr @38.11-46.2 (type "{ data: List(Num(_size)), metadata: { version: Num(_size2), ratio: Frac(_size3), description: Str }, name: Str }"))
-		(expr @48.11-56.2 (type "{ data: List(Str), metadata: { version: Num(_size), ratio: Frac(_size2), description: Str }, name: Str }"))
-		(expr @59.18-59.54 (type "_arg -> { value: _field, wrapper: List(_elem) }"))
-		(expr @60.14-60.33 (type "{ value: Num(_size), wrapper: List(Num(_size2)) }"))
+		(expr @28.15-35.2 (type "{ data: List(Num(_size)), metadata: { version: Error, ratio: Num(Frac(_size2)), description: Str } }"))
+		(expr @38.11-46.2 (type "{ data: List(Num(_size)), metadata: { version: Error, ratio: Num(Frac(_size2)), description: Str }, name: Str }"))
+		(expr @48.11-56.2 (type "{ data: List(Str), metadata: { version: Error, ratio: Num(Frac(_size)), description: Str }, name: Str }"))
+		(expr @59.18-59.54 (type "a -> { value: a, wrapper: List(a) }"))
+		(expr @60.14-60.33 (type "{ value: Error, wrapper: List(Error) }"))
 		(expr @61.14-61.33 (type "{ value: Str, wrapper: List(Str) }"))
-		(expr @62.14-62.34 (type "{ value: Frac(_size), wrapper: List(Frac(_size2)) }"))
-		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Num(_size2) }, items: List(Num(_size3)) }, collection: List(Num(_size4)) }, results: List({ data: List(Num(_size5)), tag: Str }) }"))
-		(expr @84.12-84.20 (type "Num(_size)"))
-		(expr @85.12-85.19 (type "Num(_size)"))
-		(expr @86.12-86.22 (type "List(Num(_size))"))
-		(expr @87.12-87.59 (type "{ base: Num(_size), derived: List(Num(_size2)) }"))
-		(expr @90.9-103.2 (type "{ numbers: { value: Num(_size), list: List(Num(_size2)), float: Frac(_size3) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size4)), in_list: List(List(Num(_size5))), in_record: { data: List(Num(_size6)) } }, computations: { from_num: Num(_size7), from_frac: Num(_size8), list_from_num: List(Num(_size9)) } }"))
-		(expr @105.8-108.2 (type "_arg -> Num(_size)"))))
+		(expr @62.14-62.34 (type "{ value: Num(Frac(_size)), wrapper: List(Num(Frac(_size2))) }"))
+		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(_size)), value: Error }, items: List(Error) }, collection: List(Num(_size2)) }, results: List({ data: List(Num(_size3)), tag: Str }) }"))
+		(expr @84.12-84.20 (type "Error"))
+		(expr @85.12-85.19 (type "Error"))
+		(expr @86.12-86.22 (type "List(Error)"))
+		(expr @87.12-87.59 (type "{ base: Error, derived: List(Error) }"))
+		(expr @90.9-103.2 (type "{ numbers: { value: Error, list: List(Error), float: Num(Frac(_size)) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(_size2)), in_list: List(List(Num(_size3))), in_record: { data: List(Num(_size4)) } }, computations: { from_num: Error, from_frac: Error, list_from_num: List(Error) } }"))
+		(expr @105.8-108.2 (type "_arg -> Error"))))
 ~~~

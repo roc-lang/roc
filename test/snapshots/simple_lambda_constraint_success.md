@@ -78,12 +78,12 @@ NO CHANGE
 			(e-binop @5.14-5.19 (op "add")
 				(e-lookup-local @5.14-5.15
 					(p-assign @5.11-5.12 (ident "x")))
-				(e-int @5.18-5.19 (value "2"))))
+				(e-num @5.18-5.19 (value "2"))))
 		(annotation @5.1-5.7
 			(declared-type
 				(ty-fn @4.10-4.20 (effectful false)
-					(ty @4.10-4.13 (name "I64"))
-					(ty @4.17-4.20 (name "I64"))))))
+					(ty-lookup @4.10-4.13 (name "I64") (builtin))
+					(ty-lookup @4.17-4.20 (name "I64") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "addTwoF64"))
 		(e-lambda @9.13-9.24
@@ -96,16 +96,37 @@ NO CHANGE
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
-					(ty @8.13-8.16 (name "F64"))
-					(ty @8.20-8.23 (name "F64")))))))
+					(ty-lookup @8.13-8.16 (name "F64") (builtin))
+					(ty-lookup @8.20-8.23 (name "F64") (builtin))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.7 (type "I64 -> I64"))
-		(patt @9.1-9.10 (type "F64 -> F64")))
+		(patt @5.1-5.7 (type "I64 -> Error"))
+		(patt @9.1-9.10 (type "F64 -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.10-5.19 (type "I64 -> I64"))
-		(expr @9.13-9.24 (type "F64 -> F64"))))
+		(expr @5.10-5.19 (type "I64 -> Error"))
+		(expr @9.13-9.24 (type "F64 -> Error"))))
 ~~~

@@ -19,34 +19,7 @@ wrong_type_function = |x| x * 3.14
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:5:27:5:29:**
-```roc
-string_function = |x| x + 42
-```
-                          ^^
-
-The type annotation says it should have the type:
-    _Str_
-
-But here it's being used as:
-    _Num(_size)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:9:31:9:35:**
-```roc
-wrong_type_function = |x| x * 3.14
-```
-                              ^^^^
-
-The type annotation says it should have the type:
-    _I64_
-
-But here it's being used as:
-    _Frac(_size)_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:24),Comma(1:24-1:25),LowerIdent(1:26-1:45),CloseSquare(1:45-1:46),
@@ -106,12 +79,12 @@ NO CHANGE
 			(e-binop @5.23-5.29 (op "add")
 				(e-lookup-local @5.23-5.24
 					(p-assign @5.20-5.21 (ident "x")))
-				(e-int @5.27-5.29 (value "42"))))
+				(e-num @5.27-5.29 (value "42"))))
 		(annotation @5.1-5.16
 			(declared-type
 				(ty-fn @4.19-4.29 (effectful false)
-					(ty @4.19-4.22 (name "Str"))
-					(ty @4.26-4.29 (name "Str"))))))
+					(ty-lookup @4.19-4.22 (name "Str") (builtin))
+					(ty-lookup @4.26-4.29 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.20 (ident "wrong_type_function"))
 		(e-lambda @9.23-9.35
@@ -124,16 +97,37 @@ NO CHANGE
 		(annotation @9.1-9.20
 			(declared-type
 				(ty-fn @8.23-8.33 (effectful false)
-					(ty @8.23-8.26 (name "I64"))
-					(ty @8.30-8.33 (name "I64")))))))
+					(ty-lookup @8.23-8.26 (name "I64") (builtin))
+					(ty-lookup @8.30-8.33 (name "I64") (builtin))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.16 (type "Error -> Error"))
-		(patt @9.1-9.20 (type "Error -> Error")))
+		(patt @5.1-5.16 (type "Str -> Error"))
+		(patt @9.1-9.20 (type "I64 -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.19-5.29 (type "Error -> Error"))
-		(expr @9.23-9.35 (type "Error -> Error"))))
+		(expr @5.19-5.29 (type "Str -> Error"))
+		(expr @9.23-9.35 (type "I64 -> Error"))))
 ~~~

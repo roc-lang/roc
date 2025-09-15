@@ -167,44 +167,64 @@ MultiType(_, _, c) : c
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.16
 		(ty-header @4.1-4.10 (name "MyType")
 			(ty-args
 				(ty-underscore @4.8-4.9)))
-		(ty @4.13-4.16 (name "Str")))
+		(ty-lookup @4.13-4.16 (name "Str") (builtin)))
 	(s-alias-decl @7.1-7.18
 		(ty-header @7.1-7.14 (name "MyType2")
 			(ty-args
 				(ty-underscore @7.9-7.10)
-				(ty-var @7.12-7.13 (name "b"))))
-		(ty-var @7.17-7.18 (name "b")))
+				(ty-rigid-var @7.12-7.13 (name "b"))))
+		(ty-rigid-var @7.12-7.13 (name "b")))
 	(s-alias-decl @10.1-10.18
 		(ty-header @10.1-10.14 (name "MyType3")
 			(ty-args
-				(ty-var @10.9-10.10 (name "a"))
+				(ty-rigid-var @10.9-10.10 (name "a"))
 				(ty-underscore @10.12-10.13)))
-		(ty-var @10.17-10.18 (name "a")))
+		(ty-rigid-var @10.9-10.10 (name "a")))
 	(s-alias-decl @13.1-13.33
 		(ty-header @13.1-13.18 (name "ComplexType")
 			(ty-args
 				(ty-underscore @13.13-13.14)
-				(ty-var @13.16-13.17 (name "b"))))
+				(ty-rigid-var @13.16-13.17 (name "b"))))
 		(ty-record @13.21-13.33
 			(field (field "field")
-				(ty-var @13.30-13.31 (name "b")))))
+				(ty-rigid-var @13.16-13.17 (name "b")))))
 	(s-alias-decl @16.1-16.23
 		(ty-header @16.1-16.19 (name "MultiType")
 			(ty-args
 				(ty-underscore @16.11-16.12)
 				(ty-underscore @16.14-16.15)
-				(ty-var @16.17-16.18 (name "c"))))
-		(ty-var @16.22-16.23 (name "c"))))
+				(ty-rigid-var @16.17-16.18 (name "c"))))
+		(ty-rigid-var @16.17-16.18 (name "c"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.16 (type "MyType(Error)")
 			(ty-header @4.1-4.10 (name "MyType")
 				(ty-args
@@ -213,22 +233,22 @@ MultiType(_, _, c) : c
 			(ty-header @7.1-7.14 (name "MyType2")
 				(ty-args
 					(ty-underscore @7.9-7.10)
-					(ty-var @7.12-7.13 (name "b")))))
+					(ty-rigid-var @7.12-7.13 (name "b")))))
 		(alias @10.1-10.18 (type "MyType3(a, Error)")
 			(ty-header @10.1-10.14 (name "MyType3")
 				(ty-args
-					(ty-var @10.9-10.10 (name "a"))
+					(ty-rigid-var @10.9-10.10 (name "a"))
 					(ty-underscore @10.12-10.13))))
 		(alias @13.1-13.33 (type "ComplexType(Error, b)")
 			(ty-header @13.1-13.18 (name "ComplexType")
 				(ty-args
 					(ty-underscore @13.13-13.14)
-					(ty-var @13.16-13.17 (name "b")))))
+					(ty-rigid-var @13.16-13.17 (name "b")))))
 		(alias @16.1-16.23 (type "MultiType(Error, Error, c)")
 			(ty-header @16.1-16.19 (name "MultiType")
 				(ty-args
 					(ty-underscore @16.11-16.12)
 					(ty-underscore @16.14-16.15)
-					(ty-var @16.17-16.18 (name "c"))))))
+					(ty-rigid-var @16.17-16.18 (name "c"))))))
 	(expressions))
 ~~~

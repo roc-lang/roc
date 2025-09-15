@@ -1512,11 +1512,7 @@ fn generateBuiltinTypeInstance(
 
             // Create the type
             return try self.freshFromContent(.{ .structure = .{
-                .num = .{ .num_poly = .{
-                    .var_ = anno_args[0],
-                    .int_requirements = Num.IntRequirements.init(),
-                    .frac_requirements = Num.FracRequirements.init(),
-                } },
+                .num = .{ .num_poly = anno_args[0] },
             } }, Rank.generalized, anno_region);
         },
         .frac => {
@@ -1534,12 +1530,12 @@ fn generateBuiltinTypeInstance(
             }
 
             // Create the type
-            const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .frac_unbound } }, Rank.generalized, anno_region);
-            return try self.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = .{
-                .var_ = frac_var,
-                .int_requirements = Num.IntRequirements.init(),
-                .frac_requirements = Num.FracRequirements.init(),
-            } } } }, Rank.generalized, anno_region);
+            const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                .frac_unbound = Num.FracRequirements.init(),
+            } } }, Rank.generalized, anno_region);
+            return try self.freshFromContent(.{ .structure = .{ .num = .{
+                .num_poly = frac_var,
+            } } }, Rank.generalized, anno_region);
         },
         .int => {
             // Then check arity
@@ -1556,12 +1552,12 @@ fn generateBuiltinTypeInstance(
             }
 
             // Create the type
-            const int_var = try self.freshFromContent(.{ .structure = .{ .num = .int_unbound } }, Rank.generalized, anno_region);
-            return try self.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = .{
-                .var_ = int_var,
-                .int_requirements = Num.IntRequirements.init(),
-                .frac_requirements = Num.FracRequirements.init(),
-            } } } }, Rank.generalized, anno_region);
+            const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                .int_unbound = Num.IntRequirements.init(),
+            } } }, Rank.generalized, anno_region);
+            return try self.freshFromContent(.{ .structure = .{ .num = .{
+                .num_poly = int_var,
+            } } }, Rank.generalized, anno_region);
         },
     }
 }
@@ -1626,14 +1622,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             if (num.suffix) |suffix| {
                 try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .int = suffix } } } }, rank);
             } else {
-                const int_var = try self.freshFromContent(.{ .structure = .{ .num = .int_unbound } }, rank, expr_region);
+                const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .int_unbound = Num.IntRequirements.init(),
+                } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(int_var, rank);
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{
-                    .var_ = int_var,
-                    .int_requirements = num.requirements,
-                    .frac_requirements = Num.FracRequirements.init(),
-                } } } }, rank);
+                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
+                    .num_poly = int_var,
+                } } }, rank);
             }
         },
         .e_frac_f32 => |frac| {
@@ -1644,14 +1640,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .fits_in_f32 = true,
                     .fits_in_dec = can.Can.fitsInDec(@floatCast(frac.value)),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .frac_unbound } }, rank, expr_region);
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{
-                    .var_ = frac_var,
-                    .int_requirements = Num.IntRequirements.init(),
-                    .frac_requirements = requirements,
-                } } } }, rank);
+                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
             }
         },
         .e_frac_f64 => |frac| {
@@ -1662,14 +1658,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .fits_in_f32 = can.Can.fitsInF32(@floatCast(frac.value)),
                     .fits_in_dec = can.Can.fitsInDec(@floatCast(frac.value)),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .frac_unbound } }, rank, expr_region);
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{
-                    .var_ = frac_var,
-                    .int_requirements = Num.IntRequirements.init(),
-                    .frac_requirements = requirements,
-                } } } }, rank);
+                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
             }
         },
         .e_frac_dec => |frac| {
@@ -1681,14 +1677,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .fits_in_f32 = can.Can.fitsInF32(f64_val),
                     .fits_in_dec = can.Can.fitsInDec(f64_val),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .frac_unbound } }, rank, expr_region);
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{
-                    .var_ = frac_var,
-                    .int_requirements = Num.IntRequirements.init(),
-                    .frac_requirements = requirements,
-                } } } }, rank);
+                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
             }
         },
         .e_dec_small => |frac| {
@@ -1700,14 +1696,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .fits_in_f32 = can.Can.fitsInF32(f64_val),
                     .fits_in_dec = can.Can.fitsInDec(f64_val),
                 };
-                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .frac_unbound } }, rank, expr_region);
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_poly = .{
-                    .var_ = frac_var,
-                    .int_requirements = Num.IntRequirements.init(),
-                    .frac_requirements = requirements,
-                } } } }, rank);
+                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
             }
         },
         // list //

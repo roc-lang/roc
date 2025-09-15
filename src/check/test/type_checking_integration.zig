@@ -28,14 +28,42 @@ test "check type - num - int suffix 1" {
     const source =
         \\10u8
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "U8");
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Unsigned8))");
 }
 
 test "check type - num - int suffix 2" {
     const source =
         \\10i128
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "I128");
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Signed128))");
+}
+
+test "check type - num - float" {
+    const source =
+        \\10.1
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(_size))");
+}
+
+test "check type - num - float suffix 1" {
+    const source =
+        \\10.1f32
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+}
+
+test "check type - num - float suffix 2" {
+    const source =
+        \\10.1f64
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float64))");
+}
+
+test "check type - num - float suffix 3" {
+    const source =
+        \\10.1dec
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Decimal))");
 }
 
 // primitives - strs //
@@ -74,14 +102,14 @@ test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
         \\[100u64, 200]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(U64)");
+    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned64)))");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
         \\[100, 200u32]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(U32)");
+    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned32)))");
 }
 
 test "check type - list  - diff elems 1" {
@@ -89,6 +117,15 @@ test "check type - list  - diff elems 1" {
         \\["hello", 10]
     ;
     try assertExprTypeCheckFail(test_allocator, source, "INCOMPATIBLE LIST ELEMENTS");
+}
+
+// number requirements //
+
+test "check type - num - cannot coerce 500 to u8" {
+    const source =
+        \\[500, 200u8]
+    ;
+    try assertExprTypeCheckFail(test_allocator, source, "NUMBER DOES NOT FIT IN TYPE");
 }
 
 // records //
@@ -374,7 +411,7 @@ test "check type - nominal with type and tag arg" {
         \\x : MyNominal(U8)
         \\x = MyNominal.MyNominal(10)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal(U8)");
+    try assertFileTypeCheckPass(test_allocator, source, "MyNominal(Num(Int(Unsigned8)))");
 }
 
 test "check type - nominal with with rigid vars" {
@@ -386,7 +423,7 @@ test "check type - nominal with with rigid vars" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, 2)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Pair(U64)");
+    try assertFileTypeCheckPass(test_allocator, source, "Pair(Num(Int(Unsigned64)))");
 }
 
 test "check type - nominal with with rigid vars mismatch" {

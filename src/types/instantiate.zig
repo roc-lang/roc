@@ -236,11 +236,7 @@ pub const Instantiate = struct {
 
     fn instantiateNum(self: *Self, num: Num, ctx: *Ctx) std.mem.Allocator.Error!Num {
         return switch (num) {
-            .num_poly => |poly| Num{ .num_poly = .{
-                .var_ = try self.instantiateVar(poly.var_, ctx),
-                .int_requirements = poly.int_requirements,
-                .frac_requirements = poly.frac_requirements,
-            } },
+            .num_poly => |poly_var| Num{ .num_poly = try self.instantiateVar(poly_var, ctx) },
             .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var, ctx) },
             .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var, ctx) },
             // Concrete types remain unchanged

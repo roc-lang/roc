@@ -98,18 +98,39 @@ foo = if 1 A
 		(e-if @3.7-7.6
 			(if-branches
 				(if-branch
-					(e-int @3.10-3.11 (value "1"))
+					(e-num @3.10-3.11 (value "1"))
 					(e-tag @3.12-3.13 (name "A"))))
 			(if-else
 				(e-block @5.10-7.6
 					(e-string @6.2-6.9
-						(e-literal @6.3-6.8 (string "hello"))))))))
+						(e-literal @6.3-6.8 (string "hello")))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.4 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.7-7.6 (type "Error"))))
 ~~~

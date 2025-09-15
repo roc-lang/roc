@@ -400,7 +400,7 @@ pub const Store = struct {
                 break :blk false;
             },
             .num => |num| switch (num) {
-                .num_poly => |poly| self.needsInstantiation(poly.var_),
+                .num_poly => |poly_var| self.needsInstantiation(poly_var),
                 .num_unbound => true,
                 .int_poly => |poly_var| self.needsInstantiation(poly_var),
                 .int_unbound => true,

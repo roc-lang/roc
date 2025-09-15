@@ -86,23 +86,31 @@ NO CHANGE
 			(args
 				(p-assign @7.15-7.18 (ident "msg")))
 			(e-call @7.20-7.37
-				(e-lookup-external @7.20-7.32
-					(module-idx "0")
-					(target-node-idx "0"))
 				(e-lookup-local @7.33-7.36
 					(p-assign @7.15-7.18 (ident "msg")))))
 		(annotation @7.1-7.11
 			(declared-type
 				(ty-fn @6.14-6.23 (effectful true)
-					(ty @6.14-6.17 (name "Str"))
+					(ty-lookup @6.14-6.17 (name "Str") (builtin))
 					(ty-record @6.21-6.23)))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "main!"))
 		(e-call @9.9-9.36
-			(e-lookup-local @9.9-9.19
-				(p-assign @7.1-7.11 (ident "print_msg!")))
 			(e-string @9.20-9.35
 				(e-literal @9.21-9.34 (string "Hello, world!")))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -112,6 +120,14 @@ NO CHANGE
 	(defs
 		(patt @7.1-7.11 (type "Str => {  }"))
 		(patt @9.1-9.6 (type "{  }")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @7.14-7.37 (type "Str => {  }"))
 		(expr @9.9-9.36 (type "{  }"))))

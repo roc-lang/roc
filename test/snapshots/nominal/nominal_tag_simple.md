@@ -18,6 +18,16 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Color` is exposed, but it is not defined anywhere in this module.
+
+**nominal_tag_simple.md:1:9:1:14:**
+```roc
+module [Color, blue]
+```
+        ^^^^^
+You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
+
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **nominal_tag_simple.md:9:10:9:22:**
@@ -29,7 +39,7 @@ yellow = Color.Yellow
 The tag is:
     _Yellow_
 
-But it should be one of:
+But the nominal type needs it to one of:
     _[Blue, Green, Red]_
 
 # TOKENS
@@ -83,31 +93,51 @@ NO CHANGE
 			(e-tag @6.8-6.18 (name "Blue")))
 		(annotation @6.1-6.5
 			(declared-type
-				(ty @5.8-5.13 (name "Color")))))
+				(ty-lookup @5.8-5.13 (name "Color") (local)))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "yellow"))
 		(e-nominal @9.10-9.22 (nominal "Color")
 			(e-tag @9.10-9.22 (name "Yellow")))
 		(annotation @9.1-9.7
 			(declared-type
-				(ty @8.10-8.15 (name "Color")))))
+				(ty-lookup @8.10-8.15 (name "Color") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
-			(ty @3.11-3.14 (name "Red"))
-			(ty @3.16-3.21 (name "Green"))
-			(ty @3.23-3.27 (name "Blue")))))
+			(tag_name @3.11-3.14 (name "Red"))
+			(tag_name @3.16-3.21 (name "Green"))
+			(tag_name @3.23-3.27 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Error"))
+		(patt @6.1-6.5 (type "Color"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.28 (type "Error")
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
+		(nominal @3.1-3.28 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-6.18 (type "Error"))
+		(expr @6.8-6.18 (type "Color"))
 		(expr @9.10-9.22 (type "Error"))))
 ~~~

@@ -167,8 +167,8 @@ main! = |_| {
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
-					(ty-var @4.12-4.13 (name "a"))
-					(ty-var @4.17-4.18 (name "a"))))))
+					(ty-rigid-var @4.12-4.13 (name "a"))
+					(ty-rigid-var @4.12-4.13 (name "a"))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-19.2
@@ -181,27 +181,34 @@ main! = |_| {
 					(s-let @10.5-10.23
 						(p-assign @10.5-10.8 (ident "num"))
 						(e-call @10.11-10.23
-							(e-lookup-local @10.11-10.19
-								(p-assign @5.1-5.9 (ident "identity")))
-							(e-int @10.20-10.22 (value "42"))))
+							(e-num @10.20-10.22 (value "42"))))
 					(s-let @13.5-13.28
 						(p-assign @13.5-13.8 (ident "str"))
 						(e-call @13.11-13.28
-							(e-lookup-local @13.11-13.19
-								(p-assign @5.1-5.9 (ident "identity")))
 							(e-string @13.20-13.27
 								(e-literal @13.21-13.26 (string "hello")))))
 					(s-let @16.5-16.30
 						(p-assign @16.5-16.8 (ident "lst"))
 						(e-call @16.11-16.30
-							(e-lookup-local @16.11-16.19
-								(p-assign @5.1-5.9 (ident "identity")))
 							(e-list @16.20-16.29
 								(elems
-									(e-int @16.21-16.22 (value "1"))
-									(e-int @16.24-16.25 (value "2"))
-									(e-int @16.27-16.28 (value "3"))))))
-					(e-empty_record @18.5-18.7))))))
+									(e-num @16.21-16.22 (value "1"))
+									(e-num @16.24-16.25 (value "2"))
+									(e-num @16.27-16.28 (value "3"))))))
+					(e-empty_record @18.5-18.7)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -209,6 +216,14 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @8.1-8.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @8.9-19.2 (type "_arg -> {}"))))
