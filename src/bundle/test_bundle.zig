@@ -838,10 +838,7 @@ test "unbundle with existing directory error" {
     defer bundle_file.close();
 
     // This should succeed but the CLI would error on existing directory
-    var reader_buffer: [1024]u8 = undefined;
-    var reader_interface = bundle_file.reader(&reader_buffer).interface;
-    var reader = reader_interface.adaptToOldInterface();
-    try bundle.unbundle(&reader, tmp_dir, &allocator, filename, null);
+    try bundle.unbundle(bundle_file.reader(), tmp_dir, &allocator, filename, null);
 }
 
 test "unbundle multiple archives" {
@@ -914,10 +911,7 @@ test "unbundle multiple archives" {
         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
 
-        var reader_buffer: [1024]u8 = undefined;
-        var reader_interface = bundle_file.reader(&reader_buffer).interface;
-        var reader = reader_interface.adaptToOldInterface();
-        try bundle.unbundle(&reader, extract_dir, &allocator, fname, null);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, fname, null);
     }
 
     // Verify extraction
@@ -1052,10 +1046,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
 
-        var reader_buffer: [1024]u8 = undefined;
-        var reader_interface = bundle_file.reader(&reader_buffer).interface;
-        var reader = reader_interface.adaptToOldInterface();
-        try bundle.unbundle(&reader, extract_dir, &allocator, filename1, null);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -1094,10 +1085,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
 
-        var reader_buffer: [1024]u8 = undefined;
-        var reader_interface = bundle_file.reader(&reader_buffer).interface;
-        var reader = reader_interface.adaptToOldInterface();
-        try bundle.unbundle(&reader, extract_dir, &allocator, filename2, null);
+        try bundle.unbundle(bundle_file.reader(), extract_dir, &allocator, filename2, null);
     }
 
     // Verify all files match original content
