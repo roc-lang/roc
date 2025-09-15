@@ -1711,6 +1711,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         // list //
+        .e_empty_list => {
+            try self.updateVar(expr_var, .{ .structure = .list_unbound }, rank);
+        },
         .e_list => |list| {
             const elems = self.cir.store.exprSlice(list.elems);
 
@@ -1819,6 +1822,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             } }, rank);
         },
         // tags //
+        .e_zero_argument_tag => |e| {
+            const ext_var = try self.fresh(rank, expr_region);
+            try self.var_pool.addVarToRank(ext_var, rank);
+
+            const tag = try self.types.mkTag(e.name, &.{});
+            const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+
+            // Update the expr to point to the new type
+            try self.updateVar(expr_var, tag_union_content, rank);
+        },
         .e_tag => |e| {
             // Create a tag type in the type system and assign it the expr_var
 
@@ -1894,6 +1907,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 try self.updateVar(expr_var, .err, rank);
             }
         },
+        .e_nominal_external => {
+            // TODO
+            try self.updateVar(expr_var, .err, rank);
+        },
         // lookup //
         .e_lookup_local => |lookup| {
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
@@ -1908,6 +1925,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
 
             // Unify this expression with the referenced pattern
+        },
+        .e_lookup_external => {
+            // TODO
+            try self.updateVar(expr_var, .err, rank);
         },
         // block //
         .e_block => |block| {
@@ -2332,10 +2353,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_match => |match| {
             does_fx = try self.checkMatchExpr(expr_idx, rank, match) or does_fx;
         },
-        .e_runtime_error => {
+        .e_binop => {
             try self.updateVar(expr_var, .err, rank);
         },
-        else => {
+        .e_unary_minus => {
+            try self.updateVar(expr_var, .err, rank);
+        },
+        .e_unary_not => {
+            try self.updateVar(expr_var, .err, rank);
+        },
+        .e_dot_access => {
+            try self.updateVar(expr_var, .err, rank);
+        },
+        .e_crash => {
+            try self.updateVar(expr_var, .{ .flex_var = null }, rank);
+        },
+        .e_dbg => |dbg| {
+            does_fx = try self.checkExpr(dbg.expr, rank, expected) or does_fx;
+            _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(dbg.expr));
+        },
+        .e_expect => |expect| {
+            does_fx = try self.checkExpr(expect.body, rank, expected) or does_fx;
+            try self.updateVar(expr_var, .{ .structure = .empty_record }, rank);
+        },
+        .e_ellipsis => {
+            try self.updateVar(expr_var, .{ .flex_var = null }, rank);
+        },
+        .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
     }
@@ -2606,6 +2650,58 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
 
     return does_fx;
 }
+
+// unary minus //
+
+// fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+//     const trace = tracy.trace(@src());
+//     defer trace.end();
+
+//     // Check the operand expression
+//     const does_fx = try self.checkExpr(unary.expr, rank, .no_expectation);
+
+//     // For unary minus, we constrain the operand and result to be numbers
+//     const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
+//     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
+
+//     // Create a fresh number variable for the operation
+//     const num_content = Content{ .structure = .{ .num = .{
+//         .num_unbound = .{
+//             .int_requirements = Num.IntRequirements.init(),
+//             .frac_requirements = Num.FracRequirements.init(),
+//         },
+//     } } };
+//     const num_var = try self.freshFromContent(num_content, expr_region);
+
+//     // Unify operand and result with the number type
+//     _ = try self.unify(operand_var, num_var);
+//     _ = try self.unify(result_var, num_var);
+
+//     return does_fx;
+// }
+
+// unary not //
+
+// fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
+//     const trace = tracy.trace(@src());
+//     defer trace.end();
+
+//     // Check the operand expression
+//     const does_fx = try self.checkExpr(unary.expr);
+
+//     // For unary not, we constrain the operand and result to be booleans
+//     const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
+//     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+//     // Create a fresh boolean variable for the operation
+//     const bool_var = try self.freshBool(expr_region);
+
+//     // Unify operand and result with the boolean type
+//     _ = try self.unify(operand_var, bool_var);
+//     _ = try self.unify(result_var, bool_var);
+
+//     return does_fx;
+// }
 
 // pattern OLD //
 
@@ -3565,54 +3661,6 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
 //             return does_fx;
 //         },
 //     }
-// }
-
-// fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     // Check the operand expression
-//     const does_fx = try self.checkExpr(unary.expr);
-
-//     // For unary minus, we constrain the operand and result to be numbers
-//     const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
-//     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-//     // Create a fresh number variable for the operation
-//     const num_content = Content{ .structure = .{ .num = .{
-//         .num_unbound = .{
-//             .int_requirements = Num.IntRequirements.init(),
-//             .frac_requirements = Num.FracRequirements.init(),
-//         },
-//     } } };
-//     const num_var = try self.freshFromContent(num_content, expr_region);
-
-//     // Unify operand and result with the number type
-//     _ = try self.unify(operand_var, num_var);
-//     _ = try self.unify(result_var, num_var);
-
-//     return does_fx;
-// }
-
-// fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     // Check the operand expression
-//     const does_fx = try self.checkExpr(unary.expr);
-
-//     // For unary not, we constrain the operand and result to be booleans
-//     const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
-//     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-//     // Create a fresh boolean variable for the operation
-//     const bool_var = try self.freshBool(expr_region);
-
-//     // Unify operand and result with the boolean type
-//     _ = try self.unify(operand_var, bool_var);
-//     _ = try self.unify(result_var, bool_var);
-
-//     return does_fx;
 // }
 
 // problems //

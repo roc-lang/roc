@@ -49,6 +49,13 @@ test "check type - str" {
 
 // primitives - lists //
 
+test "check type - list empty" {
+    const source =
+        \\[]
+    ;
+    try assertExprTypeCheckPass(test_allocator, source, "List(_elem)");
+}
+
 test "check type - list - same elems 1" {
     const source =
         \\["hello", "world"]
