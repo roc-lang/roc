@@ -18,14 +18,14 @@ const TEST_COMPRESSION_LEVEL: c_int = 2;
 test "simple streaming write" {
     const allocator = std.testing.allocator;
 
-    var output_writer = std.io.Writer.Allocating.init(allocator);
-    defer output_writer.deinit();
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
 
     var allocator_copy = allocator;
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        output_writer.writer,
+        output.writer().any(),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -35,23 +35,21 @@ test "simple streaming write" {
     try writer.finish();
 
     // Just check we got some output
-    const output_data = output_writer.toArrayList();
-    defer allocator.free(output_data);
-    try std.testing.expect(output_data.items.len > 0);
+    try std.testing.expect(output.items.len > 0);
 }
 
 test "simple streaming read" {
     const allocator = std.testing.allocator;
 
     // First compress some data
-    var compressed_writer = std.io.Writer.Allocating.init(allocator);
-    defer compressed_writer.deinit();
+    var compressed = std.array_list.Managed(u8).init(allocator);
+    defer compressed.deinit();
 
     var allocator_copy = allocator;
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        compressed_writer.writer,
+        compressed.writer().any(),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -64,13 +62,11 @@ test "simple streaming read" {
     const hash = writer.getHash();
 
     // Now decompress it
-    const compressed_data = compressed_writer.toArrayList();
-    defer allocator.free(compressed_data);
-    const stream_reader = std.io.Reader.fixed(compressed_data.items);
+    var stream = std.io.fixedBufferStream(compressed.items);
     var allocator_copy2 = allocator;
     var reader = try streaming_reader.DecompressingHashReader.init(
         &allocator_copy2,
-        stream_reader,
+        stream.reader().any(),
         hash,
         bundle.allocForZstd,
         bundle.freeForZstd,
@@ -93,14 +89,14 @@ test "simple streaming read" {
 test "streaming write with exact buffer boundary" {
     const allocator = std.testing.allocator;
 
-    var output_writer = std.io.Writer.Allocating.init(allocator);
-    defer output_writer.deinit();
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
 
     var allocator_copy = allocator;
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        output_writer.writer,
+        output.writer().any(),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -116,23 +112,21 @@ test "streaming write with exact buffer boundary" {
     try writer.finish();
 
     // Just verify we got output
-    const output_data = output_writer.toArrayList();
-    defer allocator.free(output_data);
-    try std.testing.expect(output_data.items.len > 0);
+    try std.testing.expect(output.items.len > 0);
 }
 
 test "streaming read with hash mismatch" {
     const allocator = std.testing.allocator;
 
     // First compress some data
-    var compressed_writer = std.io.Writer.Allocating.init(allocator);
-    defer compressed_writer.deinit();
+    var compressed = std.array_list.Managed(u8).init(allocator);
+    defer compressed.deinit();
 
     var allocator_copy = allocator;
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        compressed_writer.writer,
+        compressed.writer().any(),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -146,13 +140,11 @@ test "streaming read with hash mismatch" {
     @memset(&wrong_hash, 0xFF);
 
     // Try to decompress with wrong hash
-    const output_data = compressed_writer.toArrayList();
-    defer allocator.free(output_data);
-    const stream_reader = std.io.Reader.fixed(output_data.items);
+    var stream = std.io.fixedBufferStream(compressed.items);
     var allocator_copy2 = allocator;
     var reader = try streaming_reader.DecompressingHashReader.init(
         &allocator_copy2,
-        stream_reader,
+        stream.reader().any(),
         wrong_hash,
         bundle.allocForZstd,
         bundle.freeForZstd,
@@ -182,14 +174,14 @@ test "different compression levels" {
     var sizes: [levels.len]usize = undefined;
 
     for (levels, 0..) |level, i| {
-        var output_writer = std.io.Writer.Allocating.init(allocator);
-        defer output_writer.deinit();
+        var output = std.array_list.Managed(u8).init(allocator);
+        defer output.deinit();
 
         var allocator_copy = allocator;
         var writer = try streaming_writer.CompressingHashWriter.init(
             &allocator_copy,
             level,
-            output_writer.writer,
+            output.writer().any(),
             bundle.allocForZstd,
             bundle.freeForZstd,
         );
@@ -198,16 +190,14 @@ test "different compression levels" {
         try writer.writer().writeAll(test_data);
         try writer.finish();
 
-        const output_data = output_writer.toArrayList();
-        defer allocator.free(output_data);
-        sizes[i] = output_data.items.len;
+        sizes[i] = output.items.len;
 
         // Verify we can decompress
-        const stream_reader = std.io.Reader.fixed(output_data.items);
+        var stream = std.io.fixedBufferStream(output.items);
         var allocator_copy2 = allocator;
         var reader = try streaming_reader.DecompressingHashReader.init(
             &allocator_copy2,
-            stream_reader,
+            stream.reader().any(),
             writer.getHash(),
             bundle.allocForZstd,
             bundle.freeForZstd,
@@ -219,7 +209,7 @@ test "different compression levels" {
 
         var buffer: [1024]u8 = undefined;
         while (true) {
-            const n = try reader.reader().readVec(&.{buffer});
+            const n = try reader.reader().read(&buffer);
             if (n == 0) break;
             try decompressed.appendSlice(buffer[0..n]);
         }
@@ -256,8 +246,8 @@ test "large file streaming extraction" {
     }
 
     // Bundle it
-    var bundle_writer = std.io.Writer.Allocating.init(allocator);
-    defer bundle_writer.deinit();
+    var bundle_data = std.array_list.Managed(u8).init(allocator);
+    defer bundle_data.deinit();
 
     const test_util = @import("test_util.zig");
     const paths = [_][]const u8{"large.bin"};
@@ -268,7 +258,7 @@ test "large file streaming extraction" {
         &iter,
         3,
         &allocator_copy,
-        bundle_writer.writer,
+        bundle_data.writer(),
         tmp.dir,
         null,
         null,
@@ -280,11 +270,9 @@ test "large file streaming extraction" {
     var extract_dir = try tmp.dir.openDir("extracted", .{});
 
     // Unbundle - this should use streaming for the 2MB file
-    const bundle_data = bundle_writer.toArrayList();
-    defer allocator.free(bundle_data);
-    const stream_reader = std.io.Reader.fixed(bundle_data.items);
+    var stream = std.io.fixedBufferStream(bundle_data.items);
     var allocator_copy2 = allocator;
-    try bundle.unbundle(stream_reader, extract_dir, &allocator_copy2, filename, null);
+    try bundle.unbundle(stream.reader(), extract_dir, &allocator_copy2, filename, null);
 
     // Verify file was extracted
     const stat = try extract_dir.statFile("large.bin");
