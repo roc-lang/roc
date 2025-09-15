@@ -122,24 +122,29 @@ pub fn bundle(
     file_path_iter: anytype,
     compression_level: c_int,
     allocator: *std.mem.Allocator,
-    output_writer: std.io.Writer,
+    output_writer: anytype,
     base_dir: std.fs.Dir,
     path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
 ) BundleError![]u8 {
+    // Create a buffered writer for the output
+    var buffered_writer = std.io.bufferedWriter(output_writer);
+    const buffered = buffered_writer.writer();
+
     // Create compressing hash writer that chains: tar → compress → hash → output
-    var compress_writer = try streaming_writer.CompressingHashWriter.init(
+    var compress_writer = streaming_writer.CompressingHashWriter.init(
         allocator,
         compression_level,
-        output_writer,
+        buffered.any(),
         allocForZstd,
         freeForZstd,
-    );
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     defer compress_writer.deinit();
 
     // Create tar writer that writes to the compressing writer
-    var cw = compress_writer.writer();
-    var tar_writer: std.tar.Writer = .{ .underlying_writer = &cw};
+    var tar_writer = std.tar.writer(compress_writer.writer());
 
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
@@ -206,8 +211,7 @@ pub fn bundle(
         };
 
         // Create a reader for the file
-        var file_reader_buffer: [4096]u8 = undefined;
-        const file_reader = file.reader(&file_reader_buffer);
+        const file_reader = file.reader();
 
         // Stream the file to tar
         tar_writer.writeFileStream(tar_path, file_size, file_reader, options) catch |err| switch (err) {
@@ -227,6 +231,10 @@ pub fn bundle(
         error.WriteFailed => return error.WriteFailed,
         error.AlreadyFinished => return error.CompressionFailed,
         error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    buffered_writer.flush() catch {
+        return error.FlushFailed;
     };
 
     // Get the blake3 hash and encode as base58
