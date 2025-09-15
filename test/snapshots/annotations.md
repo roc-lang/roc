@@ -7,10 +7,11 @@ type=file
 ~~~roc
 module []
 
-StrConsList := [Nil, Cons(Str, StrConsList)]
-
-x : StrConsList
-x = StrConsList.Cons("hello", StrConsList.Nil)
+x =
+  match "hello" {
+    True => "true"
+    False => "false"
+  }
 ~~~
 # EXPECTED
 TYPE MISMATCH - annotations.md:18:28:18:28
@@ -18,60 +19,95 @@ INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
 TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
-NIL
+**INCOMPATIBLE MATCH PATTERNS**
+The first pattern in this `match` is incompatible:
+**annotations.md:4:3:**
+```roc
+  match "hello" {
+    True => "true"
+    False => "false"
+  }
+```
+    ^^^^
+
+The first pattern has the type:
+    _Bool_
+
+But the expression right after `match` has the type:
+    _Str_
+
+These two types can't never match!
+
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:12),OpColonEqual(3:13-3:15),OpenSquare(3:16-3:17),UpperIdent(3:17-3:20),Comma(3:20-3:21),UpperIdent(3:22-3:26),NoSpaceOpenRound(3:26-3:27),UpperIdent(3:27-3:30),Comma(3:30-3:31),UpperIdent(3:32-3:43),CloseRound(3:43-3:44),CloseSquare(3:44-3:45),
-LowerIdent(5:1-5:2),OpColon(5:3-5:4),UpperIdent(5:5-5:16),
-LowerIdent(6:1-6:2),OpAssign(6:3-6:4),UpperIdent(6:5-6:16),NoSpaceDotUpperIdent(6:16-6:21),NoSpaceOpenRound(6:21-6:22),StringStart(6:22-6:23),StringPart(6:23-6:28),StringEnd(6:28-6:29),Comma(6:29-6:30),UpperIdent(6:31-6:42),NoSpaceDotUpperIdent(6:42-6:46),CloseRound(6:46-6:47),
-EndOfFile(7:1-7:1),
+LowerIdent(3:1-3:2),OpAssign(3:3-3:4),
+KwMatch(4:3-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15),StringEnd(4:15-4:16),OpenCurly(4:17-4:18),
+UpperIdent(5:5-5:9),OpFatArrow(5:10-5:12),StringStart(5:13-5:14),StringPart(5:14-5:18),StringEnd(5:18-5:19),
+UpperIdent(6:5-6:10),OpFatArrow(6:11-6:13),StringStart(6:14-6:15),StringPart(6:15-6:20),StringEnd(6:20-6:21),
+CloseCurly(7:3-7:4),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.47
+(file @1.1-7.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-decl @3.1-3.45
-			(header @3.1-3.12 (name "StrConsList")
-				(args))
-			(ty-tag-union @3.16-3.45
-				(tags
-					(ty @3.17-3.20 (name "Nil"))
-					(ty-apply @3.22-3.44
-						(ty @3.22-3.26 (name "Cons"))
-						(ty @3.27-3.30 (name "Str"))
-						(ty @3.32-3.43 (name "StrConsList"))))))
-		(s-type-anno @5.1-5.16 (name "x")
-			(ty @5.5-5.16 (name "StrConsList")))
-		(s-decl @6.1-6.47
-			(p-ident @6.1-6.2 (raw "x"))
-			(e-apply @6.5-6.47
-				(e-tag @6.5-6.21 (raw "StrConsList.Cons"))
-				(e-string @6.22-6.29
-					(e-string-part @6.23-6.28 (raw "hello")))
-				(e-tag @6.31-6.46 (raw "StrConsList.Nil"))))))
+		(s-decl @3.1-7.4
+			(p-ident @3.1-3.2 (raw "x"))
+			(e-match
+				(e-string @4.9-4.16
+					(e-string-part @4.10-4.15 (raw "hello")))
+				(branches
+					(branch @5.5-5.19
+						(p-tag @5.5-5.9 (raw "True"))
+						(e-string @5.13-5.19
+							(e-string-part @5.14-5.18 (raw "true"))))
+					(branch @6.5-6.21
+						(p-tag @6.5-6.10 (raw "False"))
+						(e-string @6.14-6.21
+							(e-string-part @6.15-6.20 (raw "false")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+x = 
+	match "hello" {
+		True => "true"
+		False => "false"
+	}
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.2 (ident "x"))
-		(e-nominal @6.5-6.47 (nominal "StrConsList")
-			(e-tag @6.5-6.47 (name "Cons")
-				(args
-					(e-string @6.22-6.29
-						(e-literal @6.23-6.28 (string "hello")))
-					(e-nominal @6.31-6.46 (nominal "StrConsList")
-						(e-tag @6.31-6.46 (name "Nil"))))))
-		(annotation @6.1-6.2
-			(declared-type
-				(ty-lookup @5.5-5.16 (name "StrConsList") (local)))))
+		(p-assign @3.1-3.2 (ident "x"))
+		(e-match @4.3-7.4
+			(match @4.3-7.4
+				(cond
+					(e-string @4.9-4.16
+						(e-literal @4.10-4.15 (string "hello"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal @5.5-5.9
+									(p-applied-tag @5.5-5.9))))
+						(value
+							(e-string @5.13-5.19
+								(e-literal @5.14-5.18 (string "true")))))
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal @6.5-6.10
+									(p-applied-tag @6.5-6.10))))
+						(value
+							(e-string @6.14-6.21
+								(e-literal @6.15-6.20 (string "false")))))))))
 	(s-nominal-decl @1.1-1.1
 		(ty-header @1.1-1.1 (name "Bool"))
 		(ty-tag-union @1.1-1.1
@@ -84,28 +120,21 @@ NO CHANGE
 				(ty-rigid-var @1.1-1.1 (name "err"))))
 		(ty-tag-union @1.1-1.1
 			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
-	(s-nominal-decl @3.1-3.45
-		(ty-header @3.1-3.12 (name "StrConsList"))
-		(ty-tag-union @3.16-3.45
-			(tag_name @3.17-3.20 (name "Nil"))
-			(tag_name @3.22-3.44 (name "Cons")))))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.2 (type "StrConsList")))
+		(patt @3.1-3.2 (type "Str")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
+		(nominal @1.1-1.1 (type "Error")
 			(ty-header @1.1-1.1 (name "Bool")))
 		(nominal @1.1-1.1 (type "Result(ok, err)")
 			(ty-header @1.1-1.1 (name "Result")
 				(ty-args
 					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
-		(nominal @3.1-3.45 (type "StrConsList")
-			(ty-header @3.1-3.12 (name "StrConsList"))))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @6.5-6.47 (type "StrConsList"))))
+		(expr @4.3-7.4 (type "Str"))))
 ~~~

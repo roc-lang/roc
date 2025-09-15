@@ -2278,6 +2278,9 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
         .e_if => |if_expr| {
             does_fx = try self.checkIfElseExpr(expr_idx, expr_region, rank, if_expr) or does_fx;
         },
+        .e_match => |match| {
+            does_fx = try self.checkMatchExpr(expr_idx, rank, match) or does_fx;
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
@@ -2434,6 +2437,116 @@ fn checkIfElseExpr(
     // Set the entire expr's type to be the type of the branch
     const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
     try self.types.setVarRedirect(if_expr_var, branch_var);
+
+    return does_fx;
+}
+
+// match //
+
+/// Check the types for an if-else expr
+fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Expr.Match) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Check the match's condition
+    var does_fx = try self.checkExprNew(match.cond, rank, .no_expectation);
+    const cond_var = ModuleEnv.varFrom(match.cond);
+
+    // Assert we have at least 1 branch
+    std.debug.assert(match.branches.span.len > 0);
+
+    // Get slice of branches
+    const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
+
+    // Manually check the 1st branch
+    // The type of the branch's body becomes the var other branch bodies must unify
+    // against.
+    const first_branch_idx = branch_idxs[0];
+    const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
+
+    const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
+
+    for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
+        const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
+        try self.checkPatternNew(branch_ptrn.pattern, rank, .no_expectation);
+        const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+
+        const ptrn_result = try self.unify(cond_var, branch_ptrn_var, rank);
+        self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
+            .match_expr = expr_idx,
+        } });
+    }
+
+    // Check the first branch's value, then use that at the branch_var
+    does_fx = try self.checkExprNew(first_branch.value, rank, .no_expectation) or does_fx;
+    const branch_var = ModuleEnv.varFrom(first_branch.value);
+
+    // Then iterate over the rest of the branches
+    for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
+        const branch = self.cir.store.getMatchBranch(branch_idx);
+
+        // First, check the patterns of this branch
+        const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
+        for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
+            // Check the pattern's sub types
+            const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
+            try self.checkPatternNew(branch_ptrn.pattern, rank, .no_expectation);
+
+            // Check the pattern against the cond
+            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+            const ptrn_result = try self.unify(cond_var, branch_ptrn_var, rank);
+            self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = @intCast(branch_cur_index),
+                .num_patterns = @intCast(branch_ptrn_idxs.len),
+                .problem_pattern_index = @intCast(cur_ptrn_index),
+            } });
+        }
+
+        // Then, check the body
+        does_fx = try self.checkExprNew(branch.value, rank, .no_expectation) or does_fx;
+        const branch_result = try self.unify(branch_var, ModuleEnv.varFrom(branch.value), rank);
+        self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
+            .match_expr = expr_idx,
+            .num_branches = @intCast(match.branches.span.len),
+            .problem_branch_index = @intCast(branch_cur_index),
+        } });
+
+        if (!branch_result.isOk()) {
+            // If there was a body mismatch, do not check other branches to stop
+            // cascading errors. But still check each other branch's sub types
+            for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
+                const other_branch = self.cir.store.getMatchBranch(other_branch_idx);
+
+                // Still check the other patterns
+                const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
+                for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
+                    // Check the pattern's sub types
+                    const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
+                    try self.checkPatternNew(other_branch_ptrn.pattern, rank, .no_expectation);
+
+                    // Check the pattern against the cond
+                    const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
+                    const ptrn_result = try self.unify(cond_var, other_branch_ptrn_var, rank);
+                    self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+                        .match_expr = expr_idx,
+                        .num_branches = @intCast(match.branches.span.len),
+                        .problem_branch_index = @intCast(other_branch_cur_index),
+                        .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                        .problem_pattern_index = @intCast(other_cur_ptrn_index),
+                    } });
+                }
+
+                // Then check the other branch's exprs
+                does_fx = try self.checkExprNew(other_branch.value, rank, .no_expectation) or does_fx;
+                try self.types.setVarContent(ModuleEnv.varFrom(other_branch.value), .err);
+            }
+
+            // Then stop type checking for this branch
+            break;
+        }
+    }
 
     return does_fx;
 }
@@ -3270,183 +3383,6 @@ fn checkIfElseExpr(
 //     return false;
 // }
 
-// /// Performs bidirectional type checking for lambda expressions with optional type annotations.
-// ///
-// /// ## Constraint Ordering
-// ///
-// /// Parameter constraints from annotations are applied BEFORE checking the lambda body.
-// /// This ensures rigid variables are properly constrained during body analysis, causing
-// /// type errors to surface at their actual source rather than during later unification.
-// ///
-// /// **Why this ordering matters:**
-// /// ```
-// /// Pair(a) := [Pair(a, a)]
-// /// mk_pair_invalid : a, b -> Pair(a)
-// /// mk_pair_invalid = |x, y| Pair.Pair(x, y)
-// ///
-// /// // Step 1: Constrain parameters from annotation first
-// /// x := a[rigid], y := b[rigid]
-// ///
-// /// // Step 2: Check body - error detected immediately at constructor
-// /// Pair.Pair(x, y)  // ERROR: Pair requires same type, but x=a[rigid], y=b[rigid]
-// /// ```
-// ///
-// /// Without upfront constraints, the error would only surface during final annotation
-// /// validation, making it harder to locate the actual problem in the source code.
-// /// Similar to checkLambdaWithAnno but only validates return type, not the entire function.
-// /// This is used for lambdas to preserve error locations while still catching type errors.
-// fn checkLambdaForClosure(
-//     self: *Self,
-//     expr_idx: CIR.Expr.Idx,
-//     lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
-//     anno_type: ?Var,
-// ) std.mem.Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     // Get the actual lambda arguments
-//     const arg_patterns = self.cir.store.slicePatterns(lambda.args);
-//     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
-
-//     var mb_expected_func: ?types_mod.Func = null;
-
-//     // STEP 1: Apply annotation constraints to parameters FIRST
-//     if (anno_type) |anno_var| {
-//         const expected_resolved = self.types.resolveVar(anno_var);
-//         mb_expected_func = switch (expected_resolved.desc.content) {
-//             .structure => |s| switch (s) {
-//                 .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-//                 else => null,
-//             },
-//             else => null,
-//         };
-
-//         if (mb_expected_func) |func| {
-//             const expected_args = self.types.sliceVars(func.args);
-//             if (expected_args.len == arg_patterns.len) {
-//                 // Constrain parameters with annotation types
-//                 for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-//                     // Check the pattern
-//                     try self.checkPattern(pattern_idx);
-
-//                     // Unify against the annotation
-//                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-//                     _ = try self.unify(pattern_var, expected_arg);
-//                 }
-//             }
-//         }
-//     }
-
-//     // STEP 2: Check the body with return type constraint propagation
-//     const is_effectful = if (mb_expected_func) |func|
-//         try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
-//     else
-//         try self.checkExpr(lambda.body);
-
-//     // STEP 3: Build the function type
-//     const fn_var = ModuleEnv.varFrom(expr_idx);
-//     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-
-//     // Ensure the return variable has the correct region for error reporting
-//     const body_region = self.cir.store.getExprRegion(lambda.body);
-//     try self.fillInRegionsThrough(return_var);
-//     self.setRegionAt(return_var, body_region);
-
-//     if (is_effectful) {
-//         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
-//     } else {
-//         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
-//     }
-
-//     // STEP 4: Don't validate here - let checkDef do the final unification
-//     // This preserves error locations correctly
-
-//     // NOTE: We don't do the final unification with the full annotation here
-//     // The caller (checkDef) will handle that to preserve error locations
-
-//     return is_effectful;
-// }
-
-// fn checkLambdaWithAnno(
-//     self: *Self,
-//     expr_idx: CIR.Expr.Idx,
-//     _: Region,
-//     lambda: std.meta.FieldType(CIR.Expr, .e_lambda),
-//     anno_type: ?Var,
-// ) std.mem.Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     // Get the actual lambda arguments
-//     const arg_patterns = self.cir.store.slicePatterns(lambda.args);
-//     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
-
-//     var mb_expected_var: ?Var = null;
-//     var mb_expected_func: ?types_mod.Func = null;
-
-//     // STEP 1: Apply annotation constraints to parameters FIRST
-//     if (anno_type) |anno_var| {
-//         mb_expected_var = anno_var;
-
-//         const expected_resolved = self.types.resolveVar(anno_var);
-//         mb_expected_func = switch (expected_resolved.desc.content) {
-//             .structure => |s| switch (s) {
-//                 .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-//                 else => null,
-//             },
-//             else => null,
-//         };
-
-//         if (mb_expected_func) |func| {
-//             const expected_args = self.types.sliceVars(func.args);
-//             if (expected_args.len == arg_patterns.len) {
-//                 // Constrain parameters with annotation types
-//                 for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-//                     // Check the pattern
-//                     try self.checkPattern(pattern_idx);
-
-//                     // Unify against the annotation
-//                     const pattern_var = ModuleEnv.varFrom(pattern_idx);
-//                     _ = try self.unify(pattern_var, expected_arg);
-//                 }
-//             }
-//         }
-//     }
-
-//     // STEP 2: Check the body with return type constraint propagation for literals
-//     const is_effectful = if (mb_expected_func) |func|
-//         try self.checkExprWithExpectedAndAnnotation(lambda.body, func.ret, true)
-//     else
-//         try self.checkExpr(lambda.body);
-
-//     // STEP 3: Build the function type
-//     const fn_var = ModuleEnv.varFrom(expr_idx);
-//     const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-
-//     // Ensure the return variable has the correct region for error reporting
-//     const body_region = self.cir.store.getExprRegion(lambda.body);
-//     try self.fillInRegionsThrough(return_var);
-//     self.setRegionAt(return_var, body_region);
-
-//     if (is_effectful) {
-//         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncEffectful(arg_vars, return_var));
-//     } else {
-//         _ = try self.types.setVarContent(fn_var, try self.types.mkFuncUnbound(arg_vars, return_var));
-//     }
-
-//     // STEP 4: Validate the function body against the annotation return type
-//     if (mb_expected_func) |func| {
-//         _ = try self.unify(return_var, func.ret);
-//     }
-
-//     // STEP 5: Validate the entire function against the annotation
-//     if (mb_expected_var) |expected_var| {
-//         _ = try self.unifyWithAnnotation(fn_var, expected_var);
-//     }
-
-//     return is_effectful;
-// }
-
 // // binop //
 
 // /// Check the types for a binary operation expression
@@ -3619,234 +3555,6 @@ fn checkIfElseExpr(
 //     // Unify operand and result with the boolean type
 //     _ = try self.unify(operand_var, bool_var);
 //     _ = try self.unify(result_var, bool_var);
-
-//     return does_fx;
-// }
-
-// // nominal //
-
-// // nominal //
-
-// /// Check that a nominal type constructor usage is valid and perform type inference.
-// ///
-// /// This function validates that a user's constructor application (like `Maybe.Just(1)`)
-// /// is compatible with the nominal type's definition and infers the concrete types.
-// ///
-// /// Example:
-// ///   Maybe a := [Just(a), None]
-// ///   val = Maybe.Just(1)  // This call validates Just(1) against Maybe's definition
-// ///
-// /// Parameters:
-// /// * `node_var` - Variable representing the entire expression (initially a placeholder).
-// ///                This will be redirected to the final inferred type.
-// /// * `node_region` - Source region of the entire expression for error reporting
-// /// * `node_backing_var` - Variable for the constructor application's internal type (e.g., `Just(1)`)
-// /// * `node_backing_type` - Kind of nominal backing (tag, record, tuple, or val)
-// /// * `real_nominal_var` - Variable of the nominal type declaration (e.g., `Maybe a`)
-// fn checkNominal(
-//     self: *Self,
-//     node_var: Var,
-//     node_region: Region,
-//     node_backing_var: Var,
-//     node_backing_type: CIR.Expr.NominalBackingType,
-//     real_nominal_var: Var,
-// ) Allocator.Error!void {
-//     // Clear the rigid variable substitution map to ensure fresh instantiation
-//     self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
-
-//     // Algorithm overview:
-//     // 1. Validate that the nominal type exists and is well-formed
-//     // 2. Instantiate the nominal type's backing type with fresh variables
-//     // 3. Unify the instantiated backing type against the user's constructor
-//     // 4. If unification succeeds, instantiate the nominal type and assign to node_var
-//     // 5. If unification fails, report appropriate error and mark node_var as error
-//     //
-//     // The key insight is using a shared rigid variable map so that type parameters
-//     // in the backing type and nominal type get the same substitutions.
-
-//     // Step 1: Extract and validate the nominal type
-//     const nominal_content = self.types.resolveVar(real_nominal_var).desc.content;
-//     const nominal_type = switch (nominal_content) {
-//         .structure => |structure| switch (structure) {
-//             .nominal_type => |nt| nt,
-//             else => {
-//                 // The supposed nominal type is actually some other structure
-//                 try self.types.setVarContent(node_var, .err);
-//                 return;
-//             },
-//         },
-//         else => {
-//             // The nominal type is in an error state or unresolved
-//             try self.types.setVarContent(node_var, .err);
-//             return;
-//         },
-//     };
-
-//     // Step 2: Instantiate the nominal type's backing type
-//     // This converts rigid type variables (like `a[r]`) to fresh flexible variables
-//     // that can be unified. The backing type defines the structure (e.g., [Just(a), None])
-//     const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-//     const instantiated_backing_var = try self.instantiateVar(
-//         nominal_backing_var,
-//         &self.anonymous_rigid_var_subs,
-//         .{ .explicit = node_region },
-//     );
-
-//     // TODO: If we can, unify arguments directly to get better error messages
-//     // Unifying by the whole thing works, but doesn't have great error messages
-//     // always
-
-//     // Step 3: Unify the instantiated backing type with the user's constructor
-//     // This checks if `Just(1)` is compatible with `[Just(a), None]` and if so,
-//     // unifies `a` with the type of `1` (e.g., Num(_size))
-//     const result = try self.unify(instantiated_backing_var, node_backing_var);
-
-//     // Step 4: Handle the unification result
-//     switch (result) {
-//         .ok => {
-//             // Unification succeeded - the constructor is valid for this nominal type
-//             // Now instantiate the full nominal type using the same rigid variable map
-//             // so it gets the same type substitutions as the backing type
-//             const instantiated_qualified_var = try self.instantiateVar(
-//                 real_nominal_var,
-//                 &self.anonymous_rigid_var_subs,
-//                 .{ .explicit = node_region },
-//             );
-
-//             // Assign the inferred concrete type to the expression variable
-//             // After this, `node_var` will resolve to something like `Maybe(Num(_size))`
-//             try self.types.setVarRedirect(node_var, instantiated_qualified_var);
-//         },
-//         .problem => |problem_idx| {
-//             // Unification failed - the constructor is incompatible with the nominal type
-//             // Set a specific error message based on the backing type kind
-//             switch (node_backing_type) {
-//                 .tag => {
-//                     // Constructor doesn't exist or has wrong arity/types
-//                     self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-//                 },
-//                 else => {
-//                     // TODO: Add specific error messages for records, tuples, etc.
-//                 },
-//             }
-
-//             // Mark the entire expression as having a type error
-//             try self.types.setVarContent(node_var, .err);
-//         },
-//     }
-// }
-
-// // match //
-
-// /// Check the types for an if-else expr
-// fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     // Check the match's condition
-//     var does_fx = try self.checkExpr(match.cond);
-//     const cond_var = ModuleEnv.varFrom(match.cond);
-
-//     // Bail if we somehow have 0 branches
-//     // TODO: Should this be an error? Here or in Can?
-//     if (match.branches.span.len == 0) return does_fx;
-
-//     // Get slice of branches
-//     const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
-
-//     // Manually check the 1st branch
-//     // The type of the branch's body becomes the var other branch bodies must unify
-//     // against.
-//     const first_branch_idx = branch_idxs[0];
-//     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
-
-//     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
-
-//     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
-//         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-//         try self.checkPattern(branch_ptrn.pattern);
-//         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-
-//         const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
-//         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
-//             .match_expr = expr_idx,
-//             .num_branches = @intCast(match.branches.span.len),
-//             .problem_branch_index = 0,
-//             .num_patterns = @intCast(first_branch_ptrn_idxs.len),
-//             .problem_pattern_index = @intCast(cur_ptrn_index),
-//         } });
-//     }
-
-//     // Check the first branch's value, then use that at the branch_var
-//     does_fx = try self.checkExpr(first_branch.value) or does_fx;
-//     const branch_var = ModuleEnv.varFrom(first_branch.value);
-
-//     // Then iterate over the rest of the branches
-//     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
-//         const branch = self.cir.store.getMatchBranch(branch_idx);
-
-//         // First, check the patterns of this branch
-//         const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
-//         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
-//             // Check the pattern's sub types
-//             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-//             try self.checkPattern(branch_ptrn.pattern);
-
-//             // Check the pattern against the cond
-//             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-//             const ptrn_result = try self.unify(cond_var, branch_ptrn_var);
-//             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
-//                 .match_expr = expr_idx,
-//                 .num_branches = @intCast(match.branches.span.len),
-//                 .problem_branch_index = @intCast(branch_cur_index),
-//                 .num_patterns = @intCast(branch_ptrn_idxs.len),
-//                 .problem_pattern_index = @intCast(cur_ptrn_index),
-//             } });
-//         }
-
-//         // Then, check the body
-//         does_fx = try self.checkExpr(branch.value) or does_fx;
-//         const branch_result = try self.unify(branch_var, ModuleEnv.varFrom(branch.value));
-//         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
-//             .match_expr = expr_idx,
-//             .num_branches = @intCast(match.branches.span.len),
-//             .problem_branch_index = @intCast(branch_cur_index),
-//         } });
-
-//         if (!branch_result.isOk()) {
-//             // If there was a body mismatch, do not check other branches to stop
-//             // cascading errors. But still check each other branch's sub types
-//             for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
-//                 const other_branch = self.cir.store.getMatchBranch(other_branch_idx);
-
-//                 // Still check the other patterns
-//                 const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
-//                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
-//                     // Check the pattern's sub types
-//                     const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-//                     try self.checkPattern(other_branch_ptrn.pattern);
-
-//                     // Check the pattern against the cond
-//                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-//                     const ptrn_result = try self.unify(cond_var, other_branch_ptrn_var);
-//                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
-//                         .match_expr = expr_idx,
-//                         .num_branches = @intCast(match.branches.span.len),
-//                         .problem_branch_index = @intCast(other_branch_cur_index),
-//                         .num_patterns = @intCast(other_branch_ptrn_idxs.len),
-//                         .problem_pattern_index = @intCast(other_cur_ptrn_index),
-//                     } });
-//                 }
-
-//                 // Then check the other branch's exprs
-//                 does_fx = try self.checkExpr(other_branch.value) or does_fx;
-//                 try self.types.setVarContent(ModuleEnv.varFrom(other_branch.value), .err);
-//             }
-
-//             // Then stop type checking for this branch
-//             break;
-//         }
-//     }
 
 //     return does_fx;
 // }
