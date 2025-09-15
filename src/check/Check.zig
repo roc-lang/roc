@@ -483,7 +483,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     const rank = types_mod.Rank.top_level;
     std.debug.assert(rank == self.var_pool.current_rank);
 
-    _ = try self.checkExprNew(expr_idx, rank, .no_expectation);
+    _ = try self.checkExpr(expr_idx, rank, .no_expectation);
 
     // Now that we are existing the scope, we must generalize then pop this rank
     try self.generalizer.generalize(&self.var_pool, rank);
@@ -507,7 +507,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const def = self.cir.store.getDef(def_idx);
 
     // Check the pattern
-    try self.checkPatternNew(def.pattern, rank, .no_expectation);
+    try self.checkPattern(def.pattern, rank, .no_expectation);
 
     // Get the defs var slot
     const def_var = ModuleEnv.varFrom(def_idx);
@@ -520,11 +520,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
         const anno_var = ModuleEnv.varFrom(annotation.type_anno);
 
-        _ = try self.checkExprNew(def.expr, rank, .{
+        _ = try self.checkExpr(def.expr, rank, .{
             .expected = .{ .var_ = anno_var, .from_annotation = true },
         });
     } else {
-        _ = try self.checkExprNew(def.expr, rank, .no_expectation);
+        _ = try self.checkExpr(def.expr, rank, .no_expectation);
     }
 
     // Unify the def with its expression
@@ -1573,7 +1573,7 @@ pub const Expected = union(enum) {
     expected: struct { var_: Var, from_annotation: bool },
 };
 
-fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!bool {
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1596,7 +1596,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             var did_err = false;
             for (segment_expr_idx_slice) |seg_expr_idx| {
                 // Check the segment
-                does_fx = try self.checkExprNew(seg_expr_idx, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(seg_expr_idx, rank, .no_expectation) or does_fx;
 
                 // Check if it errored
                 const seg_var = ModuleEnv.varFrom(seg_expr_idx);
@@ -1722,13 +1722,13 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 // constrain the rest of the list
 
                 // Check the first elem
-                does_fx = try self.checkExprNew(elems[0], rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(elems[0], rank, .no_expectation) or does_fx;
 
                 // Iterate over the remaining elements
                 const elem_var = ModuleEnv.varFrom(elems[0]);
                 var last_elem_expr_idx = elems[0];
                 for (elems[1..], 1..) |elem_expr_idx, i| {
-                    does_fx = try self.checkExprNew(elem_expr_idx, rank, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(elem_expr_idx, rank, .no_expectation) or does_fx;
                     const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
 
                     // Unify each element's var with the list's elem var
@@ -1743,7 +1743,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            does_fx = try self.checkExprNew(remaining_elem_expr_idx, rank, .no_expectation) or does_fx;
+                            does_fx = try self.checkExpr(remaining_elem_expr_idx, rank, .no_expectation) or does_fx;
                         }
 
                         // Break to avoid cascading errors
@@ -1761,7 +1761,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             // Check tuple elements
             const elems_slice = self.cir.store.exprSlice(tuple.elems);
             for (elems_slice) |single_elem_expr_idx| {
-                does_fx = try self.checkExprNew(single_elem_expr_idx, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(single_elem_expr_idx, rank, .no_expectation) or does_fx;
                 try self.scratch_vars.append(self.gpa, ModuleEnv.varFrom(single_elem_expr_idx));
             }
 
@@ -1786,7 +1786,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 const field = self.cir.store.getRecordField(field_idx);
 
                 // Check the field value expression
-                does_fx = try self.checkExprNew(field.value, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(field.value, rank, .no_expectation) or does_fx;
 
                 // Append it to the scratch records array
                 try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
@@ -1802,7 +1802,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
 
             // Check if we have an ext
             if (e.ext) |ext_expr| {
-                does_fx = try self.checkExprNew(ext_expr, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(ext_expr, rank, .no_expectation) or does_fx;
                 try self.updateVar(expr_var, .{ .structure = .{ .record = .{
                     .ext = ModuleEnv.varFrom(ext_expr),
                     .fields = record_fields_range,
@@ -1825,7 +1825,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             // Process each tag arg
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
             for (arg_expr_idx_slice) |arg_expr_idx| {
-                does_fx = try self.checkExprNew(arg_expr_idx, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(arg_expr_idx, rank, .no_expectation) or does_fx;
             }
 
             // Create the type
@@ -1841,7 +1841,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
         // nominal //
         .e_nominal => |nominal| {
             // First, check the type inside the expr
-            does_fx = try self.checkExprNew(nominal.backing_expr, rank, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
             // Then, we need an instance of the nominal type being refereneced
@@ -1928,7 +1928,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
                         // Check the pattern
-                        try self.checkPatternNew(decl_stmt.pattern, next_rank, .no_expectation);
+                        try self.checkPattern(decl_stmt.pattern, next_rank, .no_expectation);
                         const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
                         // Check the annotation, if it exists
@@ -1944,17 +1944,17 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                                 break :blk Expected.no_expectation;
                             }
                         };
-                        does_fx = try self.checkExprNew(decl_stmt.expr, next_rank, check_mode) or does_fx;
+                        does_fx = try self.checkExpr(decl_stmt.expr, next_rank, check_mode) or does_fx;
                         const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
 
                         // Unify the pattern with the expression
                         _ = try self.unify(decl_pattern_var, decl_expr_var, next_rank);
                     },
                     .s_reassign => |reassign| {
-                        does_fx = try self.checkExprNew(reassign.expr, next_rank, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(reassign.expr, next_rank, .no_expectation) or does_fx;
                     },
                     .s_expr => |expr_stmt| {
-                        does_fx = try self.checkExprNew(expr_stmt.expr, next_rank, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(expr_stmt.expr, next_rank, .no_expectation) or does_fx;
                     },
                     else => {
                         // TODO
@@ -1963,7 +1963,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             }
 
             // Check the final expression
-            does_fx = try self.checkExprNew(block.final_expr, next_rank, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(block.final_expr, next_rank, .no_expectation) or does_fx;
 
             // Link the root expr with the final expr
             try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(block.final_expr));
@@ -2024,7 +2024,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             // all the pattern types are inferred
             const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
             for (arg_pattern_idxs) |pattern_idx| {
-                try self.checkPatternNew(pattern_idx, next_rank, .no_expectation);
+                try self.checkPattern(pattern_idx, next_rank, .no_expectation);
             }
 
             // Now, check if we have an expected function to validate against
@@ -2103,11 +2103,11 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
             if (mb_expected_func) |expected_func| {
-                does_fx = try self.checkExprNew(lambda.body, next_rank, .{
+                does_fx = try self.checkExpr(lambda.body, next_rank, .{
                     .expected = .{ .var_ = expected_func.ret, .from_annotation = is_expected_from_anno },
                 }) or does_fx;
             } else {
-                does_fx = try self.checkExprNew(lambda.body, next_rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(lambda.body, next_rank, .no_expectation) or does_fx;
             }
             const body_var = ModuleEnv.varFrom(lambda.body);
 
@@ -2130,7 +2130,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             try self.generalizer.generalize(&self.var_pool, next_rank);
         },
         .e_closure => |closure| {
-            does_fx = try self.checkExprNew(closure.lambda_idx, rank, expected) or does_fx;
+            does_fx = try self.checkExpr(closure.lambda_idx, rank, expected) or does_fx;
             _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
         },
         // function calling //
@@ -2139,14 +2139,14 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 .apply => blk: {
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
-                    does_fx = try self.checkExprNew(call.func, rank, .no_expectation) or does_fx;
+                    does_fx = try self.checkExpr(call.func, rank, .no_expectation) or does_fx;
                     const func_var = ModuleEnv.varFrom(call.func);
 
                     // Second, check the arguments being called
                     // It could be effectful, e.g. `fn(mk_arg!())`
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
-                        does_fx = try self.checkExprNew(call_arg_idx, rank, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(call_arg_idx, rank, .no_expectation) or does_fx;
                     }
 
                     // From the base function type, extract the actual function  info
@@ -2250,7 +2250,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                             // Check the function's arguments against the actual
                             // called arguments, unifying each one
                             for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
-                                does_fx = try self.checkExprNew(call_expr_idx, rank, .no_expectation) or does_fx;
+                                does_fx = try self.checkExpr(call_expr_idx, rank, .no_expectation) or does_fx;
 
                                 const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), rank);
                                 if (unify_result.isProblem()) {
@@ -2358,7 +2358,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
 // pattern //
 
 /// Check the types for the provided pattern
-fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!void {
+fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2368,7 +2368,12 @@ fn checkPatternNew(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Ra
 
     switch (pattern) {
         .assign => |_| {
-            // In the case of an assigned variable, set it to be a flex var
+            // In the case of an assigned variable, set it to be a flex var initially.
+            // This will be refined based on how it's used.
+            try self.updateVar(pattern_var, .{ .flex_var = null }, rank);
+        },
+        .underscore => |_| {
+            // Underscore can be anything
             try self.updateVar(pattern_var, .{ .flex_var = null }, rank);
         },
         else => {
@@ -2412,14 +2417,14 @@ fn checkIfElseExpr(
     const first_branch = self.cir.store.getIfBranch(first_branch_idx);
 
     // Check the condition of the 1st branch
-    var does_fx = try self.checkExprNew(first_branch.cond, rank, .no_expectation);
+    var does_fx = try self.checkExpr(first_branch.cond, rank, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(rank, expr_region);
     const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
     // Then we check the 1st branch's body
-    does_fx = try self.checkExprNew(first_branch.body, rank, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(first_branch.body, rank, .no_expectation) or does_fx;
 
     // The 1st branch's body is the type all other branches must match
     const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
@@ -2434,14 +2439,14 @@ fn checkIfElseExpr(
         const branch = self.cir.store.getIfBranch(branch_idx);
 
         // Check the branches condition
-        does_fx = try self.checkExprNew(branch.cond, rank, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.cond, rank, .no_expectation) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(rank, expr_region);
         const cond_result = try self.unify(branch_bool_var, cond_var, rank);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
         // Check the branch body
-        does_fx = try self.checkExprNew(branch.body, rank, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.body, rank, .no_expectation) or does_fx;
         const body_var: Var = ModuleEnv.varFrom(branch.body);
         const body_result = try self.unify(branch_var, body_var, rank);
         self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
@@ -2456,14 +2461,14 @@ fn checkIfElseExpr(
             for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
                 const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
 
-                does_fx = try self.checkExprNew(remaining_branch.cond, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(remaining_branch.cond, rank, .no_expectation) or does_fx;
                 const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                 const fresh_bool = try self.freshBool(rank, expr_region);
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, rank);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
-                does_fx = try self.checkExprNew(remaining_branch.body, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(remaining_branch.body, rank, .no_expectation) or does_fx;
                 try self.types.setVarContent(ModuleEnv.varFrom(remaining_branch.body), .err);
             }
 
@@ -2475,7 +2480,7 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExprNew(if_.final_else, rank, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(if_.final_else, rank, .no_expectation) or does_fx;
     const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
     const final_else_result = try self.unify(branch_var, final_else_var, rank);
     self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
@@ -2500,7 +2505,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
     defer trace.end();
 
     // Check the match's condition
-    var does_fx = try self.checkExprNew(match.cond, rank, .no_expectation);
+    var does_fx = try self.checkExpr(match.cond, rank, .no_expectation);
     const cond_var = ModuleEnv.varFrom(match.cond);
 
     // Assert we have at least 1 branch
@@ -2519,7 +2524,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
 
     for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.checkPatternNew(branch_ptrn.pattern, rank, .no_expectation);
+        try self.checkPattern(branch_ptrn.pattern, rank, .no_expectation);
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = try self.unify(cond_var, branch_ptrn_var, rank);
@@ -2529,7 +2534,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
     }
 
     // Check the first branch's value, then use that at the branch_var
-    does_fx = try self.checkExprNew(first_branch.value, rank, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(first_branch.value, rank, .no_expectation) or does_fx;
     const branch_var = ModuleEnv.varFrom(first_branch.value);
 
     // Then iterate over the rest of the branches
@@ -2541,7 +2546,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPatternNew(branch_ptrn.pattern, rank, .no_expectation);
+            try self.checkPattern(branch_ptrn.pattern, rank, .no_expectation);
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -2556,7 +2561,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
         }
 
         // Then, check the body
-        does_fx = try self.checkExprNew(branch.value, rank, .no_expectation) or does_fx;
+        does_fx = try self.checkExpr(branch.value, rank, .no_expectation) or does_fx;
         const branch_result = try self.unify(branch_var, ModuleEnv.varFrom(branch.value), rank);
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
@@ -2575,7 +2580,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
                     const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                    try self.checkPatternNew(other_branch_ptrn.pattern, rank, .no_expectation);
+                    try self.checkPattern(other_branch_ptrn.pattern, rank, .no_expectation);
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
@@ -2590,7 +2595,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
                 }
 
                 // Then check the other branch's exprs
-                does_fx = try self.checkExprNew(other_branch.value, rank, .no_expectation) or does_fx;
+                does_fx = try self.checkExpr(other_branch.value, rank, .no_expectation) or does_fx;
                 try self.types.setVarContent(ModuleEnv.varFrom(other_branch.value), .err);
             }
 
