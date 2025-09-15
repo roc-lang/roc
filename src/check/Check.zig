@@ -2011,9 +2011,6 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 }
             };
 
-            // Check the argument patterns
-            const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
-
             // Enter the next rank
             try self.var_pool.pushRank();
             defer self.var_pool.popRank();
@@ -2021,30 +2018,88 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             const next_rank = rank.next();
             std.debug.assert(next_rank == self.var_pool.current_rank);
 
-            // Now, check if the expected function has the the same number of
-            // arguments as  what the function was actually called with
+            // Check the argument patterns
+            // This must happen *before* checking against the expected type so
+            // all the pattern types are inferred
+            const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
+            for (arg_pattern_idxs) |pattern_idx| {
+                try self.checkPatternNew(pattern_idx, next_rank, .no_expectation);
+            }
+
+            // Now, check if we have an expected function to validate against
             if (mb_expected_func) |expected_func| {
                 const expected_func_args = self.types.sliceVars(expected_func.args);
+
+                // Next, check if the arguments arities match
                 if (expected_func_args.len == arg_pattern_idxs.len) {
                     // If so, check each argument, passing in the expected type
-                    for (expected_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                        try self.checkPatternNew(pattern_idx, next_rank, .{
-                            .expected = .{ .var_ = expected_arg_var, .from_annotation = is_expected_from_anno },
-                        });
-                    }
-                } else {
-                    // Otherwise, check the function arguments like normal
-                    for (arg_pattern_idxs) |arg_pattern_idx| {
-                        try self.checkPatternNew(arg_pattern_idx, next_rank, .no_expectation);
+
+                    // First, find all the rigid variables in a the function's type
+                    // and unify the matching corrosponding lambda arguments together.
+                    for (expected_func_args, 0..) |expected_arg_1, i| {
+                        const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+
+                        // The expected type is an annotation and as such,
+                        // should never contain a flex var. If it did, that
+                        // would indicate that the annotation is malformed
+                        std.debug.assert(expected_resolved_1.desc.content != .flex_var);
+
+                        // Skip any concrete arguments
+                        if (expected_resolved_1.desc.content != .rigid_var) {
+                            continue;
+                        }
+
+                        // Look for other arguments with the same type variable
+                        for (expected_func_args[i + 1 ..], i + 1..) |expected_arg_2, j| for_blk: {
+                            const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
+                            if (expected_resolved_1.var_ == expected_resolved_2.var_) {
+                                // These two argument indexes in the called *function's*
+                                // type have the same rigid variable! So, we unify
+                                // the corrosponding *lambda args*
+
+                                const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
+                                const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
+
+                                const unify_result = try self.unify(arg_1, arg_2, rank);
+                                if (unify_result.isProblem()) {
+                                    // Use the new error detail for bound type variable incompatibility
+                                    self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                        .incompatible_fn_args_bound_var = .{
+                                            .fn_name = null, // TODO: Use function name?
+                                            .first_arg_var = arg_1,
+                                            .second_arg_var = arg_2,
+                                            .first_arg_index = @intCast(i),
+                                            .second_arg_index = @intCast(j),
+                                            .num_args = @intCast(arg_pattern_idxs.len),
+                                        },
+                                    });
+
+                                    // Stop execution
+                                    _ = try self.updateVar(expr_var, .err, rank);
+                                    break :for_blk;
+                                }
+                            }
+                        }
                     }
 
-                    // The arity mismatch error will be caught by the regular
+                    // Then, lastly, we unify the annotation types against the
+                    // actual type
+                    for (expected_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
+                        std.debug.print("UNIFY ARGS  {} {}\n", .{
+                            self.types.resolveVar(expected_arg_var).desc.content,
+                            self.types.resolveVar(ModuleEnv.varFrom(pattern_idx)).desc.content,
+                        });
+
+                        if (is_expected_from_anno) {
+                            _ = try self.unifyWithAnnotation(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
+                        } else {
+                            _ = try self.unify(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
+                        }
+                    }
+                } else {
+                    // This means the expected type and teh actual lambda have
+                    // an arity mismatch. This will be caught by the regular
                     // expectation checking code at the bottom of this function
-                }
-            } else {
-                // Otherwise, check the function arguments like normal
-                for (arg_pattern_idxs) |arg_pattern_idx| {
-                    try self.checkPatternNew(arg_pattern_idx, next_rank, .no_expectation);
                 }
             }
             const arg_vars: []Var = @ptrCast(arg_pattern_idxs);
@@ -2166,7 +2221,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                                 // Look for other arguments with the same type variable
                                 for (func_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
                                     const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
-                                    if (expected_resolved_2.var_ == expected_resolved_2.var_) {
+                                    if (expected_resolved_1.var_ == expected_resolved_2.var_) {
                                         // These two argument indexes in the called *function's*
                                         // type have the same rigid variable! So, we unify
                                         // the corrosponding *call args*
@@ -2188,7 +2243,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                                                 },
                                             });
 
-                                            // Step execution
+                                            // Stop execution
                                             _ = try self.updateVar(expr_var, .err, rank);
                                             break :blk;
                                         }
@@ -2213,7 +2268,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                                         },
                                     });
 
-                                    // Step execution
+                                    // Stop execution
                                     _ = try self.updateVar(expr_var, .err, rank);
                                     break :blk;
                                 }
