@@ -103,7 +103,7 @@ pub const Instantiate = struct {
                 } else {
                     // Create a new flex variable for this rigid variable name
                     const fresh_var = try self.store.freshFromContentWithRank(
-                        Content{ .flex_var = ident },
+                        Content{ .flex_var = null },
                         ctx.current_rank,
                     );
                     try ctx.rigid_var_subs.append(self.store.gpa, .{ .ident = ident_bytes, .var_ = fresh_var });

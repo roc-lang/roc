@@ -202,7 +202,7 @@ test "check type - def - func with annotation 2" {
     try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
 }
 
-// // calling functions
+// calling functions
 
 test "check type - def - monomorphic id" {
     const source =
@@ -293,8 +293,6 @@ test "check type - polymorphic function function param should be constrained" {
     ;
     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
 }
-
-// full polymorphic
 
 // type aliases //
 
@@ -455,6 +453,18 @@ test "check type - nominal recursive type wrong type" {
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+}
+
+test "check type - nominal w/ polymorphic function" {
+    const source =
+        \\module []
+        \\
+        \\Pair(a) := [Pair(a, a)]
+        \\
+        \\mkPairInvalid : a, b -> Pair(a)
+        \\mkPairInvalid = |x, y| Pair.Pair(x, y)
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
 }
 
 // if-else
