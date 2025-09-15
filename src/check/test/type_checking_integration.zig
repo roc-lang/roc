@@ -464,7 +464,7 @@ test "check type - nominal w/ polymorphic function" {
         \\mkPairInvalid : a, b -> Pair(a)
         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
 }
 
 // if-else

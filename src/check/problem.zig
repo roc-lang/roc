@@ -1259,7 +1259,7 @@ pub const ReportBuilder = struct {
             try self.snapshot_writer.writeTag(expected_tag, types.expected_snapshot);
             const expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
 
-            try report.document.addText("But it should be:");
+            try report.document.addText("But the nominal type needs it to be:");
             try report.document.addLineBreak();
             try report.document.addText("    ");
             try report.document.addAnnotated(expected_tag_str, .type_variable);
@@ -1268,7 +1268,7 @@ pub const ReportBuilder = struct {
             try self.snapshot_writer.write(types.expected_snapshot);
             const expected_type = try report.addOwnedString(self.snapshot_writer.get());
 
-            try report.document.addText("But it should be one of:");
+            try report.document.addText("But the nominal type needs it to one of:");
             try report.document.addLineBreak();
             try report.document.addText("    ");
             try report.document.addAnnotated(expected_type, .type_variable);
