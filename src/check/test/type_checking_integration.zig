@@ -536,6 +536,47 @@ test "check type - if else - different branch types 3" {
     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
 }
 
+// match
+
+test "check type - match" {
+    const source =
+        \\module []
+        \\
+        \\x =
+        \\  match True {
+        \\    True => "true"
+        \\    False => "false"
+        \\  }
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Str");
+}
+
+test "check type - match - diff cond types 1" {
+    const source =
+        \\module []
+        \\
+        \\x =
+        \\  match "hello" {
+        \\    True => "true"
+        \\    False => "false"
+        \\  }
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "check type - match - diff branch types" {
+    const source =
+        \\module []
+        \\
+        \\x =
+        \\  match True {
+        \\    True => "true"
+        \\    False => 100
+        \\  }
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH BRANCHES");
+}
+
 // helpers - expr //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.

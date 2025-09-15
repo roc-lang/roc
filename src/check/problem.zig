@@ -96,6 +96,7 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
     incompatible_if_branches: IncompatibleIfBranches,
+    incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
@@ -142,6 +143,11 @@ pub const IncompatibleIfBranches = struct {
     last_if_branch: CIR.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for when match expression type is incompatibl from the patterns
+pub const IncompatibleMatchCondPattern = struct {
+    match_expr: CIR.Expr.Idx,
 };
 
 /// Problem data for when match patterns have have incompatible types
@@ -254,6 +260,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_if_branches => |data| {
                             return self.buildIncompatibleIfBranches(mismatch.types, data);
+                        },
+                        .incompatible_match_cond_pattern => |data| {
+                            return self.buildIncompatibleMatchCondPattern(mismatch.types, data);
                         },
                         .incompatible_match_patterns => |data| {
                             return self.buildIncompatibleMatchPatterns(mismatch.types, data);
@@ -427,11 +436,11 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index);
-        const expected_type_ordinal = try report.addOwnedString(self.snapshot_writer.get());
+        const expected_type_ordinal = try report.addOwnedString(self.bytes_buf.items);
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index + 1);
-        const actual_type_ordinal = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type_ordinal = try report.addOwnedString(self.bytes_buf.items);
 
         // Add description
         if (data.list_length == 2) {
@@ -646,7 +655,7 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
-        const branch_ordinal = try report.addOwnedString(self.snapshot_writer.get());
+        const branch_ordinal = try report.addOwnedString(self.bytes_buf.items);
 
         // Add title
         if (is_only_if_else) {
@@ -764,6 +773,100 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for the pattern in a match is a different type than the
+    /// match condition expr. e.g. match True { "hello" => ... }
+    fn buildIncompatibleMatchCondPattern(
+        self: *Self,
+        types: TypePair,
+        data: IncompatibleMatchCondPattern,
+    ) !Report {
+        var report = Report.init(self.gpa, "INCOMPATIBLE MATCH PATTERNS", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned strings
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+
+        self.snapshot_writer.resetContext();
+        try report.document.addText("The first pattern in this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" is incompatible:");
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const match_expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const overall_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            match_expr_region.start.offset,
+            match_expr_region.end.offset,
+        ) catch return report;
+
+        // Get region info for invalid branch
+        const invalid_var_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const invalid_var_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            invalid_var_region.start.offset,
+            invalid_var_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, overall_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = invalid_var_region_info.start_line_idx + 1,
+                .start_column = invalid_var_region_info.start_col_idx + 1,
+                .end_line = invalid_var_region_info.end_line_idx + 1,
+                .end_column = invalid_var_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the invalid branch
+        self.snapshot_writer.resetContext();
+        try report.document.addText("The first pattern has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the type of the other branches
+        try report.document.addText("But the expression right after ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("These two types can't never match!");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
     /// Build a report for incompatible match branches
     fn buildIncompatibleMatchPatterns(
         self: *Self,
@@ -784,11 +887,11 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
-        const branch_ord = try report.addOwnedString(self.snapshot_writer.get());
+        const branch_ord = try report.addOwnedString(self.bytes_buf.items);
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_pattern_index + 1);
-        const pattern_ord = try report.addOwnedString(self.snapshot_writer.get());
+        const pattern_ord = try report.addOwnedString(self.bytes_buf.items);
 
         // Add description
         if (data.num_patterns > 1) {
@@ -909,7 +1012,7 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
-        const branch_ord = try report.addOwnedString(self.snapshot_writer.get());
+        const branch_ord = try report.addOwnedString(self.bytes_buf.items);
 
         // Add description
         if (data.num_branches == 2) {
@@ -1211,7 +1314,7 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.incompatible_arg_index + 1);
-        const arg_index = try report.addOwnedString(self.snapshot_writer.get());
+        const arg_index = try report.addOwnedString(self.bytes_buf.items);
 
         // Extract only the argument types from the function snapshots
         const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
@@ -1276,11 +1379,11 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.first_arg_index + 1);
-        const first_arg_index = try report.addOwnedString(self.snapshot_writer.get());
+        const first_arg_index = try report.addOwnedString(self.bytes_buf.items);
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.second_arg_index + 1);
-        const second_arg_index = try report.addOwnedString(self.snapshot_writer.get());
+        const second_arg_index = try report.addOwnedString(self.bytes_buf.items);
 
         // The types from unification already have the correct snapshots
         // expected = first argument, actual = second argument
