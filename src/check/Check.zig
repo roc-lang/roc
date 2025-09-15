@@ -1857,7 +1857,7 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                 const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
 
                 // Now we unify what the user wrote with the backing type of the nominal vas
-                // E.g. ConList.Cons(...) <-> [Cons(a, ConstList), Nil]
+                // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
                 //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
                 const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
 
@@ -1899,7 +1899,8 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
-            if (resolved_pat.rank == Rank.generalized) {
+            // We never instantiate rigid variables
+            if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid_var) {
                 const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
                 _ = try self.types.setVarRedirect(expr_var, instantiated);
             } else {
@@ -2085,11 +2086,6 @@ fn checkExprNew(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expec
                     // Then, lastly, we unify the annotation types against the
                     // actual type
                     for (expected_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                        std.debug.print("UNIFY ARGS  {} {}\n", .{
-                            self.types.resolveVar(expected_arg_var).desc.content,
-                            self.types.resolveVar(ModuleEnv.varFrom(pattern_idx)).desc.content,
-                        });
-
                         if (is_expected_from_anno) {
                             _ = try self.unifyWithAnnotation(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
                         } else {

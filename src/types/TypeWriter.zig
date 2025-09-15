@@ -262,6 +262,7 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                 },
                 .rigid_var => |ident_idx| {
                     _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                    // Useful in debugging to see if a var is rigid or not
                     // _ = try self.buf.writer().write("[r]");
                 },
                 .alias => |alias| {
