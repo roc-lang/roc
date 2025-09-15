@@ -103,4 +103,5 @@ test "collections tests" {
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
+    std.testing.refAllDecls(@import("Literals.zig"));
 }
