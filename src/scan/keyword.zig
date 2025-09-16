@@ -1,22 +1,21 @@
 const std = @import("std");
 
 pub const TokenTag = enum(u8) {
-    // Special tokens - positioned so no-match naturally maps to them
-    ident = 0, // Default for no keyword match
+    ident = 0, // Must be zero so that "no match" on kw check maps to this
 
-    // 2-byte keywords (1-4) - @ctz result + 1
+    // 2-byte keywords (1-4)
     kw_as = 1,
     kw_or = 2,
     kw_if = 3,
     kw_in = 4,
 
-    // 3-byte keywords (5-8) - @ctz result + 5
+    // 3-byte keywords (5-8)
     kw_and = 5,
     kw_use = 6,
     kw_for = 7,
     kw_mod = 8,
 
-    // 4-byte keywords (9-10) - @ctz result + 9
+    // 4-byte keywords (9-10)
     kw_else = 9,
     kw_when = 10,
 
@@ -28,7 +27,7 @@ pub const TokenTag = enum(u8) {
     kw_return = 13,
     kw_expect = 14,
 
-    // 2-byte symbols (20-35) - @ctz result + 20
+    // 2-byte symbols (20-35)
     symbol_assign = 20, // :=
     symbol_eq = 21, // ==
     symbol_gte = 22, // >=

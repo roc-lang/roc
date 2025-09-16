@@ -9,40 +9,7 @@ const ascii_byte_type: [127 - 32]Token.StartsWith = .{
     // DO NOT REORDER THESE! They are carefully ordered to line up with UTF-8 bytes
 
     // We skip the first 32 because they're all either invalid or whitespace.
-    // .invalid, // 0 Null
-    // .invalid, // 1 Start of Header
-    // .invalid, // 2 Start of Text
-    // .invalid, // 3 End of Text
-    // .invalid, // 4 End of Transmission
-    // .invalid, // 5 Enquiry
-    // .invalid, // 6 Acknowledge
-    // .invalid, // 7 Bell
-    // .invalid, // 8 Backspace
-    // .whitespace, // 9 Horizontal Tab
-    // .whitespace, // 10 Line Feed
-    // .invalid, // 11 Vertical Tab
-    // .invalid, // 12 Form Feed
-    // .invalid, // 13 Carriage Return
-    // .invalid, // 14 Shift Out
-    // .invalid, // 15 Shift In
-    // .invalid, // 16 Data Link Escape
-    // .invalid, // 17 Device Control 1
-    // .invalid, // 18 Device Control 2
-    // .invalid, // 19 Device Control 3
-    // .invalid, // 20 Device Control 4
-    // .invalid, // 21 Negative Acknowledge
-    // .invalid, // 22 Synchronize
-    // .invalid, // 23 End of Transmission Block
-    // .invalid, // 24 Cancel
-    // .invalid, // 25 End of Medium
-    // .invalid, // 26 Substitute
-    // .invalid, // 27 Escape
-    // .invalid, // 28 File Separator
-    // .invalid, // 29 Group Separator
-    // .invalid, // 30 Record Separator
-    // .invalid, // 31 Unit Separator
-    // .invalid, // 32 Space
-    .unary, // 33 ! - bang is special bc it's either a prefix unary op, or if it's followed by `=`, an infix binary op.
+    .unary, // 33 ! - the ident handling logic chomps postfix `!` so we only care about prefix here
     .double_quote, // 34 "
     .comment, // 35 #
     .underscore_or_dollar, // 36 $
@@ -54,7 +21,7 @@ const ascii_byte_type: [127 - 32]Token.StartsWith = .{
     .infix, // 42 *
     .infix, // 43 +
     .comma, // 44 ,
-    .minus, // 45 - we start out assuming minus is a digit. however, if it's not followed by another digit, we reclassify.
+    .minus, // 45 - minus looks ahead to see if the next token is a digit before deciding what to do
     .infix, // 46 . (note: we assume infix, and in error cases may reinterpret as prefix, e.g. `x * .5` or `(.foo)`)
     .infix, // 47 /
     .digit, // 48 0
@@ -203,9 +170,258 @@ const masks_by_starts_with = .{
     .non_ws, // .invalid
 };
 
-pub const Token = struct {
-    starts_with: StartsWith,
-    region: Region,
+pub const Token = enum {
+    dollar, // '$' outside a string literal - parser will apply this to an ident token.
+    interpolation, // "${" inside a string literal
+    minus,
+
+    /// So we know this byte isn't whitespace. But what is it?
+    /// payload should be a pointer to 0
+    pub fn fromNonWhitespaceByte(src: roc_src.Bytes, src_idx: usize, in_str_literal: bool, payload: *u32) struct {
+        token: Token,
+        len: u32,
+    } {
+        const current = src[src_idx];
+        starts_with: switch (StartsWith.fromUtf8Byte(current)) {
+            .dollar => {
+                std.debug.assert(current == '$'); // The following calculation assumes this.
+
+                // Begin interpolation iff we're in a string literal and the next byte is '{'
+                const interpolate = '{' == src[src_idx + @intFromBool(in_str_literal)];
+                const len = 1 + @intFromBool(interpolate); // 2 bytes iff we chomped "${"
+                const tok = if (interpolate) .interpolation else .dollar;
+
+                return .{ .len = len, .token = tok };
+            },
+            .digit => {
+                // Chomp leading minus, if it's there.
+                var is_negated = current == '-';
+                var digit_idx = src_idx + @intFromBool(is_negated);
+                var digit = src[digit_idx];
+                const len = @panic("TODO get length from ident mask");
+
+                // If we're negated and have an ident-or-num length of 0,
+                // then this is a standalone minus - not part of a literal!
+                if (len < @intFromBool(is_negated)) {
+                    return .{ .len = 1, .token = .minus };
+                }
+
+                const has_decimal_pt = src[len] == '.';
+                const len_after_decimal = @panic("TODO get length from ident mask");
+                var underscores_before_decimal = 0;
+
+                // Custom bases are rare, so use a branch on purpose here
+                // even though this could be branchless. The bet is that they
+                // come up rarely enough that it's better to occasionally
+                // mispredict than to do all this every time.
+                var base = if (digit == 0) blk: {
+                    // Once we're in here, we can certainly
+                    // branchlessly determine the base.
+                    var has_custom_base = digit == '0';
+                    const next = src[digit_idx + 1];
+                    const hex = 4 << @intFromBool(next == 'x');
+                    const oct = 3 << @intFromBool(next == 'o');
+                    const bin = @intFromBool(next == 'b');
+                    const custom_base = hex | oct | bin;
+
+                    if (custom_base == 0) {
+                        // This wasn't one of the custom bases we support, so report a problem
+                        // and gracefully recover.
+                        if (next >= '0' and next <= '9') {
+                            // TODO emit a WARNING to delete leading zeros bc they do nothing.
+                            digit_idx += 1;
+                        } else {
+                            // TODO push an ERROR - this isn't one of the custom bases we support.
+                            // TODO special-case capitalized versions, where we make it a warning.
+                            digit_idx += 2;
+
+                            // TODO loop through and chomp remaining digits, then return malformed.
+                            return null;
+                        }
+                    } else {
+                        digit_idx += 2;
+                    }
+
+                    // Advance past e.g. "0x"
+                    digit_idx += 2;
+
+                    break :blk custom_base;
+                } else 10;
+
+                if (digit == '_') {
+                    // This should only happen if you start your number with "-_"
+                    std.debug.assert(is_negated);
+                    underscores_before_decimal += 1;
+
+                    // TODO warn that starting numbers with underscores is disallowed
+                    // TODO chomp any remaining underscores
+                    // TODO if it turned out to be all underscores, instead err "you can't negate underscore"
+                }
+
+                // Ensure capacity sufficient for the length plus enough
+                // for the highest amount of storage bytes we could need.
+                // (This is probably more than we need, but it's not worth
+                // paying for the calculation when we could just reserve a
+                // couple of extra bytes here and there.)
+                nodes.ensureCapacity(len + len_after_decimal + (2 * @sizeOf(u32)));
+
+                // Now that we've ensured we have enough capacity, we can just
+                // write directly there as needed.
+                const original_literals_len = nodes.len;
+                var dest = nodes.ptr + original_literals_len;
+                const end = digit_idx + len + @intFromBool(has_decimal_pt) + len_after_decimal;
+
+                for (digit_idx..end) |idx| {
+                    const ch = src[idx];
+                    const after_decimal_pt = idx > len;
+
+                    if (after_decimal_pt and (ch == 'e' or ch == 'E')) {
+                        // TODO chomp the parts after `e` and then go back and retroactively
+                        // modify all the digits we've seen so far.
+                        // Basically we want to precompute this so there's no chance of overflow
+                        // or precision loss that could result from doing it after the fact.
+                        // Once we're done, we should break out of the loop early.
+                        @panic("TODO Not yet supported: scientific notation in frac literals!");
+                    }
+
+                    const is_underscore = ch == '_';
+                    const is_not_underscore = !is_underscore;
+
+                    base = if (after_decimal_pt) 10 else base;
+
+                    // Our previous bitmasking should have ensured that we're only
+                    // iterating through valid identifier chars here, so ASCII alphanumeric
+                    // or UTF-8 multibyte (over 127).
+                    std.debug.assert((ch == '_' or ch == '.' or ch >= '0' or ch > 127) and
+                        ((ch <= '9') or (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z'))
+                    );
+
+                    // Normalize ASCII '0' as 0 so all the invalid numbers are above 'z'.
+                    // This way, all we have to do to check if it was invalid is to check
+                    // (ch > base) and that will catch not only invalid letters (e.g.
+                    // 'a' if we're base-10 or 'z' for all supported bases) but also things
+                    // like UTF-8 multibyte sequences, which our identifier bitmask accepts
+                    // but which aren't valid in number literals.
+                    var num = ch -% '0';
+                    num -= if (num >= 'A' - '0') 'A' - '0' else 0;
+                    num -= if (num >= 'a' - 'A' - '0') 'a' - 'A' - '0' else 0;
+
+                    // TODO turn digits from base into binary for storage
+                    // TODO as we're going, write the binary stuff into bytes slice,
+                    //      and then just copy it back out and reset their len to inline if we can.
+                    //      This way we don't need to know up front how many underscores there are.
+                    //
+
+                    // If this is outside our range (e.g. 'a' when we're base-10), error.
+                    if (num > base and is_not_underscore) {
+                        // TODO report an error and early return.
+                    }
+
+                    const is_decimal_pt_next = idx == len - 1;
+                    const advance_amount =
+                        // Don't advance the destination or length if this was an underscore,
+                        // because we want to overwrite that garbage value with the next digit.
+                        @intFromBool(is_not_underscore)
+                        // Also, skip over the decimal point.
+                        + @intFromBool(is_decimal_pt_next);
+
+                    underscores_before_decimal += @intFromBool(is_underscore) & @intFromBool(after_decimal_pt);
+                    dest += advance_amount;
+                }
+
+                const len_before_decimal_pt =
+                        len - underscores_before_decimal - @intFromBool(is_negated);
+                const len_after_decimal_pt =
+                    // dest tells us how much we wrote in total; from that, we can infer
+                    // how many actual bytes we wrote after the decimal point.
+                    @intFromPtr(dest) - nodes.ptr - original_literals_len - len_before_decimal_pt
+                    - @intFromBool(has_decimal_pt);
+
+                if (len_before_decimal_pt + len_after_decimal_pt <= 4) {
+                    std.debug.assert(*payload == 0); // Payload should have been initialized to 0
+
+                    // TODO total len ended up being 4 or less, so copy the bytes
+                    // from the end of the literals into the payload (0-padded).
+                } else {
+                    // TODO make sure appendLenAssumeCapacity is branchless and can handle
+                    // being passed a len of 0!
+                    const idx = nodes.appendLenAssumeCapacity(len_before_decimal_pt);
+                    nodes.appendLenAssumeCapacity(len_after_decimal_pt);
+                }
+
+                return .{ .len = digit_idx - src_idx, .token = tok };
+            },
+            unary, // unary op, e.g. `!` or `-` or `$` (parser converts prefix $ and postfix ! into modifiers on adjacent idents.)
+            infix, // infix binary operator, e.g. `+`, `or`, `and`, etc.
+            single_quote, // Includes both `'` and `''`
+            double_quote, // Includes both `"` and `""`
+            delimiter, // Delimiters have a payload of either +1 (open) or -1 (close)
+            comment, // Includes both doc comments and regular comments
+            comma, // Includes both single commas and double commas (which are just warnings)
+            minus, // Special becasue it can be part of a number, or unary prefix op, or infix binary op, depending on surroundings
+            digit, // 0-9
+            uc, // A-Z
+            lc, // a-z
+            underscore_or_dollar, // _ or $ (this will almost always be followed by either lc or a non-ident char)
+            multibyte_utf8, // Non-ASCII
+            invalid, // an invalid byte, e.g. ASCII 127 ("Delete") or just an operator that Roc doesn't support.
+        }
+
+        ////////////////////// OLD //////////////////////////////////
+
+        // Let's consider 2 bytes because that's actually very helpful!
+        const pair = (@as(u16, @intCast(src[index]))) | (@as(u16, @intCast(src[index + 1])) << 1);
+
+        const mask = @panic("TODO"); // TODO branchlessly get the mask etc.
+        const len = @panic("TODO"); // TODO get the len from the mask.
+
+        switch (mask) {
+            .ident_or_number => {
+                // Small ones we store inline
+                if (len <= 4) {
+                    const found_kw = kw.kw_4b_index(src);
+                } else {}
+            },
+            .symbol => {
+                switch (first_byte) {}
+            },
+            1 => {
+                // length was 1, so this is probably either an ident or symbol
+                // if it's 127+ then that's an error
+                // At 1 long, it can't be an 0x number; must be base-10.
+            },
+            2 => {
+                // It's exactly 2, so let's classify it as either a kw or ident or number.
+                // At 2 long, it can't be an 0x number; must be base-10. Starting with 0 is an error.
+            },
+            3 => {
+                // It's exactly 3, so again let's see if it's a keywword.
+                // Now it actually could be non-base-10.
+            },
+        }
+
+        const binops = .{
+            "as",
+            "or",
+            "if",
+            ":=",
+            "==",
+            "<=",
+            ">=",
+            "=>",
+            "->",
+            "<-",
+            // "else",
+            // "match",
+            // "where",
+            // "use",
+            // "expect",
+            // "return",
+            // "module",
+            // "crash",
+            // "and",
+        };
+    }
 
     pub const StartsWith = enum {
         unary, // unary op, e.g. `!` or `-` or `$` (parser converts prefix $ and postfix ! into modifiers on adjacent idents.)
