@@ -21,7 +21,7 @@ const ascii_byte_type: [127 - 32]Token.StartsWith = .{
     .infix, // 42 *
     .infix, // 43 +
     .comma, // 44 ,
-    .minus, // 45 - minus looks ahead to see if the next token is a digit before deciding what to do
+    .digit, // 45 - we treat minus as a digit and special-case it not being followed by digits
     .infix, // 46 . (note: we assume infix, and in error cases may reinterpret as prefix, e.g. `x * .5` or `(.foo)`)
     .infix, // 47 /
     .digit, // 48 0
@@ -293,8 +293,7 @@ pub const Token = enum {
                     // iterating through valid identifier chars here, so ASCII alphanumeric
                     // or UTF-8 multibyte (over 127).
                     std.debug.assert((ch == '_' or ch == '.' or ch >= '0' or ch > 127) and
-                        ((ch <= '9') or (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z'))
-                    );
+                        ((ch <= '9') or (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z')));
 
                     // Normalize ASCII '0' as 0 so all the invalid numbers are above 'z'.
                     // This way, all we have to do to check if it was invalid is to check
@@ -305,12 +304,6 @@ pub const Token = enum {
                     var num = ch -% '0';
                     num -= if (num >= 'A' - '0') 'A' - '0' else 0;
                     num -= if (num >= 'a' - 'A' - '0') 'a' - 'A' - '0' else 0;
-
-                    // TODO turn digits from base into binary for storage
-                    // TODO as we're going, write the binary stuff into bytes slice,
-                    //      and then just copy it back out and reset their len to inline if we can.
-                    //      This way we don't need to know up front how many underscores there are.
-                    //
 
                     // If this is outside our range (e.g. 'a' when we're base-10), error.
                     if (num > base and is_not_underscore) {
@@ -330,12 +323,11 @@ pub const Token = enum {
                 }
 
                 const len_before_decimal_pt =
-                        len - underscores_before_decimal - @intFromBool(is_negated);
+                    len - underscores_before_decimal - @intFromBool(is_negated);
                 const len_after_decimal_pt =
                     // dest tells us how much we wrote in total; from that, we can infer
                     // how many actual bytes we wrote after the decimal point.
-                    @intFromPtr(dest) - nodes.ptr - original_literals_len - len_before_decimal_pt
-                    - @intFromBool(has_decimal_pt);
+                    @intFromPtr(dest) - nodes.ptr - original_literals_len - len_before_decimal_pt - @intFromBool(has_decimal_pt);
 
                 if (len_before_decimal_pt + len_after_decimal_pt <= 4) {
                     std.debug.assert(*payload == 0); // Payload should have been initialized to 0
@@ -351,20 +343,74 @@ pub const Token = enum {
 
                 return .{ .len = digit_idx - src_idx, .token = tok };
             },
-            unary, // unary op, e.g. `!` or `-` or `$` (parser converts prefix $ and postfix ! into modifiers on adjacent idents.)
-            infix, // infix binary operator, e.g. `+`, `or`, `and`, etc.
-            single_quote, // Includes both `'` and `''`
-            double_quote, // Includes both `"` and `""`
-            delimiter, // Delimiters have a payload of either +1 (open) or -1 (close)
-            comment, // Includes both doc comments and regular comments
-            comma, // Includes both single commas and double commas (which are just warnings)
-            minus, // Special becasue it can be part of a number, or unary prefix op, or infix binary op, depending on surroundings
-            digit, // 0-9
-            uc, // A-Z
-            lc, // a-z
-            underscore_or_dollar, // _ or $ (this will almost always be followed by either lc or a non-ident char)
-            multibyte_utf8, // Non-ASCII
-            invalid, // an invalid byte, e.g. ASCII 127 ("Delete") or just an operator that Roc doesn't support.
+            .bang => {
+                return .{ .len = 1, .token = .bang };
+            },
+            .infix => {
+                return chompSymbol(); // TODO chomp 1 or 2 using lookup tables.
+            },
+            .single_quote => {
+                const next_idx = src_idx + 1;
+                const first_ch = src[next_idx];
+                const is_escaped = first_ch == '\\';
+                const last_idx = next_idx + @intFromBool(is_escaped);
+                const last_ch = src[last_idx];
+
+                if (last == '\'') {
+                    // TODO error - early return too short, either '' or '\'
+                }
+
+                if (src[last_idx + 1] != '\'') {
+                    // TODO report unclosed single-quote literal
+                }
+
+                const is_n = @intFromBool(last_ch == 'n');
+                const is_t = @intFromBool(last_ch == 't');
+                const is_r = @intFromBool(last_ch == 'r');
+
+                if (is_escaped and !(is_n | is_t | is_r)) {
+                    // TODO error unsupported escape
+                }
+
+                const escaped_payload =
+                    // Get the last 3 bits correct
+                    (is_n << 1) // 010 if 'n'
+                    | (is_r << 2) // 100 if 'r'
+                    | @intFromBool(last_ch <= 't') // 101 if 'r', 001 if 't'
+                    | 0b0000_1000; // They all have a 1-bit here.
+
+                payload.* = @intCast(if (is_escaped) escaped_payload else first_ch);
+            },
+            .double_quote => {
+                // TODO find next segment end
+                // TODO ...
+            },
+            .comment => {
+                const next_idx = src_idx + 1;
+                var is_doc_comment = src[next_id] == '#';
+
+                // Doc comments have to be "##" followed by a space.
+                is_doc_comment = src[next_idx + @intFromBool(is_doc_comment)] == ' ';
+
+                // TODO find next newline to end the comment
+                // TODO only write down region, not the contents of the comment
+                // TODO make token be .comment vs .doc_comment based on is_doc_comment
+            },
+            .comma => {
+                return .{ .len = 1, .token = .comma };
+            },
+            .ident => {
+                // TODO determine uc vs lc after dealing with leading underscore.
+                // Note: parser deals with leading '$' (modifies adjacent ident to get $ modifier)
+                // TODO handle leading UTF-8 multibyte
+            },
+            .delimiter => {
+                // TODO handle [, {, (
+            },
+            .invalid => {
+                // TODO handle an invalid byte, e.g. ASCII 127 ("Delete")
+                // or just an operator that Roc doesn't support.
+            },
         }
 
         ////////////////////// OLD //////////////////////////////////
