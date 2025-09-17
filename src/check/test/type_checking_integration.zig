@@ -673,6 +673,62 @@ test "check type - unary minus mismatch" {
     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
 }
 
+// binops
+
+test "check type - binops math" {
+    const source =
+        \\module []
+        \\
+        \\x = 10 + 10u32
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(Int(Unsigned32))");
+}
+
+test "check type - binops ord" {
+    const source =
+        \\module []
+        \\
+        \\x = 10.0f32 > 15
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+}
+
+test "check type - binops and" {
+    const source =
+        \\module []
+        \\
+        \\x = True and False
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+}
+
+test "check type - binops and mismatch" {
+    const source =
+        \\module []
+        \\
+        \\x = "Hello" and False
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+}
+
+test "check type - binops or" {
+    const source =
+        \\module []
+        \\
+        \\x = True or False
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+}
+
+test "check type - binops or mismatch" {
+    const source =
+        \\module []
+        \\
+        \\x = "Hello" or False
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+}
+
 // helpers - expr //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.

@@ -1221,12 +1221,18 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .num_flex => self.merge(vars, vars.b.desc.content),
 
                 // If the variable inside a was flex, then have it become unbound with requirements
-                .int_flex => self.merge(vars, .{ .structure = .{ .num = .{
-                    .int_unbound = b_reqs.int_requirements,
-                } } }),
-                .frac_flex => self.merge(vars, .{ .structure = .{ .num = .{
-                    .frac_unbound = b_reqs.frac_requirements,
-                } } }),
+                .int_flex => {
+                    const int_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = b_reqs.int_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
+                },
+                .frac_flex => {
+                    const frac_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = b_reqs.frac_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                },
 
                 // If the variable was rigid, then the rigid wins
                 .num_rigid => self.merge(vars, vars.a.desc.content),
@@ -1286,12 +1292,18 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .num_flex => self.merge(vars, vars.a.desc.content),
 
                 // If the variable inside a was flex, then have it become unbound with requirements
-                .int_flex => self.merge(vars, .{ .structure = .{ .num = .{
-                    .int_unbound = a_reqs.int_requirements,
-                } } }),
-                .frac_flex => self.merge(vars, .{ .structure = .{ .num = .{
-                    .frac_unbound = a_reqs.frac_requirements,
-                } } }),
+                .int_flex => {
+                    const int_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = a_reqs.int_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
+                },
+                .frac_flex => {
+                    const frac_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = a_reqs.frac_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                },
 
                 // If the variable was rigid, then the rigid wins
                 .num_rigid => self.merge(vars, vars.b.desc.content),
