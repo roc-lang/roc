@@ -1,6 +1,5 @@
 const std = @import("std");
-const base = @import("base");
-const Region = base.Region;
+const roc_src = @import("roc_src");
 
 const num_one_byte_ops = 20;
 const lowest_binop_char = '!';
@@ -412,61 +411,6 @@ pub const Token = enum {
                 // or just an operator that Roc doesn't support.
             },
         }
-
-        ////////////////////// OLD //////////////////////////////////
-
-        // Let's consider 2 bytes because that's actually very helpful!
-        const pair = (@as(u16, @intCast(src[index]))) | (@as(u16, @intCast(src[index + 1])) << 1);
-
-        const mask = @panic("TODO"); // TODO branchlessly get the mask etc.
-        const len = @panic("TODO"); // TODO get the len from the mask.
-
-        switch (mask) {
-            .ident_or_number => {
-                // Small ones we store inline
-                if (len <= 4) {
-                    const found_kw = kw.kw_4b_index(src);
-                } else {}
-            },
-            .symbol => {
-                switch (first_byte) {}
-            },
-            1 => {
-                // length was 1, so this is probably either an ident or symbol
-                // if it's 127+ then that's an error
-                // At 1 long, it can't be an 0x number; must be base-10.
-            },
-            2 => {
-                // It's exactly 2, so let's classify it as either a kw or ident or number.
-                // At 2 long, it can't be an 0x number; must be base-10. Starting with 0 is an error.
-            },
-            3 => {
-                // It's exactly 3, so again let's see if it's a keywword.
-                // Now it actually could be non-base-10.
-            },
-        }
-
-        const binops = .{
-            "as",
-            "or",
-            "if",
-            ":=",
-            "==",
-            "<=",
-            ">=",
-            "=>",
-            "->",
-            "<-",
-            // "else",
-            // "match",
-            // "where",
-            // "use",
-            // "expect",
-            // "return",
-            // "module",
-            // "crash",
-            // "and",
-        };
     }
 
     pub const StartsWith = enum {
