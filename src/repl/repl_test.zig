@@ -217,7 +217,7 @@ test "Repl - minimal interpreter integration" {
     var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions, common_idents);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
     var eval_stack = try Stack.initCapacity(gpa, 1024);

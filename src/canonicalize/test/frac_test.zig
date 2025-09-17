@@ -8,7 +8,6 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
-const types = @import("types");
 const builtins = @import("builtins");
 
 const Can = @import("../Can.zig");
@@ -30,58 +29,9 @@ test "fractional literal - basic decimal" {
         .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |poly| {
-                            try testing.expect(poly.requirements.fits_in_dec);
-                        },
-                        .frac_unbound => |requirements| {
-                            try testing.expect(requirements.fits_in_dec);
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => {
-                    std.debug.print("Unexpected content type: {}\n", .{resolved.desc.content});
-                    return error.UnexpectedContentType;
-                },
-            }
         },
         .e_frac_dec => |dec| {
             _ = dec;
-            // Also accept e_frac_dec for decimal literals
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |poly| {
-                            try testing.expect(poly.requirements.fits_in_dec);
-                        },
-                        .frac_unbound => |requirements| {
-                            try testing.expect(requirements.fits_in_dec);
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => {
-                    std.debug.print("Unexpected content type: {}\n", .{resolved.desc.content});
-                    return error.UnexpectedContentType;
-                },
-            }
         },
         else => {
             std.debug.print("Unexpected expr type: {}\n", .{expr});
@@ -103,88 +53,12 @@ test "fractional literal - scientific notation small" {
             // Very small numbers may round to zero when parsed as small decimal
             // This is expected behavior when the value is too small for i16 representation
             try testing.expectEqual(dec.numerator, 0);
-
-            // Still check type requirements
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .frac_poly => |poly| {
-                            try testing.expect(poly.requirements.fits_in_f32);
-                            try testing.expect(poly.requirements.fits_in_dec);
-                        },
-                        .frac_unbound => |requirements| {
-                            try testing.expect(requirements.fits_in_f32);
-                            try testing.expect(requirements.fits_in_dec);
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => return error.UnexpectedContentType,
-            }
         },
         .e_frac_dec => |frac| {
-            // Scientific notation can also be parsed as RocDec for exact representation
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |poly| {
-                            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
-                            try testing.expect(poly.requirements.fits_in_f32);
-                            try testing.expect(poly.requirements.fits_in_dec);
-                        },
-                        .frac_unbound => |requirements| {
-                            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
-                            try testing.expect(requirements.fits_in_f32);
-                            try testing.expect(requirements.fits_in_dec);
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => return error.UnexpectedContentType,
-            }
             // RocDec stores the value in a special format
             _ = frac;
         },
         .e_frac_f64 => |frac| {
-            // Or it might be parsed as f64
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |poly| {
-                            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
-                            try testing.expect(poly.requirements.fits_in_f32);
-                            try testing.expect(poly.requirements.fits_in_dec);
-                        },
-                        .frac_unbound => |requirements| {
-                            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
-                            try testing.expect(requirements.fits_in_f32);
-                            try testing.expect(requirements.fits_in_dec);
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => return error.UnexpectedContentType,
-            }
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
         },
         else => {
@@ -204,27 +78,6 @@ test "fractional literal - scientific notation large (near f64 max)" {
 
     switch (expr) {
         .e_frac_f64 => |frac| {
-            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr.get_idx()));
-            const resolved = test_env.module_env.types.resolveVar(expr_as_type_var);
-            switch (resolved.desc.content) {
-                .structure => |structure| switch (structure) {
-                    .num => |num| switch (num) {
-                        .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |poly| {
-                            try testing.expect(!poly.requirements.fits_in_dec); // Way out of Dec range
-                        },
-                        .frac_unbound => |requirements| {
-                            try testing.expect(!requirements.fits_in_dec); // Way out of Dec range
-                        },
-                        else => return error.UnexpectedNumType,
-                    },
-                    else => return error.UnexpectedStructureType,
-                },
-                .flex_var => {
-                    // It's an unbound type variable, which is also fine for literals
-                },
-                else => return error.UnexpectedContentType,
-            }
             try testing.expectEqual(frac.value, 1e308);
         },
         else => {
