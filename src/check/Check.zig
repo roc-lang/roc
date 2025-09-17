@@ -2366,8 +2366,175 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_unary_not => |unary| {
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, rank, unary) or does_fx;
         },
-        .e_dot_access => {
-            try self.updateVar(expr_var, .err, rank);
+        .e_dot_access => |dot_access| switch_blk: {
+            // Check the receiver expression
+            does_fx = try self.checkExpr(dot_access.receiver, rank, .no_expectation) or does_fx;
+
+            // Handle different receiver types
+            const receiver_var = ModuleEnv.varFrom(dot_access.receiver);
+            const resolved_receiver = self.types.resolveVar(receiver_var);
+
+            switch (resolved_receiver.desc.content) {
+                .err => {
+                    // If the reciever type is an error, then propgate it and  break
+                    try self.updateVar(expr_var, .err, rank);
+                    break :switch_blk;
+                },
+                .structure => |structure| switch (structure) {
+                    .nominal_type => |nominal| {
+                        // This is a static dispatch on a nominal type
+
+                        if (dot_access.args) |args_span| {
+                            // Method call with arguments
+                            // Get the origin module path
+                            const origin_module_path = self.cir.getIdent(nominal.origin_module);
+
+                            // Find which imported module matches this path
+                            var origin_module_idx: ?CIR.Import.Idx = null;
+                            var origin_module: ?*const ModuleEnv = null;
+
+                            // Check if it's the current module
+                            if (std.mem.eql(u8, origin_module_path, self.cir.module_name)) {
+                                origin_module = self.cir;
+                            } else {
+                                // Search through imported modules
+                                for (self.other_modules, 0..) |other_module, idx| {
+                                    if (std.mem.eql(u8, origin_module_path, other_module.module_name)) {
+                                        origin_module_idx = @enumFromInt(idx);
+                                        origin_module = other_module;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (origin_module) |module| {
+                                // Look up the method in the origin module's exports
+                                // Need to convert identifier from current module to target module
+                                const method_name_str = self.cir.getIdent(dot_access.field_name);
+
+                                // Search through the module's exposed items
+                                const node_idx_opt = if (module.common.findIdent(method_name_str)) |target_ident|
+                                    module.getExposedNodeIndexById(target_ident)
+                                else
+                                    null;
+
+                                if (node_idx_opt) |node_idx| {
+                                    // Found the method!
+                                    const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
+
+                                    // Check if we've already copied this import
+                                    const cache_key = ImportCacheKey{
+                                        .module_idx = origin_module_idx orelse @enumFromInt(0), // Current module
+                                        .node_idx = target_node_idx,
+                                    };
+
+                                    const method_var = if (self.import_cache.get(cache_key)) |cached_var|
+                                        cached_var
+                                    else blk: {
+                                        // Copy the method's type from the origin module to our type store
+                                        const source_var = ModuleEnv.varFrom(target_node_idx);
+                                        const new_copy = try self.copyVar(source_var, @constCast(module));
+                                        try self.import_cache.put(self.gpa, cache_key, new_copy);
+                                        break :blk new_copy;
+                                    };
+                                    const method_instantiated = try self.instantiateVar(method_var, rank, .use_last_var);
+
+                                    // Check all arguments
+                                    const arg_expr_idxs = self.cir.store.sliceExpr(args_span);
+                                    for (arg_expr_idxs) |arg_expr_idx| {
+                                        does_fx = try self.checkExpr(arg_expr_idx, rank, .no_expectation) or does_fx;
+                                    }
+                                    const arg_expr_vars: []Var = @ptrCast(arg_expr_idxs);
+
+                                    // Create a function type for the method call
+                                    const ret_var = try self.fresh(rank, expr_region);
+                                    const func_content = try self.types.mkFuncUnbound(arg_expr_vars, ret_var);
+                                    const expected_func_var = try self.freshFromContent(func_content, rank, expr_region);
+
+                                    // Unify with the imported method type
+                                    const result = try self.unify(method_instantiated, expected_func_var, rank);
+
+                                    // If the inferred function type matches the referenced type
+                                    // then set the expr type to be the return type
+                                    if (result.isOk()) {
+                                        try self.types.setVarRedirect(expr_var, ret_var);
+                                    } else {
+                                        try self.updateVar(expr_var, .err, rank);
+                                    }
+                                } else {
+                                    // Method not found in origin module
+                                    // TODO: Add a proper error type for method not found on nominal type
+                                    try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                                }
+                            } else {
+                                // Origin module not found
+                                // TODO: Add a proper error type for origin module not found
+                                try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                            }
+                        } else {
+                            // No arguments
+                            // TODO: This might be a field access on a nominal type's backing type, add proper error
+                            try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                        }
+
+                        // Since this was a nominal, stop execution
+                        break :switch_blk;
+                    },
+                    // .record => |record| {
+                    //     // Receiver is already a record, find the field
+                    //     const fields = self.types.getRecordFieldsSlice(record.fields);
+
+                    //     // Find the field with the matching name
+                    //     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                    //         if (field_name == dot_access.field_name) {
+                    //             // Unify the dot access expression with the field type
+                    //             _ = try self.unify(expr_var, field_var, rank);
+                    //             break;
+                    //         }
+                    //     }
+
+                    //     // Continue to general unification
+                    // },
+                    // .record_unbound => |record_unbound| {
+                    //     // Receiver is an unbound record, find the field
+                    //     const fields = self.types.getRecordFieldsSlice(record_unbound);
+
+                    //     // Find the field with the matching name
+                    //     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                    //         if (field_name == dot_access.field_name) {
+                    //             // Unify the dot access expression with the field type
+                    //             _ = try self.unify(expr_var, field_var, rank);
+                    //             break;
+                    //         }
+                    //     }
+
+                    //     // Continue to general unification
+                    // },
+                    else => {
+                        // Receiver is not a record, this is a type error
+                        // For now, we'll let unification handle the error
+                    },
+                },
+                else => {
+                    // Receiver is not a record, this is a type error
+                    // For now, we'll let unification handle the error
+
+                },
+            }
+
+            // Create a type for the inferred type of this record access
+            // E.g. foo.bar -> { bar: flex } a
+            const record_field_var = try self.fresh(rank, expr_region);
+            const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                .name = dot_access.field_name,
+                .var_ = record_field_var,
+            }});
+            const record_being_accessed = try self.freshFromContent(.{ .structure = .{
+                .record_unbound = record_field_range,
+            } }, rank, expr_region);
+
+            // Then, unify the actual reciever type with the expected record
+            _ = try self.unify(record_being_accessed, receiver_var, rank);
         },
         .e_crash => {
             try self.updateVar(expr_var, .{ .flex_var = null }, rank);
@@ -3405,140 +3572,6 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
 //     return does_fx;
 // }
 
-// // func //
-
-// /// Helper function to unify a call expression with a function type
-// fn unifyFunctionCall(
-//     self: *Self,
-//     args_vars: []const CIR.Expr.Idx, // var for the fn args
-//     ret_var: Var, // var for the return type
-//     expected_fn_var: Var, // var for the fn itself (must be instantiated)
-//     expected_func: types_mod.Func, // the expected type of the fn (must be instantiated)
-//     region: Region,
-//     func_expr_idx: CIR.Expr.Idx, // the function expression for name extraction
-// ) std.mem.Allocator.Error!bool {
-//     // Extract function name if possible
-//     const func_name: ?Ident.Idx = blk: {
-//         const func_expr = self.cir.store.getExpr(func_expr_idx);
-//         switch (func_expr) {
-//             .e_lookup_local => |lookup| {
-//                 // Get the pattern that defines this identifier
-//                 const pattern = self.cir.store.getPattern(lookup.pattern_idx);
-//                 switch (pattern) {
-//                     .assign => |assign| break :blk assign.ident,
-//                     else => break :blk null,
-//                 }
-//             },
-//             else => break :blk null,
-//         }
-//     };
-
-//     // Check arguments with expected types using bidirectional type checking
-//     const expected_args = self.types.sliceVars(expected_func.args);
-
-//     // Only unify arguments if counts match - otherwise let the normal
-//     // unification process handle the arity mismatch error
-//     if (expected_args.len == args_vars.len) {
-//         // For function signatures with bound type variables, unify arguments with each other first
-//         // This ensures proper error placement for cases like mk_pair("1", 2) where a, a -> Pair(a)
-
-//         // Find arguments that share the same type variable
-//         //
-//         // TODO(jared): This is not doing what it's intended to do, I think.
-//         // It's unifying variables if they're the the same var, but if they're
-//         // the same var they don't need to be unified? I think setting up
-//         // scope correct so all flex vars  are redirected to the same var in
-//         // canonicalize shouold do the same thing.
-//         for (expected_args, 0..) |expected_arg_1, i| {
-//             const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
-
-//             // Only check type variables, skip concrete types
-//             if (expected_resolved_1.desc.content != .flex_var and expected_resolved_1.desc.content != .rigid_var) {
-//                 continue;
-//             }
-
-//             // Look for other arguments with the same type variable
-//             for (expected_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
-//                 if (expected_arg_1 == expected_arg_2) {
-//                     // These two arguments are bound by the same type variable - unify them first
-//                     const arg_1 = @as(Var, @enumFromInt(@intFromEnum(args_vars[i])));
-//                     const arg_2 = @as(Var, @enumFromInt(@intFromEnum(args_vars[j])));
-
-//                     const unify_result = try self.unify(arg_1, arg_2);
-
-//                     if (unify_result.isProblem()) {
-//                         // Use the new error detail for bound type variable incompatibility
-//                         self.setProblemTypeMismatchDetail(unify_result.problem, .{
-//                             .incompatible_fn_args_bound_var = .{
-//                                 .fn_name = func_name,
-//                                 .first_arg_var = arg_1,
-//                                 .second_arg_var = arg_2,
-//                                 .first_arg_index = @intCast(i),
-//                                 .second_arg_index = @intCast(j),
-//                                 .num_args = @intCast(args_vars.len),
-//                             },
-//                         });
-//                         return false; // Early return on error
-//                     }
-//                 }
-//             }
-//         }
-
-//         // Apply constraint propagation for numeric literals with concrete types
-//         for (expected_args, args_vars) |expected_arg, arg_expr_idx| {
-//             const expected_resolved = self.types.resolveVar(expected_arg);
-
-//             // Only apply constraint propagation for concrete types, not type variables
-//             if (expected_resolved.desc.content != .flex_var and expected_resolved.desc.content != .rigid_var) {
-//                 const arg_expr = self.cir.store.getExpr(arg_expr_idx);
-
-//                 if (arg_expr == .e_int) {
-//                     const literal_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-//                     _ = try self.unify(literal_var, expected_arg);
-//                 }
-//             }
-//         }
-
-//         // Regular unification using the argument vars
-//         var arg_index: u32 = 0;
-//         for (expected_args, args_vars) |expected_arg, arg_expr_idx| {
-//             const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-
-//             // TODO: Do we need this?
-//             // Instantiate polymorphic arguments before unification
-//             // var arg_to_unify = actual_arg;
-//             // if (self.types.needsInstantiation(actual_arg)) {
-//             //     arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
-//             // }
-
-//             const arg_result = try self.unify(expected_arg, actual_arg);
-//             self.setDetailIfTypeMismatch(arg_result, .{
-//                 .incompatible_fn_call_arg = .{
-//                     .fn_name = func_name,
-//                     .arg_var = actual_arg,
-//                     .incompatible_arg_index = arg_index,
-//                     .num_args = @intCast(args_vars.len),
-//                 },
-//             });
-//             arg_index += 1;
-//         }
-//         // The call's type is the instantiated return type
-//         _ = try self.unify(ret_var, expected_func.ret);
-//     } else {
-//         // Arity mismatch - arguments already checked
-
-//         // Fall back to normal unification to get proper error message
-//         // Use the original func_var to avoid issues with instantiated variables in error reporting
-//         const actual_arg_vars: []Var = @constCast(@ptrCast(@alignCast(args_vars)));
-//         const actual_func_content = try self.types.mkFuncUnbound(actual_arg_vars, ret_var);
-//         const actual_func_var = try self.freshFromContent(actual_func_content, region);
-//         _ = try self.unify(actual_func_var, expected_fn_var);
-//         try self.types.setVarRedirect(ret_var, actual_func_var);
-//     }
-
-//     return false;
-// }
-
 // binop //
 
 /// Check the types for a binary operation expression
@@ -4303,93 +4336,93 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 //     return var_;
 // }
 
-// // copy type from other module //
+// copy type from other module //
 
-// /// Instantiate a variable, writing su
-// fn copyVar(
-//     self: *Self,
-//     other_module_var: Var,
-//     other_module_env: *ModuleEnv,
-// ) std.mem.Allocator.Error!Var {
-//     self.var_map.clearRetainingCapacity();
-//     const copied_var = try copy_import.copyVar(
-//         &other_module_env.*.types,
-//         self.types,
-//         other_module_var,
-//         &self.var_map,
-//         other_module_env.getIdentStore(),
-//         self.cir.getIdentStore(),
-//         self.gpa,
-//     );
+/// Instantiate a variable, writing su
+fn copyVar(
+    self: *Self,
+    other_module_var: Var,
+    other_module_env: *ModuleEnv,
+) std.mem.Allocator.Error!Var {
+    self.var_map.clearRetainingCapacity();
+    const copied_var = try copy_import.copyVar(
+        &other_module_env.*.types,
+        self.types,
+        other_module_var,
+        &self.var_map,
+        other_module_env.getIdentStore(),
+        self.cir.getIdentStore(),
+        self.gpa,
+    );
 
-//     // If we had to insert any new type variables, ensure that we have
-//     // corresponding regions for them. This is essential for error reporting.
-//     if (self.var_map.count() > 0) {
-//         var iterator = self.var_map.iterator();
-//         while (iterator.next()) |x| {
-//             // Get the newly created var
-//             const fresh_var = x.value_ptr.*;
-//             try self.fillInRegionsThrough(fresh_var);
+    // If we had to insert any new type variables, ensure that we have
+    // corresponding regions for them. This is essential for error reporting.
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
+        while (iterator.next()) |x| {
+            // Get the newly created var
+            const fresh_var = x.value_ptr.*;
+            try self.fillInRegionsThrough(fresh_var);
 
-//             self.setRegionAt(fresh_var, base.Region.zero());
-//         }
-//     }
+            self.setRegionAt(fresh_var, base.Region.zero());
+        }
+    }
 
-//     // Assert that we have regions for every type variable
-//     self.debugAssertArraysInSync();
+    // Assert that we have regions for every type variable
+    self.debugAssertArraysInSync();
 
-//     return copied_var;
-// }
+    return copied_var;
+}
 
-// // external type lookups //
+// external type lookups //
 
-// const ExternalType = struct {
-//     local_var: Var,
-//     other_cir_node_idx: CIR.Node.Idx,
-//     other_cir: *ModuleEnv,
-// };
+const ExternalType = struct {
+    local_var: Var,
+    other_cir_node_idx: CIR.Node.Idx,
+    other_cir: *ModuleEnv,
+};
 
-// /// Copy a variable from a different module into this module's types store.
-// ///
-// /// IMPORTANT: The caller must instantiate this variable before unifing
-// /// against it. This avoid poisoning the copied variable in the types store if
-// /// unification fails.
-// fn resolveVarFromExternal(
-//     self: *Self,
-//     module_idx: CIR.Import.Idx,
-//     node_idx: u16,
-// ) std.mem.Allocator.Error!?ExternalType {
-//     const module_idx_int = @intFromEnum(module_idx);
-//     if (module_idx_int < self.other_modules.len) {
-//         const other_module_cir = self.other_modules[module_idx_int];
-//         const other_module_env = other_module_cir;
+/// Copy a variable from a different module into this module's types store.
+///
+/// IMPORTANT: The caller must instantiate this variable before unifing
+/// against it. This avoid poisoning the copied variable in the types store if
+/// unification fails.
+fn resolveVarFromExternal(
+    self: *Self,
+    module_idx: CIR.Import.Idx,
+    node_idx: u16,
+) std.mem.Allocator.Error!?ExternalType {
+    const module_idx_int = @intFromEnum(module_idx);
+    if (module_idx_int < self.other_modules.len) {
+        const other_module_cir = self.other_modules[module_idx_int];
+        const other_module_env = other_module_cir;
 
-//         // The idx of the expression in the other module
-//         const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
+        // The idx of the expression in the other module
+        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
-//         // Check if we've already copied this import
-//         const cache_key = ImportCacheKey{
-//             .module_idx = module_idx,
-//             .node_idx = target_node_idx,
-//         };
+        // Check if we've already copied this import
+        const cache_key = ImportCacheKey{
+            .module_idx = module_idx,
+            .node_idx = target_node_idx,
+        };
 
-//         const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
-//             // Reuse the previously copied type.
-//             cached_var
-//         else blk: {
-//             // First time importing this type - copy it and cache the result
-//             const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-//             const new_copy = try self.copyVar(imported_var, other_module_env);
-//             try self.import_cache.put(self.gpa, cache_key, new_copy);
-//             break :blk new_copy;
-//         };
+        const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
+            // Reuse the previously copied type.
+            cached_var
+        else blk: {
+            // First time importing this type - copy it and cache the result
+            const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+            const new_copy = try self.copyVar(imported_var, other_module_env);
+            try self.import_cache.put(self.gpa, cache_key, new_copy);
+            break :blk new_copy;
+        };
 
-//         return .{
-//             .local_var = copied_var,
-//             .other_cir_node_idx = target_node_idx,
-//             .other_cir = other_module_env,
-//         };
-//     } else {
-//         return null;
-//     }
-// }
+        return .{
+            .local_var = copied_var,
+            .other_cir_node_idx = target_node_idx,
+            .other_cir = other_module_env,
+        };
+    } else {
+        return null;
+    }
+}

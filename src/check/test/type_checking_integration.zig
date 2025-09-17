@@ -17,717 +17,743 @@ const test_allocator = testing.allocator;
 
 // primitives - nums //
 
-test "check type - num - unbound" {
-    const source =
-        \\50
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(_size)");
-}
+// test "check type - num - unbound" {
+//     const source =
+//         \\50
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(_size)");
+// }
 
-test "check type - num - int suffix 1" {
-    const source =
-        \\10u8
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Unsigned8))");
-}
+// test "check type - num - int suffix 1" {
+//     const source =
+//         \\10u8
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Unsigned8))");
+// }
 
-test "check type - num - int suffix 2" {
-    const source =
-        \\10i128
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Signed128))");
-}
+// test "check type - num - int suffix 2" {
+//     const source =
+//         \\10i128
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Signed128))");
+// }
 
-test "check type - num - float" {
-    const source =
-        \\10.1
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(_size))");
-}
+// test "check type - num - float" {
+//     const source =
+//         \\10.1
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(_size))");
+// }
 
-test "check type - num - float suffix 1" {
-    const source =
-        \\10.1f32
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
-}
+// test "check type - num - float suffix 1" {
+//     const source =
+//         \\10.1f32
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+// }
 
-test "check type - num - float suffix 2" {
-    const source =
-        \\10.1f64
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float64))");
-}
+// test "check type - num - float suffix 2" {
+//     const source =
+//         \\10.1f64
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float64))");
+// }
 
-test "check type - num - float suffix 3" {
-    const source =
-        \\10.1dec
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Decimal))");
-}
+// test "check type - num - float suffix 3" {
+//     const source =
+//         \\10.1dec
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Decimal))");
+// }
 
-// primitives - strs //
+// // primitives - strs //
 
-test "check type - str" {
-    const source =
-        \\"hello"
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
-}
+// test "check type - str" {
+//     const source =
+//         \\"hello"
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Str");
+// }
 
-// primitives - lists //
+// // primitives - lists //
 
-test "check type - list empty" {
-    const source =
-        \\[]
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(_elem)");
-}
+// test "check type - list empty" {
+//     const source =
+//         \\[]
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "List(_elem)");
+// }
 
-test "check type - list - same elems 1" {
-    const source =
-        \\["hello", "world"]
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Str)");
-}
+// test "check type - list - same elems 1" {
+//     const source =
+//         \\["hello", "world"]
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "List(Str)");
+// }
 
-test "check type - list - same elems 2" {
-    const source =
-        \\[100, 200]
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(_size))");
-}
+// test "check type - list - same elems 2" {
+//     const source =
+//         \\[100, 200]
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "List(Num(_size))");
+// }
 
-test "check type - list - 1st elem more specific coreces 2nd elem" {
-    const source =
-        \\[100u64, 200]
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned64)))");
-}
+// test "check type - list - 1st elem more specific coreces 2nd elem" {
+//     const source =
+//         \\[100u64, 200]
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned64)))");
+// }
 
-test "check type - list - 2nd elem more specific coreces 1st elem" {
-    const source =
-        \\[100, 200u32]
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned32)))");
-}
+// test "check type - list - 2nd elem more specific coreces 1st elem" {
+//     const source =
+//         \\[100, 200u32]
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned32)))");
+// }
 
-test "check type - list  - diff elems 1" {
-    const source =
-        \\["hello", 10]
-    ;
-    try assertExprTypeCheckFail(test_allocator, source, "INCOMPATIBLE LIST ELEMENTS");
-}
+// test "check type - list  - diff elems 1" {
+//     const source =
+//         \\["hello", 10]
+//     ;
+//     try assertExprTypeCheckFail(test_allocator, source, "INCOMPATIBLE LIST ELEMENTS");
+// }
 
-// number requirements //
+// // number requirements //
 
-test "check type - num - cannot coerce 500 to u8" {
-    const source =
-        \\[500, 200u8]
-    ;
-    try assertExprTypeCheckFail(test_allocator, source, "NUMBER DOES NOT FIT IN TYPE");
-}
+// test "check type - num - cannot coerce 500 to u8" {
+//     const source =
+//         \\[500, 200u8]
+//     ;
+//     try assertExprTypeCheckFail(test_allocator, source, "NUMBER DOES NOT FIT IN TYPE");
+// }
 
-// records //
+// // records //
 
-test "check type - record" {
-    const source =
-        \\{
-        \\  hello: "Hello",
-        \\  world: 10,
-        \\}
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "{ hello: Str, world: Num(_size) }");
-}
+// test "check type - record" {
+//     const source =
+//         \\{
+//         \\  hello: "Hello",
+//         \\  world: 10,
+//         \\}
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "{ hello: Str, world: Num(_size) }");
+// }
 
-// tags //
+// // tags //
 
-test "check type - tag" {
-    const source =
-        \\MyTag
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "[MyTag]_others");
-}
+// test "check type - tag" {
+//     const source =
+//         \\MyTag
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "[MyTag]_others");
+// }
 
-test "check type - tag - args" {
-    const source =
-        \\MyTag("hello", 1)
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "[MyTag(Str, Num(_size))]_others");
-}
+// test "check type - tag - args" {
+//     const source =
+//         \\MyTag("hello", 1)
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "[MyTag(Str, Num(_size))]_others");
+// }
 
-// blocks //
+// // blocks //
 
-test "check type - block - return expr" {
-    const source =
-        \\{
-        \\    "Hello"
-        \\}
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
-}
+// test "check type - block - return expr" {
+//     const source =
+//         \\{
+//         \\    "Hello"
+//         \\}
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Str");
+// }
 
-test "check type - block - implicit empty record" {
-    const source =
-        \\{
-        \\    test = "hello"
-        \\}
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "{}");
-}
+// test "check type - block - implicit empty record" {
+//     const source =
+//         \\{
+//         \\    test = "hello"
+//         \\}
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "{}");
+// }
 
-test "check type - block - local value decl" {
-    const source =
-        \\{
-        \\    test = "hello"
-        \\
-        \\    test
-        \\}
-    ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
-}
+// test "check type - block - local value decl" {
+//     const source =
+//         \\{
+//         \\    test = "hello"
+//         \\
+//         \\    test
+//         \\}
+//     ;
+//     try assertExprTypeCheckPass(test_allocator, source, "Str");
+// }
 
-// function //
+// // function //
 
-test "check type - def - value" {
+// test "check type - def - value" {
+//     const source =
+//         \\module []
+//         \\
+//         \\pairU64 = "hello"
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Str");
+// }
+
+// test "check type - def - func" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id = |_| 20
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "_arg -> Num(_size)");
+// }
+
+// test "check type - def - id without annotation" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id = |x| x
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+// }
+
+// test "check type - def - id with annotation" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id : a -> a
+//         \\id = |x| x
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+// }
+
+// test "check type - def - func with annotation 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id : x -> Str
+//         \\id = |_| "test"
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "x -> Str");
+// }
+
+// test "check type - def - func with annotation 2" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id : x -> Num(_size)
+//         \\id = |_| 15
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
+// }
+
+// // calling functions
+
+// test "check type - def - monomorphic id" {
+//     const source =
+//         \\module []
+//         \\
+//         \\idStr : Str -> Str
+//         \\idStr = |x| x
+//         \\
+//         \\test = idStr("hello")
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Str");
+// }
+
+// test "check type - def - polymorphic id 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id : x -> x
+//         \\id = |x| x
+//         \\
+//         \\test = id(5)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+// }
+
+// test "check type - def - polymorphic id 2" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id : x -> x
+//         \\id = |x| x
+//         \\
+//         \\test = (id(5), id("hello"))
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "(Num(_size), Str)");
+// }
+
+// test "check type - def - polymorphic higher order 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\f = |g, v| g(v)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "a -> b, a -> b");
+// }
+
+// test "check type - top level polymorphic function is generalized" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id = |x| x
+//         \\
+//         \\result = {
+//         \\    a = id(42)
+//         \\    b = id("hello")
+//         \\    a
+//         \\}
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+// }
+
+// test "check type - let-def polymorphic function is generalized" {
+//     const source =
+//         \\module []
+//         \\
+//         \\result = {
+//         \\    id = |x| x
+//         \\    a = id(42)
+//         \\    b = id("hello")
+//         \\    a
+//         \\}
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+// }
+
+// test "check type - polymorphic function function param should be constrained" {
+//     const source =
+//         \\module []
+//         \\
+//         \\id = |x| x
+//         \\
+//         \\use_twice = |f| {
+//         \\    a = f(42)
+//         \\    b = f("hello")
+//         \\    a
+//         \\}
+//         \\result = use_twice(id)
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+// }
+
+// // type aliases //
+
+// test "check type - basic alias" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyAlias : Str
+//         \\
+//         \\x : MyAlias
+//         \\x = "hello"
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "MyAlias");
+// }
+
+// test "check type - alias with arg" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyListAlias(a) : List(a)
+//         \\
+//         \\x : MyListAlias(Num(size))
+//         \\x = [15]
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "MyListAlias(Num(size))");
+// }
+
+// test "check type - alias with mismatch arg" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyListAlias(a) : List(a)
+//         \\
+//         \\x : MyListAlias(Str)
+//         \\x = [15]
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+// }
+
+// // nominal types //
+
+// test "check type - basic nominal" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyNominal := [MyNominal]
+//         \\
+//         \\x : MyNominal
+//         \\x = MyNominal.MyNominal
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+// }
+
+// test "check type - nominal with tag arg" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyNominal := [MyNominal(Str)]
+//         \\
+//         \\x : MyNominal
+//         \\x = MyNominal.MyNominal("hello")
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+// }
+
+// test "check type - nominal with type and tag arg" {
+//     const source =
+//         \\module []
+//         \\
+//         \\MyNominal(a) := [MyNominal(a)]
+//         \\
+//         \\x : MyNominal(U8)
+//         \\x = MyNominal.MyNominal(10)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "MyNominal(Num(Int(Unsigned8)))");
+// }
+
+// test "check type - nominal with with rigid vars" {
+//     const source =
+//         \\module []
+//         \\
+//         \\Pair(a) := [Pair(a, a)]
+//         \\
+//         \\pairU64 : Pair(U64)
+//         \\pairU64 = Pair.Pair(1, 2)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Pair(Num(Int(Unsigned64)))");
+// }
+
+// test "check type - nominal with with rigid vars mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\Pair(a) := [Pair(a, a)]
+//         \\
+//         \\pairU64 : Pair(U64)
+//         \\pairU64 = Pair.Pair(1, "Str")
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+// }
+
+// test "check type - nominal recursive type" {
+//     const source =
+//         \\module []
+//         \\
+//         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
+//         \\
+//         \\x : ConsList(Str)
+//         \\x = ConsList.Cons("hello", ConsList.Nil)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "ConsList(Str)");
+// }
+
+// test "check type - nominal recursive type anno mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
+//         \\
+//         \\x : ConsList(Num(size))
+//         \\x = ConsList.Cons("hello", ConsList.Nil)
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+// }
+
+// test "check type - two nominal types" {
+//     const source =
+//         \\module []
+//         \\
+//         \\Elem(a) := [Elem(a)]
+//         \\
+//         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
+//         \\
+//         \\x = ConsList.Cons(Elem.Elem("hello"), ConsList.Nil)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "ConsList(Elem(Str))");
+// }
+
+// test "check type - nominal recursive type no args" {
+//     const source =
+//         \\module []
+//         \\
+//         \\StrConsList := [Nil, Cons(Str, StrConsList)]
+//         \\
+//         \\x : StrConsList
+//         \\x = StrConsList.Cons("hello", StrConsList.Nil)
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "StrConsList");
+// }
+
+// test "check type - nominal recursive type wrong type" {
+//     const source =
+//         \\module []
+//         \\
+//         \\StrConsList := [Nil, Cons(Str, StrConsList)]
+//         \\
+//         \\x : StrConsList
+//         \\x = StrConsList.Cons(10, StrConsList.Nil)
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+// }
+
+// test "check type - nominal w/ polymorphic function" {
+//     const source =
+//         \\module []
+//         \\
+//         \\Pair(a) := [Pair(a, a)]
+//         \\
+//         \\mkPairInvalid : a, b -> Pair(a)
+//         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+// }
+
+// // if-else
+
+// test "check type - if else" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x : Str
+//         \\x = if True "true" else "false"
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Str");
+// }
+
+// test "check type - if else - qualified bool" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x : Str
+//         \\x = if Bool.True "true" else "false"
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Str");
+// }
+
+// test "check type - if else - invalid condition 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x : Str
+//         \\x = if Truee "true" else "false"
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+// }
+
+// test "check type - if else - invalid condition 2" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x : Str
+//         \\x = if Bool.Falsee "true" else "false"
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+// }
+
+// test "check type - if else - invalid condition 3" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x : Str
+//         \\x = if "True" "true" else "false"
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+// }
+
+// test "check type - if else - different branch types 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = if True "true" else 10
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+// }
+
+// test "check type - if else - different branch types 2" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = if True "true" else if False "false" else 10
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+// }
+
+// test "check type - if else - different branch types 3" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = if True "true" else if False 10 else "last"
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+// }
+
+// // match
+
+// test "check type - match" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x =
+//         \\  match True {
+//         \\    True => "true"
+//         \\    False => "false"
+//         \\  }
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Str");
+// }
+
+// test "check type - match - diff cond types 1" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x =
+//         \\  match "hello" {
+//         \\    True => "true"
+//         \\    False => "false"
+//         \\  }
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH PATTERNS");
+// }
+
+// test "check type - match - diff branch types" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x =
+//         \\  match True {
+//         \\    True => "true"
+//         \\    False => 100
+//         \\  }
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH BRANCHES");
+// }
+
+// // unary not
+
+// test "check type - unary not" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = !True
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Bool");
+// }
+
+// test "check type - unary not mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = !"Hello"
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+// }
+
+// // unary not
+
+// test "check type - unary minus" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = -10
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+// }
+
+// test "check type - unary minus mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = "hello"
+//         \\
+//         \\y = -x
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+// }
+
+// // binops
+
+// test "check type - binops math" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = 10 + 10u32
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(Int(Unsigned32))");
+// }
+
+// test "check type - binops ord" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = 10.0f32 > 15
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+// }
+
+// test "check type - binops and" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = True and False
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Bool");
+// }
+
+// test "check type - binops and mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = "Hello" and False
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+// }
+
+// test "check type - binops or" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = True or False
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "Bool");
+// }
+
+// test "check type - binops or mismatch" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = "Hello" or False
+//     ;
+//     try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+// }
+
+// record access
+
+test "check type - record access" {
     const source =
         \\module []
         \\
-        \\pairU64 = "hello"
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
-}
-
-test "check type - def - func" {
-    const source =
-        \\module []
-        \\
-        \\id = |_| 20
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "_arg -> Num(_size)");
-}
-
-test "check type - def - id without annotation" {
-    const source =
-        \\module []
-        \\
-        \\id = |x| x
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
-}
-
-test "check type - def - id with annotation" {
-    const source =
-        \\module []
-        \\
-        \\id : a -> a
-        \\id = |x| x
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
-}
-
-test "check type - def - func with annotation 1" {
-    const source =
-        \\module []
-        \\
-        \\id : x -> Str
-        \\id = |_| "test"
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "x -> Str");
-}
-
-test "check type - def - func with annotation 2" {
-    const source =
-        \\module []
-        \\
-        \\id : x -> Num(_size)
-        \\id = |_| 15
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
-}
-
-// calling functions
-
-test "check type - def - monomorphic id" {
-    const source =
-        \\module []
-        \\
-        \\idStr : Str -> Str
-        \\idStr = |x| x
-        \\
-        \\test = idStr("hello")
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
-}
-
-test "check type - def - polymorphic id 1" {
-    const source =
-        \\module []
-        \\
-        \\id : x -> x
-        \\id = |x| x
-        \\
-        \\test = id(5)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
-}
-
-test "check type - def - polymorphic id 2" {
-    const source =
-        \\module []
-        \\
-        \\id : x -> x
-        \\id = |x| x
-        \\
-        \\test = (id(5), id("hello"))
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "(Num(_size), Str)");
-}
-
-test "check type - def - polymorphic higher order 1" {
-    const source =
-        \\module []
-        \\
-        \\f = |g, v| g(v)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> b, a -> b");
-}
-
-test "check type - top level polymorphic function is generalized" {
-    const source =
-        \\module []
-        \\
-        \\id = |x| x
-        \\
-        \\result = {
-        \\    a = id(42)
-        \\    b = id("hello")
-        \\    a
-        \\}
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
-}
-
-test "check type - let-def polymorphic function is generalized" {
-    const source =
-        \\module []
-        \\
-        \\result = {
-        \\    id = |x| x
-        \\    a = id(42)
-        \\    b = id("hello")
-        \\    a
-        \\}
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
-}
-
-test "check type - polymorphic function function param should be constrained" {
-    const source =
-        \\module []
-        \\
-        \\id = |x| x
-        \\
-        \\use_twice = |f| {
-        \\    a = f(42)
-        \\    b = f("hello")
-        \\    a
-        \\}
-        \\result = use_twice(id)
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
-}
-
-// type aliases //
-
-test "check type - basic alias" {
-    const source =
-        \\module []
-        \\
-        \\MyAlias : Str
-        \\
-        \\x : MyAlias
-        \\x = "hello"
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyAlias");
-}
-
-test "check type - alias with arg" {
-    const source =
-        \\module []
-        \\
-        \\MyListAlias(a) : List(a)
-        \\
-        \\x : MyListAlias(Num(size))
-        \\x = [15]
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyListAlias(Num(size))");
-}
-
-test "check type - alias with mismatch arg" {
-    const source =
-        \\module []
-        \\
-        \\MyListAlias(a) : List(a)
-        \\
-        \\x : MyListAlias(Str)
-        \\x = [15]
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
-}
-
-// nominal types //
-
-test "check type - basic nominal" {
-    const source =
-        \\module []
-        \\
-        \\MyNominal := [MyNominal]
-        \\
-        \\x : MyNominal
-        \\x = MyNominal.MyNominal
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
-}
-
-test "check type - nominal with tag arg" {
-    const source =
-        \\module []
-        \\
-        \\MyNominal := [MyNominal(Str)]
-        \\
-        \\x : MyNominal
-        \\x = MyNominal.MyNominal("hello")
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
-}
-
-test "check type - nominal with type and tag arg" {
-    const source =
-        \\module []
-        \\
-        \\MyNominal(a) := [MyNominal(a)]
-        \\
-        \\x : MyNominal(U8)
-        \\x = MyNominal.MyNominal(10)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal(Num(Int(Unsigned8)))");
-}
-
-test "check type - nominal with with rigid vars" {
-    const source =
-        \\module []
-        \\
-        \\Pair(a) := [Pair(a, a)]
-        \\
-        \\pairU64 : Pair(U64)
-        \\pairU64 = Pair.Pair(1, 2)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Pair(Num(Int(Unsigned64)))");
-}
-
-test "check type - nominal with with rigid vars mismatch" {
-    const source =
-        \\module []
-        \\
-        \\Pair(a) := [Pair(a, a)]
-        \\
-        \\pairU64 : Pair(U64)
-        \\pairU64 = Pair.Pair(1, "Str")
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
-}
-
-test "check type - nominal recursive type" {
-    const source =
-        \\module []
-        \\
-        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
-        \\
-        \\x : ConsList(Str)
-        \\x = ConsList.Cons("hello", ConsList.Nil)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Str)");
-}
-
-test "check type - nominal recursive type anno mismatch" {
-    const source =
-        \\module []
-        \\
-        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
-        \\
-        \\x : ConsList(Num(size))
-        \\x = ConsList.Cons("hello", ConsList.Nil)
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
-}
-
-test "check type - two nominal types" {
-    const source =
-        \\module []
-        \\
-        \\Elem(a) := [Elem(a)]
-        \\
-        \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
-        \\
-        \\x = ConsList.Cons(Elem.Elem("hello"), ConsList.Nil)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Elem(Str))");
-}
-
-test "check type - nominal recursive type no args" {
-    const source =
-        \\module []
-        \\
-        \\StrConsList := [Nil, Cons(Str, StrConsList)]
-        \\
-        \\x : StrConsList
-        \\x = StrConsList.Cons("hello", StrConsList.Nil)
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "StrConsList");
-}
-
-test "check type - nominal recursive type wrong type" {
-    const source =
-        \\module []
-        \\
-        \\StrConsList := [Nil, Cons(Str, StrConsList)]
-        \\
-        \\x : StrConsList
-        \\x = StrConsList.Cons(10, StrConsList.Nil)
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
-}
-
-test "check type - nominal w/ polymorphic function" {
-    const source =
-        \\module []
-        \\
-        \\Pair(a) := [Pair(a, a)]
-        \\
-        \\mkPairInvalid : a, b -> Pair(a)
-        \\mkPairInvalid = |x, y| Pair.Pair(x, y)
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
-}
-
-// if-else
-
-test "check type - if else" {
-    const source =
-        \\module []
-        \\
-        \\x : Str
-        \\x = if True "true" else "false"
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
-}
-
-test "check type - if else - qualified bool" {
-    const source =
-        \\module []
-        \\
-        \\x : Str
-        \\x = if Bool.True "true" else "false"
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
-}
-
-test "check type - if else - invalid condition 1" {
-    const source =
-        \\module []
-        \\
-        \\x : Str
-        \\x = if Truee "true" else "false"
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
-}
-
-test "check type - if else - invalid condition 2" {
-    const source =
-        \\module []
-        \\
-        \\x : Str
-        \\x = if Bool.Falsee "true" else "false"
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
-}
-
-test "check type - if else - invalid condition 3" {
-    const source =
-        \\module []
-        \\
-        \\x : Str
-        \\x = if "True" "true" else "false"
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
-}
-
-test "check type - if else - different branch types 1" {
-    const source =
-        \\module []
-        \\
-        \\x = if True "true" else 10
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
-}
-
-test "check type - if else - different branch types 2" {
-    const source =
-        \\module []
-        \\
-        \\x = if True "true" else if False "false" else 10
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
-}
-
-test "check type - if else - different branch types 3" {
-    const source =
-        \\module []
-        \\
-        \\x = if True "true" else if False 10 else "last"
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
-}
-
-// match
-
-test "check type - match" {
-    const source =
-        \\module []
-        \\
-        \\x =
-        \\  match True {
-        \\    True => "true"
-        \\    False => "false"
+        \\r = 
+        \\  {
+        \\    hello: "Hello",
+        \\    world: 10,
         \\  }
+        \\
+        \\x = r.hello
     ;
     try assertFileTypeCheckPass(test_allocator, source, "Str");
 }
 
-test "check type - match - diff cond types 1" {
-    const source =
-        \\module []
-        \\
-        \\x =
-        \\  match "hello" {
-        \\    True => "true"
-        \\    False => "false"
-        \\  }
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH PATTERNS");
-}
-
-test "check type - match - diff branch types" {
-    const source =
-        \\module []
-        \\
-        \\x =
-        \\  match True {
-        \\    True => "true"
-        \\    False => 100
-        \\  }
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH BRANCHES");
-}
-
-// unary not
-
-test "check type - unary not" {
-    const source =
-        \\module []
-        \\
-        \\x = !True
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
-}
-
-test "check type - unary not mismatch" {
-    const source =
-        \\module []
-        \\
-        \\x = !"Hello"
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
-}
-
-// unary not
-
-test "check type - unary minus" {
-    const source =
-        \\module []
-        \\
-        \\x = -10
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
-}
-
-test "check type - unary minus mismatch" {
-    const source =
-        \\module []
-        \\
-        \\x = "hello"
-        \\
-        \\y = -x
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
-}
-
-// binops
-
-test "check type - binops math" {
-    const source =
-        \\module []
-        \\
-        \\x = 10 + 10u32
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(Int(Unsigned32))");
-}
-
-test "check type - binops ord" {
-    const source =
-        \\module []
-        \\
-        \\x = 10.0f32 > 15
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
-}
-
-test "check type - binops and" {
-    const source =
-        \\module []
-        \\
-        \\x = True and False
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
-}
-
-test "check type - binops and mismatch" {
-    const source =
-        \\module []
-        \\
-        \\x = "Hello" and False
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
-}
-
-test "check type - binops or" {
-    const source =
-        \\module []
-        \\
-        \\x = True or False
-    ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
-}
-
-test "check type - binops or mismatch" {
-    const source =
-        \\module []
-        \\
-        \\x = "Hello" or False
-    ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
-}
+// test "check type - record access func polymorphic" {
+//     const source =
+//         \\module []
+//         \\
+//         \\x = |r| r.my_field
+//     ;
+//     try assertFileTypeCheckPass(test_allocator, source, "{ my_field: _field } -> _ret");
+// }
 
 // helpers - expr //
 

@@ -662,6 +662,8 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
+            std.debug.print("unifyFlatType {} {}\n", .{ a_flat_type, b_flat_type });
+
             switch (a_flat_type) {
                 .str => {
                     switch (b_flat_type) {
@@ -852,13 +854,10 @@ fn Unifier(comptime StoreTypeB: type) type {
                             try self.unifySharedFields(
                                 vars,
                                 self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
+                                self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
                                 null,
                                 a_gathered_fields.ext,
                             );
-
-                            // Record wins (keeps its extension and any extra fields)
-                            self.merge(vars, vars.a.desc.content);
                         },
                         else => return error.TypeMismatch,
                     }
@@ -904,12 +903,9 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 vars,
                                 self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                                 null,
-                                null,
+                                self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
                                 b_gathered_fields.ext,
                             );
-
-                            // Record wins
-                            self.merge(vars, vars.b.desc.content);
                         },
                         .record_unbound => |b_fields| {
                             // Both are record_unbound - unify fields and stay unbound
@@ -931,13 +927,15 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 b_gathered_range,
                             ) catch return Error.AllocatorError;
 
+                            std.debug.print("YYYYY\n\n", .{});
+
                             // Check that they have the same fields
                             if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
                                 return error.TypeMismatch;
                             }
 
                             // Unify shared fields (no extension since both are unbound)
-                            const dummy_ext = self.fresh(vars, .{ .structure = .empty_record }) catch return Error.AllocatorError;
+                            const dummy_ext = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
                             try self.unifySharedFields(
                                 vars,
                                 self.scratch.in_both_fields.sliceRange(partitioned.in_both),
@@ -945,9 +943,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 null,
                                 dummy_ext,
                             );
-
-                            // Stay unbound (use the first one's fields since they're unified now)
-                            self.merge(vars, vars.a.desc.content);
                         },
                         else => return error.TypeMismatch,
                     }
