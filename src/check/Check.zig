@@ -2352,11 +2352,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_binop => {
             try self.updateVar(expr_var, .err, rank);
         },
-        .e_unary_minus => {
-            try self.updateVar(expr_var, .err, rank);
+        .e_unary_minus => |unary| {
+            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, rank, unary) or does_fx;
         },
-        .e_unary_not => {
-            try self.updateVar(expr_var, .err, rank);
+        .e_unary_not => |unary| {
+            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, rank, unary) or does_fx;
         },
         .e_dot_access => {
             try self.updateVar(expr_var, .err, rank);
@@ -2649,55 +2649,55 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
 
 // unary minus //
 
-// fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryMinus) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
 
-//     // Check the operand expression
-//     const does_fx = try self.checkExpr(unary.expr, rank, .no_expectation);
+    // Check the operand expression
+    const does_fx = try self.checkExpr(unary.expr, rank, .no_expectation);
 
-//     // For unary minus, we constrain the operand and result to be numbers
-//     const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
-//     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
+    // For unary minus, we constrain the operand and result to be numbers
+    const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
+    const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
-//     // Create a fresh number variable for the operation
-//     const num_content = Content{ .structure = .{ .num = .{
-//         .num_unbound = .{
-//             .int_requirements = Num.IntRequirements.init(),
-//             .frac_requirements = Num.FracRequirements.init(),
-//         },
-//     } } };
-//     const num_var = try self.freshFromContent(num_content, expr_region);
+    // Create a fresh number variable for the operation
+    const num_content = Content{ .structure = .{ .num = .{
+        .num_unbound = .{
+            .int_requirements = Num.IntRequirements.init(),
+            .frac_requirements = Num.FracRequirements.init(),
+        },
+    } } };
+    const num_var = try self.freshFromContent(num_content, rank, expr_region);
 
-//     // Unify operand and result with the number type
-//     _ = try self.unify(operand_var, num_var);
-//     _ = try self.unify(result_var, num_var);
+    // Unify operand and result with the number type
+    _ = try self.unify(num_var, operand_var, rank);
+    _ = try self.unify(num_var, result_var, rank);
 
-//     return does_fx;
-// }
+    return does_fx;
+}
 
 // unary not //
 
-// fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
+fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
 
-//     // Check the operand expression
-//     const does_fx = try self.checkExpr(unary.expr);
+    // Check the operand expression
+    const does_fx = try self.checkExpr(unary.expr, rank, .no_expectation);
 
-//     // For unary not, we constrain the operand and result to be booleans
-//     const operand_var = @as(Var, @enumFromInt(@intFromEnum(unary.expr)));
-//     const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+    // For unary not, we constrain the operand and result to be booleans
+    const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
+    const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
-//     // Create a fresh boolean variable for the operation
-//     const bool_var = try self.freshBool(expr_region);
+    // Create a fresh boolean variable for the operation
+    const bool_var = try self.freshBool(rank, expr_region);
 
-//     // Unify operand and result with the boolean type
-//     _ = try self.unify(operand_var, bool_var);
-//     _ = try self.unify(result_var, bool_var);
+    // Unify operand and result with the boolean type
+    _ = try self.unify(bool_var, operand_var, rank);
+    _ = try self.unify(bool_var, result_var, rank);
 
-//     return does_fx;
-// }
+    return does_fx;
+}
 
 // pattern OLD //
 

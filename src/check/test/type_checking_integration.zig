@@ -631,6 +631,48 @@ test "check type - match - diff branch types" {
     try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH BRANCHES");
 }
 
+// unary not
+
+test "check type - unary not" {
+    const source =
+        \\module []
+        \\
+        \\x = !True
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+}
+
+test "check type - unary not mismatch" {
+    const source =
+        \\module []
+        \\
+        \\x = !"Hello"
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+}
+
+// unary not
+
+test "check type - unary minus" {
+    const source =
+        \\module []
+        \\
+        \\x = -10
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
+test "check type - unary minus mismatch" {
+    const source =
+        \\module []
+        \\
+        \\x = "hello"
+        \\
+        \\y = -x
+    ;
+    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+}
+
 // helpers - expr //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
