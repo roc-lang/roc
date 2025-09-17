@@ -1,16 +1,13 @@
 const std = @import("std");
-const base = @import("base");
+const roc_src = @import("roc_src");
 const Bitmasks = @import("Bitmasks.zig");
-const TokenModule = @import("Token.zig");
+const Token = @import("Token.zig");
 
-const Span = base.Span;
-const Region = base.Region;
-const SrcBytes = base.SrcBytes;
 const Self = @This();
-const Blake3 = std.crypto.hash.Blake3;
+const Span = roc_src.Span;
 
 /// The full raw source bytes of the file (or expression), guaranteed to end in newline
-src_bytes: [:'\n']align(16) u8,
+src_bytes: roc_src.Bytes,
 
 /// How many bytes within the raw source we've already processed.
 src_bytes_chomped: usize = 0,
@@ -22,21 +19,6 @@ pages_processed: usize = 0,
 /// Tracks how deep we are in string interpolation nesting
 str_interpolation_level: usize = 0,
 
-pub fn parse(self: *Self) void {
-    const token = self.nextToken(false) orelse return;
-    const current_byte = self.currentSrcByte();
-    const is_interpolating = self.str_interpolation_level > 0;
-
-    // This should only mispredict in the highly unlikely event that we hit a (disallowed) newline
-    // inside a string interpolation.
-    if (current_byte == '\n' and is_interpolating) {
-        @panic("TODO: report an error; newlines are disallowed inside string interpolations!");
-    }
-
-    // TODO: Implement string handling when token types are properly integrated
-    _ = token;
-}
-
 /// Advance to the next token, skipping over whitespace. Returns null if we reached the end of the
 /// source without encountering another token.
 pub fn nextToken(self: *Self, _: bool) ?Token {
@@ -46,9 +28,7 @@ pub fn nextToken(self: *Self, _: bool) ?Token {
     // Our initial index into src is equal to however many bytes we've chomped so far.
     const start = self.src_bytes_chomped;
     const current_byte = self.src_bytes[start];
-    // It's safe to access idx + 1 bc we guarantee there's a newline at the end of src, and
-    // we know current is not a newline. So if nothing else, idx + 1 will point to a newline.
-    _ = self.src_bytes[start + 1]; // next_byte - will be used for 2-byte token detection
+
     // The first byte determines which bitmask we'll use to find the end
     const starts_with = TokenModule.Token.StartsWith.fromUtf8Byte(current_byte);
     // TODO: Implement fromBytePair for Token

@@ -7,7 +7,7 @@ pub const Self = @This();
 pub const page_size: usize = 64;
 
 /// How many bytes within the 64B page we've already processed.
-/// TODO NOTE: we make the *masks* do the padding, by giving them a set of pointers to load their 16B at a time from,
+/// NOTE: we make the *masks* do the padding, by giving them a set of pointers to load their 16B at a time from,
 /// and then giving them different pointers if we're on the last page (pointers which point to 16B of newlines).
 /// This way we never need to actually load 64B into memory!
 bytes_chomped: usize = 0,
@@ -15,18 +15,16 @@ bytes_chomped: usize = 0,
 /// The 64-bit masks, with each bit representing a byte in a 64B page.
 masks: [std.meta.fields(Bitmask).len]u64 = .{0} ** std.meta.fields(Bitmask).len,
 
-/// If any invalid UTF-8 characters are found, they will be marked using the given
-/// u64 bitmap (0-bits mean valid UTF-8 bytes, 1-bits mean invalid UTF-8 found there).
-pub fn init(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
+pub fn init(src_bytes: []align(16) u8) Self {
     if (src_bytes.len >= page_size) {
-        return initExact(src_bytes, invalid_utf8_locs);
+        return initExact(src_bytes);
     } else {
-        return initPartialPage(src_bytes, invalid_utf8_locs);
+        return initPartialPage(src_bytes);
     }
 }
 
 /// Only call when there are enough bytes in here that we can just load everything.
-fn initExact(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
+fn initExact(src_bytes: []align(16) u8) Self {
     std.debug.assert(src_bytes.len >= page_size);
 
     var dollar_mask: u64 = 0;
@@ -49,27 +47,15 @@ fn initExact(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
     // to a known zero (so that it will fail the `== '{'` check) if there is no next page.
     const first_in_next_page_ptr = src_bytes.ptr + page_size;
     const first_in_next_page = if (src_bytes.len > page_size) first_in_next_page_ptr[0] else 0;
-    // TODO is this the bit we want? Like will the very last bit of the u64 be set if we do this? Even given endianness?
     const last_byte_starts_interpolation: u64 = @as(u64, @intFromBool(first_in_next_page == '{')) << 63;
 
-    // UTF-8 validation state
-    const utf8_validation = @import("utf8_validation.zig");
-    var utf8_state = utf8_validation.initState();
-    var utf8_error_mask: u64 = 0;
-
-    // Use 128-bit SIMD because it's supported on all the targets we build for,
-    // including wasm32.
+    // Use 128-bit SIMD because it's supported on all the targets we build for, including wasm32.
     inline for (0..page_size / 16) |ix| {
         const offset = ix * 16;
         const chunk_ptr: *align(16) const [16]u8 = @ptrCast(src_bytes[offset..].ptr);
 
         // Load 16 bytes as a vector
         const chunk_vec: @Vector(16, u8) = chunk_ptr.*;
-
-        // UTF-8 validation
-        const utf8_errors = utf8_validation.validateUtf8ChunkStateful(chunk_vec, &utf8_state);
-        const utf8_error_bits = vectorToBitmask(utf8_errors);
-        utf8_error_mask |= @as(u64, utf8_error_bits) << @intCast(offset);
 
         // Create vectors filled with the target bytes
         const dollar_vec: @Vector(16, u8) = @splat('$');
@@ -147,16 +133,13 @@ fn initExact(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
         const newline_u8 = @intFromBool(newline_cmp);
         const whitespace_u8 = space_u8 | tab_u8 | cr_u8 | newline_u8;
         // Invert for non-whitespace
-        const non_whitespace = whitespace_u8 == @as(@Vector(16, u8), @splat(0));
-        const non_ws_bits = vectorToBitmask(non_whitespace);
+        const non_ws = whitespace_u8 == @as(@Vector(16, u8), @splat(0));
+        const non_ws_bits = vectorToBitmask(non_ws);
         non_whitespace_mask |= @as(u64, non_ws_bits) << @intCast(offset);
     }
 
-    // Update the invalid UTF-8 locations
-    invalid_utf8_locs.* = utf8_error_mask;
-
     const multi_str_seg_ends =
-        (dollar_mask & (brace_mask << 1)) | last_byte_starts_interpolation | newline_mask | backslash_mask;
+        (dollar_mask & (brace_mask >> 1)) | last_byte_starts_interpolation | newline_mask | backslash_mask;
     const single_str_seg_ends = multi_str_seg_ends | quote_mask; // Quotes end single-line strings but not multiline
 
     return Self{
@@ -181,17 +164,17 @@ fn vectorToBitmask(vec: @Vector(16, bool)) u16 {
     }
 }
 
-fn initPartialPage(src_bytes: []align(16) u8, invalid_utf8_locs: *u64) Self {
+fn initPartialPage(src_bytes: []align(16) u8) Self {
     // For partial pages (< 64 bytes), pad with spaces and process normally
     var padded_bytes: [page_size]u8 align(16) = [_]u8{' '} ** page_size;
     @memcpy(padded_bytes[0..src_bytes.len], src_bytes);
 
-    return initExact(&padded_bytes, invalid_utf8_locs);
+    return initExact(&padded_bytes);
 }
 
-/// Load a new page of bytes and compute bitmasks, including UTF-8 validation
+/// Load a new page of bytes and compute bitmasks
 /// This is called for subsequent pages after the initial one
-pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, invalid_utf8_locs: *u64) void {
+pub fn load(self: *Self, src_bytes: []align(16) u8) void {
     const actual_len = @min(src_bytes.len, page_size);
 
     var dollar_mask: u64 = 0;
@@ -201,7 +184,6 @@ pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, inva
     var backslash_mask: u64 = 0;
     var num_or_ident_mask: u64 = 0;
     var non_whitespace_mask: u64 = 0;
-    var utf8_error_mask: u64 = 0;
 
     // Lookup tables for identifier classification
     const high_table = [_]u8{ 0, 0, 0, 1, 2, 4, 8, 16, 32, 32, 32, 32, 32, 32, 32, 32 };
@@ -223,12 +205,6 @@ pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, inva
         const offset = ix * 16;
         const chunk_ptr: *align(16) const [16]u8 = @ptrCast(src_bytes[offset..].ptr);
         const chunk_vec: @Vector(16, u8) = chunk_ptr.*;
-
-        // UTF-8 validation
-        const utf8_validation = @import("utf8_validation.zig");
-        const utf8_errors = utf8_validation.validateUtf8ChunkStateful(chunk_vec, utf8_state);
-        const utf8_error_bits = vectorToBitmask(utf8_errors);
-        utf8_error_mask |= @as(u64, utf8_error_bits) << @intCast(offset);
 
         // Character detection (same as in initExact)
         const dollar_vec: @Vector(16, u8) = @splat('$');
@@ -295,17 +271,14 @@ pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, inva
         const newline_u8 = @intFromBool(newline_cmp);
         const whitespace_u8 = space_u8 | tab_u8 | cr_u8 | newline_u8;
         // Invert for non-whitespace
-        const non_whitespace = whitespace_u8 == @as(@Vector(16, u8), @splat(0));
-        const non_ws_bits = vectorToBitmask(non_whitespace);
+        const non_ws = whitespace_u8 == @as(@Vector(16, u8), @splat(0));
+        const non_ws_bits = vectorToBitmask(non_ws);
         non_whitespace_mask |= @as(u64, non_ws_bits) << @intCast(offset);
     }
 
-    // Update invalid UTF-8 locations
-    invalid_utf8_locs.* = utf8_error_mask;
-
     // Compute string segment end masks
     const multi_str_seg_ends =
-        (dollar_mask & (brace_mask << 1)) | last_byte_starts_interpolation | newline_mask | backslash_mask;
+        (dollar_mask & (brace_mask >> 1)) | last_byte_starts_interpolation | newline_mask | backslash_mask;
     const single_str_seg_ends = multi_str_seg_ends | quote_mask;
 
     // Update masks
@@ -333,7 +306,312 @@ pub fn load(self: *Self, src_bytes: []align(16) u8, utf8_state: *Utf8State, inva
 pub const Bitmask = enum {
     single_str_seg_ends, // "${" or newline or backslash or double quote
     multi_str_seg_ends, // "${" or newline or backslash (no double quote)
-    newlines, // "\n" - for end of comments, and also formatter cares about blank lines
-    non_whitespace, // anything other than [" ", "\t", "\r", "\n"]
+    newlines, // "\n" - for end of comments
+    non_ws, // anything other than [" ", "\t", "\r", "\n"]
     num_or_ident, // '0'..'9', 'A'..'Z', 'a'..'z', '_', and UTF-8 multibyte sequences
 };
+
+// Tests
+
+test "init with small input" {
+    const allocator = std.testing.allocator;
+    const small_input = try allocator.alignedAlloc(u8, 16, 32);
+    defer allocator.free(small_input);
+
+    // Fill with test data
+    for (small_input) |*byte| {
+        byte.* = ' '; // Initialize all with spaces
+    }
+    // Place specific test patterns
+    small_input[0] = '"'; // Quote
+    small_input[1] = 'h';
+    small_input[2] = 'i';
+    small_input[3] = '\n'; // Newline
+    small_input[4] = '$'; // Dollar
+    small_input[5] = '{'; // Brace (should trigger ${)
+    small_input[6] = '\\'; // Backslash
+
+    const bitmasks = init(small_input[0..32]);
+
+    // Check that newline is detected at position 3
+    const newline_mask = bitmasks.masks[@intFromEnum(Bitmask.newlines)];
+    try std.testing.expect((newline_mask >> 3) & 1 == 1);
+
+    // Check that ${ is detected (dollar at position 4)
+    const multi_ends = bitmasks.masks[@intFromEnum(Bitmask.multi_str_seg_ends)];
+    try std.testing.expect((multi_ends >> 4) & 1 == 1);
+
+    // Check that backslash is detected at position 6
+    try std.testing.expect((multi_ends >> 6) & 1 == 1);
+
+    // Check that quote is in single_str_seg_ends
+    const single_ends = bitmasks.masks[@intFromEnum(Bitmask.single_str_seg_ends)];
+    try std.testing.expect((single_ends >> 0) & 1 == 1);
+}
+
+test "init with exact page size" {
+    const allocator = std.testing.allocator;
+    const exact_input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(exact_input);
+
+    // Fill with test data
+    for (exact_input, 0..) |*byte, i| {
+        if (i % 10 == 0) {
+            byte.* = '\n';
+        } else if (i % 15 == 0) {
+            byte.* = '"';
+        } else {
+            byte.* = 'a';
+        }
+    }
+
+    const bitmasks = init(exact_input);
+
+    // Verify newlines are detected at positions 0, 10, 20, 30, 40, 50, 60
+    const newline_mask = bitmasks.masks[@intFromEnum(Bitmask.newlines)];
+    try std.testing.expect((newline_mask >> 0) & 1 == 1);
+    try std.testing.expect((newline_mask >> 10) & 1 == 1);
+    try std.testing.expect((newline_mask >> 20) & 1 == 1);
+    try std.testing.expect((newline_mask >> 30) & 1 == 1);
+    try std.testing.expect((newline_mask >> 40) & 1 == 1);
+    try std.testing.expect((newline_mask >> 50) & 1 == 1);
+    try std.testing.expect((newline_mask >> 60) & 1 == 1);
+
+    // Verify quotes are detected at positions 0, 15, 30, 45, 60
+    const single_str_ends = bitmasks.masks[@intFromEnum(Bitmask.single_str_seg_ends)];
+    try std.testing.expect((single_str_ends >> 15) & 1 == 1);
+    try std.testing.expect((single_str_ends >> 30) & 1 == 1);
+    try std.testing.expect((single_str_ends >> 45) & 1 == 1);
+    try std.testing.expect((single_str_ends >> 60) & 1 == 1);
+}
+
+test "vectorToBitmask" {
+    // Test with all false
+    const all_false: @Vector(16, bool) = @splat(false);
+    try std.testing.expectEqual(@as(u16, 0), vectorToBitmask(all_false));
+
+    // Test with all true
+    const all_true: @Vector(16, bool) = @splat(true);
+    try std.testing.expectEqual(@as(u16, 0xFFFF), vectorToBitmask(all_true));
+
+    // Test with specific pattern
+    var pattern: @Vector(16, bool) = @splat(false);
+    pattern[0] = true;
+    pattern[3] = true;
+    pattern[7] = true;
+    pattern[15] = true;
+    const expected: u16 = (1 << 0) | (1 << 3) | (1 << 7) | (1 << 15);
+    try std.testing.expectEqual(expected, vectorToBitmask(pattern));
+}
+
+test "identifier detection" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Fill with various identifier and non-identifier characters
+    @memcpy(input[0..25], "abc123_XYZ !@#$%^&*()+=[]");
+    // Pad the rest with spaces
+    for (input[26..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    const bitmasks = init(input);
+
+    const ident_mask = bitmasks.masks[@intFromEnum(Bitmask.num_or_ident)];
+
+    // Check that letters, numbers, and underscore are detected
+    try std.testing.expect((ident_mask >> 0) & 1 == 1); // 'a'
+    try std.testing.expect((ident_mask >> 1) & 1 == 1); // 'b'
+    try std.testing.expect((ident_mask >> 2) & 1 == 1); // 'c'
+    try std.testing.expect((ident_mask >> 3) & 1 == 1); // '1'
+    try std.testing.expect((ident_mask >> 4) & 1 == 1); // '2'
+    try std.testing.expect((ident_mask >> 5) & 1 == 1); // '3'
+    try std.testing.expect((ident_mask >> 6) & 1 == 1); // '_'
+    try std.testing.expect((ident_mask >> 7) & 1 == 1); // 'X'
+    try std.testing.expect((ident_mask >> 8) & 1 == 1); // 'Y'
+    try std.testing.expect((ident_mask >> 9) & 1 == 1); // 'Z'
+
+    // Check that special characters are not detected as identifiers
+    try std.testing.expect((ident_mask >> 11) & 1 == 0); // '!'
+    try std.testing.expect((ident_mask >> 12) & 1 == 0); // '@'
+    try std.testing.expect((ident_mask >> 13) & 1 == 0); // '#'
+}
+
+test "whitespace detection" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Mix of whitespace and non-whitespace
+    @memcpy(input[0..16], "a b\tc\rd\ne       ");
+    // Pad the rest
+    for (input[16..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    const bitmasks = init(input);
+
+    const non_ws_mask = bitmasks.masks[@intFromEnum(Bitmask.non_ws)];
+
+    // Check non-whitespace characters are detected
+    try std.testing.expect((non_ws_mask >> 0) & 1 == 1); // 'a'
+    try std.testing.expect((non_ws_mask >> 2) & 1 == 1); // 'b'
+    try std.testing.expect((non_ws_mask >> 4) & 1 == 1); // 'c'
+    try std.testing.expect((non_ws_mask >> 6) & 1 == 1); // 'd'
+    try std.testing.expect((non_ws_mask >> 8) & 1 == 1); // 'e'
+
+    // Check whitespace characters are not in non_ws mask
+    try std.testing.expect((non_ws_mask >> 1) & 1 == 0); // ' '
+    try std.testing.expect((non_ws_mask >> 3) & 1 == 0); // '\t'
+    try std.testing.expect((non_ws_mask >> 5) & 1 == 0); // '\r'
+    try std.testing.expect((non_ws_mask >> 7) & 1 == 0); // '\n'
+}
+
+test "string interpolation detection" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Initialize all bytes to spaces
+    for (input) |*byte| {
+        byte.* = ' ';
+    }
+
+    // Test string with interpolation
+    input[0] = '"';
+    input[1] = 'h';
+    input[2] = 'e';
+    input[3] = 'l';
+    input[4] = 'l';
+    input[5] = 'o';
+    input[6] = ' ';
+    input[7] = '$'; // Dollar at position 7
+    input[8] = '{'; // Brace at position 8 (forms ${)
+    input[9] = 'n';
+    input[10] = 'a';
+    input[11] = 'm';
+    input[12] = 'e';
+    input[13] = '}';
+    input[14] = '"';
+
+    const bitmasks = init(input);
+
+    const multi_ends = bitmasks.masks[@intFromEnum(Bitmask.multi_str_seg_ends)];
+    const single_ends = bitmasks.masks[@intFromEnum(Bitmask.single_str_seg_ends)];
+
+    // Check that quote is in single_str_seg_ends
+    try std.testing.expect((single_ends >> 0) & 1 == 1); // '"' at position 0
+
+    // Check that ${ is detected (dollar at position 7)
+    try std.testing.expect((multi_ends >> 7) & 1 == 1); // '$' followed by '{'
+}
+
+test "escape sequence detection" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Test with backslashes
+    @memcpy(input[0..10], "a\\nb\\tc\\\\d");
+    // Pad the rest
+    for (input[10..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    const bitmasks = init(input);
+
+    const multi_ends = bitmasks.masks[@intFromEnum(Bitmask.multi_str_seg_ends)];
+    const single_ends = bitmasks.masks[@intFromEnum(Bitmask.single_str_seg_ends)];
+
+    // Check that backslashes are detected
+    try std.testing.expect((multi_ends >> 1) & 1 == 1); // '\\' at position 1
+    try std.testing.expect((multi_ends >> 4) & 1 == 1); // '\\' at position 4
+    try std.testing.expect((multi_ends >> 7) & 1 == 1); // '\\' at position 7
+    try std.testing.expect((multi_ends >> 8) & 1 == 1); // '\\' at position 8
+
+    // Backslashes should also be in single_str_seg_ends
+    try std.testing.expect((single_ends >> 1) & 1 == 1);
+    try std.testing.expect((single_ends >> 4) & 1 == 1);
+    try std.testing.expect((single_ends >> 7) & 1 == 1);
+    try std.testing.expect((single_ends >> 8) & 1 == 1);
+}
+
+test "UTF-8 multibyte detection" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Test with UTF-8 multibyte sequences
+    // "café" = 'c' 'a' 'f' 0xC3 0xA9 (é in UTF-8)
+    input[0] = 'c';
+    input[1] = 'a';
+    input[2] = 'f';
+    input[3] = 0xC3; // First byte of é
+    input[4] = 0xA9; // Second byte of é
+
+    // Pad the rest
+    for (input[5..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    const bitmasks = init(input);
+
+    const ident_mask = bitmasks.masks[@intFromEnum(Bitmask.num_or_ident)];
+
+    // ASCII letters should be detected as identifiers
+    try std.testing.expect((ident_mask >> 0) & 1 == 1); // 'c'
+    try std.testing.expect((ident_mask >> 1) & 1 == 1); // 'a'
+    try std.testing.expect((ident_mask >> 2) & 1 == 1); // 'f'
+
+    // UTF-8 multibyte sequences should be detected as identifiers
+    try std.testing.expect((ident_mask >> 3) & 1 == 1); // 0xC3
+    try std.testing.expect((ident_mask >> 4) & 1 == 1); // 0xA9
+}
+
+test "load function with new pages" {
+    const allocator = std.testing.allocator;
+    const input = try allocator.alignedAlloc(u8, 16, page_size);
+    defer allocator.free(input);
+
+    // Initialize with first page
+    @memcpy(input[0..10], "first page");
+    for (input[10..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    var bitmasks = init(input);
+
+    // Load a second page
+    @memcpy(input[0..11], "second\npage");
+    for (input[11..]) |*byte| {
+        byte.* = ' ';
+    }
+
+    bitmasks.load(input);
+
+    // Check that newline in second page is detected
+    const newline_mask = bitmasks.masks[@intFromEnum(Bitmask.newlines)];
+    try std.testing.expect((newline_mask >> 6) & 1 == 1); // '\n' at position 6
+}
+
+test "edge case: page boundary interpolation" {
+    const allocator = std.testing.allocator;
+
+    // Test case where '$' is at the end of a page and '{' starts the next page
+    const input1 = try allocator.alignedAlloc(u8, 16, page_size + 1);
+    defer allocator.free(input1);
+
+    // Fill most of the page with 'a', put '$' at the last position
+    for (input1[0 .. page_size - 1]) |*byte| {
+        byte.* = 'a';
+    }
+    input1[page_size - 1] = '$';
+    input1[page_size] = '{'; // First byte of next page
+
+    const bitmasks = init(input1[0 .. page_size + 1]);
+
+    // The last bit should be set in multi_str_seg_ends because of ${ spanning the boundary
+    const multi_ends = bitmasks.masks[@intFromEnum(Bitmask.multi_str_seg_ends)];
+    try std.testing.expect((multi_ends >> 63) & 1 == 1);
+}

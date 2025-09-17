@@ -102,7 +102,7 @@ pub const RocModules = struct {
             ),
             .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
             .roc_src = b.addModule("roc_src", .{ .root_source_file = b.path("src/roc_src/mod.zig") }),
-            .scan = b.addModule("scan", .{ .root_source_file = b.path("src/scan/mod.zig") }),
+            .lex = b.addModule("lex", .{ .root_source_file = b.path("src/lex/mod.zig") }),
             .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
             .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
             .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
