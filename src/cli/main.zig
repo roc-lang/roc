@@ -1397,7 +1397,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Type check the module
     var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
-    try checker.checkDefs();
+    try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;

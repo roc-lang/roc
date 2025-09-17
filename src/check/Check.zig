@@ -1623,7 +1623,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .int = suffix } } } }, rank);
             } else {
                 const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .int_unbound = Num.IntRequirements.init(),
+                    .int_unbound = num.requirements,
                 } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(int_var, rank);
 

@@ -328,7 +328,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
 
     // Type check the expression
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // WORKAROUND: The type checker doesn't set types for binop expressions yet.
     // For numeric binops, manually set the type to match the operands.

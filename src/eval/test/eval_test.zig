@@ -718,7 +718,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonicalized_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
     // Test 1: Evaluate with the original ModuleEnv
     {

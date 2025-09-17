@@ -28,12 +28,6 @@ fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
     }
 }
 
-fn calculateRequirements(value: i128) types.Num.Int.Requirements {
-    const bits_needed = types.Num.Int.BitsNeeded.fromValue(@bitCast(value));
-
-    return .{ .sign_needed = value < 0, .bits_needed = bits_needed };
-}
-
 test "canonicalize simple positive integer" {
     const source = "42";
     var test_env = try TestEnv.init(source);
