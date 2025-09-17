@@ -267,7 +267,7 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 
 /// Unify two variables where the second represents an annotation type.
 /// This sets from_annotation=true to ensure proper error region highlighting.
-pub fn unifyWithAnnotation(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
+pub fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -408,9 +408,14 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     }
 }
 
-/// The the region for a variable
+/// Set the region for a var
 fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
     self.regions.set(@enumFromInt(@intFromEnum(target_var)), new_region);
+}
+
+/// Get the region for a var
+fn getRegionAt(self: *Self, target_var: Var) Region {
+    self.regions.get(@enumFromInt(@intFromEnum(target_var)));
 }
 
 // fresh vars //
@@ -519,6 +524,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         self.anno_free_vars.items.clearRetainingCapacity();
         try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
         const anno_var = ModuleEnv.varFrom(annotation.type_anno);
+
+        // TODO: Duplicate anno var so if the body results in type mismatch, the
+        // annotation isn't corrupted
 
         _ = try self.checkExpr(def.expr, rank, .{
             .expected = .{ .var_ = anno_var, .from_annotation = true },
@@ -1980,7 +1988,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
 
             // Check the final expression
-            does_fx = try self.checkExpr(block.final_expr, next_rank, .no_expectation) or does_fx;
+            does_fx = try self.checkExpr(block.final_expr, next_rank, expected) or does_fx;
 
             // Link the root expr with the final expr
             try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(block.final_expr));
@@ -2104,7 +2112,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     // actual type
                     for (expected_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
                         if (is_expected_from_anno) {
-                            _ = try self.unifyWithAnnotation(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
+                            _ = try self.unifyFromAnno(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
                         } else {
                             _ = try self.unify(expected_arg_var, ModuleEnv.varFrom(pattern_idx), next_rank);
                         }
@@ -2349,8 +2357,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_match => |match| {
             does_fx = try self.checkMatchExpr(expr_idx, rank, match) or does_fx;
         },
-        .e_binop => {
-            try self.updateVar(expr_var, .err, rank);
+        .e_binop => |binop| {
+            does_fx = try self.checkBinopExpr(expr_idx, expr_region, rank, binop, expected) or does_fx;
         },
         .e_unary_minus => |unary| {
             does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, rank, unary) or does_fx;
@@ -2385,7 +2393,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .no_expectation => {},
         .expected => |expected_type| {
             if (expected_type.from_annotation) {
-                _ = try self.unifyWithAnnotation(expected_type.var_, expr_var, rank);
+                _ = try self.unifyFromAnno(expected_type.var_, expr_var, rank);
             } else {
                 _ = try self.unify(expected_type.var_, expr_var, rank);
             }
@@ -2426,7 +2434,7 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         .no_expectation => {},
         .expected => |expected_type| {
             if (expected_type.from_annotation) {
-                _ = try self.unifyWithAnnotation(expected_type.var_, pattern_var, rank);
+                _ = try self.unifyFromAnno(expected_type.var_, pattern_var, rank);
             } else {
                 _ = try self.unify(expected_type.var_, pattern_var, rank);
             }
@@ -2785,7 +2793,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
 //     const does_fx = self.checkExprWithExpectedAndAnnotationHelp(expr_idx, expected_type, from_annotation);
 //     if (expected_type) |expected| {
 //         if (from_annotation) {
-//             _ = try self.unifyWithAnnotation(expected, ModuleEnv.varFrom(expr_idx));
+//             _ = try self.unifyFromAnno(expected, ModuleEnv.varFrom(expr_idx));
 //         } else {
 //             _ = try self.unify(expected, ModuleEnv.varFrom(expr_idx));
 //         }
@@ -2817,7 +2825,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
 //             if (expected_type) |expected| {
 //                 const literal_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
 //                 if (from_annotation) {
-//                     _ = try self.unifyWithAnnotation(literal_var, expected);
+//                     _ = try self.unifyFromAnno(literal_var, expected);
 //                 } else {
 //                     _ = try self.unify(literal_var, expected);
 //                 }
@@ -3531,133 +3539,140 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
 //     return false;
 // }
 
-// // binop //
+// binop //
 
-// /// Check the types for a binary operation expression
-// fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, binop: CIR.Expr.Binop, expected_type: ?Var, from_annotation: bool) Allocator.Error!bool {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
+/// Check the types for a binary operation expression
+fn checkBinopExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    rank: Rank,
+    binop: CIR.Expr.Binop,
+    expected: Expected,
+) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
 
-//     switch (binop.op) {
-//         .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-//             // Check operands first
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    const lhs_var = @as(Var, ModuleEnv.varFrom(binop.lhs));
+    const rhs_var = @as(Var, ModuleEnv.varFrom(binop.rhs));
 
-//             // For now, we'll constrain both operands to be numbers
-//             // In the future, this will use static dispatch based on the lhs type
-//             const lhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.lhs)));
-//             const rhs_var = @as(Var, @enumFromInt(@intFromEnum(binop.rhs)));
-//             const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+    // Check operands first
+    var does_fx = false;
+    does_fx = try self.checkExpr(binop.lhs, rank, .no_expectation) or does_fx;
+    does_fx = try self.checkExpr(binop.rhs, rank, .no_expectation) or does_fx;
 
-//             // For bidirectional type checking: if we have an expected type,
-//             // we need to unify all operands and result with it.
-//             // This ensures literals like `2` in `|x| x + 2` get properly constrained
-//             // when the lambda has a type annotation like `I64 -> I64`.
-//             if (expected_type) |expected| {
-//                 // All three must be the same type for arithmetic operations
-//                 if (from_annotation) {
-//                     _ = try self.unifyWithAnnotation(lhs_var, expected);
-//                     _ = try self.unifyWithAnnotation(rhs_var, expected);
-//                     _ = try self.unifyWithAnnotation(result_var, expected);
-//                 } else {
-//                     _ = try self.unify(lhs_var, expected);
-//                     _ = try self.unify(rhs_var, expected);
-//                     _ = try self.unify(result_var, expected);
-//                 }
-//             } else {
-//                 // No expected type - use fresh number variables to maintain polymorphism
-//                 const num_content = Content{ .structure = .{ .num = .{
-//                     .num_unbound = .{
-//                         .int_requirements = Num.IntRequirements.init(),
-//                         .frac_requirements = Num.FracRequirements.init(),
-//                     },
-//                 } } };
-//                 const num_var_lhs = try self.freshFromContent(num_content, expr_region);
-//                 const num_var_rhs = try self.freshFromContent(num_content, expr_region);
-//                 const num_var_result = try self.freshFromContent(num_content, expr_region);
+    switch (binop.op) {
+        .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
+            // For now, we'll constrain both operands to be numbers
+            // In the future, this will use static dispatch based on the lhs type
 
-//                 // Unify lhs, rhs, and result with the number type
-//                 _ = try self.unify(num_var_lhs, lhs_var);
-//                 _ = try self.unify(num_var_rhs, rhs_var);
-//                 _ = try self.unify(result_var, num_var_result);
-//             }
+            // We check the lhs and the rhs independently, then unify them with
+            // each other. This ensures that all errors are surfaced and the
+            // operands are the same type
+            switch (expected) {
+                .expected => |expectation| {
+                    const lhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
+                    const rhs_instantiated = try self.instantiateVar(expectation.var_, rank, .{ .explicit = expr_region });
 
-//             return does_fx;
-//         },
-//         .lt, .gt, .le, .ge, .eq, .ne => {
-//             // Check operands first
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
+                    if (expectation.from_annotation) {
+                        _ = try self.unifyFromAnno(lhs_instantiated, lhs_var, rank);
+                        _ = try self.unifyFromAnno(rhs_instantiated, rhs_var, rank);
+                    } else {
+                        _ = try self.unify(lhs_instantiated, lhs_var, rank);
+                        _ = try self.unify(rhs_instantiated, rhs_var, rank);
+                    }
+                },
+                .no_expectation => {
+                    // Start with empty requirements that can be constrained by operands
+                    const num_content = Content{ .structure = .{ .num = .{
+                        .num_unbound = .{
+                            .int_requirements = Num.IntRequirements.init(),
+                            .frac_requirements = Num.FracRequirements.init(),
+                        },
+                    } } };
+                    const lhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
+                    const rhs_num_var = try self.freshFromContent(num_content, rank, expr_region);
 
-//             // Comparison operators always return Bool
-//             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                    // Unify left and right operands with num
+                    _ = try self.unify(lhs_num_var, lhs_var, rank);
+                    _ = try self.unify(rhs_num_var, rhs_var, rank);
+                },
+            }
 
-//             const fresh_bool = try self.freshBool(expr_region);
-//             _ = try self.unify(expr_var, fresh_bool);
+            // Unify left and right together
+            _ = try self.unify(lhs_var, rhs_var, rank);
 
-//             return does_fx;
-//         },
-//         .@"and" => {
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            // Set root expr. If unifications suceeded this will the the
+            // num, otherwise the propgated error
+            try self.types.setVarRedirect(expr_var, lhs_var);
+        },
+        .lt, .gt, .le, .ge, .eq, .ne => {
+            // Ensure the operands are the same type
+            _ = try self.unify(lhs_var, rhs_var, rank);
 
-//             const lhs_fresh_bool = try self.freshBool(expr_region);
-//             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
-//             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
-//                 .binop_expr = expr_idx,
-//                 .problem_side = .lhs,
-//                 .binop = .@"and",
-//             } });
+            // Set root expr. If unifications suceeded this will the the
+            // num, otherwise the propgated error
+            try self.types.setVarRedirect(expr_var, lhs_var);
+        },
+        .@"and" => {
+            const lhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
+            self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .lhs,
+                .binop = .@"and",
+            } });
 
-//             if (lhs_result.isOk()) {
-//                 const rhs_fresh_bool = try self.freshBool(expr_region);
-//                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
-//                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
-//                     .binop_expr = expr_idx,
-//                     .problem_side = .rhs,
-//                     .binop = .@"and",
-//                 } });
-//             }
+            const rhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const rhs_result = try self.unify(rhs_fresh_bool, rhs_var, rank);
+            self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .rhs,
+                .binop = .@"and",
+            } });
 
-//             return does_fx;
-//         },
-//         .@"or" => {
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
+            // Unify left and right together
+            _ = try self.unify(lhs_var, rhs_var, rank);
 
-//             const lhs_fresh_bool = try self.freshBool(expr_region);
-//             const lhs_result = try self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
-//             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
-//                 .binop_expr = expr_idx,
-//                 .problem_side = .lhs,
-//                 .binop = .@"or",
-//             } });
+            // Set root expr. If unifications suceeded this will the the
+            // num, otherwise the propgated error
+            try self.types.setVarRedirect(expr_var, lhs_var);
+        },
+        .@"or" => {
+            const lhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
+            self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .lhs,
+                .binop = .@"and",
+            } });
 
-//             if (lhs_result.isOk()) {
-//                 const rhs_fresh_bool = try self.freshBool(expr_region);
-//                 const rhs_result = try self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
-//                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
-//                     .binop_expr = expr_idx,
-//                     .problem_side = .rhs,
-//                     .binop = .@"or",
-//                 } });
-//             }
+            const rhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const rhs_result = try self.unify(rhs_fresh_bool, rhs_var, rank);
+            self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .rhs,
+                .binop = .@"and",
+            } });
 
-//             return does_fx;
-//         },
-//         .pipe_forward => {
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
-//             return does_fx;
-//         },
-//         .null_coalesce => {
-//             var does_fx = try self.checkExpr(binop.lhs);
-//             does_fx = try self.checkExpr(binop.rhs) or does_fx;
-//             return does_fx;
-//         },
-//     }
-// }
+            // Unify left and right together
+            _ = try self.unify(lhs_var, rhs_var, rank);
+
+            // Set root expr. If unifications suceeded this will the the
+            // num, otherwise the propgated error
+            try self.types.setVarRedirect(expr_var, lhs_var);
+        },
+        .pipe_forward => {
+            // TODO
+        },
+        .null_coalesce => {
+            // TODO
+        },
+    }
+
+    return does_fx;
+}
 
 // problems //
 

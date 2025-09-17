@@ -353,7 +353,7 @@ pub const Num = union(enum) {
         bits_needed: u8,
 
         pub fn init() @This() {
-            return .{ .sign_needed = true, .bits_needed = 0 };
+            return .{ .sign_needed = false, .bits_needed = 0 };
         }
 
         /// Unifies two IntRequirements, returning the most restrictive combination
