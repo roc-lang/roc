@@ -2366,25 +2366,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_unary_not => |unary| {
             does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, rank, unary) or does_fx;
         },
-        .e_dot_access => |dot_access| switch_blk: {
+        .e_dot_access => |dot_access| {
             // Check the receiver expression
             does_fx = try self.checkExpr(dot_access.receiver, rank, .no_expectation) or does_fx;
 
-            // Handle different receiver types
             const receiver_var = ModuleEnv.varFrom(dot_access.receiver);
-            const resolved_receiver = self.types.resolveVar(receiver_var);
 
-            switch (resolved_receiver.desc.content) {
-                .err => {
-                    // If the reciever type is an error, then propgate it and  break
-                    try self.updateVar(expr_var, .err, rank);
-                    break :switch_blk;
-                },
-                .structure => |structure| switch (structure) {
-                    .nominal_type => |nominal| {
-                        // This is a static dispatch on a nominal type
+            if (dot_access.args) |args_span| {
+                // If this dot access has args, then it's static dispatch
 
-                        if (dot_access.args) |args_span| {
+                const resolved_receiver = self.types.resolveVar(receiver_var);
+                switch (resolved_receiver.desc.content) {
+                    .err => {
+                        // If the reciever type is an error, then propgate it and  break
+                        try self.updateVar(expr_var, .err, rank);
+                    },
+                    .structure => |structure| switch (structure) {
+                        .nominal_type => |nominal| {
+                            // This is a static dispatch on a nominal type
+
                             // Method call with arguments
                             // Get the origin module path
                             const origin_module_path = self.cir.getIdent(nominal.origin_module);
@@ -2471,70 +2471,36 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 // TODO: Add a proper error type for origin module not found
                                 try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
                             }
-                        } else {
-                            // No arguments
-                            // TODO: This might be a field access on a nominal type's backing type, add proper error
-                            try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
-                        }
-
-                        // Since this was a nominal, stop execution
-                        break :switch_blk;
+                        },
+                        else => {
+                            // Receiver is not a nominal var, this is a type error
+                            // TODO: Add a proper error when reciever is not a nominal var
+                        },
                     },
-                    // .record => |record| {
-                    //     // Receiver is already a record, find the field
-                    //     const fields = self.types.getRecordFieldsSlice(record.fields);
-
-                    //     // Find the field with the matching name
-                    //     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
-                    //         if (field_name == dot_access.field_name) {
-                    //             // Unify the dot access expression with the field type
-                    //             _ = try self.unify(expr_var, field_var, rank);
-                    //             break;
-                    //         }
-                    //     }
-
-                    //     // Continue to general unification
-                    // },
-                    // .record_unbound => |record_unbound| {
-                    //     // Receiver is an unbound record, find the field
-                    //     const fields = self.types.getRecordFieldsSlice(record_unbound);
-
-                    //     // Find the field with the matching name
-                    //     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
-                    //         if (field_name == dot_access.field_name) {
-                    //             // Unify the dot access expression with the field type
-                    //             _ = try self.unify(expr_var, field_var, rank);
-                    //             break;
-                    //         }
-                    //     }
-
-                    //     // Continue to general unification
-                    // },
                     else => {
-                        // Receiver is not a record, this is a type error
-                        // For now, we'll let unification handle the error
+                        // Receiver is not a nominal var, this is a type error
+                        // TODO: Add a proper error when reciever is not a nominal var
+
                     },
-                },
-                else => {
-                    // Receiver is not a record, this is a type error
-                    // For now, we'll let unification handle the error
+                }
+            } else {
+                // Otherwise, this is dot access on a record
 
-                },
+                // Create a type for the inferred type of this record access
+                // E.g. foo.bar -> { bar: flex } a
+                const record_field_var = try self.fresh(rank, expr_region);
+                const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                    .name = dot_access.field_name,
+                    .var_ = record_field_var,
+                }});
+                const record_being_accessed = try self.freshFromContent(.{ .structure = .{
+                    .record_unbound = record_field_range,
+                } }, rank, expr_region);
+
+                // Then, unify the actual reciever type with the expected record
+                _ = try self.unify(record_being_accessed, receiver_var, rank);
+                try self.types.setVarRedirect(expr_var, record_field_var);
             }
-
-            // Create a type for the inferred type of this record access
-            // E.g. foo.bar -> { bar: flex } a
-            const record_field_var = try self.fresh(rank, expr_region);
-            const record_field_range = try self.types.appendRecordFields(&.{types_mod.RecordField{
-                .name = dot_access.field_name,
-                .var_ = record_field_var,
-            }});
-            const record_being_accessed = try self.freshFromContent(.{ .structure = .{
-                .record_unbound = record_field_range,
-            } }, rank, expr_region);
-
-            // Then, unify the actual reciever type with the expected record
-            _ = try self.unify(record_being_accessed, receiver_var, rank);
         },
         .e_crash => {
             try self.updateVar(expr_var, .{ .flex_var = null }, rank);
