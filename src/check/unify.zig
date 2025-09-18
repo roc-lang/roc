@@ -662,8 +662,6 @@ fn Unifier(comptime StoreTypeB: type) type {
             const trace = tracy.trace(@src());
             defer trace.end();
 
-            std.debug.print("unifyFlatType {} {}\n", .{ a_flat_type, b_flat_type });
-
             switch (a_flat_type) {
                 .str => {
                     switch (b_flat_type) {
@@ -822,41 +820,21 @@ fn Unifier(comptime StoreTypeB: type) type {
                             }
                         },
                         .record => |b_record| {
-                            try self.unifyTwoRecords(vars, a_record, b_record);
+                            try self.unifyTwoRecords(
+                                vars,
+                                a_record.fields,
+                                .{ .ext = a_record.ext },
+                                b_record.fields,
+                                .{ .ext = b_record.ext },
+                            );
                         },
                         .record_unbound => |b_fields| {
-                            // When unifying record with record_unbound, record wins
-                            // First gather the fields from the record
-                            const a_gathered_fields = try self.gatherRecordFields(a_record);
-
-                            // For record_unbound, we just have the fields directly (no extension)
-                            const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                b_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_fields.range,
-                                b_gathered_range,
-                            ) catch return Error.AllocatorError;
-
-                            // record_unbound requires at least its fields to be present in the record
-                            // The record can have additional fields (that's what makes it extensible)
-                            if (partitioned.only_in_b.len() > 0) {
-                                // The record_unbound has fields that the record doesn't have
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
+                            try self.unifyTwoRecords(
                                 vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                                null,
-                                a_gathered_fields.ext,
+                                a_record.fields,
+                                .{ .ext = a_record.ext },
+                                b_fields,
+                                .unbound,
                             );
                         },
                         else => return error.TypeMismatch,
@@ -873,75 +851,21 @@ fn Unifier(comptime StoreTypeB: type) type {
                             }
                         },
                         .record => |b_record| {
-                            // When unifying record_unbound with record, record wins
-                            // Copy unbound fields into scratch
-                            const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                a_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Gather fields from the record
-                            const b_gathered_fields = try self.gatherRecordFields(b_record);
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_range,
-                                b_gathered_fields.range,
-                            ) catch return Error.AllocatorError;
-
-                            // record_unbound requires at least its fields to be present in the record
-                            // The record can have additional fields (that's what makes it extensible)
-                            if (partitioned.only_in_a.len() > 0) {
-                                // The record_unbound has fields that the record doesn't have
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
+                            try self.unifyTwoRecords(
                                 vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                                b_gathered_fields.ext,
+                                a_fields,
+                                .unbound,
+                                b_record.fields,
+                                .{ .ext = b_record.ext },
                             );
                         },
                         .record_unbound => |b_fields| {
-                            // Both are record_unbound - unify fields and stay unbound
-                            // Copy both field sets into scratch
-                            const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                a_fields,
-                            ) catch return Error.AllocatorError;
-                            const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                b_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_range,
-                                b_gathered_range,
-                            ) catch return Error.AllocatorError;
-
-                            std.debug.print("YYYYY\n\n", .{});
-
-                            // Check that they have the same fields
-                            if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields (no extension since both are unbound)
-                            const dummy_ext = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
-                            try self.unifySharedFields(
+                            try self.unifyTwoRecords(
                                 vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                dummy_ext,
+                                a_fields,
+                                .unbound,
+                                b_fields,
+                                .unbound,
                             );
                         },
                         else => return error.TypeMismatch,
@@ -1962,16 +1886,18 @@ fn Unifier(comptime StoreTypeB: type) type {
         fn unifyTwoRecords(
             self: *Self,
             vars: *const ResolvedVarDescs,
-            a_record: Record,
-            b_record: Record,
+            a_fields: RecordField.SafeMultiList.Range,
+            a_ext: RecordExt,
+            b_fields: RecordField.SafeMultiList.Range,
+            b_ext: RecordExt,
         ) Error!void {
             const trace = tracy.trace(@src());
             defer trace.end();
 
             // First, unwrap all fields for record, erroring if we encounter an
             // invalid record ext var
-            const a_gathered_fields = try self.gatherRecordFields(a_record);
-            const b_gathered_fields = try self.gatherRecordFields(b_record);
+            const a_gathered_fields = try self.gatherRecordFields(a_fields, a_ext);
+            const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
 
             // Then partition the fields
             const partitioned = Self.partitionFields(
@@ -1994,11 +1920,24 @@ fn Unifier(comptime StoreTypeB: type) type {
                 fields_ext = .b_extends_a;
             }
 
+            const a_gathered_ext = blk: {
+                switch (a_gathered_fields.ext) {
+                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .ext => |ext_var| break :blk ext_var,
+                }
+            };
+            const b_gathered_ext = blk: {
+                switch (b_gathered_fields.ext) {
+                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .ext => |ext_var| break :blk ext_var,
+                }
+            };
+
             // Unify fields
             switch (fields_ext) {
                 .exactly_the_same => {
                     // Unify exts
-                    try self.unifyGuarded(a_gathered_fields.ext, b_gathered_fields.ext);
+                    try self.unifyGuarded(a_gathered_ext, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2007,7 +1946,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                         null,
                         null,
-                        a_gathered_fields.ext,
+                        a_gathered_ext,
                     );
                 },
                 .a_extends_b => {
@@ -2018,11 +1957,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
-                        .ext = a_gathered_fields.ext,
+                        .ext = a_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Unify the sub record with b's ext
-                    try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
+                    try self.unifyGuarded(only_in_a_var, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2042,11 +1981,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
-                        .ext = b_gathered_fields.ext,
+                        .ext = b_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Unify the sub record with a's ext
-                    try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
+                    try self.unifyGuarded(a_gathered_ext, only_in_b_var);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2066,7 +2005,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
-                        .ext = a_gathered_fields.ext,
+                        .ext = a_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new variable of a record with only b's uniq fields
@@ -2076,15 +2015,15 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
-                        .ext = b_gathered_fields.ext,
+                        .ext = b_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new ext var
                     const new_ext_var = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
 
                     // Unify the sub records with exts
-                    try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
-                    try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
+                    try self.unifyGuarded(a_gathered_ext, only_in_b_var);
+                    try self.unifyGuarded(only_in_a_var, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2101,7 +2040,9 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-        const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
+        const RecordExt = union(enum) { ext: Var, unbound };
+
+        const GatheredFields = struct { ext: RecordExt, range: RecordFieldSafeList.Range };
 
         /// Recursively unwraps the fields of an extensible record, flattening all visible fields
         /// into `scratch.gathered_fields` and following through:
@@ -2113,53 +2054,60 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// * the final tail extension variable, which is either a flex var or an empty record
         ///
         /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-        fn gatherRecordFields(self: *Self, record: Record) Error!GatheredFields {
+        fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: RecordExt) Error!GatheredFields {
             // first, copy from the store's MultiList record fields array into scratch's
             // regular list, capturing the insertion range
             var range = self.scratch.copyGatherFieldsFromMultiList(
                 &self.types_store.record_fields,
-                record.fields,
+                record_fields,
             ) catch return Error.AllocatorError;
 
             // then recursiv
-            var ext_var = record.ext;
+            var ext = record_ext;
             while (true) {
-                switch (self.types_store.resolveVar(ext_var).desc.content) {
-                    .flex_var => {
-                        return .{ .ext = ext_var, .range = range };
+                switch (record_ext) {
+                    .unbound => {
+                        return .{ .ext = ext, .range = range };
                     },
-                    .rigid_var => {
-                        return .{ .ext = ext_var, .range = range };
-                    },
-                    .alias => |alias| {
-                        ext_var = self.types_store.getAliasBackingVar(alias);
-                    },
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .record => |ext_record| {
-                                const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store.record_fields,
-                                    ext_record.fields,
-                                ) catch return Error.AllocatorError;
-                                range.count += next_range.count;
-                                ext_var = ext_record.ext;
+                    .ext => |ext_var| {
+                        switch (self.types_store.resolveVar(ext_var).desc.content) {
+                            .flex_var => {
+                                return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
-                            .record_unbound => |fields| {
-                                const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store.record_fields,
-                                    fields,
-                                ) catch return Error.AllocatorError;
-                                range.count += next_range.count;
-                                // record_unbound has no extension, so we're done
-                                return .{ .ext = ext_var, .range = range };
+                            .rigid_var => {
+                                return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
-                            .empty_record => {
-                                return .{ .ext = ext_var, .range = range };
+                            .alias => |alias| {
+                                ext = .{ .ext = self.types_store.getAliasBackingVar(alias) };
+                            },
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .record => |ext_record| {
+                                        const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                            &self.types_store.record_fields,
+                                            ext_record.fields,
+                                        ) catch return Error.AllocatorError;
+                                        range.count += next_range.count;
+                                        ext = .{ .ext = ext_record.ext };
+                                    },
+                                    .record_unbound => |fields| {
+                                        const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                            &self.types_store.record_fields,
+                                            fields,
+                                        ) catch return Error.AllocatorError;
+                                        range.count += next_range.count;
+                                        // record_unbound has no extension, so we're done
+                                        return .{ .ext = ext, .range = range };
+                                    },
+                                    .empty_record => {
+                                        return .{ .ext = ext, .range = range };
+                                    },
+                                    else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                                }
                             },
                             else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
                         }
                     },
-                    else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
                 }
             }
         }
