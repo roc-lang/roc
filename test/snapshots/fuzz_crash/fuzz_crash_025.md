@@ -152,11 +152,13 @@ e = 3402823669209384634633746074317682114553.14: I8
 ```
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The type annotation says it should have the type:
-    _U128_
+It has the type:
+    _Num(Frac(_size))_
 
-But here it's being used as:
-    _Frac(_size)_
+But the type annotation says it should have the type:
+    _Num(Int(Unsigned128))_
+
+**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
 
 # TOKENS
 ~~~zig
@@ -271,72 +273,93 @@ j = -17011687303715884105728
 (can-ir
 	(d-let
 		(p-assign @4.1-4.2 (ident "a"))
-		(e-int @4.5-4.8 (value "255"))
+		(e-num @4.5-4.8 (value "255"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.7 (name "U8")))))
+				(ty-lookup @3.5-3.7 (name "U8") (builtin)))))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
-		(e-int @7.5-7.10 (value "65535"))
+		(e-num @7.5-7.10 (value "65535"))
 		(annotation @7.1-7.2
 			(declared-type
-				(ty @6.5-6.8 (name "U16")))))
+				(ty-lookup @6.5-6.8 (name "U16") (builtin)))))
 	(d-let
 		(p-assign @10.1-10.2 (ident "c"))
-		(e-int @10.5-10.14 (value "429496729"))
+		(e-num @10.5-10.14 (value "429496729"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty @9.5-9.8 (name "U32")))))
+				(ty-lookup @9.5-9.8 (name "U32") (builtin)))))
 	(d-let
 		(p-assign @14.1-14.2 (ident "e"))
 		(e-frac-f64 @14.5-14.48 (value "3.4028236692093846e39"))
 		(annotation @14.1-14.2
 			(declared-type
-				(ty @13.5-13.9 (name "U128")))))
+				(ty-lookup @13.5-13.9 (name "U128") (builtin)))))
 	(d-let
 		(p-assign @18.1-18.2 (ident "g"))
-		(e-int @18.5-18.11 (value "-32768"))
+		(e-num @18.5-18.11 (value "-32768"))
 		(annotation @18.1-18.2
 			(declared-type
-				(ty @17.5-17.8 (name "I16")))))
+				(ty-lookup @17.5-17.8 (name "I16") (builtin)))))
 	(d-let
 		(p-assign @21.1-21.2 (ident "h"))
-		(e-int @21.5-21.12 (value "-483648"))
+		(e-num @21.5-21.12 (value "-483648"))
 		(annotation @21.1-21.2
 			(declared-type
-				(ty @20.5-20.8 (name "I32")))))
+				(ty-lookup @20.5-20.8 (name "I32") (builtin)))))
 	(d-let
 		(p-assign @24.1-24.2 (ident "i"))
-		(e-int @24.5-24.17 (value "-92233725808"))
+		(e-num @24.5-24.17 (value "-92233725808"))
 		(annotation @24.1-24.2
 			(declared-type
-				(ty @23.5-23.8 (name "I64")))))
+				(ty-lookup @23.5-23.8 (name "I64") (builtin)))))
 	(d-let
 		(p-assign @27.1-27.2 (ident "j"))
-		(e-int @27.5-27.29 (value "-17011687303715884105728"))
+		(e-num @27.5-27.29 (value "-17011687303715884105728"))
 		(annotation @27.1-27.2
 			(declared-type
-				(ty @26.5-26.9 (name "I128"))))))
+				(ty-lookup @26.5-26.9 (name "I128") (builtin)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "U8"))
-		(patt @7.1-7.2 (type "U16"))
-		(patt @10.1-10.2 (type "U32"))
+		(patt @4.1-4.2 (type "Num(Int(Unsigned8))"))
+		(patt @7.1-7.2 (type "Num(Int(Unsigned16))"))
+		(patt @10.1-10.2 (type "Num(Int(Unsigned32))"))
 		(patt @14.1-14.2 (type "Error"))
-		(patt @18.1-18.2 (type "I16"))
-		(patt @21.1-21.2 (type "I32"))
-		(patt @24.1-24.2 (type "I64"))
-		(patt @27.1-27.2 (type "I128")))
+		(patt @18.1-18.2 (type "Num(Int(Signed16))"))
+		(patt @21.1-21.2 (type "Num(Int(Signed32))"))
+		(patt @24.1-24.2 (type "Num(Int(Signed64))"))
+		(patt @27.1-27.2 (type "Num(Int(Signed128))")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.5-4.8 (type "U8"))
-		(expr @7.5-7.10 (type "U16"))
-		(expr @10.5-10.14 (type "U32"))
+		(expr @4.5-4.8 (type "Num(Int(Unsigned8))"))
+		(expr @7.5-7.10 (type "Num(Int(Unsigned16))"))
+		(expr @10.5-10.14 (type "Num(Int(Unsigned32))"))
 		(expr @14.5-14.48 (type "Error"))
-		(expr @18.5-18.11 (type "I16"))
-		(expr @21.5-21.12 (type "I32"))
-		(expr @24.5-24.17 (type "I64"))
-		(expr @27.5-27.29 (type "I128"))))
+		(expr @18.5-18.11 (type "Num(Int(Signed16))"))
+		(expr @21.5-21.12 (type "Num(Int(Signed32))"))
+		(expr @24.5-24.17 (type "Num(Int(Signed64))"))
+		(expr @27.5-27.29 (type "Num(Int(Signed128))"))))
 ~~~

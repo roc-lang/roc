@@ -68,23 +68,36 @@ NO CHANGE
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c"))))))
+					(ty-rigid-var @3.11-3.12 (name "a"))
+					(ty-rigid-var @3.14-3.15 (name "b"))
+					(ty-rigid-var @3.19-3.20 (name "c"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-type-anno @3.1-3.83 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
-			(ty-var @3.11-3.12 (name "a"))
-			(ty-var @3.14-3.15 (name "b"))
-			(ty-var @3.19-3.20 (name "c")))
+			(ty-rigid-var @3.11-3.12 (name "a"))
+			(ty-rigid-var @3.14-3.15 (name "b"))
+			(ty-rigid-var @3.19-3.20 (name "c")))
 		(where
 			(method @3.27-3.53 (module-of "a") (ident "convert")
 				(args
-					(ty-var @3.47-3.48 (name "a")))
-				(ty-var @3.52-3.53 (name "c")))
+					(ty-rigid-var @3.11-3.12 (name "a")))
+				(ty-rigid-var @3.19-3.20 (name "c")))
 			(method @3.55-3.83 (module-of "b") (ident "transform")
 				(args
-					(ty-var @3.77-3.78 (name "b")))
-				(ty-var @3.82-3.83 (name "c")))))
+					(ty-rigid-var @3.14-3.15 (name "b")))
+				(ty-rigid-var @3.19-3.20 (name "c")))))
 	(ext-decl @3.27-3.53 (ident "module(a).convert") (kind "value"))
 	(ext-decl @3.55-3.83 (ident "module(b).transform") (kind "value")))
 ~~~
@@ -93,6 +106,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "a, b -> c")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.21 (type "a, b -> c"))))
 ~~~

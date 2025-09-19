@@ -76,19 +76,19 @@ match color {
 					(pattern (degenerate false)
 						(p-applied-tag @2.20-2.23)))
 				(value
-					(e-int @2.27-2.28 (value "1"))))
+					(e-num @2.27-2.28 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.10)))
 				(value
-					(e-int @3.14-3.15 (value "2"))))
+					(e-num @3.14-3.15 (value "2"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.10)))
 				(value
-					(e-int @4.14-4.15 (value "3")))))))
+					(e-num @4.14-4.15 (value "3")))))))
 ~~~
 # TYPES
 ~~~clojure

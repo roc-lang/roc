@@ -65,6 +65,17 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
+**underscore_error_type.md:8:12:8:16:**
+```roc
+BadList := List(_)
+```
+           ^^^^
+
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
+
 **underscore_error_type.md:1:1:1:1:**
 ```roc
 module []
@@ -105,6 +116,76 @@ BadTuple := (_, U32)
              ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:6:7:6:9:**
+```roc
+foo = 42
+```
+      ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _BadType_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:11:7:11:16:**
+```roc
+bar = [1, 2, 3]
+```
+      ^^^^^^^^^
+
+It has the type:
+    _List(Num(_size))_
+
+But the type annotation says it should have the type:
+    _BadList_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:16:7:16:32:**
+```roc
+baz = { field: "hi", other: 5 }
+```
+      ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _{ field: Str, other: Num(_size) }_
+
+But the type annotation says it should have the type:
+    _BadRecord_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:21:7:21:12:**
+```roc
+qux = |x| x
+```
+      ^^^^^
+
+It has the type:
+    _a -> a_
+
+But the type annotation says it should have the type:
+    _BadFunction_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:26:8:26:21:**
+```roc
+quux = ("hello", 42)
+```
+       ^^^^^^^^^^^^^
+
+It has the type:
+    _(Str, Num(_size))_
+
+But the type annotation says it should have the type:
+    _BadTuple_
 
 # TOKENS
 ~~~zig
@@ -236,20 +317,20 @@ quux = ("hello", 42)
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-int @6.7-6.9 (value "42"))
+		(e-num @6.7-6.9 (value "42"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.14 (name "BadType")))))
+				(ty-lookup @5.7-5.14 (name "BadType") (local)))))
 	(d-let
 		(p-assign @11.1-11.4 (ident "bar"))
 		(e-list @11.7-11.16
 			(elems
-				(e-int @11.8-11.9 (value "1"))
-				(e-int @11.11-11.12 (value "2"))
-				(e-int @11.14-11.15 (value "3"))))
+				(e-num @11.8-11.9 (value "1"))
+				(e-num @11.11-11.12 (value "2"))
+				(e-num @11.14-11.15 (value "3"))))
 		(annotation @11.1-11.4
 			(declared-type
-				(ty @10.7-10.14 (name "BadList")))))
+				(ty-lookup @10.7-10.14 (name "BadList") (local)))))
 	(d-let
 		(p-assign @16.1-16.4 (ident "baz"))
 		(e-record @16.7-16.32
@@ -258,10 +339,10 @@ quux = ("hello", 42)
 					(e-string @16.16-16.20
 						(e-literal @16.17-16.19 (string "hi"))))
 				(field (name "other")
-					(e-int @16.29-16.30 (value "5")))))
+					(e-num @16.29-16.30 (value "5")))))
 		(annotation @16.1-16.4
 			(declared-type
-				(ty @15.7-15.16 (name "BadRecord")))))
+				(ty-lookup @15.7-15.16 (name "BadRecord") (local)))))
 	(d-let
 		(p-assign @21.1-21.4 (ident "qux"))
 		(e-lambda @21.7-21.12
@@ -271,23 +352,36 @@ quux = ("hello", 42)
 				(p-assign @21.8-21.9 (ident "x"))))
 		(annotation @21.1-21.4
 			(declared-type
-				(ty @20.7-20.18 (name "BadFunction")))))
+				(ty-lookup @20.7-20.18 (name "BadFunction") (local)))))
 	(d-let
 		(p-assign @26.1-26.5 (ident "quux"))
 		(e-tuple @26.8-26.21
 			(elems
 				(e-string @26.9-26.16
 					(e-literal @26.10-26.15 (string "hello")))
-				(e-int @26.18-26.20 (value "42"))))
+				(e-num @26.18-26.20 (value "42"))))
 		(annotation @26.1-26.5
 			(declared-type
-				(ty @25.8-25.16 (name "BadTuple")))))
+				(ty-lookup @25.8-25.16 (name "BadTuple") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @8.1-8.19
 		(ty-header @8.1-8.8 (name "BadList"))
-		(ty-apply @8.12-8.19 (symbol "List")
+		(ty-apply @8.12-8.19 (name "List") (builtin)
 			(ty-underscore @8.17-8.17)))
 	(s-nominal-decl @13.1-13.38
 		(ty-header @13.1-13.10 (name "BadRecord"))
@@ -295,7 +389,7 @@ quux = ("hello", 42)
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
-				(ty @13.33-13.36 (name "U32")))))
+				(ty-lookup @13.33-13.36 (name "U32") (builtin)))))
 	(s-nominal-decl @18.1-18.22
 		(ty-header @18.1-18.12 (name "BadFunction"))
 		(ty-fn @18.16-18.22 (effectful false)
@@ -305,7 +399,7 @@ quux = ("hello", 42)
 		(ty-header @23.1-23.9 (name "BadTuple"))
 		(ty-tuple @23.13-23.21
 			(ty-underscore @23.14-23.14)
-			(ty @23.17-23.20 (name "U32")))))
+			(ty-lookup @23.17-23.20 (name "U32") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
@@ -317,15 +411,22 @@ quux = ("hello", 42)
 		(patt @21.1-21.4 (type "Error"))
 		(patt @26.1-26.5 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
+		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType")))
-		(nominal @8.1-8.19 (type "Error")
+		(nominal @8.1-8.19 (type "BadList")
 			(ty-header @8.1-8.8 (name "BadList")))
-		(nominal @13.1-13.38 (type "Error")
+		(nominal @13.1-13.38 (type "BadRecord")
 			(ty-header @13.1-13.10 (name "BadRecord")))
-		(nominal @18.1-18.22 (type "Error")
+		(nominal @18.1-18.22 (type "BadFunction")
 			(ty-header @18.1-18.12 (name "BadFunction")))
-		(nominal @23.1-23.21 (type "Error")
+		(nominal @23.1-23.21 (type "BadTuple")
 			(ty-header @23.1-23.9 (name "BadTuple"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))

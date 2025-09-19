@@ -82,16 +82,29 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
 	(s-type-anno @5.1-9.21 (name "decodeThings")
 		(ty-fn @7.3-7.28 (effectful false)
-			(ty-apply @7.3-7.17 (symbol "List")
-				(ty-apply @7.8-7.16 (symbol "List")
-					(ty @7.13-7.15 (name "U8"))))
-			(ty-apply @7.21-7.28 (symbol "List")
-				(ty-var @7.26-7.27 (name "a"))))
+			(ty-apply @7.3-7.17 (name "List") (builtin)
+				(ty-apply @7.8-7.16 (name "List") (builtin)
+					(ty-lookup @7.13-7.15 (name "U8") (builtin))))
+			(ty-apply @7.21-7.28 (name "List") (builtin)
+				(ty-rigid-var @7.26-7.27 (name "a"))))
 		(where
 			(alias @9.5-9.21 (module-of "a") (ident "Decode"))))
 	(ext-decl @9.5-9.21 (ident "module(a).Decode") (kind "type")))
@@ -100,5 +113,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions))
 ~~~

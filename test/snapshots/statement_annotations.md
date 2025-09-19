@@ -103,21 +103,40 @@ NO CHANGE
 							(e-lookup-local @10.3-10.4
 								(p-assign @8.3-8.4 (ident "d"))))))
 				(e-call @13.2-13.6
-					(e-lookup-local @13.2-13.3
-						(p-assign @6.2-6.3 (ident "b")))
 					(e-lookup-local @13.4-13.5
 						(p-assign @4.26-4.27 (ident "a"))))))
 		(annotation @4.1-4.22
 			(declared-type
 				(ty-fn @3.25-3.35 (effectful false)
-					(ty-var @3.25-3.28 (name "val"))
-					(ty-var @3.32-3.35 (name "val")))))))
+					(ty-rigid-var @3.25-3.28 (name "val"))
+					(ty-rigid-var @3.25-3.28 (name "val"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.22 (type "val -> val")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.25-14.2 (type "val -> val"))))
 ~~~

@@ -145,10 +145,10 @@ NO CHANGE
 		(annotation @8.1-8.8
 			(declared-type
 				(ty-fn @7.11-7.36 (effectful false)
-					(ty-apply @7.11-7.29 (symbol "MyResult")
-						(ty @7.20-7.23 (name "Str"))
-						(ty @7.25-7.28 (name "I32")))
-					(ty @7.33-7.36 (name "Str"))))))
+					(ty-apply @7.11-7.29 (name "MyResult") (local)
+						(ty-lookup @7.11-7.29 (name "Str") (builtin))
+						(ty-lookup @7.11-7.29 (name "I32") (builtin)))
+					(ty-lookup @7.33-7.36 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "getString"))
 		(e-lambda @15.13-15.29
@@ -159,67 +159,84 @@ NO CHANGE
 		(annotation @15.1-15.10
 			(declared-type
 				(ty-fn @14.13-14.31 (effectful false)
-					(ty-apply @14.13-14.24 (symbol "Option")
-						(ty @14.20-14.23 (name "Str")))
-					(ty @14.28-14.31 (name "Str"))))))
+					(ty-apply @14.13-14.24 (name "Option") (local)
+						(ty-lookup @14.13-14.24 (name "Str") (builtin)))
+					(ty-lookup @14.28-14.31 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "getNumber"))
 		(e-lambda @18.13-18.21
 			(args
 				(p-assign @18.14-18.18 (ident "_opt")))
-			(e-int @18.20-18.21 (value "0")))
+			(e-num @18.20-18.21 (value "0")))
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.31 (effectful false)
-					(ty-apply @17.13-17.24 (symbol "Option")
-						(ty @17.20-17.23 (name "I32")))
-					(ty @17.28-17.31 (name "I32"))))))
+					(ty-apply @17.13-17.24 (name "Option") (local)
+						(ty-lookup @17.13-17.24 (name "I32") (builtin)))
+					(ty-lookup @17.28-17.31 (name "I32") (builtin))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
 		(e-lambda @20.9-20.15
 			(args
 				(p-underscore @20.10-20.11))
 			(e-empty_record @20.13-20.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.41
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
-				(ty-var @4.10-4.12 (name "ok"))
-				(ty-var @4.14-4.17 (name "err"))))
+				(ty-rigid-var @4.10-4.12 (name "ok"))
+				(ty-rigid-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
-			(ty-apply @4.22-4.30 (symbol "Good")
-				(ty-var @4.27-4.29 (name "ok")))
-			(ty-apply @4.32-4.40 (symbol "Bad")
-				(ty-var @4.36-4.39 (name "err")))))
+			(tag_name @4.22-4.30 (name "Good"))
+			(tag_name @4.32-4.40 (name "Bad"))))
 	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
-				(ty-var @11.8-11.9 (name "a"))))
+				(ty-rigid-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
-			(ty-apply @11.14-11.21 (symbol "Some")
-				(ty-var @11.19-11.20 (name "a")))
-			(ty @11.23-11.27 (name "None")))))
+			(tag_name @11.14-11.21 (name "Some"))
+			(tag_name @11.23-11.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.8 (type "MyResult(Str, I32) -> Str"))
+		(patt @8.1-8.8 (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
 		(patt @15.1-15.10 (type "Option(Str) -> Str"))
-		(patt @18.1-18.10 (type "Option(I32) -> I32"))
+		(patt @18.1-18.10 (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(patt @20.1-20.6 (type "_arg -> {}")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.41 (type "MyResult(ok, err)")
 			(ty-header @4.1-4.18 (name "MyResult")
 				(ty-args
-					(ty-var @4.10-4.12 (name "ok"))
-					(ty-var @4.14-4.17 (name "err")))))
+					(ty-rigid-var @4.10-4.12 (name "ok"))
+					(ty-rigid-var @4.14-4.17 (name "err")))))
 		(alias @11.1-11.28 (type "Option(a)")
 			(ty-header @11.1-11.10 (name "Option")
 				(ty-args
-					(ty-var @11.8-11.9 (name "a"))))))
+					(ty-rigid-var @11.8-11.9 (name "a"))))))
 	(expressions
-		(expr @8.11-8.32 (type "MyResult(Str, I32) -> Str"))
+		(expr @8.11-8.32 (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
 		(expr @15.13-15.29 (type "Option(Str) -> Str"))
-		(expr @18.13-18.21 (type "Option(I32) -> I32"))
+		(expr @18.13-18.21 (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(expr @20.9-20.15 (type "_arg -> {}"))))
 ~~~

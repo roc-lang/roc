@@ -112,9 +112,6 @@ main! = |_| {}
 			(e-block @6.22-9.2
 				(s-expr @7.5-7.30
 					(e-call @7.5-7.30
-						(e-lookup-external @7.5-7.17
-							(module-idx "0")
-							(target-node-idx "0"))
 						(e-dot-access @7.18-7.29 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
@@ -128,16 +125,29 @@ main! = |_| {}
 				(ty-fn @5.13-5.43 (effectful true)
 					(ty-record @5.13-5.36
 						(field (field "name")
-							(ty @5.21-5.24 (name "Str")))
+							(ty-lookup @5.21-5.24 (name "Str") (builtin)))
 						(field (field "age")
-							(ty @5.31-5.34 (name "U64"))))
-					(ty @5.40-5.43 (name "Str"))))))
+							(ty-lookup @5.31-5.34 (name "U64") (builtin))))
+					(ty-lookup @5.40-5.43 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15
 			(args
 				(p-underscore @10.10-10.11))
 			(e-empty_record @10.13-10.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -145,9 +155,17 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ age: U64, name: Str } => Str"))
+		(patt @6.1-6.10 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @6.13-9.2 (type "{ age: U64, name: Str } => Str"))
+		(expr @6.13-9.2 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

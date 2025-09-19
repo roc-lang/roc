@@ -540,14 +540,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign @9.16-9.24 (ident "settings")))
 			(e-call @9.26-9.51
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @9.42-9.50
 					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
 					(ty-malformed @8.15-8.30)
-					(ty @8.34-8.37 (name "Str"))))))
+					(ty-lookup @8.34-8.37 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "authenticate"))
 		(e-lambda @13.16-13.55
@@ -555,7 +554,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign @13.17-13.21 (ident "user"))
 				(p-assign @13.23-13.27 (ident "pass")))
 			(e-call @13.29-13.55
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @13.44-13.48
 					(p-assign @13.17-13.21 (ident "user")))
 				(e-lookup-local @13.50-13.54
@@ -563,8 +561,8 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.42 (effectful false)
-					(ty @12.16-12.19 (name "Str"))
-					(ty @12.21-12.24 (name "Str"))
+					(ty-lookup @12.16-12.19 (name "Str") (builtin))
+					(ty-lookup @12.21-12.24 (name "Str") (builtin))
 					(ty-malformed @12.28-12.42)))))
 	(d-let
 		(p-assign @17.1-17.12 (ident "processData"))
@@ -573,7 +571,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign @17.16-17.30 (ident "advancedConfig"))
 				(p-assign @17.32-17.37 (ident "input")))
 			(e-call @18.5-18.60
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @18.38-18.52
 					(p-assign @17.16-17.30 (ident "advancedConfig")))
 				(e-lookup-local @18.54-18.59
@@ -582,41 +579,52 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
 					(ty-malformed @16.15-16.37)
-					(ty @16.39-16.42 (name "Str"))
-					(ty-apply @16.46-16.78 (symbol "Result")
-						(ty @16.53-16.56 (name "Str"))
-						(ty-malformed @16.58-16.77))))))
+					(ty-lookup @16.39-16.42 (name "Str") (builtin))
+					(ty-apply @16.46-16.78 (name "Result") (local)
+						(ty-lookup @16.46-16.78 (name "Str") (builtin))
+						(ty-malformed @16.46-16.78))))))
 	(d-let
 		(p-assign @22.1-22.13 (ident "formatOutput"))
 		(e-lambda @22.16-22.59
 			(args
 				(p-assign @22.17-22.21 (ident "text")))
 			(e-call @22.23-22.59
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @22.31-22.35
 					(p-assign @22.17-22.21 (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation @22.1-22.13
 			(declared-type
 				(ty-fn @21.16-21.26 (effectful false)
-					(ty @21.16-21.19 (name "Str"))
-					(ty @21.23-21.26 (name "Str"))))))
+					(ty-lookup @21.16-21.19 (name "Str") (builtin))
+					(ty-lookup @21.23-21.26 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @26.1-26.13 (ident "validateAuth"))
 		(e-lambda @26.16-26.48
 			(args
 				(p-assign @26.17-26.22 (ident "creds")))
 			(e-call @26.24-26.48
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @26.42-26.47
 					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)
 					(ty-malformed @25.16-25.36)
-					(ty-apply @25.40-25.78 (symbol "Result")
-						(ty-malformed @25.47-25.61)
-						(ty-malformed @25.63-25.77))))))
+					(ty-apply @25.40-25.78 (name "Result") (local)
+						(ty-malformed @25.40-25.78)
+						(ty-malformed @25.40-25.78))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
@@ -631,6 +639,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(patt @17.1-17.12 (type "Error, Str -> Result(Str, Error)"))
 		(patt @22.1-22.13 (type "Str -> Str"))
 		(patt @26.1-26.13 (type "Error -> Result(Error, Error)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @9.15-9.51 (type "Error -> Str"))
 		(expr @13.16-13.55 (type "Str, Str -> Error"))

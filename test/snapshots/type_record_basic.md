@@ -92,10 +92,10 @@ main! = |_| getName({ name: "luke", age: 21 })
 				(ty-fn @3.11-3.41 (effectful false)
 					(ty-record @3.11-3.34
 						(field (field "name")
-							(ty @3.19-3.22 (name "Str")))
+							(ty-lookup @3.19-3.22 (name "Str") (builtin)))
 						(field (field "age")
-							(ty @3.29-3.32 (name "U64"))))
-					(ty @3.38-3.41 (name "Str"))))))
+							(ty-lookup @3.29-3.32 (name "U64") (builtin))))
+					(ty-lookup @3.38-3.41 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.44
@@ -105,23 +105,42 @@ main! = |_| getName({ name: "luke", age: 21 })
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.44
-					(e-lookup-local @6.13-6.20
-						(p-assign @4.1-4.8 (ident "getName")))
 					(e-record @6.21-6.43
 						(fields
 							(field (name "name")
 								(e-string @6.28-6.34
 									(e-literal @6.29-6.33 (string "luke"))))
 							(field (name "age")
-								(e-int @6.40-6.42 (value "21"))))))))))
+								(e-num @6.40-6.42 (value "21")))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ age: U64, name: Str } -> Str"))
+		(patt @4.1-4.8 (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Str")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.11-4.28 (type "{ age: U64, name: Str } -> Str"))
+		(expr @4.11-4.28 (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(expr @6.9-6.44 (type "_arg -> Str"))))
 ~~~

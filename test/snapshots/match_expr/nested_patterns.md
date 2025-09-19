@@ -112,7 +112,6 @@ match data {
 						(e-lookup-local @2.53-2.54
 							(p-assign @2.31-2.32 (ident "x")))
 						(e-call @2.57-2.71
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.66-2.70
 								(p-assign @1.1-1.1 (ident "rest")))))))
 			(branch
@@ -120,7 +119,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.29)))
 				(value
-					(e-int @3.33-3.34 (value "0"))))
+					(e-num @3.33-3.34 (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -141,5 +140,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Num(_size)"))
+(expr @1.1-6.2 (type "Error"))
 ~~~

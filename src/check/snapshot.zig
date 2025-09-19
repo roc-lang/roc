@@ -729,11 +729,7 @@ pub const SnapshotWriter = struct {
     pub fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
 
-        // The 1st var is the alias type's backing var, so we skip it
-        var vars = self.snapshots.sliceVars(alias.vars);
-        std.debug.assert(vars.len > 0);
-        vars = vars[1..];
-
+        const vars = self.snapshots.sliceVars(alias.vars);
         if (vars.len > 0) {
             _ = try self.buf.writer().write("(");
             for (vars, 0..) |arg, i| {

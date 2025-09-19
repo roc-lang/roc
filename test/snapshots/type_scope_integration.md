@@ -52,26 +52,6 @@ Bar : SomeUndeclaredType
       ^^^^^^^^^^^^^^^^^^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Foo` is exposed, but it is not defined anywhere in this module.
-
-**type_scope_integration.md:1:9:1:12:**
-```roc
-module [Foo, Bar]
-```
-        ^^^
-You can fix this by either defining `Foo` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Bar` is exposed, but it is not defined anywhere in this module.
-
-**type_scope_integration.md:1:14:1:17:**
-```roc
-module [Foo, Bar]
-```
-             ^^^
-You can fix this by either defining `Bar` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),

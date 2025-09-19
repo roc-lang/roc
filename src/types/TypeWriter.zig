@@ -83,10 +83,16 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names.deinit();
 }
 
+/// Writes the current var into the the writers buffer and returns a bytes slice
+pub fn writeGet(self: *TypeWriter, var_: Var) std.mem.Allocator.Error![]const u8 {
+    try self.write(var_);
+    return self.get();
+}
+
 /// Returns the current contents of the type writer's buffer as a slice.
 /// This contains the formatted type representation built up by write operations.
-pub fn get(self: *const TypeWriter) []u8 {
-    return self.buf.items[0..];
+pub fn get(self: *const TypeWriter) []const u8 {
+    return self.buf.items;
 }
 
 /// Writes a type variable to the buffer, formatting it as a human-readable string.

@@ -196,11 +196,11 @@ main! = |_| {
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @6.11-6.25 (effectful false)
-					(ty-var @6.11-6.12 (name "a"))
-					(ty-var @6.14-6.15 (name "b"))
+					(ty-rigid-var @6.11-6.12 (name "a"))
+					(ty-rigid-var @6.14-6.15 (name "b"))
 					(ty-tuple @6.19-6.25
-						(ty-var @6.20-6.21 (name "a"))
-						(ty-var @6.23-6.24 (name "b")))))))
+						(ty-rigid-var @6.11-6.12 (name "a"))
+						(ty-rigid-var @6.14-6.15 (name "b")))))))
 	(d-let
 		(p-assign @11.1-11.7 (ident "addOne"))
 		(e-lambda @11.10-11.19
@@ -209,19 +209,19 @@ main! = |_| {
 			(e-binop @11.14-11.19 (op "add")
 				(e-lookup-local @11.14-11.15
 					(p-assign @11.11-11.12 (ident "n")))
-				(e-int @11.18-11.19 (value "1"))))
+				(e-num @11.18-11.19 (value "1"))))
 		(annotation @11.1-11.7
 			(declared-type
 				(ty-fn @10.10-10.20 (effectful false)
-					(ty @10.10-10.13 (name "U64"))
-					(ty @10.17-10.20 (name "U64"))))))
+					(ty-lookup @10.10-10.13 (name "U64") (builtin))
+					(ty-lookup @10.17-10.20 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "main!"))
 		(e-closure @13.9-25.2
 			(captures
-				(capture @11.1-11.7 (ident "addOne"))
+				(capture @7.1-7.8 (ident "combine"))
 				(capture @3.1-3.9 (ident "identity"))
-				(capture @7.1-7.8 (ident "combine")))
+				(capture @11.1-11.7 (ident "addOne")))
 			(e-lambda @13.9-25.2
 				(args
 					(p-underscore @13.10-13.11))
@@ -229,21 +229,15 @@ main! = |_| {
 					(s-let @15.5-15.23
 						(p-assign @15.5-15.8 (ident "num"))
 						(e-call @15.11-15.23
-							(e-lookup-local @15.11-15.19
-								(p-assign @3.1-3.9 (ident "identity")))
-							(e-int @15.20-15.22 (value "42"))))
+							(e-num @15.20-15.22 (value "42"))))
 					(s-let @16.5-16.29
 						(p-assign @16.5-16.9 (ident "text"))
 						(e-call @16.12-16.29
-							(e-lookup-local @16.12-16.20
-								(p-assign @3.1-3.9 (ident "identity")))
 							(e-string @16.21-16.28
 								(e-literal @16.22-16.27 (string "hello")))))
 					(s-let @19.5-19.30
 						(p-assign @19.5-19.9 (ident "pair"))
 						(e-call @19.12-19.30
-							(e-lookup-local @19.12-19.19
-								(p-assign @7.1-7.8 (ident "combine")))
 							(e-lookup-local @19.20-19.23
 								(p-assign @15.5-15.8 (ident "num")))
 							(e-lookup-local @19.25-19.29
@@ -251,23 +245,42 @@ main! = |_| {
 					(s-let @22.5-22.23
 						(p-assign @22.5-22.11 (ident "result"))
 						(e-call @22.14-22.23
-							(e-lookup-local @22.14-22.20
-								(p-assign @11.1-11.7 (ident "addOne")))
-							(e-int @22.21-22.22 (value "5"))))
+							(e-num @22.21-22.22 (value "5"))))
 					(e-lookup-local @24.5-24.11
-						(p-assign @22.5-22.11 (ident "result"))))))))
+						(p-assign @22.5-22.11 (ident "result")))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.9 (type "_arg -> _ret"))
+		(patt @3.1-3.9 (type "c -> c"))
 		(patt @7.1-7.8 (type "a, b -> (a, b)"))
-		(patt @11.1-11.7 (type "U64 -> U64"))
-		(patt @13.1-13.6 (type "_arg -> U64")))
+		(patt @11.1-11.7 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @13.1-13.6 (type "_arg -> Num(Int(Unsigned64))")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.12-3.17 (type "_arg -> _ret"))
+		(expr @3.12-3.17 (type "c -> c"))
 		(expr @7.11-7.42 (type "a, b -> (a, b)"))
-		(expr @11.10-11.19 (type "U64 -> U64"))
-		(expr @13.9-25.2 (type "_arg -> U64"))))
+		(expr @11.10-11.19 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @13.9-25.2 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

@@ -579,11 +579,11 @@ NO CHANGE
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @60.1-60.2 (ident "h"))
-				(capture @89.5-89.6 (ident "a"))
+				(capture @105.5-105.6 (ident "a"))
 				(capture @99.5-99.6 (ident "a"))
-				(capture @94.4-94.5 (ident "a"))
-				(capture @105.5-105.6 (ident "a")))
+				(capture @89.5-89.6 (ident "a"))
+				(capture @60.1-60.2 (ident "h"))
+				(capture @94.4-94.5 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
 					(p-assign @60.6-60.7 (ident "x"))
@@ -611,8 +611,6 @@ NO CHANGE
 					(s-let @69.2-72.3
 						(p-assign @69.2-69.4 (ident "h2"))
 						(e-call @69.7-72.3
-							(e-lookup-local @69.7-69.8
-								(p-assign @60.1-60.2 (ident "h")))
 							(e-lookup-local @70.3-70.4
 								(p-assign @60.6-60.7 (ident "x")))
 							(e-lookup-local @71.3-71.4
@@ -675,44 +673,57 @@ NO CHANGE
 									(value
 										(e-lookup-local @108.8-108.9
 											(p-assign @105.5-105.6 (ident "a"))))))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @14.1-23.11
 		(ty-header @14.1-14.5 (name "A")
 			(ty-args
-				(ty-var @14.3-14.4 (name "a"))))
-		(ty-var @14.8-14.9 (name "a")))
+				(ty-rigid-var @14.3-14.4 (name "a"))))
+		(ty-rigid-var @14.3-14.4 (name "a")))
 	(s-alias-decl @24.1-33.11
 		(ty-header @24.1-24.5 (name "B")
 			(ty-args
-				(ty-var @24.3-24.4 (name "b"))))
-		(ty-var @24.8-24.9 (name "b")))
+				(ty-rigid-var @24.3-24.4 (name "b"))))
+		(ty-rigid-var @24.3-24.4 (name "b")))
 	(s-alias-decl @35.1-41.2
 		(ty-header @35.1-38.2 (name "C")
 			(ty-args
-				(ty-var @36.2-36.3 (name "a"))
-				(ty-var @37.2-37.3 (name "b"))))
+				(ty-rigid-var @36.2-36.3 (name "a"))
+				(ty-rigid-var @37.2-37.3 (name "b"))))
 		(ty-tuple @38.5-41.2
-			(ty-var @39.2-39.3 (name "a"))
-			(ty-var @40.2-40.3 (name "b"))))
+			(ty-rigid-var @36.2-36.3 (name "a"))
+			(ty-rigid-var @37.2-37.3 (name "b"))))
 	(s-alias-decl @42.1-48.2
 		(ty-header @42.1-45.2 (name "D")
 			(ty-args
-				(ty-var @43.2-43.3 (name "a"))
-				(ty-var @44.2-44.3 (name "b"))))
-		(ty-apply @45.5-48.2 (symbol "C")
-			(ty-var @46.2-46.3 (name "a"))
-			(ty-var @47.2-47.3 (name "b"))))
+				(ty-rigid-var @43.2-43.3 (name "a"))
+				(ty-rigid-var @44.2-44.3 (name "b"))))
+		(ty-apply @45.5-48.2 (name "C") (local)
+			(ty-rigid-var @43.2-43.3 (name "a"))
+			(ty-rigid-var @44.2-44.3 (name "b"))))
 	(s-alias-decl @49.1-52.2
 		(ty-header @49.1-49.2 (name "E"))
 		(ty-record @49.5-52.2
 			(field (field "a")
-				(ty @50.6-50.9 (name "Str")))
+				(ty-lookup @50.6-50.9 (name "Str") (builtin)))
 			(field (field "b")
-				(ty @51.6-51.9 (name "Str")))))
+				(ty-lookup @51.6-51.9 (name "Str") (builtin)))))
 	(s-alias-decl @53.1-56.2
 		(ty-header @53.1-53.2 (name "F"))
 		(ty-tag-union @53.5-56.2
-			(ty @54.2-54.3 (name "A"))
-			(ty @55.2-55.3 (name "B"))))
+			(tag_name @54.2-54.3 (name "A"))
+			(tag_name @55.2-55.3 (name "B"))))
 	(s-import @4.1-7.2 (module "I1")
 		(exposes
 			(exposed (name "I11") (wildcard false))
@@ -723,8 +734,8 @@ NO CHANGE
 			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-type-anno @58.1-58.42 (name "g")
 		(ty-fn @58.5-58.11 (effectful false)
-			(ty-var @58.5-58.6 (name "e"))
-			(ty-var @58.10-58.11 (name "e")))
+			(ty-rigid-var @58.5-58.6 (name "e"))
+			(ty-rigid-var @58.5-58.6 (name "e")))
 		(where
 			(alias @58.18-58.29 (module-of "e") (ident "A"))
 			(alias @58.31-58.42 (module-of "e") (ident "B"))))
@@ -735,30 +746,37 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @60.1-60.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
+		(patt @60.1-60.2 (type "[Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d, [Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d -> Error")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
 				(ty-args
-					(ty-var @14.3-14.4 (name "a")))))
+					(ty-rigid-var @14.3-14.4 (name "a")))))
 		(alias @24.1-33.11 (type "B(b)")
 			(ty-header @24.1-24.5 (name "B")
 				(ty-args
-					(ty-var @24.3-24.4 (name "b")))))
+					(ty-rigid-var @24.3-24.4 (name "b")))))
 		(alias @35.1-41.2 (type "C(a, b)")
 			(ty-header @35.1-38.2 (name "C")
 				(ty-args
-					(ty-var @36.2-36.3 (name "a"))
-					(ty-var @37.2-37.3 (name "b")))))
+					(ty-rigid-var @36.2-36.3 (name "a"))
+					(ty-rigid-var @37.2-37.3 (name "b")))))
 		(alias @42.1-48.2 (type "D(a, b)")
 			(ty-header @42.1-45.2 (name "D")
 				(ty-args
-					(ty-var @43.2-43.3 (name "a"))
-					(ty-var @44.2-44.3 (name "b")))))
+					(ty-rigid-var @43.2-43.3 (name "a"))
+					(ty-rigid-var @44.2-44.3 (name "b")))))
 		(alias @49.1-52.2 (type "E")
 			(ty-header @49.1-49.2 (name "E")))
 		(alias @53.1-56.2 (type "F")
 			(ty-header @53.1-53.2 (name "F"))))
 	(expressions
-		(expr @60.5-110.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
+		(expr @60.5-110.2 (type "[Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d, [Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d -> Error"))))
 ~~~

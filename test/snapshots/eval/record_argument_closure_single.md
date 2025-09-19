@@ -36,19 +36,10 @@ EndOfFile(2:1-2:1),
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.25
-	(e-lambda @1.2-1.11
-		(args
-			(p-record-destructure @1.3-1.8
-				(destructs
-					(record-destruct @1.5-1.6 (label "x") (ident "x")
-						(required
-							(p-assign @1.5-1.6 (ident "x")))))))
-		(e-lookup-local @1.10-1.11
-			(p-assign @1.5-1.6 (ident "x"))))
 	(e-record @1.14-1.24
 		(fields
 			(field (name "x")
-				(e-int @1.19-1.22 (value "-10"))))))
+				(e-num @1.19-1.22 (value "-10"))))))
 ~~~
 # TYPES
 ~~~clojure

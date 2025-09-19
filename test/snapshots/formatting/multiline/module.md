@@ -53,10 +53,23 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.2 (ident "a"))
-		(e-int @6.5-6.8 (value "97")))
+		(e-num @6.5-6.8 (value "97")))
 	(d-let
 		(p-assign @7.1-7.2 (ident "b"))
-		(e-int @7.5-7.8 (value "97"))))
+		(e-num @7.5-7.8 (value "97")))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -64,6 +77,14 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.2 (type "Num(_size)"))
 		(patt @7.1-7.2 (type "Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.5-6.8 (type "Num(_size)"))
 		(expr @7.5-7.8 (type "Num(_size)"))))

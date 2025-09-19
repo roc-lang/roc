@@ -497,10 +497,9 @@ pub fn canonicalizeFile(
                 try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
                 try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-                // TODO: is this needed?
                 // Remove from exposed_type_texts since the type is now fully defined
-                // const type_text = self.env.getIdent(type_header.name);
-                // _ = self.exposed_type_texts.remove(type_text);
+                const type_text = self.env.getIdent(type_header.name);
+                _ = self.exposed_type_texts.remove(type_text);
             },
             else => {
                 // Skip non-type-declaration statements in first pass

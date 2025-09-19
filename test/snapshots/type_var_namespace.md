@@ -166,18 +166,16 @@ main! = |_| {}
 			(e-block @5.18-14.2
 				(s-let @7.5-7.14
 					(p-assign @7.5-7.9 (ident "elem"))
-					(e-int @7.12-7.14 (value "42")))
+					(e-num @7.12-7.14 (value "42")))
 				(s-let @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
-						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.25-11.29
 							(p-assign @5.12-5.16 (ident "list")))))
 				(s-expr @11.31-11.33
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr @11.34-11.58
 					(e-call @11.34-11.58
-						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.53-11.57
 							(p-assign @7.5-7.9 (ident "elem")))))
 				(e-lookup-local @13.5-13.11
@@ -185,15 +183,28 @@ main! = |_| {}
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
-					(ty-apply @4.11-4.21 (symbol "List")
-						(ty-var @4.16-4.20 (name "elem")))
-					(ty-var @4.25-4.29 (name "elem"))))))
+					(ty-apply @4.11-4.21 (name "List") (builtin)
+						(ty-rigid-var @4.16-4.20 (name "elem")))
+					(ty-rigid-var @4.16-4.20 (name "elem"))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
 		(e-lambda @16.9-16.15
 			(args
 				(p-underscore @16.10-16.11))
-			(e-empty_record @16.13-16.15))))
+			(e-empty_record @16.13-16.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -201,6 +212,14 @@ main! = |_| {}
 	(defs
 		(patt @5.1-5.8 (type "List(elem) -> elem"))
 		(patt @16.1-16.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.11-14.2 (type "List(elem) -> elem"))
 		(expr @16.9-16.15 (type "_arg -> {}"))))

@@ -331,10 +331,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Pair(U64)"))
+		(patt @6.1-6.8 (type "Pair(Num(Int(Unsigned64)))"))
 		(patt @9.1-9.8 (type "Pair(Str)"))
 		(patt @12.1-12.7 (type "a, a -> Pair(a)"))
-		(patt @15.1-15.20 (type "Pair(U8)"))
+		(patt @15.1-15.20 (type "Pair(Num(Int(Unsigned8)))"))
 		(patt @18.1-18.18 (type "Error"))
 		(patt @21.1-21.19 (type "Error"))
 		(patt @24.1-24.14 (type "a, b -> Error")))
@@ -351,10 +351,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var @3.6-3.7 (name "a"))))))
 	(expressions
-		(expr @6.11-6.26 (type "Pair(U64)"))
+		(expr @6.11-6.26 (type "Pair(Num(Int(Unsigned64)))"))
 		(expr @9.11-9.38 (type "Pair(Str)"))
 		(expr @12.10-12.32 (type "a, a -> Pair(a)"))
-		(expr @15.23-15.35 (type "Pair(U8)"))
+		(expr @15.23-15.35 (type "Pair(Num(Int(Unsigned8)))"))
 		(expr @18.21-18.35 (type "Error"))
 		(expr @21.22-21.41 (type "Error"))
 		(expr @24.17-24.39 (type "a, b -> Error"))))

@@ -143,8 +143,7 @@ pub const Instantiator = struct {
             .rigid_var => unreachable,
             .alias => |alias| {
                 // Instantiate the structure recursively
-                const fresh_alias = try self.instantiateAlias(alias);
-                return Content{ .alias = fresh_alias };
+                return try self.instantiateAlias(alias);
             },
             .structure => |flat_type| blk: {
                 // Instantiate the structure recursively
@@ -155,13 +154,9 @@ pub const Instantiator = struct {
         };
     }
 
-    fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Alias {
+    fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
         var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
-
-        const backing_var = self.store.getAliasBackingVar(alias);
-        const fresh_backing_var = try self.instantiateVar(backing_var);
-        try fresh_vars.append(fresh_backing_var);
 
         var iter = self.store.iterAliasArgs(alias);
         while (iter.next()) |arg_var| {
@@ -169,11 +164,10 @@ pub const Instantiator = struct {
             try fresh_vars.append(fresh_elem);
         }
 
-        const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return Alias{
-            .ident = alias.ident,
-            .vars = .{ .nonempty = fresh_vars_range },
-        };
+        const backing_var = self.store.getAliasBackingVar(alias);
+        const fresh_backing_var = try self.instantiateVar(backing_var);
+
+        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items);
     }
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
@@ -197,12 +191,11 @@ pub const Instantiator = struct {
     }
 
     fn instantiateNominalType(self: *Self, nominal: NominalType) std.mem.Allocator.Error!NominalType {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
-        defer fresh_vars.deinit();
-
         const backing_var = self.store.getNominalBackingVar(nominal);
         const fresh_backing_var = try self.instantiateVar(backing_var);
-        try fresh_vars.append(fresh_backing_var);
+
+        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        defer fresh_vars.deinit();
 
         var iter = self.store.iterNominalArgs(nominal);
         while (iter.next()) |arg_var| {
@@ -210,12 +203,7 @@ pub const Instantiator = struct {
             try fresh_vars.append(fresh_elem);
         }
 
-        const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return NominalType{
-            .ident = nominal.ident,
-            .vars = .{ .nonempty = fresh_vars_range },
-            .origin_module = nominal.origin_module,
-        };
+        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module)).structure.nominal_type;
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {

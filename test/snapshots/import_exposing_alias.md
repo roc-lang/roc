@@ -100,25 +100,32 @@ NO CHANGE
 							(e-string @6.17-6.22
 								(e-literal @6.18-6.21 (string "Bob"))))
 						(field (name "age")
-							(e-int @6.29-6.31 (value "25"))))))
+							(e-num @6.29-6.31 (value "25"))))))
 			(s-let @7.2-7.24
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24
-					(e-lookup-external @7.12-7.18
-						(module-idx "0")
-						(target-node-idx "0"))
 					(e-lookup-local @7.19-7.23
 						(p-assign @6.2-6.6 (ident "data")))))
 			(s-let @8.2-8.29
 				(p-assign @8.2-8.9 (ident "decoded"))
 				(e-call @8.12-8.29
-					(e-lookup-external @8.12-8.20
-						(module-idx "0")
-						(target-node-idx "0"))
 					(e-lookup-local @8.21-8.28
 						(p-assign @7.2-7.9 (ident "encoded")))))
 			(e-lookup-local @9.2-9.9
 				(p-assign @8.2-8.9 (ident "decoded")))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.65 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))
@@ -129,6 +136,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.5 (type "_a")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.8-10.2 (type "_a"))))
 ~~~

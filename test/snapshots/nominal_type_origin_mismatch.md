@@ -118,15 +118,26 @@ main =
 		(annotation @6.1-6.14
 			(declared-type
 				(ty-fn @5.17-5.30 (effectful false)
-					(ty @5.17-5.23 (name "Person"))
-					(ty @5.27-5.30 (name "Str"))))))
+					(ty-malformed @5.17-5.23)
+					(ty-lookup @5.27-5.30 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @8.1-8.5 (ident "main"))
 		(e-call @10.5-10.34
-			(e-lookup-local @10.5-10.18
-				(p-assign @6.1-6.14 (ident "expectsPerson")))
 			(e-string @10.19-10.33
 				(e-literal @10.20-10.32 (string "not a person")))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.30 (module "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
@@ -137,6 +148,14 @@ main =
 	(defs
 		(patt @6.1-6.14 (type "Error -> Str"))
 		(patt @8.1-8.5 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.17-6.35 (type "Error -> Str"))
 		(expr @10.5-10.34 (type "Str"))))

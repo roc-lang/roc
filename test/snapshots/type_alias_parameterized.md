@@ -12,21 +12,16 @@ Pair(a, b) : (a, b)
 swapPair : Pair(a, b) -> Pair(b, a)
 swapPair = |(x, y)| (y, x)
 
-test1 = |_| swapPair((1, 2))
-
-test2 = |_| swapPair(1, 2)
+main! = |_| swapPair(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_alias_parameterized.md:10:13:10:21
+TYPE MISMATCH - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
-**UNIMPLEMENTED**
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_alias_parameterized.md:10:13:10:27:**
+**type_alias_parameterized.md:8:13:8:27:**
 ```roc
-test2 = |_| swapPair(1, 2)
+main! = |_| swapPair(1, 2)
 ```
             ^^^^^^^^^^^^^^
 
@@ -34,7 +29,7 @@ It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But I expected it to be:
-    _Pair(Error) -> Pair(Error)_
+    _Pair(c, d) -> Pair(d, c)_
 
 # TOKENS
 ~~~zig
@@ -42,13 +37,12 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),CloseRound(3:10-3:11),OpColon(3:12-3:13),OpenRound(3:14-3:15),LowerIdent(3:15-3:16),Comma(3:16-3:17),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),
 LowerIdent(5:1-5:9),OpColon(5:10-5:11),UpperIdent(5:12-5:16),NoSpaceOpenRound(5:16-5:17),LowerIdent(5:17-5:18),Comma(5:18-5:19),LowerIdent(5:20-5:21),CloseRound(5:21-5:22),OpArrow(5:23-5:25),UpperIdent(5:26-5:30),NoSpaceOpenRound(5:30-5:31),LowerIdent(5:31-5:32),Comma(5:32-5:33),LowerIdent(5:34-5:35),CloseRound(5:35-5:36),
 LowerIdent(6:1-6:9),OpAssign(6:10-6:11),OpBar(6:12-6:13),NoSpaceOpenRound(6:13-6:14),LowerIdent(6:14-6:15),Comma(6:15-6:16),LowerIdent(6:17-6:18),CloseRound(6:18-6:19),OpBar(6:19-6:20),OpenRound(6:21-6:22),LowerIdent(6:22-6:23),Comma(6:23-6:24),LowerIdent(6:25-6:26),CloseRound(6:26-6:27),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:21),NoSpaceOpenRound(8:21-8:22),NoSpaceOpenRound(8:22-8:23),Int(8:23-8:24),Comma(8:24-8:25),Int(8:26-8:27),CloseRound(8:27-8:28),CloseRound(8:28-8:29),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),LowerIdent(10:13-10:21),NoSpaceOpenRound(10:21-10:22),Int(10:22-10:23),Comma(10:23-10:24),Int(10:25-10:26),CloseRound(10:26-10:27),
-EndOfFile(11:1-11:1),
+LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:21),NoSpaceOpenRound(8:21-8:22),Int(8:22-8:23),Comma(8:23-8:24),Int(8:25-8:26),CloseRound(8:26-8:27),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.27
+(file @1.1-8.27
 	(app @1.1-1.53
 		(provides @1.5-1.12
 			(exposed-lower-ident @1.6-1.11
@@ -89,25 +83,15 @@ EndOfFile(11:1-11:1),
 				(e-tuple @6.21-6.27
 					(e-ident @6.22-6.23 (raw "y"))
 					(e-ident @6.25-6.26 (raw "x")))))
-		(s-decl @8.1-8.29
-			(p-ident @8.1-8.6 (raw "test1"))
-			(e-lambda @8.9-8.29
+		(s-decl @8.1-8.27
+			(p-ident @8.1-8.6 (raw "main!"))
+			(e-lambda @8.9-8.27
 				(args
 					(p-underscore))
-				(e-apply @8.13-8.29
+				(e-apply @8.13-8.27
 					(e-ident @8.13-8.21 (raw "swapPair"))
-					(e-tuple @8.22-8.28
-						(e-int @8.23-8.24 (raw "1"))
-						(e-int @8.26-8.27 (raw "2"))))))
-		(s-decl @10.1-10.27
-			(p-ident @10.1-10.6 (raw "test2"))
-			(e-lambda @10.9-10.27
-				(args
-					(p-underscore))
-				(e-apply @10.13-10.27
-					(e-ident @10.13-10.21 (raw "swapPair"))
-					(e-int @10.22-10.23 (raw "1"))
-					(e-int @10.25-10.26 (raw "2")))))))
+					(e-int @8.22-8.23 (raw "1"))
+					(e-int @8.25-8.26 (raw "2")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -140,29 +124,16 @@ NO CHANGE
 						(ty-rigid-var @5.12-5.22 (name "b"))
 						(ty-rigid-var @5.12-5.22 (name "a")))))))
 	(d-let
-		(p-assign @8.1-8.6 (ident "test1"))
-		(e-closure @8.9-8.29
+		(p-assign @8.1-8.6 (ident "main!"))
+		(e-closure @8.9-8.27
 			(captures
 				(capture @6.1-6.9 (ident "swapPair")))
-			(e-lambda @8.9-8.29
+			(e-lambda @8.9-8.27
 				(args
 					(p-underscore @8.10-8.11))
-				(e-call @8.13-8.29
-					(e-tuple @8.22-8.28
-						(elems
-							(e-num @8.23-8.24 (value "1"))
-							(e-num @8.26-8.27 (value "2"))))))))
-	(d-let
-		(p-assign @10.1-10.6 (ident "test2"))
-		(e-closure @10.9-10.27
-			(captures
-				(capture @6.1-6.9 (ident "swapPair")))
-			(e-lambda @10.9-10.27
-				(args
-					(p-underscore @10.10-10.11))
-				(e-call @10.13-10.27
-					(e-num @10.22-10.23 (value "1"))
-					(e-num @10.25-10.26 (value "2"))))))
+				(e-call @8.13-8.27
+					(e-num @8.22-8.23 (value "1"))
+					(e-num @8.25-8.26 (value "2"))))))
 	(s-nominal-decl @1.1-1.1
 		(ty-header @1.1-1.1 (name "Bool"))
 		(ty-tag-union @1.1-1.1
@@ -189,9 +160,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Pair(Error, Error) -> Pair(Error, Error)"))
-		(patt @8.1-8.6 (type "_arg -> Error"))
-		(patt @10.1-10.6 (type "_arg -> _ret")))
+		(patt @6.1-6.9 (type "Pair(a, b) -> Pair(b, a)"))
+		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -206,7 +176,6 @@ NO CHANGE
 					(ty-rigid-var @3.6-3.7 (name "a"))
 					(ty-rigid-var @3.9-3.10 (name "b"))))))
 	(expressions
-		(expr @6.12-6.27 (type "Pair(Error, Error) -> Pair(Error, Error)"))
-		(expr @8.9-8.29 (type "_arg -> Error"))
-		(expr @10.9-10.27 (type "_arg -> _ret"))))
+		(expr @6.12-6.27 (type "Pair(a, b) -> Pair(b, a)"))
+		(expr @8.9-8.27 (type "_arg -> _ret"))))
 ~~~

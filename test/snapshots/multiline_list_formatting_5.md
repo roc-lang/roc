@@ -37,9 +37,9 @@ EndOfFile(3:1-3:1),
 ~~~clojure
 (e-list @1.1-2.5
 	(elems
-		(e-int @1.2-1.3 (value "1"))
-		(e-int @1.5-1.6 (value "2"))
-		(e-int @2.3-2.4 (value "3"))))
+		(e-num @1.2-1.3 (value "1"))
+		(e-num @1.5-1.6 (value "2"))
+		(e-num @2.3-2.4 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

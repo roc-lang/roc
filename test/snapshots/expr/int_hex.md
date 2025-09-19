@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.5 (value "255"))
+(e-int @1.1-1.5 (value "255") (suffix "none"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "Int(_size)"))
+(expr @1.1-1.5 (type "Num(Int(_size))"))
 ~~~

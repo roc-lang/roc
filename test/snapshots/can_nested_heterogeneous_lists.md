@@ -55,13 +55,13 @@ NO CHANGE
 	(elems
 		(e-list @1.2-1.14
 			(elems
-				(e-int @1.3-1.4 (value "1"))
+				(e-num @1.3-1.4 (value "1"))
 				(e-string @1.6-1.13
 					(e-literal @1.7-1.12 (string "hello")))))
 		(e-list @1.16-1.22
 			(elems
-				(e-int @1.17-1.18 (value "2"))
-				(e-int @1.20-1.21 (value "3"))))))
+				(e-num @1.17-1.18 (value "2"))
+				(e-num @1.20-1.21 (value "3"))))))
 ~~~
 # TYPES
 ~~~clojure

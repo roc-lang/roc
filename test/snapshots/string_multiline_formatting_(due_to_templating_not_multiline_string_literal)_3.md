@@ -80,7 +80,6 @@ NO CHANGE
 	(e-literal @1.2-1.24 (string "This is a string with "))
 	(e-call @2.2-5.3
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-literal @6.2-6.42 (string " lines of text due to the template parts")))
 ~~~

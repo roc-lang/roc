@@ -14,16 +14,7 @@ test = Color.Red
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Color` is exposed, but it is not defined anywhere in this module.
-
-**qualified_tag.md:1:9:1:14:**
-```roc
-module [Color]
-```
-        ^^^^^
-You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),

@@ -499,7 +499,7 @@ test "check type - nominal recursive type wrong type" {
     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
 }
 
-test "check type - nominal w/ polymorphic function" {
+test "check type - nominal w/ polymorphic function with bad args" {
     const source =
         \\module []
         \\
@@ -509,6 +509,20 @@ test "check type - nominal w/ polymorphic function" {
         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
     ;
     try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+}
+
+test "check type - nominal w/ polymorphic function" {
+    const source =
+        \\module []
+        \\
+        \\Pair(a, b) : (a, b)
+        \\
+        \\swapPair : Pair(a, b) -> Pair(b, a)
+        \\swapPair = |(x, y)| (y, x)
+        \\
+        \\test = |_| swapPair((1, "test"))
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "_arg -> Pair(Str, Num(_size))");
 }
 
 // if-else
@@ -735,7 +749,7 @@ test "check type - record access" {
     const source =
         \\module []
         \\
-        \\r = 
+        \\r =
         \\  {
         \\    hello: "Hello",
         \\    world: 10,

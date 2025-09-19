@@ -73,35 +73,53 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.27
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
-				(ty-var @3.7-3.8 (name "a"))))
+				(ty-rigid-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.12-3.27
-			(ty-apply @3.13-3.20 (symbol "Some")
-				(ty-var @3.18-3.19 (name "a")))
-			(ty @3.22-3.26 (name "None"))))
+			(tag_name @3.13-3.20 (name "Some"))
+			(tag_name @3.22-3.26 (name "None"))))
 	(s-alias-decl @4.1-4.24
 		(ty-header @4.1-4.9 (name "Maybe")
 			(ty-args
-				(ty-var @4.7-4.8 (name "a"))))
+				(ty-rigid-var @4.7-4.8 (name "a"))))
 		(ty-tag-union @4.12-4.24
-			(ty-apply @4.13-4.18 (symbol "Ok")
-				(ty-var @4.16-4.17 (name "a")))
-			(ty @4.20-4.23 (name "Err")))))
+			(tag_name @4.13-4.18 (name "Ok"))
+			(tag_name @4.20-4.23 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.27 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
-					(ty-var @3.7-3.8 (name "a")))))
+					(ty-rigid-var @3.7-3.8 (name "a")))))
 		(alias @4.1-4.24 (type "Maybe(a)")
 			(ty-header @4.1-4.9 (name "Maybe")
 				(ty-args
-					(ty-var @4.7-4.8 (name "a"))))))
+					(ty-rigid-var @4.7-4.8 (name "a"))))))
 	(expressions))
 ~~~

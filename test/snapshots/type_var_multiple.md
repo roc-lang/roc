@@ -144,7 +144,7 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(Error, Error) -> (Error, Error)"))
+		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
@@ -155,6 +155,6 @@ main! = |_| {}
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.8-8.2 (type "(Error, Error) -> (Error, Error)"))
+		(expr @5.8-8.2 (type "(a, b) -> (b, a)"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

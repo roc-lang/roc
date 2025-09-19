@@ -79,6 +79,27 @@ process = |list| "processed"
            ^^^^
 
 
+**INCOMPATIBLE MATCH PATTERNS**
+The first pattern in this `match` is incompatible:
+**underscore_in_regular_annotations.md:20:5:**
+```roc
+    match result {
+        Ok(_) => "success",
+        Err(msg) => msg,
+    }
+```
+        ^^^^^
+
+The first pattern has the type:
+    _Result(ok, err)_
+
+But the expression right after `match` has the type:
+    _Result(ok, Str)_
+
+These two types can't never match!
+
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -273,8 +294,8 @@ transform = |_, b| b
 		(annotation @7.1-7.9
 			(declared-type
 				(ty-fn @6.12-6.18 (effectful false)
-					(ty-var @6.12-6.13 (name "a"))
-					(ty-var @6.17-6.18 (name "a"))))))
+					(ty-rigid-var @6.12-6.13 (name "a"))
+					(ty-rigid-var @6.12-6.13 (name "a"))))))
 	(d-let
 		(p-assign @11.1-11.8 (ident "process"))
 		(e-lambda @11.11-11.29
@@ -285,9 +306,9 @@ transform = |_, b| b
 		(annotation @11.1-11.8
 			(declared-type
 				(ty-fn @10.11-10.25 (effectful false)
-					(ty-apply @10.11-10.18 (symbol "List")
+					(ty-apply @10.11-10.18 (name "List") (builtin)
 						(ty-underscore @10.16-10.16))
-					(ty @10.22-10.25 (name "Str"))))))
+					(ty-lookup @10.22-10.25 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.9 (ident "get_data"))
 		(e-lambda @15.12-15.33
@@ -304,8 +325,8 @@ transform = |_, b| b
 						(field (field "field")
 							(ty-underscore @1.1-1.1))
 						(field (field "other")
-							(ty @14.31-14.34 (name "U32"))))
-					(ty @14.40-14.43 (name "U32"))))))
+							(ty-lookup @14.31-14.34 (name "U32") (builtin))))
+					(ty-lookup @14.40-14.43 (name "U32") (builtin))))))
 	(d-let
 		(p-assign @19.1-19.14 (ident "handle_result"))
 		(e-closure @19.17-23.6
@@ -339,10 +360,10 @@ transform = |_, b| b
 		(annotation @19.1-19.14
 			(declared-type
 				(ty-fn @18.17-18.38 (effectful false)
-					(ty-apply @18.17-18.31 (symbol "Result")
-						(ty-underscore @18.24-18.24)
-						(ty @18.27-18.30 (name "Str")))
-					(ty @18.35-18.38 (name "Str"))))))
+					(ty-apply @18.17-18.31 (name "Result") (local)
+						(ty-underscore @18.17-18.31)
+						(ty-lookup @18.17-18.31 (name "Str") (builtin)))
+					(ty-lookup @18.35-18.38 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @27.1-27.4 (ident "map"))
 		(e-lambda @27.7-27.16
@@ -355,12 +376,12 @@ transform = |_, b| b
 				(ty-fn @26.7-26.35 (effectful false)
 					(ty-parens @26.7-26.15
 						(ty-fn @26.8-26.14 (effectful false)
-							(ty-var @26.8-26.9 (name "a"))
-							(ty-var @26.13-26.14 (name "b"))))
-					(ty-apply @26.17-26.24 (symbol "List")
-						(ty-var @26.22-26.23 (name "a")))
-					(ty-apply @26.28-26.35 (symbol "List")
-						(ty-var @26.33-26.34 (name "b")))))))
+							(ty-rigid-var @26.8-26.9 (name "a"))
+							(ty-rigid-var @26.13-26.14 (name "b"))))
+					(ty-apply @26.17-26.24 (name "List") (builtin)
+						(ty-rigid-var @26.8-26.9 (name "a")))
+					(ty-apply @26.28-26.35 (name "List") (builtin)
+						(ty-rigid-var @26.13-26.14 (name "b")))))))
 	(d-let
 		(p-assign @31.1-31.10 (ident "transform"))
 		(e-lambda @31.13-31.21
@@ -368,7 +389,20 @@ transform = |_, b| b
 				(p-underscore @31.14-31.15)
 				(p-assign @31.17-31.18 (ident "b")))
 			(e-lookup-local @31.20-31.21
-				(p-assign @31.17-31.18 (ident "b"))))))
+				(p-assign @31.17-31.18 (ident "b")))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -376,17 +410,25 @@ transform = |_, b| b
 	(defs
 		(patt @4.1-4.5 (type "_arg -> _ret"))
 		(patt @7.1-7.9 (type "a -> a"))
-		(patt @11.1-11.8 (type "List(_c) -> Str"))
-		(patt @15.1-15.9 (type "{ field: _field2, other: U32 } -> U32"))
-		(patt @19.1-19.14 (type "Result(ok, Str) -> Str"))
+		(patt @11.1-11.8 (type "List(_elem) -> Str"))
+		(patt @15.1-15.9 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
+		(patt @19.1-19.14 (type "Result(_c, Str) -> Error"))
 		(patt @27.1-27.4 (type "a -> b, List(a) -> List(b)"))
-		(patt @31.1-31.10 (type "_arg, _arg2 -> _ret")))
+		(patt @31.1-31.10 (type "_arg, c -> c")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
 		(expr @7.12-7.17 (type "a -> a"))
-		(expr @11.11-11.29 (type "List(_c) -> Str"))
-		(expr @15.12-15.33 (type "{ field: _field2, other: U32 } -> U32"))
-		(expr @19.17-23.6 (type "Result(ok, Str) -> Str"))
+		(expr @11.11-11.29 (type "List(_elem) -> Str"))
+		(expr @15.12-15.33 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
+		(expr @19.17-23.6 (type "Result(_c, Str) -> Error"))
 		(expr @27.7-27.16 (type "a -> b, List(a) -> List(b)"))
-		(expr @31.13-31.21 (type "_arg, _arg2 -> _ret"))))
+		(expr @31.13-31.21 (type "_arg, c -> c"))))
 ~~~

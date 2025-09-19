@@ -145,7 +145,7 @@ match list {
 						(p-list @2.5-2.7
 							(patterns))))
 				(value
-					(e-int @2.11-2.12 (value "0"))))
+					(e-num @2.11-2.12 (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -189,7 +189,7 @@ match list {
 							(rest-at (index 2)
 								(p-assign @1.1-1.1 (ident "rest"))))))
 				(value
-					(e-int @6.31-6.32 (value "3"))))
+					(e-num @6.31-6.32 (value "3"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -212,5 +212,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Num(_size)"))
+(expr @1.1-8.2 (type "Error"))
 ~~~

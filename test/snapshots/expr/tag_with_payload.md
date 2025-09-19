@@ -30,7 +30,7 @@ NO CHANGE
 ~~~clojure
 (e-tag @1.1-1.9 (name "Some")
 	(args
-		(e-int @1.6-1.8 (value "42"))))
+		(e-num @1.6-1.8 (value "42"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -18,16 +18,6 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Color` is exposed, but it is not defined anywhere in this module.
-
-**nominal_tag_simple.md:1:9:1:14:**
-```roc
-module [Color, blue]
-```
-        ^^^^^
-You can fix this by either defining `Color` in this module, or by removing it from the list of exposed values.
-
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **nominal_tag_simple.md:9:10:9:22:**

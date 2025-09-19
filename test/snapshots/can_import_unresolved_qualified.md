@@ -205,18 +205,13 @@ NO CHANGE
 			(args
 				(p-assign @11.14-11.18 (ident "data")))
 			(e-call @11.20-11.40
-				(e-lookup-external @11.20-11.34
-					(module-idx "0")
-					(target-node-idx "0"))
 				(e-lookup-local @11.35-11.39
 					(p-assign @11.14-11.18 (ident "data")))))
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.36 (effectful false)
-					(ty-lookup-external @10.13-10.29
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty @10.33-10.36 (name "Str"))))))
+					(ty-lookup @10.13-10.29 (name "InvalidType") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @10.33-10.36 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.15 (ident "processRequest"))
 		(e-lambda @15.18-15.51
@@ -233,9 +228,6 @@ NO CHANGE
 	(d-let
 		(p-assign @18.1-18.7 (ident "result"))
 		(e-call @18.10-18.28
-			(e-lookup-external @18.10-18.20
-				(module-idx "0")
-				(target-node-idx "0"))
 			(e-string @18.21-18.27
 				(e-literal @18.22-18.26 (string "test")))))
 	(d-let
@@ -252,6 +244,19 @@ NO CHANGE
 		(e-lookup-external @27.10-27.49
 			(module-idx "0")
 			(target-node-idx "0")))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
@@ -268,6 +273,14 @@ NO CHANGE
 		(patt @21.1-21.7 (type "_a"))
 		(patt @24.1-24.7 (type "Error"))
 		(patt @27.1-27.7 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @7.8-7.31 (type "Error"))
 		(expr @11.13-11.40 (type "Error -> Str"))

@@ -226,11 +226,11 @@ main! = |_| {
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.10 (name "a"))
-						(ty-var @4.12-4.13 (name "b")))
+						(ty-rigid-var @4.9-4.10 (name "a"))
+						(ty-rigid-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.20 (name "b"))
-						(ty-var @4.22-4.23 (name "a")))))))
+						(ty-rigid-var @4.12-4.13 (name "b"))
+						(ty-rigid-var @4.9-4.10 (name "a")))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-closure @11.9-24.2
@@ -243,38 +243,45 @@ main! = |_| {
 					(s-let @13.5-13.34
 						(p-assign @13.5-13.12 (ident "result1"))
 						(e-call @13.15-13.34
-							(e-lookup-local @13.15-13.19
-								(p-assign @5.1-5.5 (ident "swap")))
 							(e-tuple @13.20-13.33
 								(elems
-									(e-int @13.21-13.23 (value "42"))
+									(e-num @13.21-13.23 (value "42"))
 									(e-string @13.25-13.32
 										(e-literal @13.26-13.31 (string "hello")))))))
 					(s-let @17.5-17.43
 						(p-assign @17.5-17.12 (ident "result2"))
 						(e-call @17.15-17.43
-							(e-lookup-local @17.15-17.19
-								(p-assign @5.1-5.5 (ident "swap")))
 							(e-tuple @17.20-17.42
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-list @17.32-17.41
 										(elems
-											(e-int @17.33-17.34 (value "1"))
-											(e-int @17.36-17.37 (value "2"))
-											(e-int @17.39-17.40 (value "3"))))))))
+											(e-num @17.33-17.34 (value "1"))
+											(e-num @17.36-17.37 (value "2"))
+											(e-num @17.39-17.40 (value "3"))))))))
 					(s-let @21.5-21.35
 						(p-assign @21.5-21.12 (ident "result3"))
 						(e-call @21.15-21.35
-							(e-lookup-local @21.15-21.19
-								(p-assign @5.1-5.5 (ident "swap")))
 							(e-tuple @21.20-21.34
 								(elems
 									(e-string @21.21-21.26
 										(e-literal @21.22-21.25 (string "foo")))
 									(e-string @21.28-21.33
 										(e-literal @21.29-21.32 (string "bar")))))))
-					(e-empty_record @23.5-23.7))))))
+					(e-empty_record @23.5-23.7)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -282,6 +289,14 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @11.1-11.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.8-8.2 (type "(a, b) -> (b, a)"))
 		(expr @11.9-24.2 (type "_arg -> {}"))))

@@ -277,7 +277,7 @@ main = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "num"))
-		(e-int @4.7-4.9 (value "42")))
+		(e-num @4.7-4.9 (value "42")))
 	(d-let
 		(p-assign @5.1-5.5 (ident "frac"))
 		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
@@ -307,26 +307,20 @@ main = |_| {
 						(e-lookup-local @11.34-11.39
 							(p-assign @11.19-11.24 (ident "value"))))
 					(field (name "count")
-						(e-int @11.48-11.49 (value "1")))))))
+						(e-num @11.48-11.49 (value "1")))))))
 	(d-let
 		(p-assign @14.1-14.14 (ident "int_container"))
 		(e-call @14.17-14.36
-			(e-lookup-local @14.17-14.31
-				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @14.32-14.35
 				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @15.1-15.14 (ident "str_container"))
 		(e-call @15.17-15.36
-			(e-lookup-local @15.17-15.31
-				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @15.32-15.35
 				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @16.1-16.15 (ident "list_container"))
 		(e-call @16.18-16.47
-			(e-lookup-local @16.18-16.32
-				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @16.33-16.46
 				(p-assign @7.1-7.14 (ident "my_empty_list")))))
 	(d-let
@@ -345,16 +339,12 @@ main = |_| {
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
 		(e-call @22.15-22.46
-			(e-lookup-local @22.15-22.26
-				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @22.27-22.40
 				(p-assign @14.1-14.14 (ident "int_container")))
-			(e-int @22.42-22.45 (value "100"))))
+			(e-num @22.42-22.45 (value "100"))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "updated_str"))
 		(e-call @23.15-23.50
-			(e-lookup-local @23.15-23.26
-				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @23.27-23.40
 				(p-assign @15.1-15.14 (ident "str_container")))
 			(e-string @23.42-23.49
@@ -372,32 +362,26 @@ main = |_| {
 	(d-let
 		(p-assign @29.1-29.11 (ident "int_record"))
 		(e-call @29.14-29.33
-			(e-lookup-local @29.14-29.29
-				(p-assign @26.1-26.16 (ident "identity_record")))
-			(e-int @29.30-29.32 (value "42"))))
+			(e-num @29.30-29.32 (value "42"))))
 	(d-let
 		(p-assign @30.1-30.11 (ident "str_record"))
 		(e-call @30.14-30.37
-			(e-lookup-local @30.14-30.29
-				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-string @30.30-30.36
 				(e-literal @30.31-30.35 (string "test")))))
 	(d-let
 		(p-assign @31.1-31.12 (ident "list_record"))
 		(e-call @31.15-31.41
-			(e-lookup-local @31.15-31.30
-				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-list @31.31-31.40
 				(elems
-					(e-int @31.32-31.33 (value "1"))
-					(e-int @31.35-31.36 (value "2"))
-					(e-int @31.38-31.39 (value "3"))))))
+					(e-num @31.32-31.33 (value "1"))
+					(e-num @31.35-31.36 (value "2"))
+					(e-num @31.38-31.39 (value "3"))))))
 	(d-let
 		(p-assign @33.1-33.5 (ident "main"))
 		(e-closure @33.8-36.2
 			(captures
-				(capture @14.1-14.14 (ident "int_container"))
-				(capture @15.1-15.14 (ident "str_container")))
+				(capture @15.1-15.14 (ident "str_container"))
+				(capture @14.1-14.14 (ident "int_container")))
 			(e-lambda @33.8-36.2
 				(args
 					(p-underscore @33.9-33.10))
@@ -410,7 +394,20 @@ main = |_| {
 						(e-dot-access @35.27-35.46 (field "count")
 							(receiver
 								(e-lookup-local @35.27-35.40
-									(p-assign @15.1-15.14 (ident "str_container")))))))))))
+									(p-assign @15.1-15.14 (ident "str_container"))))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -421,32 +418,40 @@ main = |_| {
 		(patt @6.1-6.4 (type "Str"))
 		(patt @7.1-7.14 (type "List(_elem)"))
 		(patt @8.1-8.17 (type "List(Frac(_size))"))
-		(patt @11.1-11.15 (type "_arg -> { data: _field, count: Num(_size) }"))
+		(patt @11.1-11.15 (type "a -> { data: a, count: Num(_size) }"))
 		(patt @14.1-14.14 (type "{ data: Frac(_size), count: Num(_size2) }"))
 		(patt @15.1-15.14 (type "{ data: Str, count: Num(_size) }"))
 		(patt @16.1-16.15 (type "{ data: List(_elem), count: Num(_size) }"))
 		(patt @19.1-19.12 (type "_arg, _arg2 -> {}"))
 		(patt @22.1-22.12 (type "{}"))
 		(patt @23.1-23.12 (type "{}"))
-		(patt @26.1-26.16 (type "_arg -> { value: _field }"))
+		(patt @26.1-26.16 (type "a -> { value: a }"))
 		(patt @29.1-29.11 (type "{ value: Num(_size) }"))
 		(patt @30.1-30.11 (type "{ value: Str }"))
 		(patt @31.1-31.12 (type "{ value: List(Num(_size)) }"))
 		(patt @33.1-33.5 (type "_arg -> Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.7-4.9 (type "Frac(_size)"))
 		(expr @5.8-5.11 (type "Frac(_size)"))
 		(expr @6.7-6.14 (type "Str"))
 		(expr @7.17-7.19 (type "List(_elem)"))
 		(expr @8.20-8.31 (type "List(Frac(_size))"))
-		(expr @11.18-11.51 (type "_arg -> { data: _field, count: Num(_size) }"))
+		(expr @11.18-11.51 (type "a -> { data: a, count: Num(_size) }"))
 		(expr @14.17-14.36 (type "{ data: Frac(_size), count: Num(_size2) }"))
 		(expr @15.17-15.36 (type "{ data: Str, count: Num(_size) }"))
 		(expr @16.18-16.47 (type "{ data: List(_elem), count: Num(_size) }"))
 		(expr @19.15-19.69 (type "_arg, _arg2 -> {}"))
 		(expr @22.15-22.46 (type "{}"))
 		(expr @23.15-23.50 (type "{}"))
-		(expr @26.19-26.35 (type "_arg -> { value: _field }"))
+		(expr @26.19-26.35 (type "a -> { value: a }"))
 		(expr @29.14-29.33 (type "{ value: Num(_size) }"))
 		(expr @30.14-30.37 (type "{ value: Str }"))
 		(expr @31.15-31.41 (type "{ value: List(Num(_size)) }"))

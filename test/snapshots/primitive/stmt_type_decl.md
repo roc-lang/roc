@@ -46,26 +46,46 @@ Foo(a, b) : (a, b, Str, U64)
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.25
 		(ty-header @3.1-3.9 (name "Foo")
 			(ty-args
-				(ty-var @3.5-3.6 (name "a"))
-				(ty-var @3.7-3.8 (name "b"))))
+				(ty-rigid-var @3.5-3.6 (name "a"))
+				(ty-rigid-var @3.7-3.8 (name "b"))))
 		(ty-tuple @3.12-3.25
-			(ty-var @3.13-3.14 (name "a"))
-			(ty-var @3.15-3.16 (name "b"))
-			(ty @3.17-3.20 (name "Str"))
-			(ty @3.21-3.24 (name "U64")))))
+			(ty-rigid-var @3.5-3.6 (name "a"))
+			(ty-rigid-var @3.7-3.8 (name "b"))
+			(ty-lookup @3.17-3.20 (name "Str") (builtin))
+			(ty-lookup @3.21-3.24 (name "U64") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.25 (type "Foo(a, b)")
 			(ty-header @3.1-3.9 (name "Foo")
 				(ty-args
-					(ty-var @3.5-3.6 (name "a"))
-					(ty-var @3.7-3.8 (name "b"))))))
+					(ty-rigid-var @3.5-3.6 (name "a"))
+					(ty-rigid-var @3.7-3.8 (name "b"))))))
 	(expressions))
 ~~~

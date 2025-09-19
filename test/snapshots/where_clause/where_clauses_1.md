@@ -92,31 +92,51 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-6.24
 		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))
-				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @3.19-3.20 (name "a")))
+				(ty-rigid-var @3.6-3.7 (name "a"))
+				(ty-rigid-var @3.9-3.15 (name "hasher"))))
+		(ty-rigid-var @3.6-3.7 (name "a")))
 	(s-alias-decl @8.1-8.53
 		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
-				(ty-var @8.8-8.9 (name "a"))))
-		(ty-var @8.13-8.14 (name "a"))))
+				(ty-rigid-var @8.8-8.9 (name "a"))))
+		(ty-rigid-var @8.8-8.9 (name "a"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a"))
-					(ty-var @3.9-3.15 (name "hasher")))))
+					(ty-rigid-var @3.6-3.7 (name "a"))
+					(ty-rigid-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
 			(ty-header @8.1-8.10 (name "Decode")
 				(ty-args
-					(ty-var @8.8-8.9 (name "a"))))))
+					(ty-rigid-var @8.8-8.9 (name "a"))))))
 	(expressions))
 ~~~

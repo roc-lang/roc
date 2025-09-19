@@ -17,17 +17,17 @@ TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:13
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_instantiation_arity_mismatch.md:5:5:5:13:**
+**test_instantiation_arity_mismatch.md:5:5:5:19:**
 ```roc
     identity(1, 2)
 ```
-    ^^^^^^^^
+    ^^^^^^^^^^^^^^
 
 It has the type:
-    _(a, b) -> (a, b)_
-
-But here it's being used as:
     _Num(_size), Num(_size2) -> _ret_
+
+But I expected it to be:
+    _(c, d) -> (c, d)_
 
 # TOKENS
 ~~~zig
@@ -81,10 +81,8 @@ EndOfFile(7:1-7:1),
 			(e-lookup-local @3.23-3.27
 				(p-assign @3.17-3.21 (ident "pair")))))
 	(e-call @5.5-5.19
-		(e-lookup-local @5.5-5.13
-			(p-assign @3.5-3.13 (ident "identity")))
-		(e-int @5.14-5.15 (value "1"))
-		(e-int @5.17-5.18 (value "2"))))
+		(e-num @5.14-5.15 (value "1"))
+		(e-num @5.17-5.18 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

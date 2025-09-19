@@ -118,7 +118,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "(Error, Error) -> (Error, Error)"))
+		(patt @4.1-4.5 (type "(a, b) -> (b, a)"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
@@ -129,6 +129,6 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.8-4.23 (type "(Error, Error) -> (Error, Error)"))
+		(expr @4.8-4.23 (type "(a, b) -> (b, a)"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

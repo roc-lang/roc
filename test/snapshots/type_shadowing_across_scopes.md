@@ -111,16 +111,6 @@ processData = |data|
                ^^^^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Result` is exposed, but it is not defined anywhere in this module.
-
-**type_shadowing_across_scopes.md:1:9:1:15:**
-```roc
-module [Result, processData]
-```
-        ^^^^^^
-You can fix this by either defining `Result` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:28),CloseSquare(1:28-1:29),

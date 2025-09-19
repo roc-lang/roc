@@ -94,9 +94,9 @@ main! = |_| processList(["one", "two", "three"])
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)
-					(ty-apply @3.15-3.24 (symbol "List")
-						(ty @3.20-3.23 (name "Str")))
-					(ty @3.28-3.31 (name "U64"))))))
+					(ty-apply @3.15-3.24 (name "List") (builtin)
+						(ty-lookup @3.20-3.23 (name "Str") (builtin)))
+					(ty-lookup @3.28-3.31 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.47
@@ -106,8 +106,6 @@ main! = |_| processList(["one", "two", "three"])
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.47
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processList")))
 					(e-list @6.25-6.46
 						(elems
 							(e-string @6.26-6.31
@@ -115,15 +113,36 @@ main! = |_| processList(["one", "two", "three"])
 							(e-string @6.32-6.37
 								(e-literal @6.33-6.36 (string "two")))
 							(e-string @6.38-6.45
-								(e-literal @6.39-6.44 (string "three"))))))))))
+								(e-literal @6.39-6.44 (string "three")))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "List(Str) -> U64"))
-		(patt @6.1-6.6 (type "_arg -> U64")))
+		(patt @4.1-4.12 (type "List(Str) -> Num(Int(Unsigned64))"))
+		(patt @6.1-6.6 (type "_arg -> Num(Int(Unsigned64))")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.15-4.32 (type "List(Str) -> U64"))
-		(expr @6.9-6.47 (type "_arg -> U64"))))
+		(expr @4.15-4.32 (type "List(Str) -> Num(Int(Unsigned64))"))
+		(expr @6.9-6.47 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

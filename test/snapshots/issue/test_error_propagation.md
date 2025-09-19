@@ -28,6 +28,20 @@ module []
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_error_propagation.md:8:9:8:15:**
+```roc
+value = "test"
+```
+        ^^^^^^
+
+It has the type:
+    _Str_
+
+But the type annotation says it should have the type:
+    _GoodAlias_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -71,13 +85,26 @@ NO CHANGE
 			(e-literal @8.10-8.14 (string "test")))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.18 (name "GoodAlias")))))
+				(ty-lookup @7.9-7.18 (name "GoodAlias") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.21
 		(ty-header @5.1-5.10 (name "GoodAlias"))
-		(ty @5.14-5.21 (name "BadBase"))))
+		(ty-lookup @5.14-5.21 (name "BadBase") (local))))
 ~~~
 # TYPES
 ~~~clojure
@@ -85,9 +112,16 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
+		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.21 (type "Error")
+		(nominal @5.1-5.21 (type "GoodAlias")
 			(ty-header @5.1-5.10 (name "GoodAlias"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))))

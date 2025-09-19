@@ -132,9 +132,9 @@ match sequence {
 						(p-list @6.5-6.7
 							(patterns))))
 				(value
-					(e-int @6.11-6.12 (value "0")))))))
+					(e-num @6.11-6.12 (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.2 (type "Num(_size)"))
+(expr @1.1-7.2 (type "Error"))
 ~~~

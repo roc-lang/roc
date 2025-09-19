@@ -20,17 +20,17 @@ TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:12
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_tuple_instantiation_crash.md:9:8:9:12:**
+**test_tuple_instantiation_crash.md:9:8:9:18:**
 ```roc
 main = swap(1, 2)
 ```
-       ^^^^
+       ^^^^^^^^^^
 
 It has the type:
-    _(a, b) -> (b, a)_
-
-But here it's being used as:
     _Num(_size), Num(_size2) -> _ret_
+
+But I expected it to be:
+    _(c, d) -> (d, c)_
 
 # TOKENS
 ~~~zig
@@ -105,26 +105,45 @@ NO CHANGE
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.10 (name "a"))
-						(ty-var @4.12-4.13 (name "b")))
+						(ty-rigid-var @4.9-4.10 (name "a"))
+						(ty-rigid-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.20 (name "b"))
-						(ty-var @4.22-4.23 (name "a")))))))
+						(ty-rigid-var @4.12-4.13 (name "b"))
+						(ty-rigid-var @4.9-4.10 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18
-			(e-lookup-local @9.8-9.12
-				(p-assign @5.1-5.5 (ident "swap")))
-			(e-int @9.13-9.14 (value "1"))
-			(e-int @9.16-9.17 (value "2")))))
+			(e-num @9.13-9.14 (value "1"))
+			(e-num @9.16-9.17 (value "2"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Error"))
+		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @9.1-9.5 (type "_c")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.8-5.23 (type "Error"))
+		(expr @5.8-5.23 (type "(a, b) -> (b, a)"))
 		(expr @9.8-9.18 (type "_c"))))
 ~~~

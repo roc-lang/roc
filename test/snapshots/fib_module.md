@@ -12,7 +12,19 @@ fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fib_module.md:3:14:**
+```roc
+fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
+```
+             ^^^^^^
+
+Right now, it has the type:
+    _Num(_size)_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
@@ -70,31 +82,48 @@ NO CHANGE
 							(e-binop @3.14-3.20 (op "le")
 								(e-lookup-local @3.14-3.15
 									(p-assign @3.8-3.9 (ident "n")))
-								(e-int @3.19-3.20 (value "1")))
+								(e-num @3.19-3.20 (value "1")))
 							(e-lookup-local @3.21-3.22
 								(p-assign @3.8-3.9 (ident "n")))))
 					(if-else
 						(e-binop @3.28-3.51 (op "add")
 							(e-call @3.28-3.38
-								(e-lookup-local @3.28-3.31
-									(p-assign @3.1-3.4 (ident "fib")))
 								(e-binop @3.32-3.37 (op "sub")
 									(e-lookup-local @3.32-3.33
 										(p-assign @3.8-3.9 (ident "n")))
-									(e-int @3.36-3.37 (value "1"))))
+									(e-num @3.36-3.37 (value "1"))))
 							(e-call @3.41-3.51
-								(e-lookup-local @3.41-3.44
-									(p-assign @3.1-3.4 (ident "fib")))
 								(e-binop @3.45-3.50 (op "sub")
 									(e-lookup-local @3.45-3.46
 										(p-assign @3.8-3.9 (ident "n")))
-									(e-int @3.49-3.50 (value "2")))))))))))
+									(e-num @3.49-3.50 (value "2"))))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.4 (type "Num(_size) -> Num(_size2)")))
+		(patt @3.1-3.4 (type "Error -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.7-3.51 (type "Num(_size) -> Num(_size2)"))))
+		(expr @3.7-3.51 (type "Error -> Error"))))
 ~~~

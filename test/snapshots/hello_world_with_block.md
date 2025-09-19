@@ -105,11 +105,21 @@ NO CHANGE
 					(e-string @9.10-9.17
 						(e-literal @9.11-9.16 (string "World"))))
 				(e-call @11.2-11.31
-					(e-lookup-external @11.2-11.14
-						(module-idx "0")
-						(target-node-idx "0"))
 					(e-string @11.15-11.30
 						(e-literal @11.16-11.29 (string "Hello, world!")))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -118,6 +128,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @8.1-8.6 (type "_arg -> _ret")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @8.9-12.2 (type "_arg -> _ret"))))
 ~~~

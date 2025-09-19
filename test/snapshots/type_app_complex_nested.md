@@ -46,6 +46,17 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 
 **UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:18:44:18:48:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                           ^^^^
+
+
+**UNDECLARED TYPE**
 The type _Error_ is not declared in this scope.
 
 This type is referenced here:
@@ -65,6 +76,17 @@ This type is referenced here:
 processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
                              ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:41:4:45:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                        ^^^^
 
 
 **UNDECLARED TYPE**
@@ -99,6 +121,38 @@ This type is referenced here:
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:12:32:12:36:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+```
+                               ^^^^
+
+
+**INCOMPATIBLE MATCH PATTERNS**
+The first pattern in this `match` is incompatible:
+**type_app_complex_nested.md:6:5:**
+```roc
+    match result {
+        Ok(maybeList) => []
+        Err(_) => []
+    }
+```
+        ^^^^^^^^^^^^^
+
+The first pattern has the type:
+    _Result(ok, err)_
+
+But the expression right after `match` has the type:
+    _Result(List(Error), Error)_
+
+These two types can't never match!
+
 
 
 # TOKENS
@@ -278,16 +332,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.73 (effectful false)
-					(ty-apply @4.18-4.62 (symbol "Result")
-						(ty-apply @4.25-4.39 (symbol "List")
-							(ty-apply @4.30-4.38 (symbol "Maybe")
-								(ty-var @4.36-4.37 (name "a"))))
-						(ty-apply @4.41-4.61 (symbol "Dict")
-							(ty @4.46-4.49 (name "Str"))
-							(ty-apply @4.51-4.60 (symbol "Error")
-								(ty-var @4.57-4.59 (name "_b")))))
-					(ty-apply @4.66-4.73 (symbol "List")
-						(ty-var @4.71-4.72 (name "a")))))))
+					(ty-apply @4.18-4.62 (name "Result") (local)
+						(ty-apply @4.18-4.62 (name "List") (builtin)
+							(ty-malformed @4.30-4.35))
+						(ty-malformed @4.18-4.62))
+					(ty-apply @4.66-4.73 (name "List") (builtin)
+						(ty-rigid-var @4.36-4.37 (name "a")))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "deepNested"))
 		(e-lambda @13.14-15.2
@@ -298,14 +348,8 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation @13.1-13.11
 			(declared-type
 				(ty-fn @12.14-12.56 (effectful false)
-					(ty-apply @12.14-12.51 (symbol "Maybe")
-						(ty-apply @12.20-12.50 (symbol "Result")
-							(ty-apply @12.27-12.45 (symbol "List")
-								(ty-apply @12.32-12.44 (symbol "Dict")
-									(ty @12.37-12.40 (name "Str"))
-									(ty-var @12.42-12.43 (name "a"))))
-							(ty-var @12.47-12.49 (name "_b"))))
-					(ty-var @12.55-12.56 (name "a"))))))
+					(ty-malformed @12.14-12.19)
+					(ty-rigid-var @12.42-12.43 (name "a"))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
 		(e-closure @20.9-20.49
@@ -315,8 +359,6 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(args
 					(p-underscore @20.10-20.11))
 				(e-call @20.13-20.49
-					(e-lookup-local @20.13-20.27
-						(p-assign @5.1-5.15 (ident "processComplex")))
 					(e-nominal @20.28-20.48 (nominal "Result")
 						(e-tag @20.28-20.48 (name "Ok")
 							(args
@@ -324,37 +366,53 @@ main! = |_| processComplex(Ok([Some(42), None]))
 									(elems
 										(e-tag @20.32-20.40 (name "Some")
 											(args
-												(e-int @20.37-20.39 (value "42"))))
+												(e-num @20.37-20.39 (value "42"))))
 										(e-tag @20.42-20.46 (name "None")))))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @18.1-18.64
 		(ty-header @18.1-18.18 (name "ComplexType")
 			(ty-args
-				(ty-var @18.13-18.14 (name "a"))
-				(ty-var @18.16-18.17 (name "b"))))
-		(ty-apply @18.21-18.64 (symbol "Result")
-			(ty-apply @18.28-18.42 (symbol "List")
-				(ty-apply @18.33-18.41 (symbol "Maybe")
-					(ty-var @18.39-18.40 (name "a"))))
-			(ty-apply @18.44-18.63 (symbol "Dict")
-				(ty @18.49-18.52 (name "Str"))
-				(ty-apply @18.54-18.62 (symbol "Error")
-					(ty-var @18.60-18.61 (name "b")))))))
+				(ty-rigid-var @18.13-18.14 (name "a"))
+				(ty-rigid-var @18.16-18.17 (name "b"))))
+		(ty-apply @18.21-18.64 (name "Result") (local)
+			(ty-apply @18.21-18.64 (name "List") (builtin)
+				(ty-malformed @18.33-18.38))
+			(ty-malformed @18.21-18.64))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.15 (type "Result(List(item), Dict) -> List(a)"))
+		(patt @5.1-5.15 (type "Result(List(Error), Error) -> List(a)"))
 		(patt @13.1-13.11 (type "Error -> a"))
-		(patt @20.1-20.6 (type "_arg -> List(a)")))
+		(patt @20.1-20.6 (type "_arg -> List(_elem)")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @18.1-18.64 (type "ComplexType(a, b)")
 			(ty-header @18.1-18.18 (name "ComplexType")
 				(ty-args
-					(ty-var @18.13-18.14 (name "a"))
-					(ty-var @18.16-18.17 (name "b"))))))
+					(ty-rigid-var @18.13-18.14 (name "a"))
+					(ty-rigid-var @18.16-18.17 (name "b"))))))
 	(expressions
-		(expr @5.18-9.6 (type "Result(List(item), Dict) -> List(a)"))
+		(expr @5.18-9.6 (type "Result(List(Error), Error) -> List(a)"))
 		(expr @13.14-15.2 (type "Error -> a"))
-		(expr @20.9-20.49 (type "_arg -> List(a)"))))
+		(expr @20.9-20.49 (type "_arg -> List(_elem)"))))
 ~~~

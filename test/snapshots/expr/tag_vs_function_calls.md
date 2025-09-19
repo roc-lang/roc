@@ -115,7 +115,7 @@ EndOfFile(11:1-11:1),
 		(field (name "someTag")
 			(e-tag @2.14-2.22 (name "Some")
 				(args
-					(e-int @2.19-2.21 (value "42")))))
+					(e-num @2.19-2.21 (value "42")))))
 		(field (name "noneTag")
 			(e-tag @3.14-3.18 (name "None")))
 		(field (name "okTag")
@@ -137,11 +137,10 @@ EndOfFile(11:1-11:1),
 				(e-binop @6.17-6.22 (op "add")
 					(e-lookup-local @6.17-6.18
 						(p-assign @6.14-6.15 (ident "x")))
-					(e-int @6.21-6.22 (value "1")))))
+					(e-num @6.21-6.22 (value "1")))))
 		(field (name "result")
 			(e-call @7.13-7.22
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-int @7.20-7.21 (value "5"))))
+				(e-num @7.20-7.21 (value "5"))))
 		(field (name "nested")
 			(e-tag @8.13-8.31 (name "Some")
 				(args
@@ -150,22 +149,22 @@ EndOfFile(11:1-11:1),
 							(args
 								(e-tag @8.21-8.29 (name "Just")
 									(args
-										(e-int @8.26-8.28 (value "42"))))))))))
+										(e-num @8.26-8.28 (value "42"))))))))))
 		(field (name "tagList")
 			(e-list @9.14-9.47
 				(elems
 					(e-tag @9.15-9.22 (name "Some")
 						(args
-							(e-int @9.20-9.21 (value "1"))))
+							(e-num @9.20-9.21 (value "1"))))
 					(e-tag @9.24-9.31 (name "Some")
 						(args
-							(e-int @9.29-9.30 (value "2"))))
+							(e-num @9.29-9.30 (value "2"))))
 					(e-tag @9.33-9.37 (name "None"))
 					(e-tag @9.39-9.46 (name "Some")
 						(args
-							(e-int @9.44-9.45 (value "3")))))))))
+							(e-num @9.44-9.45 (value "3")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: Result(Str, err), errTag: Result(ok, Str), addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some(Error)]_others3, tagList: List([Some(Num(_size4))][None]_others4) }"))
+(expr @1.1-10.2 (type "{ someTag: [Some(Num(_size))]_others, noneTag: [None]_others2, okTag: Error, errTag: Error, addOne: Num(_size2) -> Num(_size3), result: _field, nested: [Some(Error)]_others3, tagList: List([Some(Num(_size4))][None]_others4) }"))
 ~~~

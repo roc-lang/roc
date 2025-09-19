@@ -119,56 +119,6 @@ MyDict : Dict(Str, U64)
          ^^^^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `MyU64` is exposed, but it is not defined anywhere in this module.
-
-**type_comprehensive_scope.md:1:9:1:14:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-        ^^^^^
-You can fix this by either defining `MyU64` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Person` is exposed, but it is not defined anywhere in this module.
-
-**type_comprehensive_scope.md:1:16:1:22:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-               ^^^^^^
-You can fix this by either defining `Person` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Result` is exposed, but it is not defined anywhere in this module.
-
-**type_comprehensive_scope.md:1:24:1:30:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-                       ^^^^^^
-You can fix this by either defining `Result` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Tree` is exposed, but it is not defined anywhere in this module.
-
-**type_comprehensive_scope.md:1:32:1:36:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-                               ^^^^
-You can fix this by either defining `Tree` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `Node` is exposed, but it is not defined anywhere in this module.
-
-**type_comprehensive_scope.md:1:38:1:42:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-                                     ^^^^
-You can fix this by either defining `Node` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),

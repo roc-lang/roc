@@ -402,7 +402,7 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.2 (ident "a"))
-		(e-int @4.5-4.7 (value "42")))
+		(e-num @4.5-4.7 (value "42")))
 	(d-let
 		(p-assign @7.1-7.9 (ident "identity"))
 		(e-lambda @7.12-7.17
@@ -446,67 +446,67 @@ main! = |_| {
 						(p-assign @20.19-20.25 (ident "second")))))))
 	(d-let
 		(p-assign @23.1-23.2 (ident "f"))
-		(e-int @23.5-23.6 (value "1")))
+		(e-num @23.5-23.6 (value "1")))
 	(d-let
 		(p-assign @24.1-24.2 (ident "g"))
-		(e-int @24.5-24.6 (value "2")))
+		(e-num @24.5-24.6 (value "2")))
 	(d-let
 		(p-assign @25.1-25.2 (ident "h"))
-		(e-int @25.5-25.6 (value "3")))
+		(e-num @25.5-25.6 (value "3")))
 	(d-let
 		(p-assign @26.1-26.2 (ident "i"))
-		(e-int @26.5-26.6 (value "4")))
+		(e-num @26.5-26.6 (value "4")))
 	(d-let
 		(p-assign @27.1-27.2 (ident "j"))
-		(e-int @27.5-27.6 (value "5")))
+		(e-num @27.5-27.6 (value "5")))
 	(d-let
 		(p-assign @28.1-28.2 (ident "k"))
-		(e-int @28.5-28.6 (value "6")))
+		(e-num @28.5-28.6 (value "6")))
 	(d-let
 		(p-assign @29.1-29.2 (ident "l"))
-		(e-int @29.5-29.6 (value "7")))
+		(e-num @29.5-29.6 (value "7")))
 	(d-let
 		(p-assign @30.1-30.2 (ident "m"))
-		(e-int @30.5-30.6 (value "8")))
+		(e-num @30.5-30.6 (value "8")))
 	(d-let
 		(p-assign @31.1-31.2 (ident "n"))
-		(e-int @31.5-31.6 (value "9")))
+		(e-num @31.5-31.6 (value "9")))
 	(d-let
 		(p-assign @32.1-32.2 (ident "o"))
-		(e-int @32.5-32.7 (value "10")))
+		(e-num @32.5-32.7 (value "10")))
 	(d-let
 		(p-assign @33.1-33.2 (ident "p"))
-		(e-int @33.5-33.7 (value "11")))
+		(e-num @33.5-33.7 (value "11")))
 	(d-let
 		(p-assign @34.1-34.2 (ident "q"))
-		(e-int @34.5-34.7 (value "12")))
+		(e-num @34.5-34.7 (value "12")))
 	(d-let
 		(p-assign @35.1-35.2 (ident "r"))
-		(e-int @35.5-35.7 (value "13")))
+		(e-num @35.5-35.7 (value "13")))
 	(d-let
 		(p-assign @36.1-36.2 (ident "s"))
-		(e-int @36.5-36.7 (value "14")))
+		(e-num @36.5-36.7 (value "14")))
 	(d-let
 		(p-assign @37.1-37.2 (ident "t"))
-		(e-int @37.5-37.7 (value "15")))
+		(e-num @37.5-37.7 (value "15")))
 	(d-let
 		(p-assign @38.1-38.2 (ident "u"))
-		(e-int @38.5-38.7 (value "16")))
+		(e-num @38.5-38.7 (value "16")))
 	(d-let
 		(p-assign @39.1-39.2 (ident "v"))
-		(e-int @39.5-39.7 (value "17")))
+		(e-num @39.5-39.7 (value "17")))
 	(d-let
 		(p-assign @40.1-40.2 (ident "w"))
-		(e-int @40.5-40.7 (value "18")))
+		(e-num @40.5-40.7 (value "18")))
 	(d-let
 		(p-assign @41.1-41.2 (ident "x"))
-		(e-int @41.5-41.7 (value "19")))
+		(e-num @41.5-41.7 (value "19")))
 	(d-let
 		(p-assign @42.1-42.2 (ident "y"))
-		(e-int @42.5-42.7 (value "20")))
+		(e-num @42.5-42.7 (value "20")))
 	(d-let
 		(p-assign @43.1-43.2 (ident "z"))
-		(e-int @43.5-43.7 (value "21")))
+		(e-num @43.5-43.7 (value "21")))
 	(d-let
 		(p-assign @46.1-46.19 (ident "yetAnotherIdentity"))
 		(e-lambda @46.22-46.31
@@ -516,10 +516,10 @@ main! = |_| {
 				(p-assign @46.23-46.26 (ident "arg")))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "aa"))
-		(e-int @49.6-49.9 (value "100")))
+		(e-num @49.6-49.9 (value "100")))
 	(d-let
 		(p-assign @50.1-50.3 (ident "ab"))
-		(e-int @50.6-50.9 (value "200")))
+		(e-num @50.6-50.9 (value "200")))
 	(d-let
 		(p-assign @53.1-53.14 (ident "finalIdentity"))
 		(e-lambda @53.17-53.30
@@ -532,12 +532,12 @@ main! = |_| {
 		(e-closure @55.9-65.2
 			(captures
 				(capture @16.1-16.16 (ident "anotherIdentity"))
+				(capture @23.1-23.2 (ident "f"))
+				(capture @4.1-4.2 (ident "a"))
 				(capture @53.1-53.14 (ident "finalIdentity"))
-				(capture @46.1-46.19 (ident "yetAnotherIdentity"))
 				(capture @7.1-7.9 (ident "identity"))
 				(capture @20.1-20.8 (ident "combine"))
-				(capture @4.1-4.2 (ident "a"))
-				(capture @23.1-23.2 (ident "f")))
+				(capture @46.1-46.19 (ident "yetAnotherIdentity")))
 			(e-lambda @55.9-65.2
 				(args
 					(p-underscore @55.10-55.11))
@@ -545,21 +545,15 @@ main! = |_| {
 					(s-let @57.5-57.28
 						(p-assign @57.5-57.12 (ident "result1"))
 						(e-call @57.15-57.28
-							(e-lookup-local @57.15-57.23
-								(p-assign @7.1-7.9 (ident "identity")))
-							(e-int @57.24-57.27 (value "123"))))
+							(e-num @57.24-57.27 (value "123"))))
 					(s-let @58.5-58.38
 						(p-assign @58.5-58.12 (ident "result2"))
 						(e-call @58.15-58.38
-							(e-lookup-local @58.15-58.30
-								(p-assign @16.1-16.16 (ident "anotherIdentity")))
 							(e-string @58.31-58.37
 								(e-literal @58.32-58.36 (string "test")))))
 					(s-let @59.5-59.40
 						(p-assign @59.5-59.12 (ident "result3"))
 						(e-call @59.15-59.40
-							(e-lookup-local @59.15-59.22
-								(p-assign @20.1-20.8 (ident "combine")))
 							(e-lookup-local @59.23-59.30
 								(p-assign @57.5-57.12 (ident "result1")))
 							(e-lookup-local @59.32-59.39
@@ -567,34 +561,43 @@ main! = |_| {
 					(s-let @60.5-60.39
 						(p-assign @60.5-60.12 (ident "result4"))
 						(e-call @60.15-60.39
-							(e-lookup-local @60.15-60.33
-								(p-assign @46.1-46.19 (ident "yetAnotherIdentity")))
 							(e-nominal @60.34-60.38 (nominal "Bool")
 								(e-tag @60.34-60.38 (name "True")))))
 					(s-let @61.5-61.34
 						(p-assign @61.5-61.12 (ident "result5"))
 						(e-call @61.15-61.34
-							(e-lookup-local @61.15-61.28
-								(p-assign @53.1-53.14 (ident "finalIdentity")))
 							(e-dec-small @61.29-61.33 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 					(e-binop @64.5-64.10 (op "add")
 						(e-lookup-local @64.5-64.6
 							(p-assign @4.1-4.2 (ident "a")))
 						(e-lookup-local @64.9-64.10
-							(p-assign @23.1-23.2 (ident "f")))))))))
+							(p-assign @23.1-23.2 (ident "f"))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.2 (type "Num(_size)"))
-		(patt @7.1-7.9 (type "_arg2 -> _ret"))
+		(patt @7.1-7.9 (type "ac -> ac"))
 		(patt @10.1-10.2 (type "Str"))
-		(patt @11.1-11.2 (type "Frac(_size)"))
+		(patt @11.1-11.2 (type "Num(Frac(_size))"))
 		(patt @12.1-12.2 (type "Bool"))
 		(patt @13.1-13.2 (type "Bool"))
-		(patt @16.1-16.16 (type "_arg2 -> _ret"))
-		(patt @20.1-20.8 (type "_arg2, _arg3 -> (_field, _field2)"))
+		(patt @16.1-16.16 (type "ac -> ac"))
+		(patt @20.1-20.8 (type "ac, ad -> (ac, ad)"))
 		(patt @23.1-23.2 (type "Num(_size)"))
 		(patt @24.1-24.2 (type "Num(_size)"))
 		(patt @25.1-25.2 (type "Num(_size)"))
@@ -616,20 +619,28 @@ main! = |_| {
 		(patt @41.1-41.2 (type "Num(_size)"))
 		(patt @42.1-42.2 (type "Num(_size)"))
 		(patt @43.1-43.2 (type "Num(_size)"))
-		(patt @46.1-46.19 (type "_arg2 -> _ret"))
+		(patt @46.1-46.19 (type "ac -> ac"))
 		(patt @49.1-49.3 (type "Num(_size)"))
 		(patt @50.1-50.3 (type "Num(_size)"))
-		(patt @53.1-53.14 (type "_arg2 -> _ret"))
+		(patt @53.1-53.14 (type "ac -> ac"))
 		(patt @55.1-55.6 (type "_arg2 -> Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.7 (type "Num(_size)"))
-		(expr @7.12-7.17 (type "_arg2 -> _ret"))
+		(expr @7.12-7.17 (type "ac -> ac"))
 		(expr @10.5-10.12 (type "Str"))
-		(expr @11.5-11.9 (type "Frac(_size)"))
+		(expr @11.5-11.9 (type "Num(Frac(_size))"))
 		(expr @12.5-12.9 (type "Bool"))
 		(expr @13.5-13.10 (type "Bool"))
-		(expr @16.19-16.24 (type "_arg2 -> _ret"))
-		(expr @20.11-20.42 (type "_arg2, _arg3 -> (_field, _field2)"))
+		(expr @16.19-16.24 (type "ac -> ac"))
+		(expr @20.11-20.42 (type "ac, ad -> (ac, ad)"))
 		(expr @23.5-23.6 (type "Num(_size)"))
 		(expr @24.5-24.6 (type "Num(_size)"))
 		(expr @25.5-25.6 (type "Num(_size)"))
@@ -651,9 +662,9 @@ main! = |_| {
 		(expr @41.5-41.7 (type "Num(_size)"))
 		(expr @42.5-42.7 (type "Num(_size)"))
 		(expr @43.5-43.7 (type "Num(_size)"))
-		(expr @46.22-46.31 (type "_arg2 -> _ret"))
+		(expr @46.22-46.31 (type "ac -> ac"))
 		(expr @49.6-49.9 (type "Num(_size)"))
 		(expr @50.6-50.9 (type "Num(_size)"))
-		(expr @53.17-53.30 (type "_arg2 -> _ret"))
+		(expr @53.17-53.30 (type "ac -> ac"))
 		(expr @55.9-65.2 (type "_arg2 -> Num(_size)"))))
 ~~~

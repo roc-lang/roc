@@ -53,16 +53,6 @@ module [foo, bar, MyType, OtherType, foo, MyType]
 You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
-The module header says that `MyType` is exposed, but it is not defined anywhere in this module.
-
-**exposed_not_impl.md:1:19:1:25:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                  ^^^^^^
-You can fix this by either defining `MyType` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
 The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
 
 **exposed_not_impl.md:1:27:1:36:**

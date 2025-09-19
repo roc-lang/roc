@@ -68,17 +68,30 @@ NO CHANGE
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.17 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.16-3.17 (name "b"))))))
+					(ty-rigid-var @3.11-3.12 (name "a"))
+					(ty-rigid-var @3.16-3.17 (name "b"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-type-anno @3.1-3.47 (name "convert")
 		(ty-fn @3.11-3.17 (effectful false)
-			(ty-var @3.11-3.12 (name "a"))
-			(ty-var @3.16-3.17 (name "b")))
+			(ty-rigid-var @3.11-3.12 (name "a"))
+			(ty-rigid-var @3.16-3.17 (name "b")))
 		(where
 			(method @3.24-3.47 (module-of "a") (ident "to_b")
 				(args
-					(ty-var @3.41-3.42 (name "a")))
-				(ty-var @3.46-3.47 (name "b")))))
+					(ty-rigid-var @3.11-3.12 (name "a")))
+				(ty-rigid-var @3.16-3.17 (name "b")))))
 	(ext-decl @3.24-3.47 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES
@@ -86,6 +99,14 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "a -> b")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.23 (type "a -> b"))))
 ~~~

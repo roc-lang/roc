@@ -108,8 +108,6 @@ main! = |_| {}
 				(p-assign @4.15-4.18 (ident "fn!"))
 				(p-assign @4.20-4.21 (ident "x")))
 			(e-call @4.23-4.29
-				(e-lookup-local @4.23-4.26
-					(p-assign @4.15-4.18 (ident "fn!")))
 				(e-lookup-local @4.27-4.28
 					(p-assign @4.20-4.21 (ident "x"))))))
 	(d-let
@@ -117,15 +115,36 @@ main! = |_| {}
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty_record @6.13-6.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.11 (type "_arg -> ret, _arg2 -> ret2"))
+		(patt @4.1-4.11 (type "a -> b, a -> b"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.14-4.29 (type "_arg -> ret, _arg2 -> ret2"))
+		(expr @4.14-4.29 (type "a -> b, a -> b"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

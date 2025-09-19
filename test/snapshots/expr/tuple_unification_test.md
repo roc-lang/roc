@@ -38,7 +38,7 @@ NO CHANGE
 	(elems
 		(e-tuple @1.2-1.10
 			(elems
-				(e-int @1.3-1.4 (value "1"))
+				(e-num @1.3-1.4 (value "1"))
 				(e-string @1.6-1.9
 					(e-literal @1.7-1.8 (string "a")))))
 		(e-tuple @1.12-1.22

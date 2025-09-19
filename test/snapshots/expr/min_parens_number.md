@@ -29,7 +29,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-unary-minus @1.1-1.5
-	(e-int @1.3-1.4 (value "8")))
+	(e-num @1.3-1.4 (value "8")))
 ~~~
 # TYPES
 ~~~clojure

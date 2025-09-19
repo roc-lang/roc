@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.10 (value "1000000"))
+(e-num @1.1-1.10 (value "1000000"))
 ~~~
 # TYPES
 ~~~clojure

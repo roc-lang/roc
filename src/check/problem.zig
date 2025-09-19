@@ -299,12 +299,12 @@ pub const ReportBuilder = struct {
             .negative_unsigned_int => |data| {
                 return self.buildNegativeUnsignedIntReport(data);
             },
-            .infinite_recursion => |_| return self.buildUnimplementedReport(),
-            .anonymous_recursion => |_| return self.buildUnimplementedReport(),
-            .invalid_number_type => |_| return self.buildUnimplementedReport(),
-            .invalid_record_ext => |_| return self.buildUnimplementedReport(),
-            .invalid_tag_union_ext => |_| return self.buildUnimplementedReport(),
-            .bug => |_| return self.buildUnimplementedReport(),
+            .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
+            .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
+            .invalid_number_type => |_| return self.buildUnimplementedReport("invalid_number_type"),
+            .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
+            .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
+            .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
 
@@ -1723,8 +1723,10 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    fn buildUnimplementedReport(self: *Self) !Report {
-        const report = Report.init(self.gpa, "UNIMPLEMENTED", .runtime_error);
+    fn buildUnimplementedReport(self: *Self, bytes: []const u8) !Report {
+        var report = Report.init(self.gpa, "UNIMPLEMENTED: ", .runtime_error);
+        const owned_bytes = try report.addOwnedString(bytes);
+        try report.document.addText(owned_bytes);
         return report;
     }
 

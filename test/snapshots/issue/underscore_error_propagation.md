@@ -38,17 +38,31 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**underscore_error_propagation.md:8:9:8:15:**
+```roc
+value = "test"
+```
+        ^^^^^^
+
+It has the type:
+    _Str_
+
+But the type annotation says it should have the type:
+    _BadDerived_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **underscore_error_propagation.md:15:13:15:19:**
 ```roc
 goodValue = "test"
 ```
             ^^^^^^
 
-The type annotation says it should have the type:
-    _GoodDerived_
-
-But here it's being used as:
+It has the type:
     _Str_
+
+But the type annotation says it should have the type:
+    _GoodDerived_
 
 # TOKENS
 ~~~zig
@@ -111,26 +125,39 @@ NO CHANGE
 			(e-literal @8.10-8.14 (string "test")))
 		(annotation @8.1-8.6
 			(declared-type
-				(ty @7.9-7.19 (name "BadDerived")))))
+				(ty-lookup @7.9-7.19 (name "BadDerived") (local)))))
 	(d-let
 		(p-assign @15.1-15.10 (ident "goodValue"))
 		(e-string @15.13-15.19
 			(e-literal @15.14-15.18 (string "test")))
 		(annotation @15.1-15.10
 			(declared-type
-				(ty @14.13-14.24 (name "GoodDerived")))))
+				(ty-lookup @14.13-14.24 (name "GoodDerived") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @5.1-5.22
 		(ty-header @5.1-5.11 (name "BadDerived"))
-		(ty @5.15-5.22 (name "BadBase")))
+		(ty-lookup @5.15-5.22 (name "BadBase") (local)))
 	(s-nominal-decl @10.1-10.16
 		(ty-header @10.1-10.9 (name "GoodBase"))
-		(ty @10.13-10.16 (name "Str")))
+		(ty-lookup @10.13-10.16 (name "Str") (builtin)))
 	(s-nominal-decl @12.1-12.24
 		(ty-header @12.1-12.12 (name "GoodDerived"))
-		(ty @12.16-12.24 (name "GoodBase"))))
+		(ty-lookup @12.16-12.24 (name "GoodBase") (local))))
 ~~~
 # TYPES
 ~~~clojure
@@ -139,13 +166,20 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error"))
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
+		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.22 (type "Error")
+		(nominal @5.1-5.22 (type "BadDerived")
 			(ty-header @5.1-5.11 (name "BadDerived")))
 		(nominal @10.1-10.16 (type "GoodBase")
 			(ty-header @10.1-10.9 (name "GoodBase")))
-		(nominal @12.1-12.24 (type "Error")
+		(nominal @12.1-12.24 (type "GoodDerived")
 			(ty-header @12.1-12.12 (name "GoodDerived"))))
 	(expressions
 		(expr @8.9-8.15 (type "Error"))

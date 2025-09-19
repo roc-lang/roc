@@ -872,17 +872,70 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_019.md:84:2:84:4:**
+**fuzz_crash_019.md:84:2:86:3:**
 ```roc
 	me(
+		..., # r
+	)crash ke"Unr!" #)
 ```
-	^^
 
 It has the type:
+    __arg -> _ret_
+
+But I expected it to be:
     _[Blue]_others, [Tb]_others2 -> Error_
 
-But here it's being used as:
-    __arg -> _ret_
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**fuzz_crash_019.md:105:16:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+               ^^^^^^^^^^
+
+Both sides of `and` must be _Bool_ values, but the left side is:
+    _Num(_size)_
+
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
+
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**fuzz_crash_019.md:105:16:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+                              ^^^^^^^^^^^^
+
+Both sides of `and` must be _Bool_ values, but the right side is:
+    _Num(_size)_
+
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
+
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**fuzz_crash_019.md:105:16:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+                                              ^^^^^^^
+
+Both sides of `and` must be _Bool_ values, but the right side is:
+    _Num(_size)_
+
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
+
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**fuzz_crash_019.md:105:2:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+ ^^^^^^^^^^
+
+Both sides of `and` must be _Bool_ values, but the left side is:
+    _Num(_size)_
+
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig
@@ -1491,9 +1544,9 @@ expect {
 					(if-branch
 						(e-lookup-local @35.16-35.19
 							(p-assign @35.8-35.11 (ident "num")))
-						(e-int @35.20-35.21 (value "2"))))
+						(e-num @35.20-35.21 (value "2"))))
 				(if-else
-					(e-int @35.27-35.28 (value "5"))))))
+					(e-num @35.27-35.28 (value "5"))))))
 	(d-let
 		(p-assign @38.1-38.4 (ident "add"))
 		(e-lambda @38.7-47.2
@@ -1501,7 +1554,7 @@ expect {
 				(p-assign @38.8-38.11 (ident "num")))
 			(e-block @38.13-47.2
 				(s-expr @39.2-39.3
-					(e-int @39.2-39.3 (value "1")))
+					(e-num @39.2-39.3 (value "1")))
 				(e-if @40.2-46.3
 					(if-branches
 						(if-branch
@@ -1514,7 +1567,7 @@ expect {
 					(if-else
 						(e-block @43.9-46.3
 							(s-dbg @44.3-44.10
-								(e-int @44.7-44.10 (value "123")))
+								(e-num @44.7-44.10 (value "123")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "me"))
@@ -1547,13 +1600,13 @@ expect {
 								(pattern (degenerate false)
 									(p-assign @57.2-57.4 (ident "er"))))
 							(value
-								(e-int @58.4-58.5 (value "1"))))
+								(e-num @58.4-58.5 (value "1"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-str @58.6-58.11 (text """))))
 							(value
-								(e-int @58.15-58.17 (value "20"))))
+								(e-num @58.15-58.17 (value "20"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1572,20 +1625,20 @@ expect {
 											(p-int @60.10-60.11 (value "3"))
 											(p-assign @60.12-60.15 (ident "est"))))))
 							(value
-								(e-int @60.16-60.19 (value "123"))))
+								(e-num @60.16-60.19 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-list @61.3-62.4
 										(patterns))))
 							(value
-								(e-int @62.5-62.7 (value "23"))))
+								(e-num @62.5-62.7 (value "23"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-small-dec @63.3-63.6)))
 							(value
-								(e-int @63.7-63.10 (value "314"))))
+								(e-num @63.7-63.10 (value "314"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1593,7 +1646,7 @@ expect {
 								(pattern (degenerate false)
 									(p-small-dec @64.10-64.14)))
 							(value
-								(e-int @64.18-64.21 (value "314"))))
+								(e-num @64.18-64.21 (value "314"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1601,7 +1654,7 @@ expect {
 										(patterns
 											(p-int @65.4-65.5 (value "1"))))))
 							(value
-								(e-int @65.12-65.15 (value "123"))))
+								(e-num @65.12-65.15 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1611,21 +1664,21 @@ expect {
 											(p-int @66.7-66.8 (value "2"))
 											(p-int @66.10-66.11 (value "3"))))))
 							(value
-								(e-int @66.12-66.15 (value "123"))))
+								(e-num @66.12-66.15 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-record-destructure @67.3-67.7
 										(destructs))))
 							(value
-								(e-int @67.11-67.13 (value "12"))))
+								(e-num @67.11-67.13 (value "12"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @68.3-68.10
 										(p-applied-tag @68.3-68.10))))
 							(value
-								(e-int @68.14-68.16 (value "12")))))))))
+								(e-num @68.14-68.16 (value "12")))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
@@ -1643,7 +1696,7 @@ expect {
 							(e-literal @76.7-76.8 (string "d"))))
 					(s-var @77.2-77.14
 						(p-assign @77.2-77.14 (ident "er"))
-						(e-int @77.11-77.14 (value "123")))
+						(e-num @77.11-77.14 (value "123")))
 					(s-expect @78.2-78.14
 						(e-runtime-error (tag "ident_not_in_scope")))
 					(s-return @79.2-80.6
@@ -1652,8 +1705,6 @@ expect {
 						(e-not-implemented @1.1-1.1))
 					(s-expr @84.2-86.3
 						(e-call @84.2-86.3
-							(e-lookup-local @84.2-84.4
-								(p-assign @49.1-49.3 (ident "me")))
 							(e-not-implemented @1.1-1.1)))
 					(s-runtime-error (tag "crash_expects_string"))
 					(s-expr @86.11-86.17
@@ -1670,18 +1721,17 @@ expect {
 						(e-list @88.5-91.3
 							(elems
 								(e-call @89.3-89.14
-									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @89.7-89.9
 										(p-assign @77.2-77.14 (ident "er"))))
-								(e-int @89.16-89.19 (value "456"))
-								(e-int @90.1-90.2 (value "9")))))
+								(e-num @89.16-89.19 (value "456"))
+								(e-num @90.1-90.2 (value "9")))))
 					(s-runtime-error (tag "not_implemented"))
 					(s-let @96.2-96.59
 						(p-assign @96.2-96.4 (ident "rd"))
 						(e-record @96.7-96.59
 							(fields
 								(field (name "foo")
-									(e-int @96.14-96.17 (value "123")))
+									(e-num @96.14-96.17 (value "123")))
 								(field (name "bar")
 									(e-string @96.24-96.27
 										(e-literal @96.25-96.26 (string "H"))))
@@ -1698,7 +1748,7 @@ expect {
 						(p-assign @97.2-97.3 (ident "t"))
 						(e-tuple @97.6-97.48
 							(elems
-								(e-int @97.7-97.10 (value "123"))
+								(e-num @97.7-97.10 (value "123"))
 								(e-string @97.12-97.19
 									(e-literal @97.13-97.18 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -1710,15 +1760,15 @@ expect {
 											(p-assign @97.2-97.3 (ident "t")))))
 								(e-list @97.38-97.47
 									(elems
-										(e-int @97.39-97.40 (value "1"))
-										(e-int @97.42-97.43 (value "2"))
-										(e-int @97.45-97.46 (value "3")))))))
+										(e-num @97.39-97.40 (value "1"))
+										(e-num @97.42-97.43 (value "2"))
+										(e-num @97.45-97.46 (value "3")))))))
 					(s-expr @98.2-98.3
 						(e-runtime-error (tag "ident_not_in_scope")))
 					(s-expr @98.4-104.3
 						(e-tuple @98.4-104.3
 							(elems
-								(e-int @99.3-99.6 (value "123"))
+								(e-num @99.3-99.6 (value "123"))
 								(e-string @100.3-100.10
 									(e-literal @100.4-100.9 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -1729,31 +1779,31 @@ expect {
 										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-list @103.3-103.12
 									(elems
-										(e-int @103.4-103.5 (value "1"))
-										(e-int @103.7-103.8 (value "2"))
-										(e-int @103.10-103.11 (value "3")))))))
+										(e-num @103.4-103.5 (value "1"))
+										(e-num @103.7-103.8 (value "2"))
+										(e-num @103.10-103.11 (value "3")))))))
 					(s-expr @105.2-105.54
 						(e-binop @105.2-105.54 (op "or")
 							(e-binop @105.2-105.12 (op "gt")
 								(e-binop @105.2-105.8 (op "null_coalesce")
 									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-int @105.6-105.8 (value "12")))
-								(e-int @105.11-105.12 (value "5")))
+									(e-num @105.6-105.8 (value "12")))
+								(e-num @105.11-105.12 (value "5")))
 							(e-binop @105.16-105.54 (op "or")
 								(e-binop @105.16-105.43 (op "and")
 									(e-binop @105.16-105.26 (op "lt")
 										(e-binop @105.16-105.22 (op "add")
-											(e-int @105.16-105.18 (value "13"))
-											(e-int @105.21-105.22 (value "2")))
-										(e-int @105.25-105.26 (value "5")))
+											(e-num @105.16-105.18 (value "13"))
+											(e-num @105.21-105.22 (value "2")))
+										(e-num @105.25-105.26 (value "5")))
 									(e-binop @105.31-105.43 (op "ge")
 										(e-binop @105.31-105.37 (op "sub")
-											(e-int @105.31-105.33 (value "10"))
-											(e-int @105.36-105.37 (value "1")))
-										(e-int @105.41-105.43 (value "16"))))
+											(e-num @105.31-105.33 (value "10"))
+											(e-num @105.36-105.37 (value "1")))
+										(e-num @105.41-105.43 (value "16"))))
 								(e-binop @105.47-105.54 (op "le")
-									(e-int @105.47-105.49 (value "12"))
-									(e-int @105.53-105.54 (value "3"))))))
+									(e-num @105.47-105.49 (value "12"))
+									(e-num @105.53-105.54 (value "3"))))))
 					(s-expr @105.55-105.85
 						(e-dot-access @105.55-105.85 (field "unknown")
 							(receiver
@@ -1767,56 +1817,68 @@ expect {
 							(e-string @107.3-109.6
 								(e-literal @107.4-107.6 (string "Ho"))
 								(e-call @108.4-108.9
-									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(e-literal @109.4-109.5 (string " ")))))))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @13.1-13.33
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
-				(ty-var @13.5-13.6 (name "a"))
-				(ty-var @13.8-13.9 (name "b"))))
+				(ty-rigid-var @13.5-13.6 (name "a"))
+				(ty-rigid-var @13.8-13.9 (name "b"))))
 		(ty-fn @13.13-13.33 (effectful false)
-			(ty @13.13-13.16 (name "Lis"))
+			(ty-malformed @13.13-13.16)
 			(ty-malformed @13.19-13.21)
-			(ty-apply @13.26-13.33 (symbol "List")
-				(ty-var @13.31-13.32 (name "b")))))
+			(ty-apply @13.26-13.33 (name "List") (builtin)
+				(ty-rigid-var @13.8-13.9 (name "b")))))
 	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
-			(ty-apply @17.3-18.4 (symbol "List"))
+			(ty-apply @17.3-18.4 (name "List") (builtin))
 			(ty-malformed @19.4-19.6)
-			(ty-apply @20.4-20.15 (symbol "List")
+			(ty-apply @20.4-20.15 (name "List") (builtin)
 				(ty-malformed @20.12-20.13))))
 	(s-alias-decl @24.1-24.27
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
-				(ty @24.15-24.16 (name "O")))
+				(ty-malformed @24.15-24.16))
 			(field (field "bar")
 				(ty-malformed @24.24-24.25))))
 	(s-alias-decl @25.1-26.2
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
-				(ty-var @25.4-25.5 (name "a"))))
+				(ty-rigid-var @25.4-25.5 (name "a"))))
 		(ty-record @25.9-26.2))
 	(s-alias-decl @28.1-29.2
 		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
-				(ty-var @28.7-28.8 (name "a"))))
+				(ty-rigid-var @28.7-28.8 (name "a"))))
 		(ty-record @28.12-29.2))
 	(s-alias-decl @30.1-30.19
 		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
-				(ty-var @30.7-30.8 (name "a"))))
+				(ty-rigid-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
-			(ty @30.13-30.18 (name "Somne"))))
+			(tag_name @30.13-30.18 (name "Somne"))))
 	(s-alias-decl @32.1-33.2
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
-				(ty-var @32.8-32.9 (name "a"))))
+				(ty-rigid-var @32.8-32.9 (name "a"))))
 		(ty-tag-union @32.13-33.2))
 	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf")
 		(exposes
@@ -1835,7 +1897,7 @@ expect {
 			(s-expr @119.2-119.10
 				(e-binop @119.2-119.10 (op "eq")
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-int @119.9-119.10 (value "1"))))
+					(e-num @119.9-119.10 (value "1"))))
 			(e-binop @120.1-120.9 (op "eq")
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))))))
@@ -1846,15 +1908,22 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
-		(patt @49.1-49.3 (type "Error"))
+		(patt @49.1-49.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @13.1-13.33 (type "Map(a, b)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
-					(ty-var @13.5-13.6 (name "a"))
-					(ty-var @13.8-13.9 (name "b")))))
+					(ty-rigid-var @13.5-13.6 (name "a"))
+					(ty-rigid-var @13.8-13.9 (name "b")))))
 		(alias @14.1-20.15 (type "MapML")
 			(ty-header @14.1-15.2 (name "MapML")))
 		(alias @24.1-24.27 (type "Som")
@@ -1862,23 +1931,23 @@ expect {
 		(alias @25.1-26.2 (type "Ml(a)")
 			(ty-header @25.1-25.6 (name "Ml")
 				(ty-args
-					(ty-var @25.4-25.5 (name "a")))))
+					(ty-rigid-var @25.4-25.5 (name "a")))))
 		(alias @28.1-29.2 (type "Soine(a)")
 			(ty-header @28.1-28.9 (name "Soine")
 				(ty-args
-					(ty-var @28.7-28.8 (name "a")))))
+					(ty-rigid-var @28.7-28.8 (name "a")))))
 		(alias @30.1-30.19 (type "Maybe(a)")
 			(ty-header @30.1-30.9 (name "Maybe")
 				(ty-args
-					(ty-var @30.7-30.8 (name "a")))))
+					(ty-rigid-var @30.7-30.8 (name "a")))))
 		(alias @32.1-33.2 (type "Mayine(a)")
 			(ty-header @32.1-32.10 (name "Mayine")
 				(ty-args
-					(ty-var @32.8-32.9 (name "a"))))))
+					(ty-rigid-var @32.8-32.9 (name "a"))))))
 	(expressions
 		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
-		(expr @49.6-69.3 (type "Error"))
+		(expr @49.6-69.3 (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

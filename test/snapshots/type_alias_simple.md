@@ -17,7 +17,19 @@ main! = |_| getUser(100)
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**type_alias_simple.md:6:20:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+                   ^^^^^^^
+
+Right now, it has the type:
+    _UserId_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -91,7 +103,7 @@ NO CHANGE
 						(e-binop @6.20-6.27 (op "gt")
 							(e-lookup-local @6.20-6.22
 								(p-assign @6.12-6.14 (ident "id")))
-							(e-int @6.25-6.27 (value "10")))
+							(e-num @6.25-6.27 (value "10")))
 						(e-string @6.29-6.34
 							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
@@ -100,8 +112,8 @@ NO CHANGE
 		(annotation @6.1-6.8
 			(declared-type
 				(ty-fn @5.11-5.24 (effectful false)
-					(ty @5.11-5.17 (name "UserId"))
-					(ty @5.21-5.24 (name "Str"))))))
+					(ty-lookup @5.11-5.17 (name "UserId") (local))
+					(ty-lookup @5.21-5.24 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-8.25
@@ -111,12 +123,23 @@ NO CHANGE
 				(args
 					(p-underscore @8.10-8.11))
 				(e-call @8.13-8.25
-					(e-lookup-local @8.13-8.20
-						(p-assign @6.1-6.8 (ident "getUser")))
-					(e-int @8.21-8.24 (value "100"))))))
+					(e-num @8.21-8.24 (value "100"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
-		(ty @3.10-3.13 (name "U64"))))
+		(ty-lookup @3.10-3.13 (name "U64") (builtin))))
 ~~~
 # TYPES
 ~~~clojure
@@ -125,6 +148,13 @@ NO CHANGE
 		(patt @6.1-6.8 (type "UserId -> Str"))
 		(patt @8.1-8.6 (type "_arg -> Str")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.13 (type "UserId")
 			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions

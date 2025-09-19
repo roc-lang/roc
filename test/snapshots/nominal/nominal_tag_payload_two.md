@@ -21,16 +21,7 @@ is_ok = |result| match result {
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `MyResult` is exposed, but it is not defined anywhere in this module.
-
-**nominal_tag_payload_two.md:1:9:1:17:**
-```roc
-module [MyResult, ok, is_ok]
-```
-        ^^^^^^^^
-You can fix this by either defining `MyResult` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),

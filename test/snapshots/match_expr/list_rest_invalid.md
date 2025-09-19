@@ -207,7 +207,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign @2.15-2.15 (ident "rest"))))))
 				(value
-					(e-int @2.24-2.25 (value "0"))))
+					(e-num @2.24-2.25 (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -217,7 +217,7 @@ match items {
 							(rest-at (index 0)
 								(p-assign @3.8-3.8 (ident "rest"))))))
 				(value
-					(e-int @3.23-3.24 (value "1"))))
+					(e-num @3.23-3.24 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -228,7 +228,7 @@ match items {
 							(rest-at (index 1)
 								(p-assign @4.11-4.11 (ident "rest"))))))
 				(value
-					(e-int @4.23-4.24 (value "2")))))))
+					(e-num @4.23-4.24 (value "2")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -114,21 +114,32 @@ main! = |_| {}
 						(e-lookup-local @8.17-8.18
 							(p-assign @8.14-8.15 (ident "y")))))
 				(e-call @10.5-10.13
-					(e-lookup-local @10.5-10.10
-						(p-assign @8.5-8.10 (ident "inner")))
 					(e-lookup-local @10.11-10.12
 						(p-assign @5.10-5.11 (ident "x"))))))
 		(annotation @5.1-5.6
 			(declared-type
 				(ty-fn @4.9-4.15 (effectful false)
-					(ty-var @4.9-4.10 (name "a"))
-					(ty-var @4.14-4.15 (name "a"))))))
+					(ty-rigid-var @4.9-4.10 (name "a"))
+					(ty-rigid-var @4.9-4.10 (name "a"))))))
 	(d-let
 		(p-assign @13.1-13.6 (ident "main!"))
 		(e-lambda @13.9-13.15
 			(args
 				(p-underscore @13.10-13.11))
-			(e-empty_record @13.13-13.15))))
+			(e-empty_record @13.13-13.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -136,6 +147,14 @@ main! = |_| {}
 	(defs
 		(patt @5.1-5.6 (type "a -> a"))
 		(patt @13.1-13.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.9-11.2 (type "a -> a"))
 		(expr @13.9-13.15 (type "_arg -> {}"))))

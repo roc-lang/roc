@@ -37,29 +37,6 @@ All branches in an `match` must have compatible types.
 Note: You can wrap branches values in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**literal_patterns.md:1:1:**
-```roc
-match Answer {
-    Answer => 1
-    Zero => "hello"
-    Greeting => 3
-    10 => 4
-}
-```
-    ^^
-
-The fourth pattern has this type:
-    _Num(_size)_
-
-But all the previous patterns have this type: 
-    _[Answer, Zero, Greeting]_others_
-
-All patterns in an `match` must have compatible types.
-
-
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),UpperIdent(1:7-1:13),OpenCurly(1:14-1:15),
@@ -110,7 +87,7 @@ match Answer {
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.11)))
 				(value
-					(e-int @2.15-2.16 (value "1"))))
+					(e-num @2.15-2.16 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -123,13 +100,13 @@ match Answer {
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.13)))
 				(value
-					(e-int @4.17-4.18 (value "3"))))
+					(e-num @4.17-4.18 (value "3"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-int @5.5-5.7 (value "10"))))
 				(value
-					(e-int @5.11-5.12 (value "4")))))))
+					(e-num @5.11-5.12 (value "4")))))))
 ~~~
 # TYPES
 ~~~clojure

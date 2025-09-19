@@ -26,6 +26,20 @@ module []
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_underscore_error.md:6:7:6:9:**
+```roc
+foo = 42
+```
+      ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _BadType_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
@@ -59,10 +73,23 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-int @6.7-6.9 (value "42"))
+		(e-num @6.7-6.9 (value "42"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.14 (name "BadType")))))
+				(ty-lookup @5.7-5.14 (name "BadType") (local)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))
@@ -73,7 +100,14 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
+		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))))

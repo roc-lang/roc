@@ -88,16 +88,29 @@ main! = |_| {}
 				(ty-fn @3.12-3.40 (effectful false)
 					(ty-record @3.12-3.35
 						(field (field "field")
-							(ty-var @3.21-3.22 (name "a")))
+							(ty-rigid-var @3.21-3.22 (name "a")))
 						(field (field "other")
-							(ty-var @3.31-3.33 (name "_b"))))
-					(ty-var @3.39-3.40 (name "a"))))))
+							(ty-rigid-var @3.31-3.33 (name "_b"))))
+					(ty-rigid-var @3.21-3.22 (name "a"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
 			(args
 				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+			(e-empty_record @6.13-6.15)))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -105,6 +118,14 @@ main! = |_| {}
 	(defs
 		(patt @4.1-4.9 (type "{ field: a, other: _b } -> a"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.12-4.33 (type "{ field: a, other: _b } -> a"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))

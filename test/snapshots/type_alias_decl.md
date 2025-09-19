@@ -282,7 +282,7 @@ main! = |_| {
 			(e-block @27.13-39.2
 				(s-let @30.5-30.17
 					(p-assign @30.5-30.11 (ident "userId"))
-					(e-int @30.14-30.17 (value "123")))
+					(e-num @30.14-30.17 (value "123")))
 				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person"))
 					(e-record @33.14-33.40
@@ -291,102 +291,117 @@ main! = |_| {
 								(e-string @33.22-33.29
 									(e-literal @33.23-33.28 (string "Alice"))))
 							(field (name "age")
-								(e-int @33.36-33.38 (value "30"))))))
+								(e-num @33.36-33.38 (value "30"))))))
 				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color"))
 					(e-tag @36.13-36.16 (name "Red")))
 				(e-lookup-local @38.5-38.11
 					(p-assign @30.5-30.11 (ident "userId"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.13
 		(ty-header @4.1-4.7 (name "UserId"))
-		(ty @4.10-4.13 (name "U64")))
+		(ty-lookup @4.10-4.13 (name "U64") (builtin)))
 	(s-alias-decl @7.1-7.37
 		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
-				(ty-var @7.8-7.10 (name "ok"))
-				(ty-var @7.12-7.15 (name "err"))))
+				(ty-rigid-var @7.8-7.10 (name "ok"))
+				(ty-rigid-var @7.12-7.15 (name "err"))))
 		(ty-tag-union @7.19-7.37
-			(ty-apply @7.20-7.26 (symbol "Ok")
-				(ty-var @7.23-7.25 (name "ok")))
-			(ty-apply @7.28-7.36 (symbol "Err")
-				(ty-var @7.32-7.35 (name "err")))))
+			(tag_name @7.20-7.26 (name "Ok"))
+			(tag_name @7.28-7.36 (name "Err"))))
 	(s-alias-decl @10.1-10.35
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
 			(field (field "name")
-				(ty @10.19-10.22 (name "Str")))
+				(ty-lookup @10.19-10.22 (name "Str") (builtin)))
 			(field (field "age")
-				(ty @10.30-10.33 (name "U64")))))
+				(ty-lookup @10.30-10.33 (name "U64") (builtin)))))
 	(s-alias-decl @13.1-13.21
 		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
-				(ty-var @13.7-13.8 (name "a"))
-				(ty-var @13.10-13.11 (name "b"))))
+				(ty-rigid-var @13.7-13.8 (name "a"))
+				(ty-rigid-var @13.10-13.11 (name "b"))))
 		(ty-fn @13.15-13.21 (effectful false)
-			(ty-var @13.15-13.16 (name "a"))
-			(ty-var @13.20-13.21 (name "b"))))
+			(ty-rigid-var @13.7-13.8 (name "a"))
+			(ty-rigid-var @13.10-13.11 (name "b"))))
 	(s-alias-decl @16.1-16.38
 		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
-				(ty-var @16.13-16.17 (name "data"))))
-		(ty-apply @16.21-16.38 (symbol "Result")
-			(ty-var @16.28-16.32 (name "data"))
-			(ty @16.34-16.37 (name "Str"))))
+				(ty-rigid-var @16.13-16.17 (name "data"))))
+		(ty-apply @16.21-16.38 (name "Result") (local)
+			(ty-rigid-var @16.13-16.17 (name "data"))
+			(ty-lookup @16.21-16.38 (name "Str") (builtin))))
 	(s-alias-decl @19.1-19.47
 		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
-			(ty @19.10-19.13 (name "Red"))
-			(ty @19.15-19.20 (name "Green"))
-			(ty @19.22-19.26 (name "Blue"))
-			(ty-apply @19.28-19.46 (symbol "Custom")
-				(ty @19.35-19.37 (name "U8"))
-				(ty @19.39-19.41 (name "U8"))
-				(ty @19.43-19.45 (name "U8")))))
+			(tag_name @19.10-19.13 (name "Red"))
+			(tag_name @19.15-19.20 (name "Green"))
+			(tag_name @19.22-19.26 (name "Blue"))
+			(tag_name @19.28-19.46 (name "Custom"))))
 	(s-alias-decl @22.1-25.2
 		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
-				(ty-var @22.11-22.15 (name "item"))))
+				(ty-rigid-var @22.11-22.15 (name "item"))))
 		(ty-record @22.19-25.2
 			(field (field "contents")
-				(ty-apply @23.16-23.26 (symbol "List")
-					(ty-var @23.21-23.25 (name "item"))))
+				(ty-apply @23.16-23.26 (name "List") (builtin)
+					(ty-rigid-var @22.11-22.15 (name "item"))))
 			(field (field "metadata")
 				(ty-record @24.16-24.45
 					(field (field "size")
-						(ty @24.25-24.28 (name "U64")))
+						(ty-lookup @24.25-24.28 (name "U64") (builtin)))
 					(field (field "created")
-						(ty @24.40-24.43 (name "Str"))))))))
+						(ty-lookup @24.40-24.43 (name "Str") (builtin))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "_arg -> U64")))
+		(patt @27.1-27.6 (type "_arg -> UserId")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.13 (type "UserId")
 			(ty-header @4.1-4.7 (name "UserId")))
 		(alias @7.1-7.37 (type "Result(ok, err)")
 			(ty-header @7.1-7.16 (name "Result")
 				(ty-args
-					(ty-var @7.8-7.10 (name "ok"))
-					(ty-var @7.12-7.15 (name "err")))))
+					(ty-rigid-var @7.8-7.10 (name "ok"))
+					(ty-rigid-var @7.12-7.15 (name "err")))))
 		(alias @10.1-10.35 (type "Person")
 			(ty-header @10.1-10.7 (name "Person")))
 		(alias @13.1-13.21 (type "MapFn(a, b)")
 			(ty-header @13.1-13.12 (name "MapFn")
 				(ty-args
-					(ty-var @13.7-13.8 (name "a"))
-					(ty-var @13.10-13.11 (name "b")))))
+					(ty-rigid-var @13.7-13.8 (name "a"))
+					(ty-rigid-var @13.10-13.11 (name "b")))))
 		(alias @16.1-16.38 (type "ApiResponse(data)")
 			(ty-header @16.1-16.18 (name "ApiResponse")
 				(ty-args
-					(ty-var @16.13-16.17 (name "data")))))
+					(ty-rigid-var @16.13-16.17 (name "data")))))
 		(alias @19.1-19.47 (type "Color")
 			(ty-header @19.1-19.6 (name "Color")))
 		(alias @22.1-25.2 (type "Container(item)")
 			(ty-header @22.1-22.16 (name "Container")
 				(ty-args
-					(ty-var @22.11-22.15 (name "item"))))))
+					(ty-rigid-var @22.11-22.15 (name "item"))))))
 	(expressions
-		(expr @27.9-39.2 (type "_arg -> U64"))))
+		(expr @27.9-39.2 (type "_arg -> UserId"))))
 ~~~

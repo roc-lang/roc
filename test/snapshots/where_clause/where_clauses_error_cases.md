@@ -188,32 +188,53 @@ broken_fn3 : a -> b
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-type-anno @4.1-6.24 (name "broken_fn1")
 		(ty-fn @4.14-4.20 (effectful false)
-			(ty-var @4.14-4.15 (name "a"))
-			(ty-var @4.19-4.20 (name "b")))
+			(ty-rigid-var @4.14-4.15 (name "a"))
+			(ty-rigid-var @4.19-4.20 (name "b")))
 		(where
 			(malformed @6.5-6.24)))
 	(s-type-anno @9.1-10.8 (name "broken_fn2")
 		(ty-fn @9.14-9.20 (effectful false)
-			(ty-var @9.14-9.15 (name "a"))
-			(ty-var @9.19-9.20 (name "b")))
+			(ty-rigid-var @9.14-9.15 (name "a"))
+			(ty-rigid-var @9.19-9.20 (name "b")))
 		(where
 			(malformed @10.3-10.8)))
 	(s-type-anno @13.1-15.30 (name "broken_fn3")
 		(ty-fn @13.14-13.20 (effectful false)
-			(ty-var @13.14-13.15 (name "a"))
-			(ty-var @13.19-13.20 (name "b")))
+			(ty-rigid-var @13.14-13.15 (name "a"))
+			(ty-rigid-var @13.19-13.20 (name "b")))
 		(where
 			(method @15.5-15.30 (module-of "c") (ident "method")
 				(args
-					(ty-var @15.24-15.25 (name "c")))
-				(ty-var @15.29-15.30 (name "d")))))
+					(ty-rigid-var @15.24-15.25 (name "c")))
+				(ty-rigid-var @15.29-15.30 (name "d")))))
 	(ext-decl @15.5-15.30 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions))
 ~~~

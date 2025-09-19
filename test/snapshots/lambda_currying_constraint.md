@@ -141,22 +141,20 @@ NO CHANGE
 		(annotation @5.1-5.10
 			(declared-type
 				(ty-fn @4.13-4.26 (effectful false)
-					(ty-var @4.13-4.14 (name "a"))
+					(ty-rigid-var @4.13-4.14 (name "a"))
 					(ty-parens @4.18-4.26
 						(ty-fn @4.19-4.25 (effectful false)
-							(ty-var @4.19-4.20 (name "a"))
-							(ty-var @4.24-4.25 (name "a"))))))))
+							(ty-rigid-var @4.13-4.14 (name "a"))
+							(ty-rigid-var @4.13-4.14 (name "a"))))))))
 	(d-let
 		(p-assign @9.1-9.11 (ident "curriedAdd"))
 		(e-call @9.14-9.26
-			(e-lookup-local @9.14-9.23
-				(p-assign @5.1-5.10 (ident "makeAdder")))
-			(e-int @9.24-9.25 (value "5")))
+			(e-num @9.24-9.25 (value "5")))
 		(annotation @9.1-9.11
 			(declared-type
 				(ty-fn @8.14-8.24 (effectful false)
-					(ty @8.14-8.17 (name "I64"))
-					(ty @8.21-8.24 (name "I64"))))))
+					(ty-lookup @8.14-8.17 (name "I64") (builtin))
+					(ty-lookup @8.21-8.24 (name "I64") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "applyTwice"))
 		(e-lambda @13.14-13.28
@@ -164,11 +162,7 @@ NO CHANGE
 				(p-assign @13.15-13.16 (ident "f"))
 				(p-assign @13.18-13.19 (ident "x")))
 			(e-call @13.21-13.28
-				(e-lookup-local @13.21-13.22
-					(p-assign @13.15-13.16 (ident "f")))
 				(e-call @13.23-13.27
-					(e-lookup-local @13.23-13.24
-						(p-assign @13.15-13.16 (ident "f")))
 					(e-lookup-local @13.25-13.26
 						(p-assign @13.18-13.19 (ident "x"))))))
 		(annotation @13.1-13.11
@@ -176,10 +170,10 @@ NO CHANGE
 				(ty-fn @12.14-12.30 (effectful false)
 					(ty-parens @12.14-12.22
 						(ty-fn @12.15-12.21 (effectful false)
-							(ty-var @12.15-12.16 (name "a"))
-							(ty-var @12.20-12.21 (name "a"))))
-					(ty-var @12.24-12.25 (name "a"))
-					(ty-var @12.29-12.30 (name "a"))))))
+							(ty-rigid-var @12.15-12.16 (name "a"))
+							(ty-rigid-var @12.15-12.16 (name "a"))))
+					(ty-rigid-var @12.15-12.16 (name "a"))
+					(ty-rigid-var @12.15-12.16 (name "a"))))))
 	(d-let
 		(p-assign @17.1-17.14 (ident "addThreeTwice"))
 		(e-closure @17.17-17.45
@@ -189,34 +183,53 @@ NO CHANGE
 				(args
 					(p-assign @17.18-17.19 (ident "n")))
 				(e-call @17.21-17.45
-					(e-lookup-local @17.21-17.31
-						(p-assign @13.1-13.11 (ident "applyTwice")))
 					(e-lambda @17.32-17.41
 						(args
 							(p-assign @17.33-17.34 (ident "x")))
 						(e-binop @17.36-17.41 (op "add")
 							(e-lookup-local @17.36-17.37
 								(p-assign @17.33-17.34 (ident "x")))
-							(e-int @17.40-17.41 (value "3"))))
+							(e-num @17.40-17.41 (value "3"))))
 					(e-lookup-local @17.43-17.44
 						(p-assign @17.18-17.19 (ident "n"))))))
 		(annotation @17.1-17.14
 			(declared-type
 				(ty-fn @16.17-16.27 (effectful false)
-					(ty @16.17-16.20 (name "I64"))
-					(ty @16.24-16.27 (name "I64")))))))
+					(ty-lookup @16.17-16.20 (name "I64") (builtin))
+					(ty-lookup @16.24-16.27 (name "I64") (builtin))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @5.1-5.10 (type "a -> a -> a"))
-		(patt @9.1-9.11 (type "I64 -> I64"))
+		(patt @9.1-9.11 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(patt @13.1-13.11 (type "a -> a, a -> a"))
-		(patt @17.1-17.14 (type "I64 -> I64")))
+		(patt @17.1-17.14 (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.13-5.26 (type "a -> a -> a"))
-		(expr @9.14-9.26 (type "I64 -> I64"))
+		(expr @9.14-9.26 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(expr @13.14-13.28 (type "a -> a, a -> a"))
-		(expr @17.17-17.45 (type "I64 -> I64"))))
+		(expr @17.17-17.45 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))))
 ~~~

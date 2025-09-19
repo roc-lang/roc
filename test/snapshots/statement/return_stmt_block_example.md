@@ -20,6 +20,19 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**return_stmt_block_example.md:5:15:**
+```roc
+    str = if (num > 10) {
+```
+              ^^^^^^^^
+
+Right now, it has the type:
+    _Num(Int(Unsigned64))_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:5:11:**
@@ -36,7 +49,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _Result(ok, [TooBig]_others)_
+    _Result(_a, _b)_
 
 All branches in an `if` must have compatible types.
 
@@ -133,7 +146,7 @@ foo = |num| {
 								(e-binop @5.15-5.23 (op "gt")
 									(e-lookup-local @5.15-5.18
 										(p-assign @4.8-4.11 (ident "num")))
-									(e-int @5.21-5.23 (value "10")))
+									(e-num @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
 									(e-nominal @6.16-6.27 (nominal "Result")
 										(e-tag @6.16-6.27 (name "Err")
@@ -151,17 +164,38 @@ foo = |num| {
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.35 (effectful false)
-					(ty @3.7-3.10 (name "U64"))
-					(ty-apply @3.14-3.35 (symbol "Result")
-						(ty @3.21-3.24 (name "Str"))
-						(ty-tag-union @3.26-3.34
-							(ty @3.27-3.33 (name "TooBig")))))))))
+					(ty-lookup @3.7-3.10 (name "U64") (builtin))
+					(ty-apply @3.14-3.35 (name "Result") (local)
+						(ty-lookup @3.14-3.35 (name "Str") (builtin))
+						(ty-tag-union @3.14-3.35
+							(tag_name @3.27-3.33 (name "TooBig"))))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Result(Error, [TooBig])")))
+		(patt @4.1-4.4 (type "Num(Int(Unsigned64)) -> Result(Str, [TooBig])")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Result(Error, [TooBig])"))))
+		(expr @4.7-11.2 (type "Num(Int(Unsigned64)) -> Result(Str, [TooBig])"))))
 ~~~

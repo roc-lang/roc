@@ -52,13 +52,26 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @3.1-3.2 (ident "a"))
-		(e-int @3.5-3.6 (value "5")))
+		(e-num @3.5-3.6 (value "5")))
 	(d-let
 		(p-assign @4.1-4.2 (ident "b"))
 		(e-binop @4.5-4.10 (op "add")
 			(e-lookup-local @4.5-4.6
 				(p-assign @3.1-3.2 (ident "a")))
-			(e-int @4.9-4.10 (value "1")))))
+			(e-num @4.9-4.10 (value "1"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -66,6 +79,14 @@ NO CHANGE
 	(defs
 		(patt @3.1-3.2 (type "Num(_size)"))
 		(patt @4.1-4.2 (type "Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.5-3.6 (type "Num(_size)"))
 		(expr @4.5-4.10 (type "Num(_size)"))))

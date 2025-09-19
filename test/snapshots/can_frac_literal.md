@@ -54,17 +54,38 @@ NO CHANGE
 		(e-frac-f64 @4.5-4.12 (value "1.23e45")))
 	(d-let
 		(p-assign @5.1-5.2 (ident "z"))
-		(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))
+		(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5")))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Frac(_size)"))
-		(patt @4.1-4.2 (type "Frac(_size)"))
-		(patt @5.1-5.2 (type "Frac(_size)")))
+		(patt @3.1-3.2 (type "Num(Frac(_size))"))
+		(patt @4.1-4.2 (type "Num(Frac(_size))"))
+		(patt @5.1-5.2 (type "Num(Frac(_size))")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.5-3.9 (type "Frac(_size)"))
-		(expr @4.5-4.12 (type "Frac(_size)"))
-		(expr @5.5-5.8 (type "Frac(_size)"))))
+		(expr @3.5-3.9 (type "Num(Frac(_size))"))
+		(expr @4.5-4.12 (type "Num(Frac(_size))"))
+		(expr @5.5-5.8 (type "Num(Frac(_size))"))))
 ~~~

@@ -15,16 +15,7 @@ empty = ConsList.Nil
 # EXPECTED
 NIL
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `ConsList` is exposed, but it is not defined anywhere in this module.
-
-**nominal_tag_recursive_payload.md:1:9:1:17:**
-```roc
-module [ConsList, empty]
-```
-        ^^^^^^^^
-You can fix this by either defining `ConsList` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),

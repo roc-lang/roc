@@ -657,6 +657,11 @@ pub const Store = struct {
     /// * update b to to the new desc value
     /// * redirect a -> b
     ///
+    /// CRITICAL: The merge direction (a -> b) is load-bearing and must not be changed!
+    /// Multiple parts of the unification algorithm depend on this specific order:
+    /// - When unifying aliases with structures, we rely on this order to ensure
+    ///   that we don't loose alias context
+    ///
     // NOTE: The elm & the roc compiler this step differently
     // * The elm compiler sets b to redirect to a
     // * The roc compiler sets a to redirect to b
