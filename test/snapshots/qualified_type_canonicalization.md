@@ -562,9 +562,7 @@ transform = |result|
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
-				(ty-lookup-external @14.19-14.28
-					(module-idx "0")
-					(target-node-idx "0")))))
+				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "0") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-nominal-external @19.20-19.43
@@ -573,9 +571,7 @@ transform = |result|
 			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
-				(ty-lookup-external @18.20-18.35
-					(module-idx "2")
-					(target-node-idx "0")))))
+				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "2") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -587,7 +583,7 @@ transform = |result|
 		(e-nominal @27.14-27.27 (nominal "Result")
 			(e-tag @27.14-27.27 (name "Ok")
 				(args
-					(e-int @27.24-27.26 (value "42")))))
+					(e-num @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
 				(ty-malformed @26.14-26.27))))
@@ -601,9 +597,7 @@ transform = |result|
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
-					(ty-lookup-external @30.18-30.27
-						(module-idx "0")
-						(target-node-idx "0"))))))
+					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "0") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -614,10 +608,8 @@ transform = |result|
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup-external @34.16-34.25
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty @34.29-34.32 (name "Str"))))))
+					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @34.29-34.32 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
 		(e-closure @40.13-44.6
@@ -639,7 +631,6 @@ transform = |result|
 											(p-applied-tag @42.9-42.23))))
 								(value
 									(e-call @42.27-42.47
-										(e-runtime-error (tag "ident_not_in_scope"))
 										(e-lookup-local @42.43-42.46
 											(p-assign @42.19-42.22 (ident "rgb"))))))
 							(branch
@@ -654,6 +645,19 @@ transform = |result|
 				(ty-fn @39.13-39.76 (effectful false)
 					(ty-malformed @39.13-39.26)
 					(ty-malformed @39.55-39.76)))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @9.1-9.13 (module "Color")
 		(exposes))
 	(s-import @10.1-10.15 (module "ModuleA")
@@ -672,6 +676,14 @@ transform = |result|
 		(patt @31.1-31.9 (type "{  } -> Error"))
 		(patt @35.1-35.13 (type "Error -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.20-19.43 (type "Error"))

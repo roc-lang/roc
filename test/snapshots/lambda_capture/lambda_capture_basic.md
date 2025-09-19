@@ -40,23 +40,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.22
-	(e-call @1.1-1.19
-		(e-lambda @1.2-1.15
-			(args
-				(p-assign @1.3-1.4 (ident "x")))
-			(e-closure @1.6-1.15
-				(captures
-					(capture @1.3-1.4 (ident "x")))
-				(e-lambda @1.6-1.15
-					(args
-						(p-assign @1.7-1.8 (ident "y")))
-					(e-binop @1.10-1.15 (op "add")
-						(e-lookup-local @1.10-1.11
-							(p-assign @1.3-1.4 (ident "x")))
-						(e-lookup-local @1.14-1.15
-							(p-assign @1.7-1.8 (ident "y")))))))
-		(e-int @1.17-1.18 (value "1")))
-	(e-int @1.20-1.21 (value "2")))
+	(e-num @1.20-1.21 (value "2")))
 ~~~
 # TYPES
 ~~~clojure

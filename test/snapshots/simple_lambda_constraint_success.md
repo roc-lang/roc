@@ -116,8 +116,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.7 (type "I64 -> Error"))
-		(patt @9.1-9.10 (type "F64 -> Error")))
+		(patt @5.1-5.7 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(patt @9.1-9.10 (type "Num(Frac(Float64)) -> Num(Frac(Float64))")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -127,6 +127,6 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.10-5.19 (type "I64 -> Error"))
-		(expr @9.13-9.24 (type "F64 -> Error"))))
+		(expr @5.10-5.19 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(expr @9.13-9.24 (type "Num(Frac(Float64)) -> Num(Frac(Float64))"))))
 ~~~

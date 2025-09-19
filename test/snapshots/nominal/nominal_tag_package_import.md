@@ -76,14 +76,25 @@ blue = CC.Color.RGB(0, 0, 255)
 			(target-node-idx "0")
 			(e-tag @8.8-8.29 (name "RGB")
 				(args
-					(e-int @8.21-8.22 (value "0"))
-					(e-int @8.23-8.24 (value "0"))
-					(e-int @8.25-8.28 (value "255")))))
+					(e-num @8.21-8.22 (value "0"))
+					(e-num @8.23-8.24 (value "0"))
+					(e-num @8.25-8.28 (value "255")))))
 		(annotation @8.1-8.5
 			(declared-type
-				(ty-lookup-external @7.8-7.16
-					(module-idx "0")
-					(target-node-idx "0")))))
+				(ty-lookup @7.8-7.16 (name "Color") (external (module-idx "0") (target-node-idx "0"))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
 		(exposes)))
 ~~~
@@ -92,6 +103,14 @@ blue = CC.Color.RGB(0, 0, 255)
 (inferred-types
 	(defs
 		(patt @8.1-8.5 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @8.8-8.29 (type "Error"))))
 ~~~

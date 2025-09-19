@@ -282,8 +282,8 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @9.1-9.8 (type "a, b -> (a, b)"))
-		(patt @13.1-13.7 (type "U64 -> Error"))
-		(patt @15.1-15.6 (type "_arg -> Error")))
+		(patt @13.1-13.7 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @15.1-15.6 (type "_arg -> Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -295,6 +295,6 @@ main! = |_| {
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-13.19 (type "U64 -> Error"))
-		(expr @15.9-27.2 (type "_arg -> Error"))))
+		(expr @13.10-13.19 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @15.9-27.2 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

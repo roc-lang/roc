@@ -364,10 +364,10 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Result(a, Error), a -> b -> Result(b, Error)"))
+		(patt @5.1-5.11 (type "Result(a, e), a -> b -> Result(b, e)"))
 		(patt @14.1-14.9 (type "a -> a"))
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
-		(patt @22.1-22.12 (type "List(_a) -> U64"))
+		(patt @22.1-22.12 (type "List(_a) -> Num(Int(Unsigned64))"))
 		(patt @26.1-26.15 (type "a -> Result(Result(a, Str), Str)"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
 	(type_decls
@@ -379,10 +379,10 @@ main = |_| "done"
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.14-10.2 (type "Result(a, Error), a -> b -> Result(b, Error)"))
+		(expr @5.14-10.2 (type "Result(a, e), a -> b -> Result(b, e)"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
-		(expr @22.15-22.24 (type "List(_a) -> U64"))
+		(expr @22.15-22.24 (type "List(_a) -> Num(Int(Unsigned64))"))
 		(expr @26.18-26.39 (type "a -> Result(Result(a, Str), Str)"))
 		(expr @28.8-28.18 (type "_arg -> Str"))))
 ~~~

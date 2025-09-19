@@ -629,18 +629,15 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign @9.14-9.19 (ident "input")))
 			(e-call @9.21-9.38
-				(e-lookup-external @9.21-9.31
-					(module-idx "0")
-					(target-node-idx "0"))
 				(e-lookup-local @9.32-9.37
 					(p-assign @9.14-9.19 (ident "input")))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.40 (effectful false)
-					(ty @8.13-8.16 (name "Str"))
-					(ty-apply @8.20-8.40 (symbol "Result")
-						(ty @8.27-8.32 (name "Value"))
-						(ty @8.34-8.39 (name "Error")))))))
+					(ty-lookup @8.13-8.16 (name "Str") (builtin))
+					(ty-apply @8.20-8.40 (name "Result") (local)
+						(ty-malformed @8.20-8.40)
+						(ty-malformed @8.20-8.40))))))
 	(d-let
 		(p-assign @13.1-13.14 (ident "handleRequest"))
 		(e-closure @13.17-19.2
@@ -654,9 +651,6 @@ combineResults = |jsonResult, httpStatus|
 					(s-let @14.5-14.35
 						(p-assign @14.5-14.11 (ident "result"))
 						(e-call @14.14-14.35
-							(e-lookup-external @14.14-14.25
-								(module-idx "0")
-								(target-node-idx "0"))
 							(e-dot-access @14.26-14.34 (field "body")
 								(receiver
 									(e-lookup-local @14.26-14.29
@@ -674,9 +668,6 @@ combineResults = |jsonResult, httpStatus|
 												(p-applied-tag @16.9-16.18))))
 									(value
 										(e-call @16.22-16.36
-											(e-lookup-external @16.22-16.29
-												(module-idx "1")
-												(target-node-idx "0"))
 											(e-lookup-local @16.30-16.35
 												(p-assign @16.12-16.17 (ident "value"))))))
 								(branch
@@ -686,16 +677,13 @@ combineResults = |jsonResult, httpStatus|
 												(p-applied-tag @17.9-17.19))))
 									(value
 										(e-call @17.23-17.45
-											(e-lookup-external @17.23-17.38
-												(module-idx "1")
-												(target-node-idx "0"))
 											(e-lookup-local @17.39-17.44
 												(p-assign @17.13-17.18 (ident "error"))))))))))))
 		(annotation @13.1-13.14
 			(declared-type
 				(ty-fn @12.17-12.36 (effectful false)
-					(ty @12.17-12.24 (name "Request"))
-					(ty @12.28-12.36 (name "Response"))))))
+					(ty-malformed @12.17-12.24)
+					(ty-malformed @12.28-12.36)))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "processData"))
 		(e-lambda @23.15-27.6
@@ -703,7 +691,6 @@ combineResults = |jsonResult, httpStatus|
 				(p-assign @23.16-23.22 (ident "config"))
 				(p-assign @23.24-23.30 (ident "values")))
 			(e-call @24.5-27.6
-				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @25.9-25.15
 					(p-assign @23.24-23.30 (ident "values")))
 				(e-closure @26.9-26.41
@@ -713,9 +700,6 @@ combineResults = |jsonResult, httpStatus|
 						(args
 							(p-assign @26.10-26.11 (ident "v")))
 						(e-call @26.13-26.41
-							(e-lookup-external @26.13-26.30
-								(module-idx "0")
-								(target-node-idx "0"))
 							(e-lookup-local @26.31-26.37
 								(p-assign @23.16-23.22 (ident "config")))
 							(e-lookup-local @26.39-26.40
@@ -723,37 +707,32 @@ combineResults = |jsonResult, httpStatus|
 		(annotation @23.1-23.12
 			(declared-type
 				(ty-fn @22.15-22.64 (effectful false)
-					(ty @22.15-22.21 (name "Config"))
-					(ty-apply @22.23-22.34 (symbol "List")
-						(ty @22.28-22.33 (name "Value")))
-					(ty-apply @22.38-22.64 (symbol "Result")
-						(ty-apply @22.45-22.56 (symbol "List")
-							(ty @22.50-22.55 (name "Value")))
-						(ty @22.58-22.63 (name "Error")))))))
+					(ty-malformed @22.15-22.21)
+					(ty-apply @22.23-22.34 (name "List") (builtin)
+						(ty-malformed @22.28-22.33))
+					(ty-apply @22.38-22.64 (name "Result") (local)
+						(ty-apply @22.38-22.64 (name "List") (builtin)
+							(ty-malformed @22.50-22.55))
+						(ty-malformed @22.38-22.64))))))
 	(d-let
 		(p-assign @38.1-38.13 (ident "createClient"))
 		(e-lambda @38.16-38.48
 			(args
 				(p-assign @38.17-38.23 (ident "config")))
 			(e-call @38.25-38.48
-				(e-lookup-external @38.25-38.40
-					(module-idx "1")
-					(target-node-idx "0"))
 				(e-lookup-local @38.41-38.47
 					(p-assign @38.17-38.23 (ident "config")))))
 		(annotation @38.1-38.13
 			(declared-type
 				(ty-fn @37.16-37.37 (effectful false)
-					(ty @37.16-37.22 (name "Config"))
-					(ty-lookup-external @37.26-37.37
-						(module-idx "1")
-						(target-node-idx "0"))))))
+					(ty-malformed @37.16-37.22)
+					(ty-lookup @37.26-37.37 (name "Client") (external (module-idx "1") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @42.1-42.15 (ident "handleResponse"))
 		(e-closure @42.18-46.6
 			(captures
-				(capture @44.12-44.18 (ident "status"))
-				(capture @45.13-45.18 (ident "error")))
+				(capture @45.13-45.18 (ident "error"))
+				(capture @44.12-44.18 (ident "status")))
 			(e-lambda @42.18-46.6
 				(args
 					(p-assign @42.19-42.27 (ident "response")))
@@ -772,9 +751,6 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag @44.9-44.19))))
 								(value
 									(e-call @44.23-44.50
-										(e-lookup-external @44.23-44.42
-											(module-idx "1")
-											(target-node-idx "0"))
 										(e-lookup-local @44.43-44.49
 											(p-assign @44.12-44.18 (ident "status"))))))
 							(branch
@@ -784,20 +760,19 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag @45.9-45.19))))
 								(value
 									(e-call @45.23-45.44
-										(e-runtime-error (tag "ident_not_in_scope"))
 										(e-lookup-local @45.38-45.43
 											(p-assign @45.13-45.18 (ident "error")))))))))))
 		(annotation @42.1-42.15
 			(declared-type
 				(ty-fn @41.18-41.33 (effectful false)
-					(ty @41.18-41.26 (name "Response"))
-					(ty @41.30-41.33 (name "Str"))))))
+					(ty-malformed @41.18-41.26)
+					(ty-lookup @41.30-41.33 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @50.1-50.15 (ident "combineResults"))
 		(e-closure @50.18-54.6
 			(captures
-				(capture @52.12-52.17 (ident "value"))
-				(capture @53.13-53.18 (ident "error")))
+				(capture @53.13-53.18 (ident "error"))
+				(capture @52.12-52.17 (ident "value")))
 			(e-lambda @50.18-54.6
 				(args
 					(p-assign @50.19-50.29 (ident "jsonResult"))
@@ -821,9 +796,6 @@ combineResults = |jsonResult, httpStatus|
 													(fields
 														(field (name "body")
 															(e-call @52.33-52.51
-																(e-lookup-external @52.33-52.44
-																	(module-idx "0")
-																	(target-node-idx "0"))
 																(e-lookup-local @52.45-52.50
 																	(p-assign @52.12-52.17 (ident "value")))))
 														(field (name "status")
@@ -843,22 +815,35 @@ combineResults = |jsonResult, httpStatus|
 		(annotation @50.1-50.15
 			(declared-type
 				(ty-fn @49.18-49.73 (effectful false)
-					(ty-apply @49.18-49.38 (symbol "Result")
-						(ty @49.25-49.30 (name "Value"))
-						(ty @49.32-49.37 (name "Error")))
-					(ty @49.40-49.46 (name "Status"))
-					(ty-apply @49.50-49.73 (symbol "Result")
-						(ty @49.57-49.65 (name "Response"))
-						(ty @49.67-49.72 (name "Error")))))))
+					(ty-apply @49.18-49.38 (name "Result") (local)
+						(ty-malformed @49.18-49.38)
+						(ty-malformed @49.18-49.38))
+					(ty-malformed @49.40-49.46)
+					(ty-apply @49.50-49.73 (name "Result") (local)
+						(ty-malformed @49.50-49.73)
+						(ty-malformed @49.50-49.73))))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @30.1-34.2
 		(ty-header @30.1-30.13 (name "ServerConfig"))
 		(ty-record @30.16-34.2
 			(field (field "jsonConfig")
-				(ty @31.18-31.24 (name "Config")))
+				(ty-malformed @31.18-31.24))
 			(field (field "httpStatus")
-				(ty @32.18-32.24 (name "Status")))
+				(ty-malformed @32.18-32.24))
 			(field (field "defaultResponse")
-				(ty @33.23-33.31 (name "Response")))))
+				(ty-malformed @33.23-33.31))))
 	(s-import @3.1-3.49 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
@@ -879,17 +864,24 @@ combineResults = |jsonResult, httpStatus|
 	(defs
 		(patt @9.1-9.10 (type "Str -> Result(Error, Error)"))
 		(patt @13.1-13.14 (type "Error -> Error"))
-		(patt @23.1-23.12 (type "Error, List(Error) -> Result(List(item), Error)"))
+		(patt @23.1-23.12 (type "Error, List(Error) -> Result(List(Error), Error)"))
 		(patt @38.1-38.13 (type "Error -> Error"))
 		(patt @42.1-42.15 (type "Error -> Str"))
 		(patt @50.1-50.15 (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(Error, Error)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @30.1-34.2 (type "ServerConfig")
 			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions
 		(expr @9.13-9.38 (type "Str -> Result(Error, Error)"))
 		(expr @13.17-19.2 (type "Error -> Error"))
-		(expr @23.15-27.6 (type "Error, List(Error) -> Result(List(item), Error)"))
+		(expr @23.15-27.6 (type "Error, List(Error) -> Result(List(Error), Error)"))
 		(expr @38.16-38.48 (type "Error -> Error"))
 		(expr @42.18-46.6 (type "Error -> Str"))
 		(expr @50.18-54.6 (type "Result(Error, Error), Error -> Result(Error, Error)"))))

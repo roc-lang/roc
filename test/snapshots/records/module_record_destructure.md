@@ -136,7 +136,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "{ age: U64 } -> Error")))
+		(patt @4.1-4.12 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -146,5 +146,5 @@ extract_age = |person| {
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.15-8.2 (type "{ age: U64 } -> Error"))))
+		(expr @4.15-8.2 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))"))))
 ~~~

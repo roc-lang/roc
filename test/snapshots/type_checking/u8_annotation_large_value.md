@@ -22,7 +22,7 @@ x = 500
     ^^^
 
 Its inferred type is:
-    _U8_
+    _Num(Int(Unsigned8))_
 
 # TOKENS
 ~~~zig

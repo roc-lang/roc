@@ -85,46 +85,7 @@ EndOfFile(8:1-8:1),
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-7.17
-	(e-call @1.2-7.13
-		(e-call @1.3-7.8
-			(e-lambda @1.4-7.2
-				(args
-					(p-assign @1.5-1.6 (ident "a")))
-				(e-block @1.8-7.2
-					(s-let @2.5-2.18
-						(p-assign @2.5-2.10 (ident "a_loc"))
-						(e-binop @2.13-2.18 (op "mul")
-							(e-lookup-local @2.13-2.14
-								(p-assign @1.5-1.6 (ident "a")))
-							(e-int @2.17-2.18 (value "2"))))
-					(e-closure @3.5-6.6
-						(captures
-							(capture @2.5-2.10 (ident "a_loc")))
-						(e-lambda @3.5-6.6
-							(args
-								(p-assign @3.6-3.7 (ident "b")))
-							(e-block @3.9-6.6
-								(s-let @4.9-4.26
-									(p-assign @4.9-4.14 (ident "b_loc"))
-									(e-binop @4.17-4.26 (op "add")
-										(e-lookup-local @4.17-4.22
-											(p-assign @2.5-2.10 (ident "a_loc")))
-										(e-lookup-local @4.25-4.26
-											(p-assign @3.6-3.7 (ident "b")))))
-								(e-closure @5.9-5.22
-									(captures
-										(capture @4.9-4.14 (ident "b_loc")))
-									(e-lambda @5.9-5.22
-										(args
-											(p-assign @5.10-5.11 (ident "c")))
-										(e-binop @5.13-5.22 (op "add")
-											(e-lookup-local @5.13-5.18
-												(p-assign @4.9-4.14 (ident "b_loc")))
-											(e-lookup-local @5.21-5.22
-												(p-assign @5.10-5.11 (ident "c")))))))))))
-			(e-int @7.4-7.7 (value "100")))
-		(e-int @7.10-7.12 (value "20")))
-	(e-int @7.15-7.16 (value "3")))
+	(e-num @7.15-7.16 (value "3")))
 ~~~
 # TYPES
 ~~~clojure

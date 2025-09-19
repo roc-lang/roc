@@ -22,7 +22,19 @@ checkNumber = |num| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**if_then_else_nested_chain.md:4:5:**
+```roc
+	if num < 0 {
+```
+    ^^^^^^^
+
+Right now, it has the type:
+    _Num(_size)_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),
@@ -145,7 +157,6 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @3.1-3.12 (type "Num(_size) -> Str")))
-		(patt @3.1-3.12 (type "_arg -> Str")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -155,5 +166,5 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.15-13.2 (type "Num(_size) -> Str"))))
+		(expr @3.15-13.2 (type "Error -> Str"))))
 ~~~

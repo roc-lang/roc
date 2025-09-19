@@ -19,7 +19,36 @@ wrong_type_function = |x| x * 3.14
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:5:27:5:29:**
+```roc
+string_function = |x| x + 42
+```
+                          ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _Str_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:9:31:9:35:**
+```roc
+wrong_type_function = |x| x * 3.14
+```
+                              ^^^^
+
+It has the type:
+    _Num(Frac(_size))_
+
+But the type annotation says it should have the type:
+    _Num(Int(Signed64))_
+
+**Hint:** This might be because the numeric literal is too large to fit in the target type.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:24),Comma(1:24-1:25),LowerIdent(1:26-1:45),CloseSquare(1:45-1:46),
@@ -118,7 +147,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.16 (type "Str -> Error"))
-		(patt @9.1-9.20 (type "I64 -> Error")))
+		(patt @9.1-9.20 (type "Num(Int(Signed64)) -> Error")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -129,5 +158,5 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.19-5.29 (type "Str -> Error"))
-		(expr @9.23-9.35 (type "I64 -> Error"))))
+		(expr @9.23-9.35 (type "Num(Int(Signed64)) -> Error"))))
 ~~~

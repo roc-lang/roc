@@ -61,5 +61,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.65 (type "_arg -> Error"))
+(expr @1.1-1.65 (type "_arg -> Str"))
 ~~~

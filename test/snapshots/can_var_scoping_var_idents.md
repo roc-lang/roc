@@ -113,7 +113,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "_arg -> Error")))
+		(patt @4.1-4.9 (type "Num(_size) -> Num(_size2)")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -123,5 +123,5 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.12-10.2 (type "_arg -> Error"))))
+		(expr @4.12-10.2 (type "Num(_size) -> Num(_size2)"))))
 ~~~

@@ -57,21 +57,11 @@ EndOfFile(6:1-6:1),
 (e-block @1.1-5.2
 	(s-let @2.5-2.11
 		(p-assign @2.5-2.6 (ident "a"))
-		(e-int @2.9-2.11 (value "10")))
+		(e-num @2.9-2.11 (value "10")))
 	(s-let @3.5-3.23
 		(p-assign @3.5-3.6 (ident "b"))
 		(e-call @3.9-3.23
-			(e-closure @3.10-3.19
-				(captures
-					(capture @2.5-2.6 (ident "a")))
-				(e-lambda @3.10-3.19
-					(args
-						(p-underscore @3.11-3.12))
-					(e-binop @3.14-3.19 (op "mul")
-						(e-lookup-local @3.14-3.15
-							(p-assign @2.5-2.6 (ident "a")))
-						(e-int @3.18-3.19 (value "2")))))
-			(e-int @3.21-3.22 (value "5"))))
+			(e-num @3.21-3.22 (value "5"))))
 	(e-lookup-local @4.5-4.6
 		(p-assign @3.5-3.6 (ident "b"))))
 ~~~

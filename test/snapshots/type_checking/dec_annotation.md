@@ -64,7 +64,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Dec")))
+		(patt @4.1-4.2 (type "Num(Frac(Decimal))")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -74,5 +74,5 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @4.5-4.12 (type "Dec"))))
+		(expr @4.5-4.12 (type "Num(Frac(Decimal))"))))
 ~~~

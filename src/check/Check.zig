@@ -820,7 +820,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                         .annotation => {
                             // Otherwise, we're in an annotation and this cannot
                             // be recursive
-
                         },
                     }
 
@@ -831,14 +830,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     );
                     try self.types.setVarRedirect(anno_var, instantiated_var);
                 },
-                .external => |_| {
-                    @panic("TODO: External type lookups");
-                    // // TODO External
-                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
-                    //     // TODO?
-                    //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
-                    // };
-                    // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                .external => |ext| {
+                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                        const ext_instantiated_var = try self.instantiateVar(
+                            ext_ref.local_var,
+                            Rank.generalized,
+                            .{ .explicit = anno_region },
+                        );
+                        try self.types.setVarRedirect(anno_var, ext_instantiated_var);
+                    } else {
+                        // If this external type is unresolved, can should've reported
+                        // an error. So we set to error and continue
+                        try self.updateVar(anno_var, .err, Rank.generalized);
+                    }
                 },
             }
         },
@@ -907,11 +911,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                         },
                     }
 
-                    // Resolve the type that's being referenced
+                    // Resolve the referenced type
                     const decl_var = ModuleEnv.varFrom(local.decl_idx);
                     const decl_resolved = self.types.resolveVar(decl_var).desc.content;
 
-                    // Get the arguments & name of this declaration
+                    // Get the arguments & name the referenced type
                     const decl_arg_vars, const decl_name = blk: {
                         if (decl_resolved == .alias) {
                             const decl_alias = decl_resolved.alias;
@@ -963,14 +967,67 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     );
                     try self.types.setVarRedirect(anno_var, instantiated_var);
                 },
-                .external => |_| {
-                    @panic("TODO: External type apply");
-                    // // TODO External
-                    // const resolved_external = try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse {
-                    //     // TODO?
-                    //     break :blk try self.freshFromContent(.err, Rank.generalized, anno_region);
-                    // };
-                    // break :blk try self.instantiateVarAnon(resolved_external.local_var, .{ .explicit = anno_region });
+                .external => |ext| {
+                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                        // Resolve the referenced type
+                        const ext_resolved = self.types.resolveVar(ext_ref.local_var).desc.content;
+
+                        // Get the arguments & name the referenced type
+                        const ext_arg_vars, const ext_name = blk: {
+                            if (ext_resolved == .alias) {
+                                const decl_alias = ext_resolved.alias;
+                                break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                            } else if (ext_resolved == .structure and ext_resolved.structure == .nominal_type) {
+                                const decl_nominal = ext_resolved.structure.nominal_type;
+                                break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+                            } else if (ext_resolved == .err) {
+                                try self.updateVar(anno_var, .err, Rank.generalized);
+                                return;
+                            } else {
+                                std.debug.assert(false);
+                                try self.updateVar(anno_var, .err, Rank.generalized);
+                                return;
+                            }
+                        };
+
+                        // Check for an arity mismatch
+                        if (ext_arg_vars.len != anno_arg_vars.len) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
+                                .type_name = ext_name,
+                                .region = anno_region,
+                                .num_expected_args = @intCast(ext_arg_vars.len),
+                                .num_actual_args = @intCast(anno_args.len),
+                            } });
+                            try self.updateVar(anno_var, .err, Rank.generalized);
+                            return;
+                        }
+
+                        // Then, built the map of applied variables
+                        self.rigid_var_substitutions.clearRetainingCapacity();
+                        for (ext_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
+                            const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
+
+                            std.debug.assert(decl_arg_resolved == .rigid_var);
+                            const decl_arg_rigid_ident = decl_arg_resolved.rigid_var;
+
+                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid_ident, anno_arg_var);
+                        }
+
+                        // Then instantiate the variable, substituting the rigid
+                        // variables in the definition with the applied args from
+                        // the annotation
+                        const instantiated_var = try self.instantiateVarWithSubs(
+                            ext_ref.local_var,
+                            &self.rigid_var_substitutions,
+                            Rank.generalized,
+                            .{ .explicit = anno_region },
+                        );
+                        try self.types.setVarRedirect(anno_var, instantiated_var);
+                    } else {
+                        // If this external type is unresolved, can should've reported
+                        // an error. So we set to error and continue
+                        try self.updateVar(anno_var, .err, Rank.generalized);
+                    }
                 },
             }
         },

@@ -19,7 +19,7 @@ The number **300** does not fit in its inferred type:
            ^^^
 
 Its inferred type is:
-    _U8_
+    _Num(Int(Unsigned8))_
 
 # TOKENS
 ~~~zig

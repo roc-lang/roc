@@ -22,7 +22,7 @@ x = -1
     ^^
 
 However, its inferred type is **unsigned**:
-    _U8_
+    _Num(Int(Unsigned8))_
 
 # TOKENS
 ~~~zig

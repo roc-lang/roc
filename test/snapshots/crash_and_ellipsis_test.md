@@ -276,9 +276,9 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "U64 -> U64"))
-		(patt @9.1-9.10 (type "U64 -> U64"))
-		(patt @15.1-15.16 (type "U64 -> U64"))
+		(patt @5.1-5.13 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @9.1-9.10 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @15.1-15.16 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
@@ -289,8 +289,8 @@ main! = |_| {
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @5.16-5.23 (type "U64 -> U64"))
-		(expr @9.13-11.2 (type "U64 -> U64"))
-		(expr @15.19-17.2 (type "U64 -> U64"))
+		(expr @5.16-5.23 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @9.13-11.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @15.19-17.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @19.9-24.2 (type "_arg -> List(_elem)"))))
 ~~~

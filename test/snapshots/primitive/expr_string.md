@@ -56,7 +56,20 @@ NO CHANGE
 			(e-literal @3.8-3.14 (string "hello "))
 			(e-lookup-local @3.16-3.20
 				(p-assign @2.1-2.5 (ident "name")))
-			(e-literal @3.21-3.21 (string "")))))
+			(e-literal @3.21-3.21 (string ""))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -64,6 +77,14 @@ NO CHANGE
 	(defs
 		(patt @2.1-2.5 (type "Str"))
 		(patt @3.1-3.4 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Result(ok, err)")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @2.8-2.13 (type "Str"))
 		(expr @3.7-3.22 (type "Str"))))
