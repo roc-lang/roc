@@ -28,7 +28,7 @@ const Content = types_mod.Content;
 const Rank = types_mod.Rank;
 const Num = types_mod.Num;
 const testing = std.testing;
-const Instantiate = types_mod.instantiate.Instantiate;
+const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = @import("snapshot.zig").Store;
@@ -62,17 +62,17 @@ seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
 var_pool: VarPool,
 /// wrapper around generalization, contains some internal state used to do it's work
 generalizer: Generalizer,
+/// A map from one var to another. Used in instantiation and var copying
+var_map: std.AutoHashMap(Var, Var),
+/// A map from one var to another. Used to apply type arguments in instantation
+rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch tags used to build up intermediate lists, used for various things
 scratch_tags: base.Scratch(types_mod.Tag),
 /// scratch record fields used to build up intermediate lists, used for various things
 scratch_record_fields: base.Scratch(types_mod.RecordField),
-/// used in instantiation. TODO: Move into something like Instantiator
-var_map: std.AutoHashMap(Var, Var),
-/// used in instantiation. TODO: Move into something like Instantiator
-anonymous_rigid_var_subs: Instantiate.RigidSubstitutions,
-/// Cache for imported types. This cache lives for the entire type-checking session
+// Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
@@ -109,18 +109,18 @@ pub fn init(
         .problems = try ProblemStore.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .var_map = std.AutoHashMap(Var, Var).init(gpa),
         .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
         .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
         .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
+        .var_pool = try VarPool.init(gpa),
+        .generalizer = try Generalizer.init(gpa, types),
+        .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
-        .anonymous_rigid_var_subs = try Instantiate.RigidSubstitutions.init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
-        .var_pool = try VarPool.init(gpa),
-        .generalizer = try Generalizer.init(gpa, types),
     };
 }
 
@@ -130,18 +130,18 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.var_map.deinit();
     self.anno_free_vars.deinit(self.gpa);
     self.decl_free_vars.deinit(self.gpa);
     self.seen_annos.deinit();
-    self.anonymous_rigid_var_subs.deinit(self.gpa);
+    self.var_pool.deinit();
+    self.generalizer.deinit();
+    self.var_map.deinit();
+    self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit(self.gpa);
     self.scratch_tags.deinit(self.gpa);
     self.scratch_record_fields.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
-    self.var_pool.deinit();
-    self.generalizer.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -331,42 +331,91 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
-/// Instantiate a variable
+/// Instantiate a variable, substituting any encountered rigids with flex vars
+///
+/// Note that the the rigid var structure will be preserved.
+/// E.g. `a -> a`, `a` will reference the same new flex var
 fn instantiateVar(
     self: *Self,
     var_to_instantiate: Var,
     rank: types_mod.Rank,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
-    return self.instantiateVarWithSubs(var_to_instantiate, &self.anonymous_rigid_var_subs, rank, region_behavior);
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+
+        .current_rank = rank,
+        .rigid_behavior = .fresh_flex,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, region_behavior);
+}
+
+/// Instantiate a variable, substituting any encountered rigids with *new* rigid vars
+///
+/// Note that the the rigid var structure will be preserved.
+/// E.g. `a -> a`, `a` will reference the same new rigid var
+fn instantiateVarPreserveRigids(
+    self: *Self,
+    var_to_instantiate: Var,
+    rank: types_mod.Rank,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+
+        .current_rank = rank,
+        .rigid_behavior = .fresh_flex,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, region_behavior);
 }
 
 /// Instantiate a variable
 fn instantiateVarWithSubs(
     self: *Self,
     var_to_instantiate: Var,
-    subs: *Instantiate.RigidSubstitutions,
+    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     rank: types_mod.Rank,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    self.var_map.clearRetainingCapacity();
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
 
-    var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), &self.var_map);
-    var instantiate_ctx = Instantiate.Ctx{ .rigid_var_subs = subs, .current_rank = rank };
-    const instantiated_var = try instantiate.instantiateVar(var_to_instantiate, &instantiate_ctx);
+        .current_rank = rank,
+        .rigid_behavior = .{ .substitute_rigids = subs },
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, region_behavior);
+}
+
+/// Instantiate a variable
+fn instantiateVarHelp(
+    self: *Self,
+    var_to_instantiate: Var,
+    instantiator: *Instantiator,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    // First, reset state
+    instantiator.var_map.clearRetainingCapacity();
+
+    // Then, instantiate the variable with the provided context
+    const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
-    if (self.var_map.count() > 0) {
-        var iterator = self.var_map.iterator();
+    if (instantiator.var_map.count() > 0) {
+        var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
             // Get the newly created var
             const fresh_var = x.value_ptr.*;
 
             // Add to pool
-            try self.var_pool.addVarToRank(fresh_var, rank);
+            try self.var_pool.addVarToRank(fresh_var, instantiator.current_rank);
 
             // Set the region
             try self.fillInRegionsThrough(fresh_var);
@@ -389,6 +438,7 @@ fn instantiateVarWithSubs(
     // Assert that we have regions for every type variable
     self.debugAssertArraysInSync();
 
+    // Return the instantiated var
     return instantiated_var;
 }
 
@@ -735,8 +785,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                                     _ = try self.problems.appendProblem(self.gpa, .{ .type_apply_mismatch_arities = .{
                                         .type_name = this_decl.name,
                                         .region = anno_region,
-                                        .num_expected_args = this_decl.num_args,
-                                        .num_actual_args = 0,
+                                        .num_expected_args = 0,
+                                        .num_actual_args = this_decl.num_args,
                                     } });
                                     try self.updateVar(anno_var, .err, Rank.generalized);
                                     return;
@@ -892,19 +942,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     }
 
                     // Then, built the map of applied variables
-                    // TODO: Recursive rigid vars subs
-                    self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
+                    self.rigid_var_substitutions.clearRetainingCapacity();
                     for (decl_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
                         const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
+
                         std.debug.assert(decl_arg_resolved == .rigid_var);
                         const decl_arg_rigid_ident = decl_arg_resolved.rigid_var;
-                        try self.anonymous_rigid_var_subs.append(
-                            self.gpa,
-                            .{
-                                .ident = self.cir.getIdentText(decl_arg_rigid_ident),
-                                .var_ = anno_arg_var,
-                            },
-                        );
+
+                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid_ident, anno_arg_var);
                     }
 
                     // Then instantiate the variable, substituting the rigid
@@ -912,7 +957,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     // the annotation
                     const instantiated_var = try self.instantiateVarWithSubs(
                         decl_var,
-                        &self.anonymous_rigid_var_subs,
+                        &self.rigid_var_substitutions,
                         Rank.generalized,
                         .{ .explicit = anno_region },
                     );
@@ -4304,42 +4349,6 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 
 // copy type from other module //
 
-/// Instantiate a variable, writing su
-fn copyVar(
-    self: *Self,
-    other_module_var: Var,
-    other_module_env: *ModuleEnv,
-) std.mem.Allocator.Error!Var {
-    self.var_map.clearRetainingCapacity();
-    const copied_var = try copy_import.copyVar(
-        &other_module_env.*.types,
-        self.types,
-        other_module_var,
-        &self.var_map,
-        other_module_env.getIdentStore(),
-        self.cir.getIdentStore(),
-        self.gpa,
-    );
-
-    // If we had to insert any new type variables, ensure that we have
-    // corresponding regions for them. This is essential for error reporting.
-    if (self.var_map.count() > 0) {
-        var iterator = self.var_map.iterator();
-        while (iterator.next()) |x| {
-            // Get the newly created var
-            const fresh_var = x.value_ptr.*;
-            try self.fillInRegionsThrough(fresh_var);
-
-            self.setRegionAt(fresh_var, base.Region.zero());
-        }
-    }
-
-    // Assert that we have regions for every type variable
-    self.debugAssertArraysInSync();
-
-    return copied_var;
-}
-
 // external type lookups //
 
 const ExternalType = struct {
@@ -4391,4 +4400,43 @@ fn resolveVarFromExternal(
     } else {
         return null;
     }
+}
+
+/// Instantiate a variable, writing su
+fn copyVar(
+    self: *Self,
+    other_module_var: Var,
+    other_module_env: *ModuleEnv,
+) std.mem.Allocator.Error!Var {
+    // First, reset state
+    self.var_map.clearRetainingCapacity();
+
+    // Then, copy the var from the dest type store into this type store
+    const copied_var = try copy_import.copyVar(
+        &other_module_env.*.types,
+        self.types,
+        other_module_var,
+        &self.var_map,
+        other_module_env.getIdentStore(),
+        self.cir.getIdentStore(),
+        self.gpa,
+    );
+
+    // If we had to insert any new type variables, ensure that we have
+    // corresponding regions for them. This is essential for error reporting.
+    if (self.var_map.count() > 0) {
+        var iterator = self.var_map.iterator();
+        while (iterator.next()) |x| {
+            // Get the newly created var
+            const fresh_var = x.value_ptr.*;
+            try self.fillInRegionsThrough(fresh_var);
+
+            self.setRegionAt(fresh_var, base.Region.zero());
+        }
+    }
+
+    // Assert that we have regions for every type variable
+    self.debugAssertArraysInSync();
+
+    return copied_var;
 }

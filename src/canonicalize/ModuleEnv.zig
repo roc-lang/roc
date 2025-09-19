@@ -1825,6 +1825,11 @@ pub fn getIdentStore(self: *Self) *Ident.Store {
     return &self.common.idents;
 }
 
+/// Returns an immutable reference to the identifier store.
+pub fn getIdentStoreConst(self: *const Self) *const Ident.Store {
+    return &self.common.idents;
+}
+
 /// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.common.getIdent(idx);
