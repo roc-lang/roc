@@ -1409,6 +1409,14 @@ pub const BinOp = struct {
 };
 
 /// TODO
+pub const StaticDispatch = struct {
+    subject: Expr.Idx,
+    method_name: Token.Idx,
+    args: Expr.Span,
+    region: TokenizedRegion,
+};
+
+/// TODO
 pub const Unary = struct {
     operator: Token.Idx,
     expr: Expr.Idx,
@@ -2246,6 +2254,7 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     field_access: BinOp,
+    static_dispatch: StaticDispatch,
     local_dispatch: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
@@ -2307,6 +2316,7 @@ pub const Expr = union(enum) {
             .record => |e| e.region,
             .tuple => |e| e.region,
             .field_access => |e| e.region,
+            .static_dispatch => |e| e.region,
             .local_dispatch => |e| e.region,
             .lambda => |e| e.region,
             .record_updater => |e| e.region,
@@ -2602,6 +2612,32 @@ pub const Expr = union(enum) {
 
                 // Push right expression
                 try ast.store.getExpr(a.right).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .static_dispatch => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-static-dispatch");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // Push subject expression
+                try tree.pushStaticAtom("subject");
+                try ast.store.getExpr(a.subject).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push method name
+                try tree.pushStaticAtom("method");
+                // Use resolveQualifiedName to handle dot stripping, just like ident does
+                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent };
+                const empty_qualifiers = Token.Span{ .span = .{ .start = 0, .len = 0 } };
+                const method_name = ast.resolveQualifiedName(empty_qualifiers, a.method_name, &strip_tokens);
+                try tree.pushString(method_name);
+
+                // Push arguments
+                try tree.pushStaticAtom("args");
+                for (ast.store.exprSlice(a.args)) |arg_id| {
+                    try ast.store.getExpr(arg_id).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },

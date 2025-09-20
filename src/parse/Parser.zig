@@ -2155,20 +2155,49 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 }
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
+                const method_name_token = s;
                 self.advance();
-                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                const ident = try self.store.addExpr(.{ .ident = .{
-                    .region = .{ .start = s, .end = self.pos },
-                    .token = s,
-                    .qualifiers = empty_qualifiers,
-                } });
-                const ident_suffixed = try self.parseExprSuffix(s, ident);
-                expression = try self.store.addExpr(.{ .field_access = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .operator = start,
-                    .left = expression,
-                    .right = ident_suffixed,
-                } });
+
+                // Check if this is a static dispatch (method call) - i.e., followed by (
+                if (self.peek() == .NoSpaceOpenRound) {
+                    // Parse as static dispatch
+                    self.advance(); // consume the (
+                    const scratch_top = self.store.scratchExprTop();
+                    self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+                        switch (err) {
+                            error.ExpectedNotFound => {
+                                self.store.clearScratchExprsFrom(scratch_top);
+                                return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
+                            },
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.TooNested => return error.TooNested,
+                        }
+                    };
+                    const args = try self.store.exprSpanFrom(scratch_top);
+
+                    expression = try self.store.addExpr(.{ .static_dispatch = .{
+                        .subject = expression,
+                        .method_name = method_name_token,
+                        .args = args,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                } else {
+                    // Parse as field access
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const ident = try self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = s, .end = self.pos },
+                        .token = s,
+                        .qualifiers = empty_qualifiers,
+                    } });
+                    // Call parseExprSuffix but it won't see NoSpaceOpenRound since we already checked
+                    const ident_suffixed = try self.parseExprSuffix(s, ident);
+                    expression = try self.store.addExpr(.{ .field_access = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = start,
+                        .left = expression,
+                        .right = ident_suffixed,
+                    } });
+                }
             }
         }
         while (getTokenBP(self.peek())) |bp| {

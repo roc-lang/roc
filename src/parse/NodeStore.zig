@@ -619,6 +619,17 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(fa.left);
             node.data.rhs = @intFromEnum(fa.right);
         },
+        .static_dispatch => |sd| {
+            node.tag = .static_dispatch;
+            node.region = sd.region;
+            node.main_token = sd.method_name;
+            node.data.lhs = @intFromEnum(sd.subject);
+            // Store args span in extra_data
+            const extra_idx = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, sd.args.span.start);
+            try store.extra_data.append(store.gpa, sd.args.span.len);
+            node.data.rhs = extra_idx;
+        },
         .local_dispatch => |ld| {
             node.tag = .local_dispatch;
             node.region = ld.region;
@@ -1437,6 +1448,20 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .left = @enumFromInt(node.data.lhs),
                 .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .static_dispatch => {
+            const extra_idx = node.data.rhs;
+            const args_span_start = store.extra_data.items[extra_idx];
+            const args_span_len = store.extra_data.items[extra_idx + 1];
+            return .{ .static_dispatch = .{
+                .subject = @enumFromInt(node.data.lhs),
+                .method_name = node.main_token,
+                .args = .{ .span = .{
+                    .start = args_span_start,
+                    .len = args_span_len,
+                } },
                 .region = node.region,
             } };
         },

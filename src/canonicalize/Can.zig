@@ -2684,6 +2684,15 @@ pub fn canonicalizeExpr(
                 .free_vars = null,
             };
         },
+        .static_dispatch => |_| {
+            // Static dispatch not yet implemented in canonicalization
+            const feature = try self.env.insertString("canonicalize static_dispatch expression");
+            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        },
         .local_dispatch => |_| {
             const feature = try self.env.insertString("canonicalize local_dispatch expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{

@@ -375,6 +375,12 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     field_access,
+    /// Static dispatch (method call)
+    /// Example: foo.bar(a, b, c)
+    /// * lhs - subject expression
+    /// * rhs - extra index containing args span
+    /// * main_token - method name token
+    static_dispatch,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

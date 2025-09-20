@@ -868,6 +868,22 @@ const Formatter = struct {
                 try fmt.push('.');
                 _ = try fmt.formatExprInner(fa.right, .no_indent_on_access);
             },
+            .static_dispatch => |sd| {
+                _ = try fmt.formatExpr(sd.subject);
+                try fmt.push('.');
+                try fmt.pushTokenText(sd.method_name);
+                try fmt.push('(');
+
+                // Format arguments
+                const args = fmt.ast.store.exprSlice(sd.args);
+                for (args, 0..) |arg_id, i| {
+                    _ = try fmt.formatExpr(arg_id);
+                    if (i < args.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(')');
+            },
             .local_dispatch => |ld| {
                 _ = try fmt.formatExpr(ld.left);
                 if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
@@ -2108,6 +2124,21 @@ const Formatter = struct {
                         }
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
+                    },
+                    .static_dispatch => |sd| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, sd.subject)) {
+                            return true;
+                        }
+
+                        // Check if any arguments are multiline
+                        const args = fmt.ast.store.exprSlice(sd.args);
+                        for (args) |arg_id| {
+                            if (fmt.nodeWillBeMultiline(AST.Expr.Idx, arg_id)) {
+                                return true;
+                            }
+                        }
+
+                        return false;
                     },
                     .lambda => |l| {
                         if (fmt.nodeWillBeMultiline(AST.Expr.Idx, l.body)) {
