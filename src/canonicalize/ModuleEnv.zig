@@ -1029,6 +1029,7 @@ pub fn serialize(
         .module_name = "", // Will be set when deserializing
         .diagnostics = self.diagnostics,
         .store = (try self.store.serialize(allocator, writer)).*,
+        .static_dispatches = .{},
     };
 
     // set gpa to all zeros, so that what we write to the file is deterministic
