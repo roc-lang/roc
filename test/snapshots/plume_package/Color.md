@@ -80,7 +80,9 @@ is_named_color = |str|{
 # EXPECTED
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:1:1:1:1
 INVALID NOMINAL TAG - Color.md:23:5:23:33
+TYPE MISMATCH - Color.md:1:1:1:1
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -105,6 +107,20 @@ Is there an `import` or `exposing` missing up-top?
              ^^^^^^^^^^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:1:1:1:1:**
+```roc
+module [
+```
+^
+
+It has the type:
+    _U8_
+
+But here it's being used as:
+    _({}) -> _ret_
+
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **Color.md:23:5:23:33:**
@@ -122,6 +138,20 @@ But it should be one of:
 **Hint:** The nominal type has a tag with the same name, but different args:
 
     _RGBA(U8, U8, U8, Dec)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:1:1:1:1:**
+```roc
+module [
+```
+^
+
+It has the type:
+    _Str_
+
+But here it's being used as:
+    _({}) -> _ret_
 
 # TOKENS
 ~~~zig
@@ -263,10 +293,12 @@ EndOfFile(72:1-72:1),
 						(s-decl @22.5-22.34
 							(p-ident @22.5-22.12 (raw "rounded"))
 							(e-binop @22.15-22.34 (op "/")
-								(e-field-access @22.15-22.26
+								(e-static-dispatch @22.15-22.26
+									subject
 									(e-ident @22.15-22.16 (raw "a"))
-									(e-apply @22.16-22.26
-										(e-ident @22.16-22.24 (raw "to_frac"))))
+									method
+									"to_frac"
+									args)
 								(e-frac @22.29-22.34 (raw "255.0"))))
 						(e-apply @23.5-23.33
 							(e-tag @23.5-23.15 (raw "Color.RGBA"))
@@ -294,10 +326,12 @@ EndOfFile(72:1-72:1),
 					(statements
 						(s-decl @29.5-29.26
 							(p-ident @29.5-29.10 (raw "bytes"))
-							(e-field-access @29.13-29.26
+							(e-static-dispatch @29.13-29.26
+								subject
 								(e-ident @29.13-29.16 (raw "str"))
-								(e-apply @29.16-29.26
-									(e-ident @29.16-29.24 (raw "to_utf8")))))
+								method
+								"to_utf8"
+								args))
 						(s-decl @30.5-30.109
 							(p-ident @30.5-30.25 (raw "is_char_in_hex_range"))
 							(e-lambda @30.28-30.109
@@ -346,34 +380,46 @@ EndOfFile(72:1-72:1),
 											(s-decl @34.13-40.45
 												(p-ident @34.13-34.21 (raw "is_valid"))
 												(e-binop @35.17-40.45 (op "and")
-													(e-field-access @35.17-35.41
+													(e-static-dispatch @35.17-35.41
+														subject
 														(e-ident @35.17-35.18 (raw "a"))
-														(e-apply @35.18-35.41
-															(e-ident @35.18-35.39 (raw "is_char_in_hex_range"))))
+														method
+														"is_char_in_hex_range"
+														args)
 													(e-binop @36.21-40.45 (op "and")
-														(e-field-access @36.21-36.45
+														(e-static-dispatch @36.21-36.45
+															subject
 															(e-ident @36.21-36.22 (raw "b"))
-															(e-apply @36.22-36.45
-																(e-ident @36.22-36.43 (raw "is_char_in_hex_range"))))
+															method
+															"is_char_in_hex_range"
+															args)
 														(e-binop @37.21-40.45 (op "and")
-															(e-field-access @37.21-37.45
+															(e-static-dispatch @37.21-37.45
+																subject
 																(e-ident @37.21-37.22 (raw "c"))
-																(e-apply @37.22-37.45
-																	(e-ident @37.22-37.43 (raw "is_char_in_hex_range"))))
+																method
+																"is_char_in_hex_range"
+																args)
 															(e-binop @38.21-40.45 (op "and")
-																(e-field-access @38.21-38.45
+																(e-static-dispatch @38.21-38.45
+																	subject
 																	(e-ident @38.21-38.22 (raw "d"))
-																	(e-apply @38.22-38.45
-																		(e-ident @38.22-38.43 (raw "is_char_in_hex_range"))))
+																	method
+																	"is_char_in_hex_range"
+																	args)
 																(e-binop @39.21-40.45 (op "and")
-																	(e-field-access @39.21-39.45
+																	(e-static-dispatch @39.21-39.45
+																		subject
 																		(e-ident @39.21-39.22 (raw "e"))
-																		(e-apply @39.22-39.45
-																			(e-ident @39.22-39.43 (raw "is_char_in_hex_range"))))
-																	(e-field-access @40.21-40.45
+																		method
+																		"is_char_in_hex_range"
+																		args)
+																	(e-static-dispatch @40.21-40.45
+																		subject
 																		(e-ident @40.21-40.22 (raw "f"))
-																		(e-apply @40.22-40.45
-																			(e-ident @40.22-40.43 (raw "is_char_in_hex_range"))))))))))
+																		method
+																		"is_char_in_hex_range"
+																		args)))))))
 											(e-if-then-else @42.13-42.125
 												(e-ident @42.16-42.24 (raw "is_valid"))
 												(e-apply @42.25-42.43
@@ -464,39 +510,45 @@ EndOfFile(72:1-72:1),
 							(e-ident @53.25-53.30 (raw "inner")))))))
 		(s-expect @56.1-56.57
 			(e-binop @56.8-56.57 (op "==")
-				(e-field-access @56.8-56.34
+				(e-static-dispatch @56.8-56.34
+					subject
 					(e-apply @56.8-56.25
 						(e-ident @56.8-56.11 (raw "rgb"))
 						(e-int @56.12-56.15 (raw "124"))
 						(e-int @56.17-56.19 (raw "56"))
 						(e-int @56.21-56.24 (raw "245")))
-					(e-apply @56.25-56.34
-						(e-ident @56.25-56.32 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string @56.38-56.57
 					(e-string-part @56.39-56.56 (raw "rgb(124, 56, 245)")))))
 		(s-expect @57.1-57.69
 			(e-binop @57.8-57.69 (op "==")
-				(e-field-access @57.8-57.40
+				(e-static-dispatch @57.8-57.40
+					subject
 					(e-apply @57.8-57.31
 						(e-ident @57.8-57.12 (raw "rgba"))
 						(e-int @57.13-57.16 (raw "124"))
 						(e-int @57.18-57.20 (raw "56"))
 						(e-int @57.22-57.25 (raw "245"))
 						(e-int @57.27-57.30 (raw "255")))
-					(e-apply @57.31-57.40
-						(e-ident @57.31-57.38 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string @57.44-57.69
 					(e-string-part @57.45-57.68 (raw "rgba(124, 56, 245, 1.0)")))))
 		(s-expect @58.1-58.54
 			(e-binop @58.8-58.54 (op "==")
-				(e-field-access @58.8-58.37
+				(e-static-dispatch @58.8-58.37
+					subject
 					(e-apply @58.8-58.22
 						(e-ident @58.8-58.11 (raw "hex"))
 						(e-string @58.12-58.21
 							(e-string-part @58.13-58.20 (raw "#ff00ff"))))
-					(e-apply @58.22-58.37
-						(e-ident @58.22-58.29 (raw "map_ok"))
-						(e-ident @58.30-58.36 (raw "to_str"))))
+					method
+					"map_ok"
+					args
+					(e-ident @58.30-58.36 (raw "to_str")))
 				(e-apply @58.41-58.54
 					(e-tag @58.41-58.43 (raw "Ok"))
 					(e-string @58.44-58.53
@@ -518,10 +570,12 @@ EndOfFile(72:1-72:1),
 				(args
 					(p-ident @61.10-61.13 (raw "str")))
 				(e-if-then-else @62.5-65.50
-					(e-field-access @62.8-62.28
+					(e-static-dispatch @62.8-62.28
+						subject
 						(e-ident @62.8-62.11 (raw "str"))
-						(e-apply @62.11-62.28
-							(e-ident @62.11-62.26 (raw "is_named_color"))))
+						method
+						"is_named_color"
+						args)
 					(e-apply @63.9-63.29
 						(e-tag @63.9-63.11 (raw "Ok"))
 						(e-apply @63.12-63.28
@@ -553,11 +607,13 @@ EndOfFile(72:1-72:1),
 										(e-string-part @68.43-68.55 (raw "AntiqueWhite")))
 									(e-string @68.58-68.64
 										(e-string-part @68.59-68.63 (raw "Aqua"))))))
-						(e-field-access @70.5-70.25
+						(e-static-dispatch @70.5-70.25
+							subject
 							(e-ident @70.5-70.11 (raw "colors"))
-							(e-apply @70.11-70.25
-								(e-ident @70.11-70.20 (raw "contains"))
-								(e-ident @70.21-70.24 (raw "str"))))))))))
+							method
+							"contains"
+							args
+							(e-ident @70.21-70.24 (raw "str")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -671,11 +727,9 @@ is_named_color = |str| {
 				(s-let @22.5-22.34
 					(p-assign @22.5-22.12 (ident "rounded"))
 					(e-binop @22.15-22.34 (op "div")
-						(e-dot-access @22.15-22.26 (field "to_frac")
-							(receiver
-								(e-lookup-local @22.15-22.16
-									(p-assign @21.18-21.19 (ident "a"))))
-							(args))
+						(e-call @22.15-22.26
+							(e-lookup-local @22.15-22.16
+								(p-assign @21.18-21.19 (ident "a"))))
 						(e-dec-small @22.29-22.34 (numerator "2550") (denominator-power-of-ten "1") (value "255"))))
 				(e-nominal @23.5-23.33 (nominal "Color")
 					(e-tag @23.5-23.33 (name "RGBA")
@@ -713,11 +767,9 @@ is_named_color = |str| {
 				(e-block @27.13-46.2
 					(s-let @29.5-29.26
 						(p-assign @29.5-29.10 (ident "bytes"))
-						(e-dot-access @29.13-29.26 (field "to_utf8")
-							(receiver
-								(e-lookup-local @29.13-29.16
-									(p-assign @27.8-27.11 (ident "str"))))
-							(args)))
+						(e-call @29.13-29.26
+							(e-lookup-local @29.13-29.16
+								(p-assign @27.8-27.11 (ident "str")))))
 					(s-let @30.5-30.109
 						(p-assign @30.5-30.25 (ident "is_char_in_hex_range"))
 						(e-lambda @30.28-30.109
@@ -775,40 +827,28 @@ is_named_color = |str| {
 											(s-let @34.13-40.45
 												(p-assign @34.13-34.21 (ident "is_valid"))
 												(e-binop @35.17-40.45 (op "and")
-													(e-dot-access @35.17-35.41 (field "is_char_in_hex_range")
-														(receiver
-															(e-lookup-local @35.17-35.18
-																(p-assign @33.15-33.16 (ident "a"))))
-														(args))
+													(e-call @35.17-35.41
+														(e-lookup-local @35.17-35.18
+															(p-assign @33.15-33.16 (ident "a"))))
 													(e-binop @36.21-40.45 (op "and")
-														(e-dot-access @36.21-36.45 (field "is_char_in_hex_range")
-															(receiver
-																(e-lookup-local @36.21-36.22
-																	(p-assign @33.18-33.19 (ident "b"))))
-															(args))
+														(e-call @36.21-36.45
+															(e-lookup-local @36.21-36.22
+																(p-assign @33.18-33.19 (ident "b"))))
 														(e-binop @37.21-40.45 (op "and")
-															(e-dot-access @37.21-37.45 (field "is_char_in_hex_range")
-																(receiver
-																	(e-lookup-local @37.21-37.22
-																		(p-assign @33.21-33.22 (ident "c"))))
-																(args))
+															(e-call @37.21-37.45
+																(e-lookup-local @37.21-37.22
+																	(p-assign @33.21-33.22 (ident "c"))))
 															(e-binop @38.21-40.45 (op "and")
-																(e-dot-access @38.21-38.45 (field "is_char_in_hex_range")
-																	(receiver
-																		(e-lookup-local @38.21-38.22
-																			(p-assign @33.24-33.25 (ident "d"))))
-																	(args))
+																(e-call @38.21-38.45
+																	(e-lookup-local @38.21-38.22
+																		(p-assign @33.24-33.25 (ident "d"))))
 																(e-binop @39.21-40.45 (op "and")
-																	(e-dot-access @39.21-39.45 (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local @39.21-39.22
-																				(p-assign @33.27-33.28 (ident "e"))))
-																		(args))
-																	(e-dot-access @40.21-40.45 (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local @40.21-40.22
-																				(p-assign @33.30-33.31 (ident "f"))))
-																		(args))))))))
+																	(e-call @39.21-39.45
+																		(e-lookup-local @39.21-39.22
+																			(p-assign @33.27-33.28 (ident "e"))))
+																	(e-call @40.21-40.45
+																		(e-lookup-local @40.21-40.22
+																			(p-assign @33.30-33.31 (ident "f"))))))))))
 											(e-if @42.13-42.125
 												(if-branches
 													(if-branch
@@ -967,11 +1007,9 @@ is_named_color = |str| {
 			(e-if @62.5-65.50
 				(if-branches
 					(if-branch
-						(e-dot-access @62.8-62.28 (field "is_named_color")
-							(receiver
-								(e-lookup-local @62.8-62.11
-									(p-assign @61.10-61.13 (ident "str"))))
-							(args))
+						(e-call @62.8-62.28
+							(e-lookup-local @62.8-62.11
+								(p-assign @61.10-61.13 (ident "str"))))
 						(e-nominal @63.9-63.29 (nominal "Result")
 							(e-tag @63.9-63.29 (name "Ok")
 								(args
@@ -1018,13 +1056,11 @@ is_named_color = |str| {
 									(e-literal @68.43-68.55 (string "AntiqueWhite")))
 								(e-string @68.58-68.64
 									(e-literal @68.59-68.63 (string "Aqua")))))))
-				(e-dot-access @70.5-70.25 (field "contains")
-					(receiver
-						(e-lookup-local @70.5-70.11
-							(p-assign @68.5-68.11 (ident "colors"))))
-					(args
-						(e-lookup-local @70.21-70.24
-							(p-assign @67.19-67.22 (ident "str"))))))))
+				(e-call @70.5-70.25
+					(e-lookup-local @70.5-70.11
+						(p-assign @68.5-68.11 (ident "colors")))
+					(e-lookup-local @70.21-70.24
+						(p-assign @67.19-67.22 (ident "str")))))))
 	(s-nominal-decl @10.1-15.2
 		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
@@ -1043,43 +1079,37 @@ is_named_color = |str| {
 				(ty @14.9-14.12 (name "Str")))))
 	(s-expect @56.1-56.57
 		(e-binop @56.8-56.57 (op "eq")
-			(e-dot-access @56.8-56.34 (field "to_str")
-				(receiver
-					(e-call @56.8-56.25
-						(e-lookup-local @56.8-56.11
-							(p-assign @18.1-18.4 (ident "rgb")))
-						(e-int @56.12-56.15 (value "124"))
-						(e-int @56.17-56.19 (value "56"))
-						(e-int @56.21-56.24 (value "245"))))
-				(args))
+			(e-call @56.8-56.34
+				(e-call @56.8-56.25
+					(e-lookup-local @56.8-56.11
+						(p-assign @18.1-18.4 (ident "rgb")))
+					(e-int @56.12-56.15 (value "124"))
+					(e-int @56.17-56.19 (value "56"))
+					(e-int @56.21-56.24 (value "245"))))
 			(e-string @56.38-56.57
 				(e-literal @56.39-56.56 (string "rgb(124, 56, 245)")))))
 	(s-expect @57.1-57.69
 		(e-binop @57.8-57.69 (op "eq")
-			(e-dot-access @57.8-57.40 (field "to_str")
-				(receiver
-					(e-call @57.8-57.31
-						(e-lookup-local @57.8-57.12
-							(p-assign @21.1-21.5 (ident "rgba")))
-						(e-int @57.13-57.16 (value "124"))
-						(e-int @57.18-57.20 (value "56"))
-						(e-int @57.22-57.25 (value "245"))
-						(e-int @57.27-57.30 (value "255"))))
-				(args))
+			(e-call @57.8-57.40
+				(e-call @57.8-57.31
+					(e-lookup-local @57.8-57.12
+						(p-assign @21.1-21.5 (ident "rgba")))
+					(e-int @57.13-57.16 (value "124"))
+					(e-int @57.18-57.20 (value "56"))
+					(e-int @57.22-57.25 (value "245"))
+					(e-int @57.27-57.30 (value "255"))))
 			(e-string @57.44-57.69
 				(e-literal @57.45-57.68 (string "rgba(124, 56, 245, 1.0)")))))
 	(s-expect @58.1-58.54
 		(e-binop @58.8-58.54 (op "eq")
-			(e-dot-access @58.8-58.37 (field "map_ok")
-				(receiver
-					(e-call @58.8-58.22
-						(e-lookup-local @58.8-58.11
-							(p-assign @27.1-27.4 (ident "hex")))
-						(e-string @58.12-58.21
-							(e-literal @58.13-58.20 (string "#ff00ff")))))
-				(args
-					(e-lookup-local @58.30-58.36
-						(p-assign @49.1-49.7 (ident "to_str")))))
+			(e-call @58.8-58.37
+				(e-call @58.8-58.22
+					(e-lookup-local @58.8-58.11
+						(p-assign @27.1-27.4 (ident "hex")))
+					(e-string @58.12-58.21
+						(e-literal @58.13-58.20 (string "#ff00ff"))))
+				(e-lookup-local @58.30-58.36
+					(p-assign @49.1-49.7 (ident "to_str"))))
 			(e-nominal @58.41-58.54 (nominal "Result")
 				(e-tag @58.41-58.54 (name "Ok")
 					(args
@@ -1092,9 +1122,9 @@ is_named_color = |str| {
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> Error"))
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> Error"))
-		(patt @27.1-27.4 (type "Str -> Result(Error, [InvalidHex(Str)])"))
-		(patt @49.1-49.7 (type "Error -> Str"))
-		(patt @61.1-61.6 (type "Str -> Result(Error, [UnknownColor(Str)])"))
+		(patt @27.1-27.4 (type "Error -> Result(Error, [InvalidHex(Str)])"))
+		(patt @49.1-49.7 (type "Error -> Error"))
+		(patt @61.1-61.6 (type "Error -> Result(Error, [UnknownColor(Error)])"))
 		(patt @67.1-67.15 (type "_arg -> _ret")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Error")
@@ -1102,8 +1132,8 @@ is_named_color = |str| {
 	(expressions
 		(expr @18.7-18.35 (type "U8, U8, U8 -> Error"))
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> Error"))
-		(expr @27.7-46.2 (type "Str -> Result(Error, [InvalidHex(Str)])"))
-		(expr @49.10-54.2 (type "Error -> Str"))
-		(expr @61.9-65.50 (type "Str -> Result(Error, [UnknownColor(Str)])"))
+		(expr @27.7-46.2 (type "Error -> Result(Error, [InvalidHex(Str)])"))
+		(expr @49.10-54.2 (type "Error -> Error"))
+		(expr @61.9-65.50 (type "Error -> Result(Error, [UnknownColor(Error)])"))
 		(expr @67.18-71.2 (type "_arg -> _ret"))))
 ~~~

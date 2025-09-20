@@ -174,6 +174,8 @@ PARSE ERROR - fuzz_crash_027.md:40:9:40:10
 PARSE ERROR - fuzz_crash_027.md:41:1:41:2
 PARSE ERROR - fuzz_crash_027.md:122:3:122:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:33:142:34
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:34:142:38
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
@@ -215,6 +217,9 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:142:33:142:34
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:142:34:142:38
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -227,7 +232,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:142:10:142:47
+TYPE MISMATCH - fuzz_crash_027.md:100:13:148:2
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -319,6 +324,28 @@ Expressions can be identifiers, literals, function calls, or operators.
 		),	456, # ee
 ```
 		^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:142:33:142:34:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                               ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.ned** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_027.md:142:34:142:38:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                                ^^^^
 
 
 **UNDECLARED TYPE**
@@ -738,6 +765,33 @@ This feature is not yet implemented: canonicalize suffix_single_question express
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_027.md:142:33:142:34:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                               ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_027.md:142:34:142:38:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                                ^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -922,11 +976,58 @@ But here it's being used as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:142:10:142:47:**
+**fuzz_crash_027.md:100:13:148:2:**
 ```roc
+main! = |_| { # Yeah Ie
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comd
+		tag
+
+	# Jusnt!
+
+	...
+	match_time(
+		..., #
+	)
+	some_func(
+		dbg # bug
+			42, # Aft expr
+	)
+	crash "Unreachtement
+	tag_with = Ok(number)
+	ited = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # Afin list
+e[, # afarg
+		),	456, # ee
+	]
+	for n in list {
+	line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	m_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # Thisnt
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+} # Commenl decl
 ```
-	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The type annotation says it should have the type:
     _Result({  }, _d)_
@@ -1487,23 +1588,24 @@ EndOfFile(160:1-160:1),
 										(e-binop @141.73-141.78 (op "/")
 											(e-int @141.73-141.74 (raw "3"))
 											(e-int @141.77-141.78 (raw "5")))))))
-						(s-decl @142.2-142.47
+						(s-decl @142.2-142.33
 							(p-ident @142.2-142.7 (raw "stale"))
-							(e-field-access @142.10-142.47
-								(e-field-access @142.10-142.41
-									(e-field-access @142.10-142.34
-										(e-question-suffix @142.10-142.24
-											(e-apply @142.10-142.23
-												(e-ident @142.10-142.17 (raw "some_fn"))
-												(e-ident @142.18-142.22 (raw "arg1"))))
-										(e-question-suffix @142.24-142.34
-											(e-apply @142.24-142.33
-												(e-ident @142.24-142.31 (raw "statod")))))
-									(e-question-suffix @142.34-142.41
-										(e-apply @142.34-142.40
-											(e-ident @142.34-142.38 (raw "ned")))))
-								(e-question-suffix @142.41-142.47
-									(e-ident @142.41-142.46 (raw "recd")))))
+							(e-static-dispatch @142.10-142.33
+								subject
+								(e-question-suffix @142.10-142.24
+									(e-apply @142.10-142.23
+										(e-ident @142.10-142.17 (raw "some_fn"))
+										(e-ident @142.18-142.22 (raw "arg1"))))
+								method
+								"statod"
+								args))
+						(e-malformed @142.33-142.34 (reason "expr_unexpected_token"))
+						(e-malformed @142.34-142.38 (reason "expr_unexpected_token"))
+						(e-field-access @142.38-142.47
+							(e-question-suffix @142.38-142.41
+								(e-tuple @142.38-142.40))
+							(e-question-suffix @142.41-142.47
+								(e-ident @142.41-142.46 (raw "recd"))))
 						(e-apply @143.2-147.3
 							(e-tag @143.2-143.11 (raw "Stdoline!"))
 							(e-string @144.3-146.10
@@ -1679,7 +1781,8 @@ main! = |_| { # Yeah Ie
 		[1, 2, 3],
 	)
 	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+	stale = some_fn(arg1)?.statod()
+			()?.recd?
 	Stdoline!(
 		"How about ${ #
 			Num.toStr(number) # on expr
@@ -2060,15 +2163,18 @@ expect {
 									(e-binop @141.73-141.78 (op "div")
 										(e-int @141.73-141.74 (value "3"))
 										(e-int @141.77-141.78 (value "5")))))))
-					(s-let @142.2-142.47
+					(s-let @142.2-142.33
 						(p-assign @142.2-142.7 (ident "stale"))
-						(e-dot-access @142.10-142.47 (field "unknown")
+						(e-call @142.10-142.33
+							(e-runtime-error (tag "not_implemented"))))
+					(s-expr @142.33-142.34
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @142.34-142.38
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @142.38-142.47
+						(e-dot-access @142.38-142.47 (field "unknown")
 							(receiver
-								(e-dot-access @142.10-142.41 (field "unknown")
-									(receiver
-										(e-dot-access @142.10-142.34 (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+								(e-runtime-error (tag "not_implemented")))))
 					(e-tag @143.2-147.3 (name "Stdoline!")
 						(args
 							(e-string @144.3-146.10

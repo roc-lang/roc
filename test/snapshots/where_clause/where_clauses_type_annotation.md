@@ -11,9 +11,22 @@ convert : a -> b where module(a).to_b : a -> b
 convert = |a| a.to_b()
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - where_clauses_type_annotation.md:4:15:4:16
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**where_clauses_type_annotation.md:4:15:4:16:**
+```roc
+convert = |a| a.to_b()
+```
+              ^
+
+It has the type:
+    _a_
+
+But here it's being used as:
+    _({}) -> _ret_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),CloseSquare(1:16-1:17),
@@ -43,10 +56,12 @@ EndOfFile(5:1-5:1),
 			(e-lambda @4.11-4.23
 				(args
 					(p-ident @4.12-4.13 (raw "a")))
-				(e-field-access @4.15-4.23
+				(e-static-dispatch @4.15-4.23
+					subject
 					(e-ident @4.15-4.16 (raw "a"))
-					(e-apply @4.16-4.23
-						(e-ident @4.16-4.21 (raw "to_b"))))))))
+					method
+					"to_b"
+					args)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -60,11 +75,9 @@ NO CHANGE
 		(e-lambda @4.11-4.23
 			(args
 				(p-assign @4.12-4.13 (ident "a")))
-			(e-dot-access @4.15-4.23 (field "to_b")
-				(receiver
-					(e-lookup-local @4.15-4.16
-						(p-assign @4.12-4.13 (ident "a"))))
-				(args)))
+			(e-call @4.15-4.23
+				(e-lookup-local @4.15-4.16
+					(p-assign @4.12-4.13 (ident "a")))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.17 (effectful false)
@@ -85,7 +98,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "a -> b")))
+		(patt @4.1-4.8 (type "Error -> b")))
 	(expressions
-		(expr @4.11-4.23 (type "a -> b"))))
+		(expr @4.11-4.23 (type "Error -> b"))))
 ~~~

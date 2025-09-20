@@ -810,7 +810,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
         const deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
-        defer deserialized_env.deinit();
+        // Note: deserialized_env points into buffer and doesn't own its memory, so we don't call deinit()
+        // The buffer will be freed by the defer on line 807
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);

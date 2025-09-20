@@ -61,10 +61,12 @@ EndOfFile(8:1-8:1),
 				(e-string-part @3.55-3.55 (raw ""))
 				(e-ident @3.57-3.61 (raw "name"))
 				(e-string-part @3.62-3.64 (raw " ("))
-				(e-field-access @3.66-3.78
+				(e-static-dispatch @3.66-3.78
+					subject
 					(e-ident @3.66-3.69 (raw "age"))
-					(e-apply @3.69-3.78
-						(e-ident @3.69-3.76 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string-part @3.79-3.86 (raw ") from "))
 				(e-ident @3.88-3.92 (raw "city"))
 				(e-string-part @3.93-3.93 (raw ""))))
@@ -166,11 +168,9 @@ match ... {
 						(e-lookup-local @3.57-3.61
 							(p-assign @3.17-3.21 (ident "name")))
 						(e-literal @3.62-3.64 (string " ("))
-						(e-dot-access @3.66-3.78 (field "to_str")
-							(receiver
-								(e-lookup-local @3.66-3.69
-									(p-assign @3.23-3.26 (ident "age"))))
-							(args))
+						(e-call @3.66-3.78
+							(e-lookup-local @3.66-3.69
+								(p-assign @3.23-3.26 (ident "age"))))
 						(e-literal @3.79-3.86 (string ") from "))
 						(e-lookup-local @3.88-3.92
 							(p-assign @3.42-3.46 (ident "city")))

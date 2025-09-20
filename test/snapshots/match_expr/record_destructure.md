@@ -37,10 +37,12 @@ EndOfFile(6:1-6:1),
 				(e-string-part @2.23-2.23 (raw ""))
 				(e-ident @2.25-2.29 (raw "name"))
 				(e-string-part @2.30-2.34 (raw " is "))
-				(e-field-access @2.36-2.48
+				(e-static-dispatch @2.36-2.48
+					subject
 					(e-ident @2.36-2.39 (raw "age"))
-					(e-apply @2.39-2.48
-						(e-ident @2.39-2.46 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string-part @2.49-2.59 (raw " years old"))))
 		(branch @3.5-3.68
 			(p-record @3.5-3.32
@@ -91,11 +93,9 @@ match ... {
 						(e-lookup-local @2.25-2.29
 							(p-assign @2.7-2.11 (ident "name")))
 						(e-literal @2.30-2.34 (string " is "))
-						(e-dot-access @2.36-2.48 (field "to_str")
-							(receiver
-								(e-lookup-local @2.36-2.39
-									(p-assign @2.13-2.16 (ident "age"))))
-							(args))
+						(e-call @2.36-2.48
+							(e-lookup-local @2.36-2.39
+								(p-assign @2.13-2.16 (ident "age"))))
 						(e-literal @2.49-2.59 (string " years old")))))
 			(branch
 				(patterns

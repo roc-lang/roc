@@ -82,14 +82,16 @@ EndOfFile(7:1-7:1),
 					(p-underscore))
 				(e-apply @6.13-6.55
 					(e-ident @6.13-6.24 (raw "processDict"))
-					(e-field-access @6.25-6.54
+					(e-static-dispatch @6.25-6.54
+						subject
 						(e-apply @6.25-6.37
 							(e-ident @6.25-6.35 (raw "Dict.empty")))
-						(e-apply @6.37-6.54
-							(e-ident @6.37-6.44 (raw "insert"))
-							(e-string @6.45-6.50
-								(e-string-part @6.46-6.49 (raw "one")))
-							(e-int @6.52-6.53 (raw "1")))))))))
+						method
+						"insert"
+						args
+						(e-string @6.45-6.50
+							(e-string-part @6.46-6.49 (raw "one")))
+						(e-int @6.52-6.53 (raw "1"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -123,14 +125,12 @@ NO CHANGE
 				(e-call @6.13-6.55
 					(e-lookup-local @6.13-6.24
 						(p-assign @4.1-4.12 (ident "processDict")))
-					(e-dot-access @6.25-6.54 (field "insert")
-						(receiver
-							(e-call @6.25-6.37
-								(e-runtime-error (tag "ident_not_in_scope"))))
-						(args
-							(e-string @6.45-6.50
-								(e-literal @6.46-6.49 (string "one")))
-							(e-int @6.52-6.53 (value "1")))))))))
+					(e-call @6.25-6.54
+						(e-call @6.25-6.37
+							(e-runtime-error (tag "ident_not_in_scope")))
+						(e-string @6.45-6.50
+							(e-literal @6.46-6.49 (string "one")))
+						(e-int @6.52-6.53 (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

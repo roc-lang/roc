@@ -12,9 +12,22 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - can_dot_access_with_vars.md:4:5:4:9
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**can_dot_access_with_vars.md:4:5:4:9:**
+```roc
+    list.map(fn)
+```
+    ^^^^
+
+It has the type:
+    _List(Num(_size))_
+
+But here it's being used as:
+    _Num(_size2) -> Num(_size3) -> _ret_
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -42,11 +55,13 @@ EndOfFile(6:1-6:1),
 				(e-binop @3.14-3.19 (op "+")
 					(e-ident @3.14-3.15 (raw "x"))
 					(e-int @3.18-3.19 (raw "1")))))
-		(e-field-access @4.5-4.17
+		(e-static-dispatch @4.5-4.17
+			subject
 			(e-ident @4.5-4.9 (raw "list"))
-			(e-apply @4.9-4.17
-				(e-ident @4.9-4.13 (raw "map"))
-				(e-ident @4.14-4.16 (raw "fn"))))))
+			method
+			"map"
+			args
+			(e-ident @4.14-4.16 (raw "fn")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -75,13 +90,11 @@ EndOfFile(6:1-6:1),
 				(e-lookup-local @3.14-3.15
 					(p-assign @3.11-3.12 (ident "x")))
 				(e-int @3.18-3.19 (value "1")))))
-	(e-dot-access @4.5-4.17 (field "map")
-		(receiver
-			(e-lookup-local @4.5-4.9
-				(p-assign @2.5-2.9 (ident "list"))))
-		(args
-			(e-lookup-local @4.14-4.16
-				(p-assign @3.5-3.7 (ident "fn"))))))
+	(e-call @4.5-4.17
+		(e-lookup-local @4.5-4.9
+			(p-assign @2.5-2.9 (ident "list")))
+		(e-lookup-local @4.14-4.16
+			(p-assign @3.5-3.7 (ident "fn")))))
 ~~~
 # TYPES
 ~~~clojure

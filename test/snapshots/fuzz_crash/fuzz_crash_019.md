@@ -135,6 +135,8 @@ PARSE ERROR - fuzz_crash_019.md:60:16:60:16
 PARSE ERROR - fuzz_crash_019.md:62:5:62:5
 PARSE ERROR - fuzz_crash_019.md:63:7:63:7
 PARSE ERROR - fuzz_crash_019.md:66:12:66:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_019.md:105:71:105:72
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_019.md:105:72:105:76
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
@@ -175,6 +177,9 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
+NOT IMPLEMENTED - :0:0:0:0
+UNRECOGNIZED SYNTAX - fuzz_crash_019.md:105:71:105:72
+UNRECOGNIZED SYNTAX - fuzz_crash_019.md:105:72:105:76
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:6:108:8
@@ -264,6 +269,28 @@ This is an unexpected parsing error. Please check your syntax.
 		(1, 2, 3)123
 ```
 		         ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:105:71:105:72:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                                     ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.ned** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_019.md:105:72:105:76:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                                      ^^^^
 
 
 **UNDECLARED TYPE**
@@ -717,6 +744,33 @@ Is there an `import` or `exposing` missing up-top?
 ```
 	^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_019.md:105:71:105:72:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                                     ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_019.md:105:72:105:76:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                                      ^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
@@ -1296,19 +1350,20 @@ EndOfFile(122:1-122:1),
 								(e-binop @105.47-105.54 (op "<=")
 									(e-int @105.47-105.49 (raw "12"))
 									(e-int @105.53-105.54 (raw "3")))))
-						(e-field-access @105.55-105.85
-							(e-field-access @105.55-105.79
-								(e-field-access @105.55-105.72
-									(e-question-suffix @105.55-105.66
-										(e-apply @105.55-105.65
-											(e-ident @105.55-105.59 (raw "e_fn"))
-											(e-ident @105.60-105.64 (raw "arg1"))))
-									(e-question-suffix @105.66-105.72
-										(e-apply @105.66-105.71
-											(e-ident @105.66-105.69 (raw "od")))))
-								(e-question-suffix @105.72-105.79
-									(e-apply @105.72-105.78
-										(e-ident @105.72-105.76 (raw "ned")))))
+						(e-static-dispatch @105.55-105.71
+							subject
+							(e-question-suffix @105.55-105.66
+								(e-apply @105.55-105.65
+									(e-ident @105.55-105.59 (raw "e_fn"))
+									(e-ident @105.60-105.64 (raw "arg1"))))
+							method
+							"od"
+							args)
+						(e-malformed @105.71-105.72 (reason "expr_unexpected_token"))
+						(e-malformed @105.72-105.76 (reason "expr_unexpected_token"))
+						(e-field-access @105.76-105.85
+							(e-question-suffix @105.76-105.79
+								(e-tuple @105.76-105.78))
 							(e-question-suffix @105.79-105.85
 								(e-ident @105.79-105.84 (raw "recd"))))
 						(e-apply @106.2-110.3
@@ -1461,7 +1516,8 @@ ma = |_| {
 		[1, 2, 3],
 	)
 	b ?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
-	e_fn(arg1)?.od()?.ned()?.recd?
+	e_fn(arg1)?.od()
+			()?.recd?
 	Stdo!(
 		"Ho${ #
 			r(nu) # xpr
@@ -1755,14 +1811,17 @@ expect {
 								(e-binop @105.47-105.54 (op "le")
 									(e-int @105.47-105.49 (value "12"))
 									(e-int @105.53-105.54 (value "3"))))))
-					(s-expr @105.55-105.85
-						(e-dot-access @105.55-105.85 (field "unknown")
+					(s-expr @105.55-105.71
+						(e-call @105.55-105.71
+							(e-runtime-error (tag "not_implemented"))))
+					(s-expr @105.71-105.72
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @105.72-105.76
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @105.76-105.85
+						(e-dot-access @105.76-105.85 (field "unknown")
 							(receiver
-								(e-dot-access @105.55-105.79 (field "unknown")
-									(receiver
-										(e-dot-access @105.55-105.72 (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+								(e-runtime-error (tag "not_implemented")))))
 					(e-tag @106.2-110.3 (name "Stdo!")
 						(args
 							(e-string @107.3-109.6

@@ -8,12 +8,54 @@ type=expr
 foo.bar(a, b, c)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - static_dispatch_basic.md:1:1:1:4
+UNDEFINED VARIABLE - static_dispatch_basic.md:1:9:1:10
+UNDEFINED VARIABLE - static_dispatch_basic.md:1:12:1:13
+UNDEFINED VARIABLE - static_dispatch_basic.md:1:15:1:16
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize static_dispatch expression
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**static_dispatch_basic.md:1:1:1:4:**
+```roc
+foo.bar(a, b, c)
+```
+^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_basic.md:1:9:1:10:**
+```roc
+foo.bar(a, b, c)
+```
+        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_basic.md:1:12:1:13:**
+```roc
+foo.bar(a, b, c)
+```
+           ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `c` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_basic.md:1:15:1:16:**
+```roc
+foo.bar(a, b, c)
+```
+              ^
+
 
 # TOKENS
 ~~~zig
@@ -26,7 +68,7 @@ EndOfFile(2:1-2:1),
 	subject
 	(e-ident @1.1-1.4 (raw "foo"))
 	method
-	".bar"
+	"bar"
 	args
 	(e-ident @1.9-1.10 (raw "a"))
 	(e-ident @1.12-1.13 (raw "b"))
@@ -38,9 +80,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-call @1.1-1.17
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-1.17 (type "_d"))
 ~~~

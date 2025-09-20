@@ -103,10 +103,12 @@ EndOfFile(10:1-10:1),
 				(e-string-part @7.55-7.71 (raw "renamed nested: "))
 				(e-ident @7.73-7.82 (raw "firstName"))
 				(e-string-part @7.83-7.85 (raw " ("))
-				(e-field-access @7.87-7.103
+				(e-static-dispatch @7.87-7.103
+					subject
 					(e-ident @7.87-7.94 (raw "userAge"))
-					(e-apply @7.94-7.103
-						(e-ident @7.94-7.101 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string-part @7.104-7.105 (raw ")"))))
 		(branch @8.5-8.25
 			(p-record @8.5-8.7)
@@ -259,11 +261,9 @@ match ... {
 						(e-lookup-local @7.73-7.82
 							(p-assign @7.23-7.32 (ident "firstName")))
 						(e-literal @7.83-7.85 (string " ("))
-						(e-dot-access @7.87-7.103 (field "to_str")
-							(receiver
-								(e-lookup-local @7.87-7.94
-									(p-assign @7.39-7.46 (ident "userAge"))))
-							(args))
+						(e-call @7.87-7.103
+							(e-lookup-local @7.87-7.94
+								(p-assign @7.39-7.46 (ident "userAge"))))
 						(e-literal @7.104-7.105 (string ")")))))
 			(branch
 				(patterns

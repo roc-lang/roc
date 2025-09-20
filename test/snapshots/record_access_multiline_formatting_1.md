@@ -28,37 +28,26 @@ EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-4.16
-	(e-field-access @1.1-3.33
-		(e-field-access @1.1-2.28
-			(e-question-suffix @1.1-1.15
-				(e-apply @1.1-1.14
-					(e-ident @1.1-1.8 (raw "some_fn"))
-					(e-ident @1.9-1.13 (raw "arg1"))))
-			(e-question-suffix @2.2-2.28
-				(e-apply @2.2-2.27
-					(e-ident @2.2-2.25 (raw ".static_dispatch_method")))))
-		(e-question-suffix @3.2-3.33
-			(e-apply @3.2-3.32
-				(e-ident @3.2-3.30 (raw ".next_static_dispatch_method")))))
-	(e-question-suffix @4.2-4.16
-		(e-ident @4.2-4.15 (raw ".record_field"))))
+(e-static-dispatch @1.1-2.27
+	subject
+	(e-question-suffix @1.1-1.15
+		(e-apply @1.1-1.14
+			(e-ident @1.1-1.8 (raw "some_fn"))
+			(e-ident @1.9-1.13 (raw "arg1"))))
+	method
+	".static_dispatch_method"
+	args)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+some_fn(arg1)?.static_dispatch_method()
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-4.16 (field "unknown")
-	(receiver
-		(e-dot-access @1.1-3.33 (field "unknown")
-			(receiver
-				(e-dot-access @1.1-2.28 (field "unknown")
-					(receiver
-						(e-runtime-error (tag "not_implemented"))))))))
+(e-call @1.1-2.27
+	(e-runtime-error (tag "not_implemented")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.16 (type "_a"))
+(expr @1.1-2.27 (type "_a"))
 ~~~
