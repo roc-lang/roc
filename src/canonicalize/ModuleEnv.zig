@@ -45,6 +45,8 @@ all_statements: CIR.Statement.Span,
 exports: CIR.Def.Span,
 /// All external declarations referenced in this module
 external_decls: CIR.ExternalDecl.SafeList,
+/// Static dispatch nodes to resolve after type checking
+static_dispatches: collections.SafeList(CIR.Expr.Idx),
 /// Store for interned module imports
 imports: CIR.Import.Store,
 /// The module's name as a string
@@ -58,11 +60,11 @@ store: NodeStore,
 
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
-    _ = gpa; // unused since we don't create new allocations
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
+    self.static_dispatches = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 16);
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
@@ -86,6 +88,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
+        .static_dispatches = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
@@ -1064,6 +1067,7 @@ pub const Serialized = struct {
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
+    static_dispatches: collections.SafeList(CIR.Expr.Idx), // Will be re-initialized during deserialization
     imports: CIR.Import.Store.Serialized,
     module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
@@ -1122,6 +1126,7 @@ pub const Serialized = struct {
             .all_statements = self.all_statements,
             .exports = self.exports,
             .external_decls = self.external_decls.deserialize(offset).*,
+            .static_dispatches = collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 16) catch unreachable,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,

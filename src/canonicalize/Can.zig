@@ -96,6 +96,8 @@ scratch_seen_record_fields: base.Scratch(SeenRecordField),
 scratch_tags: base.Scratch(types.Tag),
 /// Scratch free variables
 scratch_free_vars: base.Scratch(Pattern.Idx),
+/// List of static dispatch nodes to resolve after type checking
+static_dispatches: collections.SafeList(CIR.Expr.Idx),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -214,6 +216,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .unqualified_nominal_tags = std.StringHashMapUnmanaged(Statement.Idx){},
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .static_dispatches = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 16),
     };
 
     // Top-level scope is not a function boundary
@@ -938,6 +941,9 @@ pub fn canonicalizeFile(
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
+
+    // Copy static_dispatches to ModuleEnv for type checking
+    self.env.static_dispatches = self.static_dispatches;
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
@@ -2716,6 +2722,9 @@ pub fn canonicalizeExpr(
                     .called_via = CalledVia.apply,
                 },
             }, Content{ .flex_var = null }, region);
+
+            // Append this static dispatch to the list for later processing
+            _ = try self.static_dispatches.append(self.env.gpa, expr_idx);
 
             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
