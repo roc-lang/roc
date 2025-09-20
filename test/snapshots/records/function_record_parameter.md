@@ -27,10 +27,12 @@ EndOfFile(2:1-2:1),
 		(e-string-part @1.18-1.24 (raw "Hello "))
 		(e-ident @1.26-1.30 (raw "name"))
 		(e-string-part @1.31-1.41 (raw ", you are "))
-		(e-field-access @1.43-1.55
+		(e-static-dispatch @1.43-1.55
+			subject
 			(e-ident @1.43-1.46 (raw "age"))
-			(e-apply @1.46-1.55
-				(e-ident @1.46-1.53 (raw "to_str"))))
+			method
+			"to_str"
+			args)
 		(e-string-part @1.56-1.66 (raw " years old"))))
 ~~~
 # FORMATTED
@@ -54,11 +56,9 @@ NO CHANGE
 		(e-lookup-local @1.26-1.30
 			(p-assign @1.4-1.8 (ident "name")))
 		(e-literal @1.31-1.41 (string ", you are "))
-		(e-dot-access @1.43-1.55 (field "to_str")
-			(receiver
-				(e-lookup-local @1.43-1.46
-					(p-assign @1.10-1.13 (ident "age"))))
-			(args))
+		(e-call @1.43-1.55
+			(e-lookup-local @1.43-1.46
+				(p-assign @1.10-1.13 (ident "age"))))
 		(e-literal @1.56-1.66 (string " years old"))))
 ~~~
 # TYPES

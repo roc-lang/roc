@@ -40,11 +40,13 @@ EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-1.13
+(e-static-dispatch @1.1-1.13
+	subject
 	(e-ident @1.1-1.5 (raw "list"))
-	(e-apply @1.5-1.13
-		(e-ident @1.5-1.9 (raw "map"))
-		(e-ident @1.10-1.12 (raw "fn"))))
+	method
+	"map"
+	args
+	(e-ident @1.10-1.12 (raw "fn")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -52,11 +54,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.13 (field "map")
-	(receiver
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(args
-		(e-runtime-error (tag "ident_not_in_scope"))))
+(e-call @1.1-1.13
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure

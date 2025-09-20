@@ -334,6 +334,28 @@ This is an unexpected parsing error. Please check your syntax.
 	                                                  ^^
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **?** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:65:189:66:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                               ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.next_static_dispatch_method** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**fuzz_crash_023.md:189:66:189:94:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -781,6 +803,33 @@ Is there an `import` or `exposing` missing up-top?
 ```
 	                    ^^^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize suffix_single_question expression
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_023.md:189:65:189:66:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                               ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_023.md:189:66:189:94:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
@@ -1658,23 +1707,24 @@ EndOfFile(208:1-208:1),
 										(e-binop @188.81-188.86 (op "/")
 											(e-int @188.81-188.82 (raw "3"))
 											(e-int @188.85-188.86 (raw "5")))))))
-						(s-decl @189.2-189.111
+						(s-decl @189.2-189.65
 							(p-ident @189.2-189.23 (raw "static_dispatch_style"))
-							(e-field-access @189.26-189.111
-								(e-field-access @189.26-189.97
-									(e-field-access @189.26-189.66
-										(e-question-suffix @189.26-189.40
-											(e-apply @189.26-189.39
-												(e-ident @189.26-189.33 (raw "some_fn"))
-												(e-ident @189.34-189.38 (raw "arg1"))))
-										(e-question-suffix @189.40-189.66
-											(e-apply @189.40-189.65
-												(e-ident @189.40-189.63 (raw "static_dispatch_method")))))
-									(e-question-suffix @189.66-189.97
-										(e-apply @189.66-189.96
-											(e-ident @189.66-189.94 (raw "next_static_dispatch_method")))))
-								(e-question-suffix @189.97-189.111
-									(e-ident @189.97-189.110 (raw "record_field")))))
+							(e-static-dispatch @189.26-189.65
+								subject
+								(e-question-suffix @189.26-189.40
+									(e-apply @189.26-189.39
+										(e-ident @189.26-189.33 (raw "some_fn"))
+										(e-ident @189.34-189.38 (raw "arg1"))))
+								method
+								"static_dispatch_method"
+								args))
+						(e-malformed @189.65-189.66 (reason "expr_unexpected_token"))
+						(e-malformed @189.66-189.94 (reason "expr_unexpected_token"))
+						(e-field-access @189.94-189.111
+							(e-question-suffix @189.94-189.97
+								(e-tuple @189.94-189.96))
+							(e-question-suffix @189.97-189.111
+								(e-ident @189.97-189.110 (raw "record_field"))))
 						(e-question-suffix @190.2-190.29
 							(e-apply @190.2-190.28
 								(e-ident @190.2-190.14 (raw "Stdout.line!"))
@@ -1903,7 +1953,8 @@ main! = |_| { # Yeah I can leave a comment here
 		[1, 2, 3],
 	)
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()
+			()?.record_field?
 	Stdout.line!(interpolated)?
 	Stdout.line!(
 		"How about ${ # Comment after string interpolation open
@@ -2341,15 +2392,18 @@ expect {
 									(e-binop @188.81-188.86 (op "div")
 										(e-int @188.81-188.82 (value "3"))
 										(e-int @188.85-188.86 (value "5")))))))
-					(s-let @189.2-189.111
+					(s-let @189.2-189.65
 						(p-assign @189.2-189.23 (ident "static_dispatch_style"))
-						(e-dot-access @189.26-189.111 (field "unknown")
+						(e-call @189.26-189.65
+							(e-runtime-error (tag "not_implemented"))))
+					(s-expr @189.65-189.66
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @189.66-189.94
+						(e-runtime-error (tag "expr_not_canonicalized")))
+					(s-expr @189.94-189.111
+						(e-dot-access @189.94-189.111 (field "unknown")
 							(receiver
-								(e-dot-access @189.26-189.97 (field "unknown")
-									(receiver
-										(e-dot-access @189.26-189.66 (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+								(e-runtime-error (tag "not_implemented")))))
 					(s-expr @190.2-190.29
 						(e-runtime-error (tag "not_implemented")))
 					(e-call @191.2-195.3

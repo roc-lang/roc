@@ -13,7 +13,20 @@ stringify = |value| value.to_str()
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**where_clauses_simple_dispatch.md:4:21:4:26:**
+```roc
+stringify = |value| value.to_str()
+```
+                    ^^^^^
+
+It has the type:
+    _a_
+
+But here it's being used as:
+    _({}) -> _ret_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),CloseSquare(1:18-1:19),
@@ -43,10 +56,12 @@ EndOfFile(5:1-5:1),
 			(e-lambda @4.13-4.35
 				(args
 					(p-ident @4.14-4.19 (raw "value")))
-				(e-field-access @4.21-4.35
+				(e-static-dispatch @4.21-4.35
+					subject
 					(e-ident @4.21-4.26 (raw "value"))
-					(e-apply @4.26-4.35
-						(e-ident @4.26-4.33 (raw "to_str"))))))))
+					method
+					"to_str"
+					args)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -60,11 +75,9 @@ NO CHANGE
 		(e-lambda @4.13-4.35
 			(args
 				(p-assign @4.14-4.19 (ident "value")))
-			(e-dot-access @4.21-4.35 (field "to_str")
-				(receiver
-					(e-lookup-local @4.21-4.26
-						(p-assign @4.14-4.19 (ident "value"))))
-				(args)))
+			(e-call @4.21-4.35
+				(e-lookup-local @4.21-4.26
+					(p-assign @4.14-4.19 (ident "value")))))
 		(annotation @4.1-4.10
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
@@ -85,7 +98,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.10 (type "a -> Str")))
+		(patt @4.1-4.10 (type "Error -> Str")))
 	(expressions
-		(expr @4.13-4.35 (type "a -> Str"))))
+		(expr @4.13-4.35 (type "Error -> Str"))))
 ~~~

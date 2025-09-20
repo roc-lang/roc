@@ -45,10 +45,12 @@ EndOfFile(4:1-4:1),
 				(e-string-part @2.42-2.47 (raw "User "))
 				(e-ident @2.49-2.57 (raw "userName"))
 				(e-string-part @2.58-2.62 (raw " is "))
-				(e-field-access @2.64-2.80
+				(e-static-dispatch @2.64-2.80
+					subject
 					(e-ident @2.64-2.71 (raw "userAge"))
-					(e-apply @2.71-2.80
-						(e-ident @2.71-2.78 (raw "to_str"))))
+					method
+					"to_str"
+					args)
 				(e-string-part @2.81-2.91 (raw " years old"))))))
 ~~~
 # FORMATTED
@@ -81,11 +83,9 @@ match person {
 						(e-lookup-local @2.49-2.57
 							(p-assign @2.13-2.21 (ident "userName")))
 						(e-literal @2.58-2.62 (string " is "))
-						(e-dot-access @2.64-2.80 (field "to_str")
-							(receiver
-								(e-lookup-local @2.64-2.71
-									(p-assign @2.28-2.35 (ident "userAge"))))
-							(args))
+						(e-call @2.64-2.80
+							(e-lookup-local @2.64-2.71
+								(p-assign @2.28-2.35 (ident "userAge"))))
 						(e-literal @2.81-2.91 (string " years old"))))))))
 ~~~
 # TYPES

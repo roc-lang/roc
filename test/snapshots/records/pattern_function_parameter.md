@@ -30,15 +30,19 @@ EndOfFile(2:1-2:1),
 			(e-string-part @1.38-1.44 (raw "User: "))
 			(e-ident @1.46-1.50 (raw "name"))
 			(e-string-part @1.51-1.53 (raw " ("))
-			(e-field-access @1.55-1.66
+			(e-static-dispatch @1.55-1.66
+				subject
 				(e-ident @1.55-1.58 (raw "age"))
-				(e-apply @1.58-1.66
-					(e-ident @1.58-1.64 (raw "toStr"))))
+				method
+				"toStr"
+				args)
 			(e-string-part @1.67-1.90 (raw " years old) - Contact: "))
-			(e-field-access @1.92-1.107
+			(e-static-dispatch @1.92-1.107
+				subject
 				(e-ident @1.92-1.97 (raw "email"))
-				(e-apply @1.97-1.107
-					(e-ident @1.97-1.105 (raw "display"))))
+				method
+				"display"
+				args)
 			(e-string-part @1.108-1.108 (raw "")))))
 ~~~
 # FORMATTED
@@ -68,17 +72,13 @@ NO CHANGE
 				(e-lookup-local @1.46-1.50
 					(p-assign @1.17-1.21 (ident "name")))
 				(e-literal @1.51-1.53 (string " ("))
-				(e-dot-access @1.55-1.66 (field "toStr")
-					(receiver
-						(e-lookup-local @1.55-1.58
-							(p-assign @1.23-1.26 (ident "age"))))
-					(args))
+				(e-call @1.55-1.66
+					(e-lookup-local @1.55-1.58
+						(p-assign @1.23-1.26 (ident "age"))))
 				(e-literal @1.67-1.90 (string " years old) - Contact: "))
-				(e-dot-access @1.92-1.107 (field "display")
-					(receiver
-						(e-lookup-local @1.92-1.97
-							(p-assign @1.28-1.33 (ident "email"))))
-					(args))
+				(e-call @1.92-1.107
+					(e-lookup-local @1.92-1.97
+						(p-assign @1.28-1.33 (ident "email"))))
 				(e-literal @1.108-1.108 (string ""))))))
 ~~~
 # TYPES

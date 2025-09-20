@@ -44,10 +44,12 @@ EndOfFile(10:1-10:1),
 				(e-block @3.13-9.2
 					(statements
 						(s-dbg @5.5-5.21
-							(e-field-access @5.9-5.21
+							(e-static-dispatch @5.9-5.21
+								subject
 								(e-ident @5.9-5.12 (raw "num"))
-								(e-apply @5.12-5.21
-									(e-ident @5.12-5.19 (raw "to_str")))))
+								method
+								"to_str"
+								args))
 						(s-dbg @8.5-8.13
 							(e-tuple @8.8-8.13
 								(e-ident @8.9-8.12 (raw "num"))))))))))
@@ -74,11 +76,9 @@ foo = |num| {
 				(p-assign @3.8-3.11 (ident "num")))
 			(e-block @3.13-9.2
 				(s-dbg @5.5-5.21
-					(e-dot-access @5.9-5.21 (field "to_str")
-						(receiver
-							(e-lookup-local @5.9-5.12
-								(p-assign @3.8-3.11 (ident "num"))))
-						(args)))
+					(e-call @5.9-5.21
+						(e-lookup-local @5.9-5.12
+							(p-assign @3.8-3.11 (ident "num")))))
 				(e-dbg @8.5-8.13
 					(e-lookup-local @8.9-8.12
 						(p-assign @3.8-3.11 (ident "num"))))))))

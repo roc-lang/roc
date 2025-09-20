@@ -15,7 +15,20 @@ main! = |_| processList(["one","two","three"])
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_application_basic.md:3:15:3:24:**
+```roc
+processList : List(Str) -> U64
+```
+              ^^^^^^^^^
+
+It has the type:
+    _List(Str)_
+
+But here it's being used as:
+    _({}) -> _ret_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -50,10 +63,12 @@ EndOfFile(7:1-7:1),
 			(e-lambda @4.15-4.32
 				(args
 					(p-ident @4.16-4.20 (raw "list")))
-				(e-field-access @4.22-4.32
+				(e-static-dispatch @4.22-4.32
+					subject
 					(e-ident @4.22-4.26 (raw "list"))
-					(e-apply @4.26-4.32
-						(e-ident @4.26-4.30 (raw "len"))))))
+					method
+					"len"
+					args)))
 		(s-decl @6.1-6.47
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.47
@@ -86,11 +101,9 @@ main! = |_| processList(["one", "two", "three"])
 		(e-lambda @4.15-4.32
 			(args
 				(p-assign @4.16-4.20 (ident "list")))
-			(e-dot-access @4.22-4.32 (field "len")
-				(receiver
-					(e-lookup-local @4.22-4.26
-						(p-assign @4.16-4.20 (ident "list"))))
-				(args)))
+			(e-call @4.22-4.32
+				(e-lookup-local @4.22-4.26
+					(p-assign @4.16-4.20 (ident "list")))))
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)
