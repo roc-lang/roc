@@ -2684,14 +2684,41 @@ pub fn canonicalizeExpr(
                 .free_vars = null,
             };
         },
-        .static_dispatch => |_| {
-            // Static dispatch not yet implemented in canonicalization
-            const feature = try self.env.insertString("canonicalize static_dispatch expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .static_dispatch => |sd| {
+            const region = self.parse_ir.tokenizedRegionToRegion(sd.region);
+
+            // Mark the start of scratch expressions and free vars
+            const free_vars_start = self.scratch_free_vars.top();
+            const scratch_top = self.env.store.scratchExprTop();
+
+            // Canonicalize the subject expression and add as first element
+            const can_subject = try self.canonicalizeExpr(sd.subject) orelse {
+                self.env.store.clearScratchExprsFrom(scratch_top);
+                return null;
+            };
+            try self.env.store.addScratchExpr(can_subject.idx);
+
+            // Canonicalize and add all arguments
+            const args_slice = self.parse_ir.store.exprSlice(sd.args);
+            for (args_slice) |arg| {
+                if (try self.canonicalizeExpr(arg)) |can_arg| {
+                    try self.env.store.addScratchExpr(can_arg.idx);
+                }
+            }
+
+            // Create span from scratch expressions
+            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+            // Create a function call marked as apply (static dispatch is just function application syntax)
+            const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
+                .e_call = .{
+                    .args = args_span,
+                    .called_via = CalledVia.apply,
+                },
+            }, Content{ .flex_var = null }, region);
+
+            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .local_dispatch => |_| {
             const feature = try self.env.insertString("canonicalize local_dispatch expression");
