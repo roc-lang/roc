@@ -169,6 +169,7 @@ pub fn deinit(
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
     self.unqualified_nominal_tags.deinit(gpa);
+    self.static_dispatches.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -942,8 +943,11 @@ pub fn canonicalizeFile(
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
-    // Copy static_dispatches to ModuleEnv for type checking
-    self.env.static_dispatches = self.static_dispatches;
+    // Copy static_dispatches contents to ModuleEnv for type checking
+    // We need to copy the items, not transfer ownership
+    for (self.static_dispatches.items.items) |item| {
+        _ = try self.env.static_dispatches.append(self.env.gpa, item);
+    }
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();

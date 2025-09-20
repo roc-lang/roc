@@ -60,11 +60,12 @@ store: NodeStore,
 
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
+    _ = gpa; // gpa not needed anymore since static_dispatches is initialized in init()
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
-    self.static_dispatches = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 16);
+    // Note: static_dispatches already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
@@ -101,6 +102,7 @@ pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
+    self.static_dispatches.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();

@@ -364,12 +364,20 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // diagnostics to provide better error messages. But for tests, we want to fail early
     // on syntax errors to catch issues like semicolons that shouldn't be in Roc code.
     if (parse_ast.tokenize_diagnostics.items.len > 0) {
-        // Found tokenization errors in test code
+        // Found tokenization errors in test code - cleanup before returning
+        parse_ast.deinit(allocator);
+        module_env.deinit();
+        allocator.destroy(parse_ast);
+        allocator.destroy(module_env);
         return error.TokenizeError;
     }
 
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        // Found parse errors in test code
+        // Found parse errors in test code - cleanup before returning
+        parse_ast.deinit(allocator);
+        module_env.deinit();
+        allocator.destroy(parse_ast);
+        allocator.destroy(module_env);
         return error.SyntaxError;
     }
 
