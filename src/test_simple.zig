@@ -1,5 +1,5 @@
 const std = @import("std");
-const gt = @import("greenthreads.zig");
+const gt = @import("greenthreads/greenthreads.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;

@@ -20,11 +20,18 @@ test "guard page test" {
     // Install signal handler for both SIGSEGV and SIGBUS
     var old_segv: c.struct_sigaction = undefined;
     var old_bus: c.struct_sigaction = undefined;
-    var new_action = c.struct_sigaction{
-        .__sigaction_u = .{ .__sa_handler = handleSegfault },
-        .sa_flags = 0,
-        .sa_mask = undefined,
-    };
+    var new_action = if (@import("builtin").os.tag == .macos)
+        c.struct_sigaction{
+            .__sigaction_u = .{ .__sa_handler = handleSegfault },
+            .sa_flags = 0,
+            .sa_mask = undefined,
+        }
+    else
+        c.struct_sigaction{
+            .sa_handler = handleSegfault,
+            .sa_flags = 0,
+            .sa_mask = undefined,
+        };
     _ = c.sigemptyset(&new_action.sa_mask);
     
     var ret = c.sigaction(c.SIGSEGV, &new_action, &old_segv);

@@ -10,6 +10,8 @@ const STACK_ALIGN = 16;
 
 const PAGE_SIZE = switch (builtin.os.tag) {
     .macos => if (builtin.cpu.arch == .aarch64) 16384 else 4096,
+    .linux => 4096,
+    .windows => 4096,
     else => 4096,
 };
 
@@ -20,7 +22,7 @@ pub const Config = struct {
 extern fn switch_context_impl(current: [*]u64, target: [*]u64) void;
 comptime {
     if (builtin.cpu.arch == .aarch64) {
-        asm (@embedFile("switch_context.s"));
+        asm (@embedFile("switch_context_aarch64.s"));
     } else if (builtin.cpu.arch == .x86_64) {
         asm (@embedFile("switch_context_x64.s"));
     }
@@ -66,7 +68,13 @@ pub const ThreadStore = struct {
 
     pub fn deinit(self: *ThreadStore) void {
         for (self.threads.items) |thread| {
-            os.munmap(@alignCast(thread.stack_memory));
+            switch (builtin.os.tag) {
+                .windows => {
+                    const windows = std.os.windows;
+                    windows.VirtualFree(thread.stack_memory.ptr, 0, windows.MEM_RELEASE);
+                },
+                else => os.munmap(@alignCast(thread.stack_memory)),
+            }
         }
         self.threads.deinit(self.allocator);
     }
@@ -76,17 +84,48 @@ pub const ThreadStore = struct {
         const stack_size = self.config.stack_size;
         const total_size = stack_size + guard_size;
         
-        const memory = try os.mmap(
-            null,
-            total_size,
-            os.PROT.READ | os.PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        );
-        errdefer os.munmap(memory);
+        const memory = switch (builtin.os.tag) {
+            .windows => blk: {
+                const windows = std.os.windows;
+                const mem = try windows.VirtualAlloc(
+                    null,
+                    total_size,
+                    windows.MEM_COMMIT | windows.MEM_RESERVE,
+                    windows.PAGE_READWRITE,
+                );
+                break :blk @as([*]u8, @ptrCast(mem))[0..total_size];
+            },
+            else => try os.mmap(
+                null,
+                total_size,
+                os.PROT.READ | os.PROT.WRITE,
+                .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+                -1,
+                0,
+            ),
+        };
+        errdefer switch (builtin.os.tag) {
+            .windows => {
+                const windows = std.os.windows;
+                windows.VirtualFree(memory.ptr, 0, windows.MEM_RELEASE);
+            },
+            else => os.munmap(memory),
+        };
 
-        try os.mprotect(memory[0..guard_size], os.PROT.NONE);
+        switch (builtin.os.tag) {
+            .windows => {
+                const windows = std.os.windows;
+                var old_protect: windows.DWORD = undefined;
+                const result = windows.VirtualProtect(
+                    memory.ptr,
+                    guard_size,
+                    windows.PAGE_NOACCESS,
+                    &old_protect,
+                );
+                if (result == 0) return error.MemoryProtectionFailed;
+            },
+            else => try os.mprotect(memory[0..guard_size], os.PROT.NONE),
+        }
 
         var thread = GreenThread{
             .context = std.mem.zeroes([CONTEXT_SIZE]u64),
@@ -275,7 +314,9 @@ test "thread with yield" {
 }
 
 test "guard page catches stack overflow" {
-    // Test that guard pages actually work by directly testing mmap'd memory
+    // Skip on unsupported platforms
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    
     const c = @cImport({
         @cInclude("signal.h");
         @cInclude("setjmp.h");
@@ -295,11 +336,22 @@ test "guard page catches stack overflow" {
     // Install signal handlers
     var old_segv: c.struct_sigaction = undefined;
     var old_bus: c.struct_sigaction = undefined;
-    var new_action = c.struct_sigaction{
-        .__sigaction_u = .{ .__sa_handler = TestState.handleFault },
-        .sa_flags = 0,
-        .sa_mask = undefined,
-    };
+    
+    var new_action: c.struct_sigaction = undefined;
+    if (builtin.os.tag == .macos) {
+        new_action = c.struct_sigaction{
+            .__sigaction_u = .{ .__sa_handler = TestState.handleFault },
+            .sa_flags = 0,
+            .sa_mask = undefined,
+        };
+    } else {
+        new_action = c.struct_sigaction{
+            .sa_handler = TestState.handleFault,
+            .sa_flags = 0,
+            .sa_mask = undefined,
+        };
+    }
+    
     _ = c.sigemptyset(&new_action.sa_mask);
     
     _ = c.sigaction(c.SIGSEGV, &new_action, &old_segv);
@@ -328,7 +380,7 @@ test "guard page catches stack overflow" {
         try os.mprotect(memory[0..guard_size], os.PROT.NONE);
         
         // Try to write to the guard page - should fault
-        memory[guard_size - 1] = 0xFF;
+        memory[0] = 0xFF;
         
         // Should not reach here
         try testing.expect(false);
