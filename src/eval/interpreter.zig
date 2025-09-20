@@ -91,6 +91,7 @@ pub const EvalError = error{
     PatternNotFound,
     GlobalDefinitionNotSupported,
     StringAllocationFailed,
+    MethodNotFound,
     StringReferenceCountCorrupted,
     StringBuiltinFailed,
     StringLiteralCorrupted,
@@ -1162,19 +1163,116 @@ pub const Interpreter = struct {
             },
 
             .e_dot_access => |dot_access| {
-                // Push work to complete field access after receiver is evaluated
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_dot_access,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .dot_access_field_name = dot_access.field_name },
-                });
+                // Check if this is a method call (static dispatch) or field access
+                if (dot_access.args) |args_span| {
+                    // This is a static dispatch method call
+                    // We need to look up the method based on the type of the receiver
 
-                // Evaluate the receiver expression
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = dot_access.receiver,
-                    .extra = .{ .nothing = {} },
-                });
+                    // TODO: Current implementation is incomplete.
+                    // Proper static dispatch requires:
+                    // 1. Access to type-resolved method information from Check.zig
+                    // 2. Looking up the method based on the receiver's nominal type
+                    // 3. Handling cross-module static dispatch
+                    //
+                    // For now, we do a simple name lookup which works for basic cases
+                    // but doesn't handle methods on nominal types correctly.
+
+                    const method_name = self.env.getIdent(dot_access.field_name);
+                    self.traceInfo("Static dispatch: looking for method '{s}'", .{method_name});
+
+                    // Try to find the method in the current module's definitions
+                    // This is a simplified approach that assumes the method is defined locally
+                    var method_expr_idx: ?CIR.Expr.Idx = null;
+
+                    // Look through all definitions to find the method
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        const pattern = self.env.store.getPattern(def.pattern);
+
+                        // Check if this is an assign pattern with matching name
+                        switch (pattern) {
+                            .assign => |assign| {
+                                const def_name = self.env.getIdent(assign.ident);
+                                if (std.mem.eql(u8, def_name, method_name)) {
+                                    // Found a matching method name
+                                    // Get the expression - need to check if it's a lambda
+                                    const def_expr = self.env.store.getExpr(def.expr);
+                                    switch (def_expr) {
+                                        .e_lambda => {
+                                            method_expr_idx = def.expr;
+                                            self.traceInfo("Found method '{s}' at expr_idx {}", .{ method_name, method_expr_idx.? });
+                                            break;
+                                        },
+                                        else => {
+                                            // Not a function, keep looking
+                                        },
+                                    }
+                                }
+                            },
+                            else => {
+                                // Not an assign pattern, skip
+                            },
+                        }
+                    }
+
+                    if (method_expr_idx == null) {
+                        self.traceError("Static dispatch: method '{s}' not found", .{method_name});
+                        return error.MethodNotFound;
+                    }
+
+                    // Get all the arguments (receiver + provided args)
+                    const provided_args = self.env.store.sliceExpr(args_span);
+                    const total_arg_count: u32 = @intCast(1 + provided_args.len); // +1 for receiver
+
+                    // Schedule the work items in reverse order (LIFO)
+                    // 3. Lambda call (executed last)
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_lambda_call,
+                        .expr_idx = expr_idx,
+                        .extra = .{ .arg_count = total_arg_count },
+                    });
+
+                    // 2. Function (the method)
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = method_expr_idx.?,
+                        .extra = .{ .nothing = {} },
+                    });
+
+                    // 1b. Provided arguments (in reverse order for LIFO)
+                    var i = provided_args.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try self.work_stack.append(WorkItem{
+                            .kind = .w_eval_expr_structural,
+                            .expr_idx = provided_args[i],
+                            .extra = .{ .nothing = {} },
+                        });
+                    }
+
+                    // 1a. Receiver (first argument)
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = dot_access.receiver,
+                        .extra = .{ .nothing = {} },
+                    });
+                } else {
+                    // This is regular field access
+                    // Push work to complete field access after receiver is evaluated
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_dot_access,
+                        .expr_idx = expr_idx,
+                        .extra = .{ .dot_access_field_name = dot_access.field_name },
+                    });
+
+                    // Evaluate the receiver expression
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = dot_access.receiver,
+                        .extra = .{ .nothing = {} },
+                    });
+                }
             },
 
             .e_str_segment => |str_seg| {

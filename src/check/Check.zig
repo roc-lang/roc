@@ -1408,8 +1408,78 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                         }
                     },
                     else => {
-                        // Receiver is not a record, this is a type error
-                        // For now, we'll let unification handle the error
+                        // For other types (tag unions, etc.) with method calls
+                        if (dot_access.args) |args_span| {
+                            // This is a method call on a non-nominal, non-record type
+                            // For now, treat it as a simple function call where the method
+                            // is looked up by name and the receiver is the first argument
+
+                            // Look up the method by name in the current scope
+                            const method_name_str = self.cir.getIdent(dot_access.field_name);
+
+                            // Try to find the method in the current module's definitions
+                            // This is a simplified approach for testing
+                            var method_var: ?Var = null;
+                            const all_defs = self.cir.store.sliceDefs(self.cir.all_defs);
+                            for (all_defs) |def_idx| {
+                                const def = self.cir.store.getDef(def_idx);
+                                const pattern = self.cir.store.getPattern(def.pattern);
+
+                                // Check if this is an assign pattern with matching name
+                                switch (pattern) {
+                                    .assign => |assign| {
+                                        const def_name = self.cir.getIdent(assign.ident);
+                                        if (std.mem.eql(u8, def_name, method_name_str)) {
+                                            // Found a matching method name
+                                            method_var = @as(Var, @enumFromInt(@intFromEnum(def.expr)));
+                                            break;
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            }
+
+                            if (method_var) |found_method| {
+                                // Check all arguments
+                                var i: u32 = 0;
+                                while (i < args_span.span.len) : (i += 1) {
+                                    const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                    does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
+                                }
+
+                                // Create argument list for the function call
+                                var args = std.ArrayList(Var).init(self.gpa);
+                                defer args.deinit();
+
+                                // Add the receiver as the first argument
+                                try args.append(receiver_var);
+
+                                // Add the remaining arguments
+                                i = 0;
+                                while (i < args_span.span.len) : (i += 1) {
+                                    const arg_expr_idx = @as(CIR.Expr.Idx, @enumFromInt(args_span.span.start + i));
+                                    const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                                    try args.append(arg_var);
+                                }
+
+                                // Create a function type for the method call
+                                const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                                const func_content = try self.types.mkFuncUnbound(args.items, dot_access_var);
+                                const expected_func_var = try self.freshFromContent(func_content, expr_region);
+
+                                // Instantiate the found method
+                                const method_instantiated = try self.instantiateVarAnon(found_method, .use_last_var);
+
+                                // Unify with the method type
+                                _ = try self.unify(expected_func_var, method_instantiated);
+                            } else {
+                                // Method not found - set error type
+                                try self.types.setVarContent(@enumFromInt(@intFromEnum(expr_idx)), .err);
+                            }
+                        } else {
+                            // Receiver is not a record and this is field access, not a method call
+                            // For now, we'll let unification handle the error
+                        }
                     },
                 },
                 .flex_var => {

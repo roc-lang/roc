@@ -1812,8 +1812,10 @@ expect {
 									(e-int @105.47-105.49 (value "12"))
 									(e-int @105.53-105.54 (value "3"))))))
 					(s-expr @105.55-105.71
-						(e-call @105.55-105.71
-							(e-runtime-error (tag "not_implemented"))))
+						(e-dot-access @105.55-105.71 (field "od")
+							(receiver
+								(e-runtime-error (tag "not_implemented")))
+							(args)))
 					(s-expr @105.71-105.72
 						(e-runtime-error (tag "expr_not_canonicalized")))
 					(s-expr @105.72-105.76

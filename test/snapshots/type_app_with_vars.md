@@ -13,23 +13,8 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:3:11:3:18
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_with_vars.md:3:11:3:18:**
-```roc
-mapList : List(a), (a -> b) -> List(b)
-```
-          ^^^^^^^
-
-It has the type:
-    _List(a)_
-
-But here it's being used as:
-    _a -> b -> _ret_
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_app_with_vars.md:6:13:6:20:**
@@ -123,11 +108,13 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 			(args
 				(p-assign @4.12-4.16 (ident "list"))
 				(p-assign @4.18-4.20 (ident "fn")))
-			(e-call @4.22-4.34
-				(e-lookup-local @4.22-4.26
-					(p-assign @4.12-4.16 (ident "list")))
-				(e-lookup-local @4.31-4.33
-					(p-assign @4.18-4.20 (ident "fn")))))
+			(e-dot-access @4.22-4.34 (field "map")
+				(receiver
+					(e-lookup-local @4.22-4.26
+						(p-assign @4.12-4.16 (ident "list"))))
+				(args
+					(e-lookup-local @4.31-4.33
+						(p-assign @4.18-4.20 (ident "fn"))))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.39 (effectful false)

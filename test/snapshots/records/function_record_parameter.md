@@ -56,9 +56,11 @@ NO CHANGE
 		(e-lookup-local @1.26-1.30
 			(p-assign @1.4-1.8 (ident "name")))
 		(e-literal @1.31-1.41 (string ", you are "))
-		(e-call @1.43-1.55
-			(e-lookup-local @1.43-1.46
-				(p-assign @1.10-1.13 (ident "age"))))
+		(e-dot-access @1.43-1.55 (field "to_str")
+			(receiver
+				(e-lookup-local @1.43-1.46
+					(p-assign @1.10-1.13 (ident "age"))))
+			(args))
 		(e-literal @1.56-1.66 (string " years old"))))
 ~~~
 # TYPES

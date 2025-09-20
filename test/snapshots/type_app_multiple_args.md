@@ -125,12 +125,14 @@ NO CHANGE
 				(e-call @6.13-6.55
 					(e-lookup-local @6.13-6.24
 						(p-assign @4.1-4.12 (ident "processDict")))
-					(e-call @6.25-6.54
-						(e-call @6.25-6.37
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-string @6.45-6.50
-							(e-literal @6.46-6.49 (string "one")))
-						(e-int @6.52-6.53 (value "1"))))))))
+					(e-dot-access @6.25-6.54 (field "insert")
+						(receiver
+							(e-call @6.25-6.37
+								(e-runtime-error (tag "ident_not_in_scope"))))
+						(args
+							(e-string @6.45-6.50
+								(e-literal @6.46-6.49 (string "one")))
+							(e-int @6.52-6.53 (value "1")))))))))
 ~~~
 # TYPES
 ~~~clojure

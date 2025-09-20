@@ -54,9 +54,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.13
-	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-runtime-error (tag "ident_not_in_scope")))
+(e-dot-access @1.1-1.13 (field "map")
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure

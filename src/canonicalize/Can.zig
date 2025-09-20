@@ -2697,41 +2697,44 @@ pub fn canonicalizeExpr(
         .static_dispatch => |sd| {
             const region = self.parse_ir.tokenizedRegionToRegion(sd.region);
 
-            // Mark the start of scratch expressions and free vars
-            const free_vars_start = self.scratch_free_vars.top();
-            const scratch_top = self.env.store.scratchExprTop();
-
-            // Canonicalize the subject expression and add as first element
+            // Canonicalize the subject expression (receiver)
             const can_subject = try self.canonicalizeExpr(sd.subject) orelse {
-                self.env.store.clearScratchExprsFrom(scratch_top);
                 return null;
             };
-            try self.env.store.addScratchExpr(can_subject.idx);
 
-            // Canonicalize and add all arguments
+            // Get the method name identifier
+            const method_name = if (self.parse_ir.tokens.resolveIdentifier(sd.method_name)) |ident|
+                ident
+            else
+                try self.env.insertIdent(base.Ident.for_text("unknown"));
+
+            // Canonicalize the arguments
+            const scratch_top = self.env.store.scratchExprTop();
             const args_slice = self.parse_ir.store.exprSlice(sd.args);
             for (args_slice) |arg| {
                 if (try self.canonicalizeExpr(arg)) |can_arg| {
                     try self.env.store.addScratchExpr(can_arg.idx);
+                } else {
+                    self.env.store.clearScratchExprsFrom(scratch_top);
+                    return null;
                 }
             }
-
-            // Create span from scratch expressions
+            // Always create an args span for method calls, even if empty
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
-            // Create a function call marked as apply (static dispatch is just function application syntax)
+            // Create a dot access expression with args (method call)
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
-                .e_call = .{
+                .e_dot_access = .{
+                    .receiver = can_subject.idx,
+                    .field_name = method_name,
                     .args = args_span,
-                    .called_via = CalledVia.apply,
                 },
             }, Content{ .flex_var = null }, region);
 
-            // Append this static dispatch to the list for later processing
+            // Append this static dispatch to the list for later processing if needed
             _ = try self.static_dispatches.append(self.env.gpa, expr_idx);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_subject.free_vars };
         },
         .local_dispatch => |_| {
             const feature = try self.env.insertString("canonicalize local_dispatch expression");

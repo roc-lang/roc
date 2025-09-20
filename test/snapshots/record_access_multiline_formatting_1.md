@@ -44,8 +44,9 @@ some_fn(arg1)?.static_dispatch_method()
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-2.27
-	(e-runtime-error (tag "not_implemented")))
+(e-dot-access @1.1-2.27 (field "static_dispatch_method")
+	(receiver
+		(e-runtime-error (tag "not_implemented"))))
 ~~~
 # TYPES
 ~~~clojure

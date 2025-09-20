@@ -2317,8 +2317,10 @@ expect {
 										(e-int @188.85-188.86 (value "5")))))))
 					(s-let @189.2-189.65
 						(p-assign @189.2-189.23 (ident "static_dispatch_style"))
-						(e-call @189.26-189.65
-							(e-runtime-error (tag "not_implemented"))))
+						(e-dot-access @189.26-189.65 (field "static_dispatch_method")
+							(receiver
+								(e-runtime-error (tag "not_implemented")))
+							(args)))
 					(s-expr @189.65-189.66
 						(e-runtime-error (tag "expr_not_canonicalized")))
 					(s-expr @189.66-189.94

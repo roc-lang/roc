@@ -261,9 +261,11 @@ match ... {
 						(e-lookup-local @7.73-7.82
 							(p-assign @7.23-7.32 (ident "firstName")))
 						(e-literal @7.83-7.85 (string " ("))
-						(e-call @7.87-7.103
-							(e-lookup-local @7.87-7.94
-								(p-assign @7.39-7.46 (ident "userAge"))))
+						(e-dot-access @7.87-7.103 (field "to_str")
+							(receiver
+								(e-lookup-local @7.87-7.94
+									(p-assign @7.39-7.46 (ident "userAge"))))
+							(args))
 						(e-literal @7.104-7.105 (string ")")))))
 			(branch
 				(patterns

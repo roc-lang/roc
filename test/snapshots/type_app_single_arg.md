@@ -13,22 +13,9 @@ processList = |list| list.len()
 main! = |_| processList(["one","two"])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_single_arg.md:3:15:3:24
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_single_arg.md:3:15:3:24:**
-```roc
-processList : List(Str) -> U64
-```
-              ^^^^^^^^^
-
-It has the type:
-    _List(Str)_
-
-But here it's being used as:
-    _({}) -> _ret_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -99,9 +86,11 @@ main! = |_| processList(["one", "two"])
 		(e-lambda @4.15-4.32
 			(args
 				(p-assign @4.16-4.20 (ident "list")))
-			(e-call @4.22-4.32
-				(e-lookup-local @4.22-4.26
-					(p-assign @4.16-4.20 (ident "list")))))
+			(e-dot-access @4.22-4.32 (field "len")
+				(receiver
+					(e-lookup-local @4.22-4.26
+						(p-assign @4.16-4.20 (ident "list"))))
+				(args)))
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)

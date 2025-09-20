@@ -12,22 +12,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_dot_access_with_vars.md:4:5:4:9
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_dot_access_with_vars.md:4:5:4:9:**
-```roc
-    list.map(fn)
-```
-    ^^^^
-
-It has the type:
-    _List(Num(_size))_
-
-But here it's being used as:
-    _Num(_size2) -> Num(_size3) -> _ret_
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -90,13 +77,15 @@ EndOfFile(6:1-6:1),
 				(e-lookup-local @3.14-3.15
 					(p-assign @3.11-3.12 (ident "x")))
 				(e-int @3.18-3.19 (value "1")))))
-	(e-call @4.5-4.17
-		(e-lookup-local @4.5-4.9
-			(p-assign @2.5-2.9 (ident "list")))
-		(e-lookup-local @4.14-4.16
-			(p-assign @3.5-3.7 (ident "fn")))))
+	(e-dot-access @4.5-4.17 (field "map")
+		(receiver
+			(e-lookup-local @4.5-4.9
+				(p-assign @2.5-2.9 (ident "list"))))
+		(args
+			(e-lookup-local @4.14-4.16
+				(p-assign @3.5-3.7 (ident "fn"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "_a"))
+(expr @1.1-5.2 (type "Error"))
 ~~~

@@ -11,22 +11,9 @@ stringify : a -> Str where module(a).to_str : a -> Str
 stringify = |value| value.to_str()
 ~~~
 # EXPECTED
-TYPE MISMATCH - where_clauses_simple_dispatch.md:4:21:4:26
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**where_clauses_simple_dispatch.md:4:21:4:26:**
-```roc
-stringify = |value| value.to_str()
-```
-                    ^^^^^
-
-It has the type:
-    _a_
-
-But here it's being used as:
-    _({}) -> _ret_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),CloseSquare(1:18-1:19),
@@ -75,9 +62,11 @@ NO CHANGE
 		(e-lambda @4.13-4.35
 			(args
 				(p-assign @4.14-4.19 (ident "value")))
-			(e-call @4.21-4.35
-				(e-lookup-local @4.21-4.26
-					(p-assign @4.14-4.19 (ident "value")))))
+			(e-dot-access @4.21-4.35 (field "to_str")
+				(receiver
+					(e-lookup-local @4.21-4.26
+						(p-assign @4.14-4.19 (ident "value"))))
+				(args)))
 		(annotation @4.1-4.10
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
@@ -98,7 +87,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.10 (type "Error -> Str")))
+		(patt @4.1-4.10 (type "a -> Str")))
 	(expressions
-		(expr @4.13-4.35 (type "Error -> Str"))))
+		(expr @4.13-4.35 (type "a -> Str"))))
 ~~~

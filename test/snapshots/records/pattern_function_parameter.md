@@ -72,13 +72,17 @@ NO CHANGE
 				(e-lookup-local @1.46-1.50
 					(p-assign @1.17-1.21 (ident "name")))
 				(e-literal @1.51-1.53 (string " ("))
-				(e-call @1.55-1.66
-					(e-lookup-local @1.55-1.58
-						(p-assign @1.23-1.26 (ident "age"))))
+				(e-dot-access @1.55-1.66 (field "toStr")
+					(receiver
+						(e-lookup-local @1.55-1.58
+							(p-assign @1.23-1.26 (ident "age"))))
+					(args))
 				(e-literal @1.67-1.90 (string " years old) - Contact: "))
-				(e-call @1.92-1.107
-					(e-lookup-local @1.92-1.97
-						(p-assign @1.28-1.33 (ident "email"))))
+				(e-dot-access @1.92-1.107 (field "display")
+					(receiver
+						(e-lookup-local @1.92-1.97
+							(p-assign @1.28-1.33 (ident "email"))))
+					(args))
 				(e-literal @1.108-1.108 (string ""))))))
 ~~~
 # TYPES

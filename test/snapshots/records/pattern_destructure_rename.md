@@ -83,9 +83,11 @@ match person {
 						(e-lookup-local @2.49-2.57
 							(p-assign @2.13-2.21 (ident "userName")))
 						(e-literal @2.58-2.62 (string " is "))
-						(e-call @2.64-2.80
-							(e-lookup-local @2.64-2.71
-								(p-assign @2.28-2.35 (ident "userAge"))))
+						(e-dot-access @2.64-2.80 (field "to_str")
+							(receiver
+								(e-lookup-local @2.64-2.71
+									(p-assign @2.28-2.35 (ident "userAge"))))
+							(args))
 						(e-literal @2.81-2.91 (string " years old"))))))))
 ~~~
 # TYPES

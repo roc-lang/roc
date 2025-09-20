@@ -168,9 +168,11 @@ match ... {
 						(e-lookup-local @3.57-3.61
 							(p-assign @3.17-3.21 (ident "name")))
 						(e-literal @3.62-3.64 (string " ("))
-						(e-call @3.66-3.78
-							(e-lookup-local @3.66-3.69
-								(p-assign @3.23-3.26 (ident "age"))))
+						(e-dot-access @3.66-3.78 (field "to_str")
+							(receiver
+								(e-lookup-local @3.66-3.69
+									(p-assign @3.23-3.26 (ident "age"))))
+							(args))
 						(e-literal @3.79-3.86 (string ") from "))
 						(e-lookup-local @3.88-3.92
 							(p-assign @3.42-3.46 (ident "city")))

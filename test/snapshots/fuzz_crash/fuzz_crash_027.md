@@ -2165,8 +2165,10 @@ expect {
 										(e-int @141.77-141.78 (value "5")))))))
 					(s-let @142.2-142.33
 						(p-assign @142.2-142.7 (ident "stale"))
-						(e-call @142.10-142.33
-							(e-runtime-error (tag "not_implemented"))))
+						(e-dot-access @142.10-142.33 (field "statod")
+							(receiver
+								(e-runtime-error (tag "not_implemented")))
+							(args)))
 					(s-expr @142.33-142.34
 						(e-runtime-error (tag "expr_not_canonicalized")))
 					(s-expr @142.34-142.38

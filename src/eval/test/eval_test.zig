@@ -17,6 +17,7 @@ const stack = @import("../stack.zig");
 
 const LayoutStore = layout.Store;
 const Can = can.Can;
+const CIR = can.CIR;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
@@ -850,4 +851,182 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try testing.expectEqual(@as(i128, 13), result.asI128());
         }
     }
+}
+
+test "eval static dispatch - basic syntax and name lookup" {
+    // This test verifies that static dispatch syntax (x.method()) is parsed
+    // and that the interpreter can do basic name lookup for methods.
+    // Note: Full static dispatch on nominal types requires more work.
+    const allocator = testing.allocator;
+
+    // Test that static dispatch syntax is accepted and tries to find the method
+    // This tests basic method lookup by name in the current module
+    const source =
+        \\module []
+        \\
+        \\area = |x| 75
+        \\
+        \\obj = { value: 42 }
+        \\
+        \\main = obj.area()
+    ;
+
+    // Create module environment
+    var module_env = try ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+
+    module_env.module_name = "Test";
+    module_env.common.source = source;
+    try module_env.common.calcLineStarts(allocator);
+
+    // Parse the module
+    var parse_ast = try parse.parse(&module_env.common, allocator);
+    defer parse_ast.deinit(allocator);
+
+    // Initialize CIR fields
+    try module_env.initCIRFields(allocator, "Test");
+
+    // Canonicalize
+    var czer = try Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    // Type check
+    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer checker.deinit();
+    try checker.checkDefs();
+
+    // Verify no type errors
+    try testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+
+    // Find the main expression
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
+
+    try testing.expect(main_expr_idx != null);
+
+    // Set up the interpreter
+    var eval_stack = try stack.Stack.initCapacity(allocator, 4096);
+    defer eval_stack.deinit();
+
+    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
+    defer layout_cache.deinit();
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    // Create interpreter
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &module_env,
+        &eval_stack,
+        &layout_cache,
+        &module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+
+    // Evaluate the main expression
+    const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
+
+    // Verify the result, which should be 75
+    try testing.expectEqual(@as(i128, 75), result.asI128());
+}
+
+test "eval static dispatch - method call with arguments" {
+    // Test static dispatch with arguments passed to the method
+    const allocator = testing.allocator;
+
+    const source =
+        \\module []
+        \\
+        \\add = |x, y| y + 32
+        \\
+        \\obj = { value: 10 }
+        \\
+        \\main = obj.add(10)
+    ;
+
+    // Create module environment
+    var module_env = try ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+
+    module_env.module_name = "Test";
+    module_env.common.source = source;
+    try module_env.common.calcLineStarts(allocator);
+
+    // Parse the module
+    var parse_ast = try parse.parse(&module_env.common, allocator);
+    defer parse_ast.deinit(allocator);
+
+    // Initialize CIR fields
+    try module_env.initCIRFields(allocator, "Test");
+
+    // Canonicalize
+    var czer = try Can.init(&module_env, &parse_ast, null);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    // Type check
+    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
+    defer checker.deinit();
+    try checker.checkDefs();
+
+    // Verify no type errors
+    try testing.expectEqual(@as(usize, 0), checker.problems.problems.items.len);
+
+    // Find the main expression
+    const defs = module_env.store.sliceDefs(module_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+
+    for (defs) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
+
+    try testing.expect(main_expr_idx != null);
+
+    // Set up the interpreter
+    var eval_stack = try stack.Stack.initCapacity(allocator, 4096);
+    defer eval_stack.deinit();
+
+    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
+    defer layout_cache.deinit();
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    // Create interpreter
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &module_env,
+        &eval_stack,
+        &layout_cache,
+        &module_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+
+    // Evaluate the main expression
+    const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
+
+    // Verify the result, which should be 42 (10 + 32)
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }

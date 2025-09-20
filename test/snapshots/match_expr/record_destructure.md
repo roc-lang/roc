@@ -93,9 +93,11 @@ match ... {
 						(e-lookup-local @2.25-2.29
 							(p-assign @2.7-2.11 (ident "name")))
 						(e-literal @2.30-2.34 (string " is "))
-						(e-call @2.36-2.48
-							(e-lookup-local @2.36-2.39
-								(p-assign @2.13-2.16 (ident "age"))))
+						(e-dot-access @2.36-2.48 (field "to_str")
+							(receiver
+								(e-lookup-local @2.36-2.39
+									(p-assign @2.13-2.16 (ident "age"))))
+							(args))
 						(e-literal @2.49-2.59 (string " years old")))))
 			(branch
 				(patterns
