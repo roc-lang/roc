@@ -35,10 +35,16 @@ quux = ("hello", 42)
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:8:17:8:17
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:8:12:8:16
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:23:14:23:14
+TYPE MISMATCH - underscore_error_type.md:6:7:6:9
+TYPE MISMATCH - underscore_error_type.md:11:7:11:16
+TYPE MISMATCH - underscore_error_type.md:16:7:16:32
+TYPE MISMATCH - underscore_error_type.md:21:7:21:12
+TYPE MISMATCH - underscore_error_type.md:26:8:26:21
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.

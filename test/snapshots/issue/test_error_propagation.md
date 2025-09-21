@@ -16,6 +16,7 @@ value = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
+TYPE MISMATCH - test_error_propagation.md:8:9:8:15
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.

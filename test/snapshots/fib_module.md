@@ -12,19 +12,7 @@ fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
 # EXPECTED
 NIL
 # PROBLEMS
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fib_module.md:3:14:**
-```roc
-fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
-```
-             ^^^^^^
-
-Right now, it has the type:
-    _Num(_size)_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
@@ -115,7 +103,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.4 (type "Error -> Error")))
+		(patt @3.1-3.4 (type "Num(_size) -> Num(_size2)")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -125,5 +113,5 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.7-3.51 (type "Error -> Error"))))
+		(expr @3.7-3.51 (type "Num(_size) -> Num(_size2)"))))
 ~~~

@@ -13,7 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:13
+TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -27,7 +27,7 @@ It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But I expected it to be:
-    _(c, d) -> (c, d)_
+    _(a, b) -> (a, b)_
 
 # TOKENS
 ~~~zig

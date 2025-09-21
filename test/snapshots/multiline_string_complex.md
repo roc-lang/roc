@@ -55,7 +55,7 @@ x = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - multiline_string_complex.md:37:7:37:10
-TYPE MISMATCH - multiline_string_complex.md:40:5:40:9
+TYPE MISMATCH - multiline_string_complex.md:40:6:40:9
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

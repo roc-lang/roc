@@ -29,7 +29,7 @@ It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But I expected it to be:
-    _Pair(c, d) -> Pair(d, c)_
+    _Pair(a, b) -> Pair(b, a)_
 
 # TOKENS
 ~~~zig

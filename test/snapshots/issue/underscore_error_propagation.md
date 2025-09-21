@@ -23,6 +23,7 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
+TYPE MISMATCH - underscore_error_propagation.md:8:9:8:15
 TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**

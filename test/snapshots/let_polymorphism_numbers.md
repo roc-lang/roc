@@ -36,7 +36,8 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - let_polymorphism_numbers.md:16:19:16:23
+TYPE MISMATCH - let_polymorphism_numbers.md:17:24:17:27
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

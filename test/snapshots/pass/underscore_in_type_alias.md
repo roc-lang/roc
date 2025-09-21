@@ -25,6 +25,7 @@ TagType := [Some(_), None]
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:21:7:21
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:16:7:20
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1

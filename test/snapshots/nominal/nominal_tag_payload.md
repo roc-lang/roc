@@ -165,8 +165,8 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.6 (type "a -> Maybe(a)"))
 		(patt @9.1-9.6 (type "Maybe(_a)"))
-		(patt @11.1-11.6 (type "b -> Maybe(b)"))
-		(patt @13.1-13.6 (type "Maybe(_b)")))
+		(patt @11.1-11.6 (type "a -> Maybe(a)"))
+		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -182,6 +182,6 @@ NO CHANGE
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))
 		(expr @9.9-9.19 (type "Maybe(_a)"))
-		(expr @11.9-11.26 (type "b -> Maybe(b)"))
-		(expr @13.9-13.19 (type "Maybe(_b)"))))
+		(expr @11.9-11.26 (type "a -> Maybe(a)"))
+		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

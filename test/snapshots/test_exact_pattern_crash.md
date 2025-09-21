@@ -34,7 +34,7 @@ main = {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
-TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:18
+TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `p1` is not used anywhere in your code.
@@ -60,7 +60,7 @@ It has the type:
     _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
 
 But I expected it to be:
-    _Pair(e, h), e -> i, h -> j -> Pair(i, j)_
+    _Pair(a, b), a -> c, b -> d -> Pair(c, d)_
 
 # TOKENS
 ~~~zig

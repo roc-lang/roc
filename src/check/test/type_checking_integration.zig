@@ -246,6 +246,15 @@ test "check type - def - func with annotation 2" {
     try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
 }
 
+test "check type - def - nested lambda" {
+    const source =
+        \\module []
+        \\
+        \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
+    ;
+    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+}
+
 // calling functions
 
 test "check type - def - monomorphic id" {
@@ -704,7 +713,7 @@ test "check type - binops ord" {
         \\
         \\x = 10.0f32 > 15
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+    try assertFileTypeCheckPass(test_allocator, source, "Bool");
 }
 
 test "check type - binops and" {

@@ -14,6 +14,7 @@ foo = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
+TYPE MISMATCH - simple_underscore_error.md:6:7:6:9
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.

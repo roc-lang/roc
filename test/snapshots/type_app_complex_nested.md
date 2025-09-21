@@ -28,11 +28,15 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
+UNDECLARED TYPE - type_app_complex_nested.md:18:44:18:48
 UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
+UNDECLARED TYPE - type_app_complex_nested.md:4:41:4:45
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
+INCOMPATIBLE MATCH PATTERNS - type_app_complex_nested.md:6:5:6:5
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -397,7 +401,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(patt @5.1-5.15 (type "Result(List(Error), Error) -> List(a)"))
 		(patt @13.1-13.11 (type "Error -> a"))
-		(patt @20.1-20.6 (type "_arg -> List(_elem)")))
+		(patt @20.1-20.6 (type "_arg -> List(a)")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -414,5 +418,5 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(expressions
 		(expr @5.18-9.6 (type "Result(List(Error), Error) -> List(a)"))
 		(expr @13.14-15.2 (type "Error -> a"))
-		(expr @20.9-20.49 (type "_arg -> List(_elem)"))))
+		(expr @20.9-20.49 (type "_arg -> List(a)"))))
 ~~~

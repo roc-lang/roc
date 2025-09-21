@@ -32,7 +32,7 @@ composed = |n| get_value(make_record(n))
                ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(_elem)_
+    _List(a)_
 
 But the type annotation says it should have the type:
     _Str_

@@ -78,7 +78,9 @@ is_named_color = |str|{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - Color.md:30:5:30:25
+UNDEFINED VARIABLE - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:22:29:22:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -116,19 +118,6 @@ It has the type:
 
 But I expected it to be:
     _Num(_size)_
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**Color.md:30:33:**
-```roc
-    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
-```
-                                ^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the left side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig

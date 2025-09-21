@@ -15,7 +15,7 @@ match ... {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
+NIL
 # PROBLEMS
 NIL
 # TOKENS

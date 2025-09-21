@@ -34,7 +34,6 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
 TYPE MISMATCH - annotations.md:18:28:18:28
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
-TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:

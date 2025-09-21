@@ -21,7 +21,7 @@ scopedTypeVarInternal = |a| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - statement_annotations.md:13:7:13:8
+NIL
 # PROBLEMS
 NIL
 # TOKENS

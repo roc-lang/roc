@@ -235,5 +235,5 @@ EndOfFile(16:1-16:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: Error, callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others4), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others5 } }"))
+(expr @1.1-15.2 (type "{ callback: Num(_size) -> Num(_size2), metadata: Error, name: Str, nested: { items: List([Some(Str)][None]_others), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others2 }, preferences: { notifications: [Email(Str)]_others3, theme: [Dark]_others4 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others5 }"))
 ~~~

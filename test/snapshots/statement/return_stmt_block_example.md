@@ -20,19 +20,6 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**return_stmt_block_example.md:5:15:**
-```roc
-    str = if (num > 10) {
-```
-              ^^^^^^^^
-
-Right now, it has the type:
-    _Num(Int(Unsigned64))_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:5:11:**
@@ -49,7 +36,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _Result(_a, _b)_
+    _Result(ok, err)_
 
 All branches in an `if` must have compatible types.
 

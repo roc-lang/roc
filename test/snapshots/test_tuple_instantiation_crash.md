@@ -16,7 +16,7 @@ swap = |(x, y)| (y, x)
 main = swap(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:12
+TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -30,7 +30,7 @@ It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
 But I expected it to be:
-    _(c, d) -> (d, c)_
+    _(a, b) -> (b, a)_
 
 # TOKENS
 ~~~zig

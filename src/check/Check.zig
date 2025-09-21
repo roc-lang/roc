@@ -1644,9 +1644,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
 
             // Copy the scratch fields into the types store
-            const record_fields_range = try self.types.appendRecordFields(
-                self.scratch_record_fields.sliceFromStart(record_fields_top),
-            );
+            const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
+            std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
             // Check if we have an ext
             if (e.ext) |ext_expr| {
@@ -2709,11 +2709,14 @@ fn checkBinopExpr(
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
             // Ensure the operands are the same type
-            _ = try self.unify(lhs_var, rhs_var, rank);
+            const result = try self.unify(lhs_var, rhs_var, rank);
 
-            // Set root expr. If unifications suceeded this will the the
-            // num, otherwise the propgated error
-            try self.types.setVarRedirect(expr_var, lhs_var);
+            if (result.isOk()) {
+                const fresh_bool = try self.freshBool(rank, expr_region);
+                try self.types.setVarRedirect(expr_var, fresh_bool);
+            } else {
+                try self.updateVar(expr_var, .err, rank);
+            }
         },
         .@"and" => {
             const lhs_fresh_bool = try self.freshBool(rank, expr_region);

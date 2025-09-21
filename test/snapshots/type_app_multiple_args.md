@@ -13,8 +13,8 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
+UNDECLARED TYPE - type_app_multiple_args.md:3:15:3:19
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
-TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Dict_ is not declared in this scope.

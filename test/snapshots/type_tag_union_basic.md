@@ -27,7 +27,6 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
 INCOMPATIBLE MATCH PATTERNS - type_tag_union_basic.md:7:39:7:39
-INCOMPATIBLE MATCH PATTERNS - type_tag_union_basic.md:13:27:13:27
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `maybe` is not used anywhere in your code.
@@ -56,7 +55,7 @@ The first pattern has the type:
     _Result(ok, err)_
 
 But the expression right after `match` has the type:
-    _[Err(_a), Ok(_b)]_
+    _[Err(_err), Ok(_ok)]_
 
 These two types can't never match!
 

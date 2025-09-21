@@ -576,20 +576,21 @@ fn Unifier(comptime StoreTypeB: type) type {
                     }
                 },
                 .structure => {
-                    // When unifying an alias with a concrete structure:
-                    // We want to preserve the alias for display while ensuring the types are compatible.
+                    // When unifying an alias with a concrete structure, we
+                    // want to preserve the alias for display while ensuring the
+                    // types are compatible.
 
-                    // Step 1: Unify the structure (b) with the alias's backing type
-                    // IMPORTANT: Order matters! By putting vars.b first, if unification succeeds,
-                    // vars.b will be redirected to point to backing_var (or their merged result).
+                    // First, we unify the concrete var with the alias backing var
+                    // IMPORANT: The arg order here is important! Unifying
+                    // updates the second var to hold the type, and the first
+                    // var to redirect to the second
                     try self.unifyGuarded(vars.b.var_, backing_var);
 
-                    // Step 2: Redirect b to point to the alias wrapper (a)
-                    // Now that we've confirmed the structure is compatible with the alias's backing type,
-                    // we redirect b to point to the alias itself. This preserves the alias name for display
-                    // purposes - anyone who was referencing the concrete structure will now see it through
-                    // the alias lens, which is what we want for better error messages and type presentation.
-                    self.types_store.setVarRedirect(vars.b.var_, vars.a.var_) catch return Error.AllocatorError;
+                    // Next, we create a fresh alias (which interally points to `backing_var`),
+                    // then we redirect both a & b to the new alias.
+                    const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
                 },
                 .err => self.merge(vars, .err),
             }
@@ -648,22 +649,23 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
                 .rigid_var => return error.TypeMismatch,
                 .alias => |b_alias| {
-                    // When unifying a concrete structure with an alias:
-                    // We want to preserve the alias for display while ensuring the types are compatible.
+                    // When unifying an alias with a concrete structure, we
+                    // want to preserve the alias for display while ensuring the
+                    // types are compatible.
 
                     const backing_var = self.types_store.getAliasBackingVar(b_alias);
 
-                    // Step 1: Unify the structure (a) with the alias's backing type
-                    // IMPORTANT: Order matters! By putting vars.a first, if unification succeeds,
-                    // vars.a will be redirected to point to backing_var (or their merged result).
+                    // First, we unify the concrete var with the alias backing var
+                    // IMPORANT: The arg order here is important! Unifying
+                    // updates the second var to hold the type, and the first
+                    // var to redirect to the second
                     try self.unifyGuarded(vars.a.var_, backing_var);
 
-                    // Step 2: Redirect a to point to the alias wrapper (b)
-                    // Now that we've confirmed the structure is compatible with the alias's backing type,
-                    // we redirect a to point to the alias itself. This preserves the alias name for display
-                    // purposes - anyone who was referencing the concrete structure will now see it through
-                    // the alias lens, which is what we want for better error messages and type presentation.
-                    self.types_store.setVarRedirect(vars.a.var_, vars.b.var_) catch return Error.AllocatorError;
+                    // Next, we create a fresh alias (which interally points to `backing_var`),
+                    // then we redirect both a & b to the new alias.
+                    const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
                 },
                 .structure => |b_flat_type| {
                     try self.unifyFlatType(vars, a_flat_type, b_flat_type);

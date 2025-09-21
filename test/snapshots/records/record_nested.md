@@ -137,5 +137,5 @@ EndOfFile(13:1-13:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(_size) }, address: { street: Str, city: Str, coordinates: { lat: Num(Frac(_size2)), lng: Num(Frac(_size3)) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr @1.1-12.2 (type "{ address: { city: Str, coordinates: { lat: Num(Frac(_size)), lng: Num(Frac(_size2)) }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: Num(_size3), name: Str } }"))
 ~~~

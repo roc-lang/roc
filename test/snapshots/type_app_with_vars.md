@@ -13,7 +13,7 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
+TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -27,7 +27,7 @@ It has the type:
     _List(Num(_size)) -> _ret_
 
 But I expected it to be:
-    _List(c), c -> d -> List(d)_
+    _List(a), a -> b -> List(b)_
 
 # TOKENS
 ~~~zig

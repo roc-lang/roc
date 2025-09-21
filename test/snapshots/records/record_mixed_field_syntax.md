@@ -84,5 +84,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.52 (type "{ name: Error, age: Num(_size), email: Error, status: Str, balance: Error }"))
+(expr @1.1-1.52 (type "{ age: Num(_size), balance: Error, email: Error, name: Error, status: Str }"))
 ~~~

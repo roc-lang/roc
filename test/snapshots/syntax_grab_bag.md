@@ -269,7 +269,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-TYPE MISMATCH - syntax_grab_bag.md:155:2:155:12
+TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -902,58 +902,6 @@ It has the type:
 
 But I expected it to be:
     _[Red][Blue, Green]_others, _arg -> Error_
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**syntax_grab_bag.md:188:44:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-                                           ^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the left side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**syntax_grab_bag.md:188:44:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-                                                          ^^^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**syntax_grab_bag.md:188:44:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-                                                                          ^^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**syntax_grab_bag.md:188:18:**
-```roc
-	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
-                 ^^^^^^^^^^^^^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the left side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig

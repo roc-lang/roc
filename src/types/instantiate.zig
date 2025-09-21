@@ -89,7 +89,7 @@ pub const Instantiator = struct {
                         },
                         .fresh_flex => {
                             break :blk try self.store.freshFromContentWithRank(
-                                Content{ .flex_var = null },
+                                Content{ .flex_var = ident },
                                 self.current_rank,
                             );
                         },

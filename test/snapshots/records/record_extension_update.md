@@ -54,5 +54,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.36 (type "{ age: Num(_size), active: Error, Error }"))
+(expr @1.1-1.36 (type "{ active: Error, age: Num(_size), Error }"))
 ~~~

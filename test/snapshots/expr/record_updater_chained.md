@@ -140,10 +140,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ name: Str, age: Num(_size), city: Str }"))
-		(patt @4.1-4.12 (type "{ age: Num(_size), { name: Str, age: Num(_size2), city: Str } }"))
-		(patt @5.1-5.9 (type "{ city: Str, age: Num(_size), { name: Str, age: Num(_size2), city: Str } }"))
-		(patt @6.1-6.6 (type "{ name: Str, age: Num(_size), city: Str, age: Num(_size2), { name: Str, age: Num(_size3), city: Str } }")))
+		(patt @3.1-3.7 (type "{ age: Num(_size), city: Str, name: Str }"))
+		(patt @4.1-4.12 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(patt @5.1-5.9 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(patt @6.1-6.6 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
 	(type_decls
 		(nominal @1.1-1.1 (type "Bool")
 			(ty-header @1.1-1.1 (name "Bool")))
@@ -153,8 +153,8 @@ NO CHANGE
 					(ty-rigid-var @1.1-1.1 (name "ok"))
 					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
-		(expr @3.10-3.52 (type "{ name: Str, age: Num(_size), city: Str }"))
-		(expr @4.15-4.36 (type "{ age: Num(_size), { name: Str, age: Num(_size2), city: Str } }"))
-		(expr @5.12-5.47 (type "{ city: Str, age: Num(_size), { name: Str, age: Num(_size2), city: Str } }"))
-		(expr @6.9-6.53 (type "{ name: Str, age: Num(_size), city: Str, age: Num(_size2), { name: Str, age: Num(_size3), city: Str } }"))))
+		(expr @3.10-3.52 (type "{ age: Num(_size), city: Str, name: Str }"))
+		(expr @4.15-4.36 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(expr @5.12-5.47 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(expr @6.9-6.53 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }"))))
 ~~~

@@ -187,6 +187,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
+TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **PARSE ERROR**
@@ -879,58 +880,6 @@ But all the previous patterns have this type:
 All patterns in an `match` must have compatible types.
 
 
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**fuzz_crash_020.md:105:16:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-               ^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the left side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**fuzz_crash_020.md:105:16:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-                              ^^^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**fuzz_crash_020.md:105:16:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-                                              ^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**fuzz_crash_020.md:105:2:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
- ^^^^^^^^^^
-
-Both sides of `and` must be _Bool_ values, but the left side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig

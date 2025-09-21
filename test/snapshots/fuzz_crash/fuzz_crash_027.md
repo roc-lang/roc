@@ -224,10 +224,10 @@ UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
+TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:111:2:111:12
-TYPE MISMATCH - fuzz_crash_027.md:142:10:142:47
+TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -844,6 +844,16 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
+**TOO FEW ARGS**
+The type _List_ expects  argument, but got  instead.
+**fuzz_crash_027.md:21:3:22:4:**
+```roc
+		List( #rg
+		),
+```
+
+
+
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
 **fuzz_crash_027.md:50:5:**
@@ -853,7 +863,7 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _U64_
+    _Num(Int(Unsigned64))_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -907,31 +917,18 @@ All patterns in an `match` must have compatible types.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:111:2:111:12:**
+**fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
+		..., #
+	)
 ```
-	^^^^^^^^^^
 
 It has the type:
+    __arg -> _ret_
+
+But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
-
-But here it's being used as:
-    __arg2 -> _ret_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:142:10:142:47:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
-	        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The type annotation says it should have the type:
-    _Result({  }, _d)_
-
-But here it's being used as:
-    _[Stdoline!(Str)]_others_
 
 # TOKENS
 ~~~zig
@@ -1710,9 +1707,9 @@ expect {
 					(if-branch
 						(e-lookup-local @45.16-45.19
 							(p-assign @45.8-45.11 (ident "num")))
-						(e-int @45.20-45.21 (value "2"))))
+						(e-num @45.20-45.21 (value "2"))))
 				(if-else
-					(e-int @45.27-45.28 (value "5"))))))
+					(e-num @45.27-45.28 (value "5"))))))
 	(d-let
 		(p-assign @48.1-48.8 (ident "add_one"))
 		(e-lambda @48.11-58.2
@@ -1721,7 +1718,7 @@ expect {
 			(e-block @48.17-58.2
 				(s-let @49.2-49.11
 					(p-assign @49.2-49.7 (ident "other"))
-					(e-int @49.10-49.11 (value "1")))
+					(e-num @49.10-49.11 (value "1")))
 				(e-if @50.2-57.3
 					(if-branches
 						(if-branch
@@ -1730,18 +1727,18 @@ expect {
 							(e-block @50.9-54.3
 								(s-dbg @51.3-52.3
 									(e-runtime-error (tag "empty_tuple")))
-								(e-int @53.3-53.4 (value "0")))))
+								(e-num @53.3-53.4 (value "0")))))
 					(if-else
 						(e-block @54.9-57.3
 							(s-dbg @55.3-55.10
-								(e-int @55.7-55.10 (value "123")))
+								(e-num @55.7-55.10 (value "123")))
 							(e-lookup-local @56.3-56.8
 								(p-assign @49.2-49.7 (ident "other"))))))))
 		(annotation @48.1-48.8
 			(declared-type
 				(ty-fn @47.11-47.21 (effectful false)
-					(ty @47.11-47.14 (name "U64"))
-					(ty @47.18-47.21 (name "U64"))))))
+					(ty-lookup @47.11-47.14 (name "U64") (builtin))
+					(ty-lookup @47.18-47.21 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "match_time"))
 		(e-lambda @60.14-94.3
@@ -1770,13 +1767,13 @@ expect {
 								(pattern (degenerate false)
 									(p-applied-tag @67.3-67.7)))
 							(value
-								(e-int @67.12-67.13 (value "1"))))
+								(e-num @67.12-67.13 (value "1"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-str @68.3-68.8 (text """))))
 							(value
-								(e-int @69.1-69.3 (value "0"))))
+								(e-num @69.1-69.3 (value "0"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1784,7 +1781,7 @@ expect {
 								(pattern (degenerate false)
 									(p-str @70.11-70.16 (text """))))
 							(value
-								(e-int @70.20-70.22 (value "20"))))
+								(e-num @70.20-70.22 (value "20"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1808,7 +1805,7 @@ expect {
 										(rest-at (index 3)
 											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
-								(e-int @74.32-74.35 (value "123"))))
+								(e-num @74.32-74.35 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1816,13 +1813,13 @@ expect {
 										(patterns
 											(p-assign @76.1-76.4 (ident "ist"))))))
 							(value
-								(e-int @77.8-77.11 (value "123"))))
+								(e-num @77.8-77.11 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-small-dec @78.3-78.7)))
 							(value
-								(e-int @78.11-78.14 (value "314"))))
+								(e-num @78.11-78.14 (value "314"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1830,7 +1827,7 @@ expect {
 								(pattern (degenerate false)
 									(p-small-dec @79.10-79.14)))
 							(value
-								(e-int @79.18-79.21 (value "314"))))
+								(e-num @79.18-79.21 (value "314"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1840,7 +1837,7 @@ expect {
 											(p-int @80.7-80.8 (value "2"))
 											(p-int @80.10-80.11 (value "3"))))))
 							(value
-								(e-int @80.16-80.19 (value "123"))))
+								(e-num @80.16-80.19 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1850,7 +1847,7 @@ expect {
 											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 											(p-int @81.14-81.15 (value "3"))))))
 							(value
-								(e-int @81.20-81.23 (value "123"))))
+								(e-num @81.20-81.23 (value "123"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1872,7 +1869,7 @@ expect {
 								(pattern (degenerate false)
 									(p-runtime-error @88.4-88.6 (tag "not_implemented"))))
 							(value
-								(e-int @88.11-88.13 (value "12"))))
+								(e-num @88.11-88.13 (value "12"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1885,7 +1882,7 @@ expect {
 												(sub-pattern
 													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
 							(value
-								(e-int @89.29-89.31 (value "12"))))
+								(e-num @89.29-89.31 (value "12"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1895,14 +1892,14 @@ expect {
 												(sub-pattern
 													(p-int @91.9-91.10 (value "1"))))))))
 							(value
-								(e-int @92.9-92.11 (value "12"))))
+								(e-num @92.9-92.11 (value "12"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @93.3-93.10
 										(p-applied-tag @93.3-93.10))))
 							(value
-								(e-int @93.14-93.20 (value "121000")))))))))
+								(e-num @93.14-93.20 (value "121000")))))))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-closure @100.9-148.2
@@ -1918,11 +1915,11 @@ expect {
 							(e-literal @101.11-101.16 (string "World"))))
 					(s-var @102.2-102.18
 						(p-assign @102.2-102.18 (ident "number"))
-						(e-int @102.15-102.18 (value "123")))
+						(e-num @102.15-102.18 (value "123")))
 					(s-expect @103.2-103.18
 						(e-binop @103.9-103.18 (op "eq")
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-int @103.17-103.18 (value "1"))))
+							(e-num @103.17-103.18 (value "1"))))
 					(s-let @104.2-104.12
 						(p-assign @104.2-104.5 (ident "tag"))
 						(e-tag @104.8-104.12 (name "Blue")))
@@ -1933,14 +1930,11 @@ expect {
 						(e-not-implemented @1.1-1.1))
 					(s-expr @111.2-113.3
 						(e-call @111.2-113.3
-							(e-lookup-local @111.2-111.12
-								(p-assign @60.1-60.11 (ident "match_time")))
 							(e-not-implemented @1.1-1.1)))
 					(s-expr @114.2-117.3
 						(e-call @114.2-117.3
-							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dbg @115.3-116.6
-								(e-int @116.4-116.6 (value "42")))))
+								(e-num @116.4-116.6 (value "42")))))
 					(s-crash @118.2-118.22 (msg "Unreachtement"))
 					(s-let @119.2-119.23
 						(p-assign @119.2-119.10 (ident "tag_with"))
@@ -1960,14 +1954,14 @@ expect {
 						(p-assign @121.2-121.6 (ident "list"))
 						(e-list @121.9-126.3
 							(elems
-								(e-int @125.6-125.9 (value "456")))))
+								(e-num @125.6-125.9 (value "456")))))
 					(s-runtime-error (tag "not_implemented"))
 					(s-let @131.2-131.71
 						(p-assign @131.2-131.8 (ident "record"))
 						(e-record @131.11-131.71
 							(fields
 								(field (name "foo")
-									(e-int @131.18-131.21 (value "123")))
+									(e-num @131.18-131.21 (value "123")))
 								(field (name "bar")
 									(e-string @131.28-131.35
 										(e-literal @131.29-131.34 (string "Hello"))))
@@ -1986,7 +1980,7 @@ expect {
 						(p-assign @132.2-132.7 (ident "tuple"))
 						(e-tuple @132.10-132.68
 							(elems
-								(e-int @132.11-132.14 (value "123"))
+								(e-num @132.11-132.14 (value "123"))
 								(e-string @132.16-132.23
 									(e-literal @132.17-132.22 (string "World")))
 								(e-lookup-local @132.25-132.28
@@ -2003,14 +1997,14 @@ expect {
 											(p-assign @132.2-132.7 (ident "tuple")))))
 								(e-list @132.58-132.67
 									(elems
-										(e-int @132.59-132.60 (value "1"))
-										(e-int @132.62-132.63 (value "2"))
-										(e-int @132.65-132.66 (value "3")))))))
+										(e-num @132.59-132.60 (value "1"))
+										(e-num @132.62-132.63 (value "2"))
+										(e-num @132.65-132.66 (value "3")))))))
 					(s-let @133.2-140.3
 						(p-assign @133.2-133.9 (ident "m_tuple"))
 						(e-tuple @133.12-140.3
 							(elems
-								(e-int @134.3-134.6 (value "123"))
+								(e-num @134.3-134.6 (value "123"))
 								(e-string @135.3-135.10
 									(e-literal @135.4-135.9 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -2026,9 +2020,9 @@ expect {
 											(p-assign @132.2-132.7 (ident "tuple")))))
 								(e-list @139.3-139.12
 									(elems
-										(e-int @139.4-139.5 (value "1"))
-										(e-int @139.7-139.8 (value "2"))
-										(e-int @139.10-139.11 (value "3")))))))
+										(e-num @139.4-139.5 (value "1"))
+										(e-num @139.7-139.8 (value "2"))
+										(e-num @139.10-139.11 (value "3")))))))
 					(s-let @141.2-141.78
 						(p-assign @141.2-141.7 (ident "bsult"))
 						(e-binop @141.10-141.78 (op "or")
@@ -2038,27 +2032,27 @@ expect {
 										(e-tag @141.10-141.18 (name "Err")
 											(args
 												(e-runtime-error (tag "ident_not_in_scope")))))
-									(e-int @141.22-141.24 (value "12")))
+									(e-num @141.22-141.24 (value "12")))
 								(e-binop @141.27-141.32 (op "mul")
-									(e-int @141.27-141.28 (value "5"))
-									(e-int @141.31-141.32 (value "5"))))
+									(e-num @141.27-141.28 (value "5"))
+									(e-num @141.31-141.32 (value "5"))))
 							(e-binop @141.36-141.78 (op "or")
 								(e-binop @141.36-141.63 (op "and")
 									(e-binop @141.36-141.46 (op "lt")
 										(e-binop @141.36-141.42 (op "add")
-											(e-int @141.36-141.38 (value "13"))
-											(e-int @141.41-141.42 (value "2")))
-										(e-int @141.45-141.46 (value "5")))
+											(e-num @141.36-141.38 (value "13"))
+											(e-num @141.41-141.42 (value "2")))
+										(e-num @141.45-141.46 (value "5")))
 									(e-binop @141.51-141.63 (op "ge")
 										(e-binop @141.51-141.57 (op "sub")
-											(e-int @141.51-141.53 (value "10"))
-											(e-int @141.56-141.57 (value "1")))
-										(e-int @141.61-141.63 (value "16"))))
+											(e-num @141.51-141.53 (value "10"))
+											(e-num @141.56-141.57 (value "1")))
+										(e-num @141.61-141.63 (value "16"))))
 								(e-binop @141.67-141.78 (op "le")
-									(e-int @141.67-141.69 (value "12"))
+									(e-num @141.67-141.69 (value "12"))
 									(e-binop @141.73-141.78 (op "div")
-										(e-int @141.73-141.74 (value "3"))
-										(e-int @141.77-141.78 (value "5")))))))
+										(e-num @141.73-141.74 (value "3"))
+										(e-num @141.77-141.78 (value "5")))))))
 					(s-let @142.2-142.47
 						(p-assign @142.2-142.7 (ident "stale"))
 						(e-dot-access @142.10-142.47 (field "unknown")
@@ -2073,16 +2067,15 @@ expect {
 							(e-string @144.3-146.10
 								(e-literal @144.4-144.14 (string "How about "))
 								(e-call @145.4-145.21
-									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @145.14-145.20
 										(p-assign @102.2-102.18 (ident "number"))))
 								(e-literal @146.4-146.9 (string " as a"))))))))
 		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
-					(ty-apply @99.9-99.21 (symbol "List")
-						(ty @99.14-99.20 (name "String")))
-					(ty-apply @99.25-99.38 (symbol "Result")
+					(ty-apply @99.9-99.21 (name "List") (builtin)
+						(ty-malformed @99.14-99.20))
+					(ty-apply @99.25-99.38 (name "Result") (local)
 						(ty-record @99.32-99.34)
 						(ty-underscore @1.1-1.1))))))
 	(d-let
@@ -2091,72 +2084,82 @@ expect {
 		(annotation @151.1-151.6
 			(declared-type
 				(ty-record @150.9-150.11))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Bool"))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "True"))
+			(tag_name @1.1-1.1 (name "False"))))
+	(s-nominal-decl @1.1-1.1
+		(ty-header @1.1-1.1 (name "Result")
+			(ty-args
+				(ty-rigid-var @1.1-1.1 (name "ok"))
+				(ty-rigid-var @1.1-1.1 (name "err"))))
+		(ty-tag-union @1.1-1.1
+			(tag_name @1.1-1.1 (name "Ok"))
+			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @15.1-15.41
 		(ty-header @15.1-15.10 (name "Map")
 			(ty-args
-				(ty-var @15.5-15.6 (name "a"))
-				(ty-var @15.8-15.9 (name "b"))))
+				(ty-rigid-var @15.5-15.6 (name "a"))
+				(ty-rigid-var @15.8-15.9 (name "b"))))
 		(ty-fn @15.13-15.41 (effectful false)
-			(ty-apply @15.13-15.20 (symbol "List")
-				(ty-var @15.18-15.19 (name "a")))
+			(ty-apply @15.13-15.20 (name "List") (builtin)
+				(ty-rigid-var @15.5-15.6 (name "a")))
 			(ty-parens @15.22-15.30
 				(ty-fn @15.23-15.29 (effectful false)
-					(ty-var @15.23-15.24 (name "a"))
-					(ty-var @15.28-15.29 (name "b"))))
-			(ty-apply @15.34-15.41 (symbol "List")
-				(ty-var @15.39-15.40 (name "b")))))
+					(ty-rigid-var @15.5-15.6 (name "a"))
+					(ty-rigid-var @15.8-15.9 (name "b"))))
+			(ty-apply @15.34-15.41 (name "List") (builtin)
+				(ty-rigid-var @15.8-15.9 (name "b")))))
 	(s-alias-decl @16.1-24.15
 		(ty-header @16.1-19.2 (name "MapML")
 			(ty-args
-				(ty-var @17.2-17.3 (name "a"))
-				(ty-var @18.2-18.3 (name "b"))))
+				(ty-rigid-var @17.2-17.3 (name "a"))
+				(ty-rigid-var @18.2-18.3 (name "b"))))
 		(ty-fn @21.3-24.15 (effectful false)
-			(ty-apply @21.3-22.4 (symbol "List"))
+			(ty-apply @21.3-22.4 (name "List") (builtin))
 			(ty-parens @23.3-23.11
 				(ty-fn @23.4-23.10 (effectful false)
-					(ty-var @23.4-23.5 (name "a"))
-					(ty-var @23.9-23.10 (name "b"))))
-			(ty-apply @24.4-24.15 (symbol "List")
-				(ty-var @24.12-24.13 (name "b")))))
+					(ty-rigid-var @17.2-17.3 (name "a"))
+					(ty-rigid-var @18.2-18.3 (name "b"))))
+			(ty-apply @24.4-24.15 (name "List") (builtin)
+				(ty-rigid-var @18.2-18.3 (name "b")))))
 	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
-			(ty @26.8-26.11 (name "Bar"))
-			(ty @26.13-26.16 (name "Baz"))))
+			(ty-malformed @26.8-26.11)
+			(ty-malformed @26.13-26.16)))
 	(s-alias-decl @32.1-32.35
 		(ty-header @32.1-32.8 (name "Some")
 			(ty-args
-				(ty-var @32.6-32.7 (name "a"))))
+				(ty-rigid-var @32.6-32.7 (name "a"))))
 		(ty-record @32.11-32.35
 			(field (field "foo")
-				(ty-apply @32.19-32.24 (symbol "Ok")
-					(ty-var @32.22-32.23 (name "a"))))
+				(ty-malformed @32.19-32.21))
 			(field (field "bar")
 				(ty-malformed @32.32-32.33))))
 	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
-				(ty-var @33.4-33.5 (name "a"))))
+				(ty-rigid-var @33.4-33.5 (name "a"))))
 		(ty-record @33.9-35.2
 			(field (field "bar")
-				(ty @34.8-34.11 (name "Som")))))
+				(ty-malformed @34.8-34.11))))
 	(s-alias-decl @37.1-39.2
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
-				(ty-var @37.7-37.8 (name "a"))))
+				(ty-rigid-var @37.7-37.8 (name "a"))))
 		(ty-record @37.12-39.2
 			(field (field "bar")
-				(ty @38.8-38.11 (name "Som")))))
+				(ty-malformed @38.8-38.11))))
 	(s-alias-decl @43.1-43.34
 		(ty-header @43.1-43.8 (name "Func")
 			(ty-args
-				(ty-var @43.6-43.7 (name "a"))))
+				(ty-rigid-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
-			(ty-apply @43.11-43.19 (symbol "Maybe")
-				(ty-var @43.17-43.18 (name "a")))
-			(ty-var @43.21-43.22 (name "a"))
-			(ty-apply @43.26-43.34 (symbol "Maybe")
-				(ty-var @43.32-43.33 (name "a")))))
+			(ty-malformed @43.11-43.16)
+			(ty-rigid-var @43.6-43.7 (name "a"))
+			(ty-malformed @43.26-43.31)))
 	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -2174,15 +2177,15 @@ expect {
 	(s-expect @96.1-97.11
 		(e-binop @97.2-97.11 (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @97.10-97.11 (value "1"))))
+			(e-num @97.10-97.11 (value "1"))))
 	(s-expect @155.1-159.2
 		(e-block @155.8-159.2
 			(s-let @156.2-156.9
 				(p-assign @156.2-156.5 (ident "foo"))
-				(e-int @156.8-156.9 (value "1")))
+				(e-num @156.8-156.9 (value "1")))
 			(s-let @157.2-157.10
 				(p-assign @157.2-157.6 (ident "blah"))
-				(e-int @157.9-157.10 (value "1")))
+				(e-num @157.9-157.10 (value "1")))
 			(e-binop @158.2-158.13 (op "eq")
 				(e-lookup-local @158.2-158.6
 					(p-assign @157.2-157.6 (ident "blah")))
@@ -2194,43 +2197,50 @@ expect {
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
-		(patt @48.1-48.8 (type "Error -> Error"))
-		(patt @60.1-60.11 (type "Error"))
+		(patt @48.1-48.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
 		(patt @100.1-100.6 (type "List(Error) -> Error"))
-		(patt @151.1-151.6 (type "{}")))
+		(patt @151.1-151.6 (type "{  }")))
 	(type_decls
+		(nominal @1.1-1.1 (type "Bool")
+			(ty-header @1.1-1.1 (name "Bool")))
+		(nominal @1.1-1.1 (type "Error")
+			(ty-header @1.1-1.1 (name "Result")
+				(ty-args
+					(ty-rigid-var @1.1-1.1 (name "ok"))
+					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @15.1-15.41 (type "Map(a, b)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
-					(ty-var @15.5-15.6 (name "a"))
-					(ty-var @15.8-15.9 (name "b")))))
+					(ty-rigid-var @15.5-15.6 (name "a"))
+					(ty-rigid-var @15.8-15.9 (name "b")))))
 		(alias @16.1-24.15 (type "MapML(a, b)")
 			(ty-header @16.1-19.2 (name "MapML")
 				(ty-args
-					(ty-var @17.2-17.3 (name "a"))
-					(ty-var @18.2-18.3 (name "b")))))
+					(ty-rigid-var @17.2-17.3 (name "a"))
+					(ty-rigid-var @18.2-18.3 (name "b")))))
 		(alias @26.1-26.17 (type "Foo")
 			(ty-header @26.1-26.4 (name "Foo")))
 		(alias @32.1-32.35 (type "Some(a)")
 			(ty-header @32.1-32.8 (name "Some")
 				(ty-args
-					(ty-var @32.6-32.7 (name "a")))))
+					(ty-rigid-var @32.6-32.7 (name "a")))))
 		(alias @33.1-35.2 (type "Ml(a)")
 			(ty-header @33.1-33.6 (name "Ml")
 				(ty-args
-					(ty-var @33.4-33.5 (name "a")))))
+					(ty-rigid-var @33.4-33.5 (name "a")))))
 		(alias @37.1-39.2 (type "Soine(a)")
 			(ty-header @37.1-37.9 (name "Soine")
 				(ty-args
-					(ty-var @37.7-37.8 (name "a")))))
+					(ty-rigid-var @37.7-37.8 (name "a")))))
 		(alias @43.1-43.34 (type "Func(a)")
 			(ty-header @43.1-43.8 (name "Func")
 				(ty-args
-					(ty-var @43.6-43.7 (name "a"))))))
+					(ty-rigid-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
-		(expr @48.11-58.2 (type "Error -> Error"))
-		(expr @60.14-94.3 (type "Error"))
+		(expr @48.11-58.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
 		(expr @100.9-148.2 (type "List(Error) -> Error"))
-		(expr @151.9-151.11 (type "{}"))))
+		(expr @151.9-151.11 (type "{  }"))))
 ~~~

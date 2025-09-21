@@ -19,7 +19,7 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
+NIL
 # PROBLEMS
 NIL
 # TOKENS

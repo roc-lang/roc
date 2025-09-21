@@ -41,6 +41,7 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
+INCOMPATIBLE MATCH PATTERNS - underscore_in_regular_annotations.md:20:5:20:5
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.

@@ -41,7 +41,8 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - number_literal_suffixes.md:12:9:12:15
+INVALID NUMBER - number_literal_suffixes.md:23:12:23:19
 # PROBLEMS
 **INVALID NUMBER**
 This number literal is not valid: `123dec`
@@ -279,5 +280,5 @@ EndOfFile(35:1-35:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-34.2 (type "{ u8: Num(Int(Unsigned8)), u16: Num(Int(Unsigned16)), u32: Num(Int(Unsigned32)), u64: Num(Int(Unsigned64)), u128: Num(Int(Unsigned128)), i8: Num(Int(Signed8)), i16: Num(Int(Signed16)), i32: Num(Int(Signed32)), i64: Num(Int(Signed64)), i128: Num(Int(Signed128)), dec: Error, u8Neg: Num(Int(Unsigned8)), u16Neg: Num(Int(Unsigned16)), u32Neg: Num(Int(Unsigned32)), u64Neg: Num(Int(Unsigned64)), u128Neg: Num(Int(Unsigned128)), i8Neg: Num(Int(Signed8)), i16Neg: Num(Int(Signed16)), i32Neg: Num(Int(Signed32)), i64Neg: Num(Int(Signed64)), i128Neg: Num(Int(Signed128)), decNeg: Error, u8Bin: Num(Int(Unsigned8)), u16Bin: Num(Int(Unsigned16)), u32Bin: Num(Int(Unsigned32)), u64Bin: Num(Int(Unsigned64)), u128Bin: Num(Int(Unsigned128)), i8Bin: Num(Int(Signed8)), i16Bin: Num(Int(Signed16)), i32Bin: Num(Int(Signed32)), i64Bin: Num(Int(Signed64)), i128Bin: Num(Int(Signed128)) }"))
+(expr @1.1-34.2 (type "{ dec: Error, decNeg: Error, i128: Num(Int(Signed128)), i128Bin: Num(Int(Signed128)), i128Neg: Num(Int(Signed128)), i16: Num(Int(Signed16)), i16Bin: Num(Int(Signed16)), i16Neg: Num(Int(Signed16)), i32: Num(Int(Signed32)), i32Bin: Num(Int(Signed32)), i32Neg: Num(Int(Signed32)), i64: Num(Int(Signed64)), i64Bin: Num(Int(Signed64)), i64Neg: Num(Int(Signed64)), i8: Num(Int(Signed8)), i8Bin: Num(Int(Signed8)), i8Neg: Num(Int(Signed8)), u128: Num(Int(Unsigned128)), u128Bin: Num(Int(Unsigned128)), u128Neg: Num(Int(Unsigned128)), u16: Num(Int(Unsigned16)), u16Bin: Num(Int(Unsigned16)), u16Neg: Num(Int(Unsigned16)), u32: Num(Int(Unsigned32)), u32Bin: Num(Int(Unsigned32)), u32Neg: Num(Int(Unsigned32)), u64: Num(Int(Unsigned64)), u64Bin: Num(Int(Unsigned64)), u64Neg: Num(Int(Unsigned64)), u8: Num(Int(Unsigned8)), u8Bin: Num(Int(Unsigned8)), u8Neg: Num(Int(Unsigned8)) }"))
 ~~~

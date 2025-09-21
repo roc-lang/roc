@@ -8,7 +8,7 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - not_tag.md:1:1:1:8
+NIL
 # PROBLEMS
 NIL
 # TOKENS
