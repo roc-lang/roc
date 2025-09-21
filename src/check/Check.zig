@@ -472,6 +472,13 @@ pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
     for (defs_slice) |def_idx| {
         try self.checkDef(def_idx);
     }
+
+    // Freeze the interners after all definitions have been checked.
+    // This must happen AFTER type imports (which occur during checkDef when
+    // processing e_lookup_external), because importing types from other modules
+    // can introduce new field names that need to be interned.
+    // But it must happen BEFORE type solving begins.
+    self.cir.freezeInterners();
 }
 
 /// Check the types for a single definition
@@ -1404,13 +1411,101 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                         // Receiver is an unbound record, find the field
                         const fields = self.types.getRecordFieldsSlice(record_unbound);
 
-                        // Find the field with the matching name
+                        // First, try to find the field with the matching name
+                        var found_field = false;
                         for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
                             if (field_name == dot_access.field_name) {
                                 // Unify the dot access expression with the field type
                                 const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                                 _ = try self.unify(dot_access_var, field_var);
+                                found_field = true;
                                 break;
+                            }
+                        }
+
+                        // If no field found and this looks like a method call, search for static dispatch methods
+                        if (!found_field and dot_access.args != null) {
+                            // This is a method call on a record - search ALL modules for matching methods
+                            const method_name_str = self.cir.getIdent(dot_access.field_name);
+
+                            // Search through all modules (current + other modules)
+                            var method_found = false;
+
+                            // Search current module first
+                            const all_defs = self.cir.store.sliceDefs(self.cir.all_defs);
+                            for (all_defs) |def_idx| {
+                                const def = self.cir.store.getDef(def_idx);
+                                const pattern = self.cir.store.getPattern(def.pattern);
+
+                                if (pattern == .assign) {
+                                    const def_name = self.cir.getIdent(pattern.assign.ident);
+                                    if (std.mem.eql(u8, def_name, method_name_str)) {
+                                        // Found a method with matching name - check if it can work with records
+                                        const method_var = @as(Var, @enumFromInt(@intFromEnum(def.expr)));
+
+                                        // Create a function type that takes the record as first argument
+                                        const args_span = dot_access.args.?;
+                                        const args_slice = self.cir.store.exprSlice(args_span);
+
+                                        // Build the expected function type: (record, ...args) -> result
+                                        var arg_vars = try std.ArrayList(Var).initCapacity(self.gpa, args_slice.len + 1);
+                                        defer arg_vars.deinit();
+
+                                        // First arg is the receiver (record)
+                                        try arg_vars.append(receiver_var);
+
+                                        // Add the other arguments
+                                        for (args_slice) |arg_expr| {
+                                            const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr)));
+                                            try arg_vars.append(arg_var);
+                                        }
+
+                                        // Create the function type
+                                        const result_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                                        const fn_content = types_mod.Content{
+                                            .structure = .{
+                                                .fn_pure = .{
+                                                    .args = try self.types.vars.appendSlice(self.gpa, arg_vars.items),
+                                                    .ret = result_var,
+                                                    .needs_instantiation = false,
+                                                },
+                                            },
+                                        };
+                                        const expected_fn_var = try self.freshFromContent(fn_content, expr_region);
+
+                                        // Try to unify the method with this function type
+                                        const unify_result = try self.unify(method_var, expected_fn_var);
+                                        if (unify_result.isOk()) {
+                                            method_found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // If not found in current module, search other modules
+                            if (!method_found) {
+                                for (self.other_modules) |other_module| {
+                                    const other_defs = other_module.store.sliceDefs(other_module.all_defs);
+                                    for (other_defs) |def_idx| {
+                                        const def = other_module.store.getDef(def_idx);
+                                        const pattern = other_module.store.getPattern(def.pattern);
+
+                                        if (pattern == .assign) {
+                                            const def_name = other_module.getIdent(pattern.assign.ident);
+                                            if (std.mem.eql(u8, def_name, method_name_str)) {
+                                                // Found a method with matching name in another module
+                                                // We need to handle cross-module type references carefully
+
+                                                // For now, just mark that we found it and let the interpreter handle dispatch
+                                                // The interpreter will handle the actual method resolution
+                                                method_found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (method_found) break;
+                                }
                             }
                         }
                     },

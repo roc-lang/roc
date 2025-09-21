@@ -688,6 +688,27 @@ pub const Interpreter = struct {
     /// Helper to get the layout for an expression
     fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
+
+        // When getting layouts, we need to use the current module's type information
+        // The layout cache was initialized with Main's types, but when evaluating
+        // expressions from other modules, we need to use their type stores
+        if (self.type_store != self.layout_cache.types_store) {
+            // We're in a different module - need to get layout from that module's types
+            // For now, create a temporary layout store with the correct types
+            var temp_layout_cache = LayoutStore.init(@constCast(self.env), self.type_store) catch return error.LayoutError;
+            defer temp_layout_cache.deinit();
+
+            const layout_idx = temp_layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
+                error.ZeroSizedType => return error.ZeroSizedType,
+                error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
+                else => |e| return e,
+            };
+
+            // Add the layout to our main cache so we can use it
+            const temp_layout = temp_layout_cache.getLayout(layout_idx);
+            return self.layout_cache.insertLayout(temp_layout) catch return error.LayoutError;
+        }
+
         const layout_idx = self.layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
             error.ZeroSizedType => return error.ZeroSizedType,
             error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
@@ -1034,11 +1055,14 @@ pub const Interpreter = struct {
                                 // to get its closure value
                                 self.traceInfo("Evaluating matched definition from module '{s}'", .{module_name});
 
-                                // Save current environment
+                                // For lambdas, we need to evaluate them in their defining module's context
+                                // but NOT switch contexts for the current evaluation flow
+
+                                // Save current environment temporarily
                                 const saved_env = self.env;
                                 const saved_store = self.type_store;
 
-                                // Switch to the other module's environment
+                                // Switch to the other module's environment just for this expression
                                 self.env = other_module;
                                 self.type_store = @constCast(&other_module.types);
                                 defer {
@@ -1047,7 +1071,7 @@ pub const Interpreter = struct {
                                     self.type_store = saved_store;
                                 }
 
-                                // Evaluate the expression directly in the other module's context
+                                // Evaluate the expression directly - this creates the closure with the right module_ptr
                                 try self.evalExpr(other_def.expr, roc_ops, null);
                                 return;
                             }
@@ -2200,14 +2224,21 @@ pub const Interpreter = struct {
                 .fn_pure => |func| {
                     // First check if the return type is mapped in our TypeScope
                     var return_type_var = func.ret;
+                    var use_current_type_store = false;
                     if (self.type_scope.lookup(func.ret)) |mapped_var| {
                         // Use the mapped type instead of the polymorphic one
+                        // This mapped variable is in the current module's type system
                         return_type_var = mapped_var;
+                        use_current_type_store = true;
                         self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
+                    // Use the appropriate type store based on where the variable comes from
+                    const ret_resolved = if (use_current_type_store)
+                        self.type_store.resolveVar(return_type_var)
+                    else
+                        closure_module.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2237,6 +2268,20 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
+                            // Need to use the closure module's type system if it's different
+                            if (&closure_module.types != self.layout_cache.types_store) {
+                                // We're in a different module - need to get layout from that module's types
+                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                defer temp_layout_cache.deinit();
+
+                                const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
+                                    self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                    return error.TypeMismatch;
+                                };
+
+                                return temp_layout_cache.getLayout(ret_layout_idx);
+                            }
+
                             const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
@@ -2248,14 +2293,21 @@ pub const Interpreter = struct {
                 .fn_effectful => |func| {
                     // First check if the return type is mapped in our TypeScope
                     var return_type_var = func.ret;
+                    var use_current_type_store = false;
                     if (self.type_scope.lookup(func.ret)) |mapped_var| {
                         // Use the mapped type instead of the polymorphic one
+                        // This mapped variable is in the current module's type system
                         return_type_var = mapped_var;
+                        use_current_type_store = true;
                         self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
+                    // Use the appropriate type store based on where the variable comes from
+                    const ret_resolved = if (use_current_type_store)
+                        self.type_store.resolveVar(return_type_var)
+                    else
+                        closure_module.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2285,6 +2337,20 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
+                            // Need to use the closure module's type system if it's different
+                            if (&closure_module.types != self.layout_cache.types_store) {
+                                // We're in a different module - need to get layout from that module's types
+                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                defer temp_layout_cache.deinit();
+
+                                const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
+                                    self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                    return error.TypeMismatch;
+                                };
+
+                                return temp_layout_cache.getLayout(ret_layout_idx);
+                            }
+
                             const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
@@ -2294,11 +2360,15 @@ pub const Interpreter = struct {
                     }
                 },
                 .fn_unbound => |func| {
+
                     // First check if the return type is mapped in our TypeScope
                     var return_type_var = func.ret;
+                    var use_current_type_store = false;
                     if (self.type_scope.lookup(func.ret)) |mapped_var| {
                         // Use the mapped type instead of the polymorphic one
+                        // This mapped variable is in the current module's type system
                         return_type_var = mapped_var;
+                        use_current_type_store = true;
                         self.traceInfo("Resolved return type via TypeScope: {} -> {}", .{ func.ret, mapped_var });
                     } else {
                         self.traceInfo("No TypeScope mapping found for return type var: {}", .{func.ret});
@@ -2309,7 +2379,32 @@ pub const Interpreter = struct {
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
+                    // Use the appropriate type store based on where the variable comes from
+                    // For fn_unbound, if we don't have a TypeScope mapping, the return type might not
+                    // be instantiated yet. We need to handle this carefully.
+                    const ret_resolved = if (use_current_type_store)
+                        self.type_store.resolveVar(return_type_var)
+                    else blk: {
+                        // Check if this type variable exists in the closure module's type store
+                        const var_idx = @intFromEnum(return_type_var);
+                        if (var_idx >= closure_module.types.slots.backing.len()) {
+                            // Variable doesn't exist - it's likely an uninstantiated polymorphic type
+                            // For unbound functions returning closures, default to a generic closure layout
+                            self.traceInfo("Return type var {} out of bounds for closure module, treating as polymorphic closure", .{return_type_var});
+
+                            // Return a flex_var to trigger the polymorphic path
+                            break :blk types.ResolvedVarDesc{
+                                .var_ = return_type_var,
+                                .desc_idx = undefined, // This will be unused since we check the content
+                                .desc = .{
+                                    .content = .{ .flex_var = null },
+                                    .rank = .generalized,
+                                    .mark = .none,
+                                },
+                            };
+                        }
+                        break :blk closure_module.types.resolveVar(return_type_var);
+                    };
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2339,6 +2434,30 @@ pub const Interpreter = struct {
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
+                            // If we used the current type store to resolve, use current layout cache
+                            if (use_current_type_store) {
+                                // The mapped variable is in the current module's type system
+                                const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
+                                    self.traceError("Failed to get layout for mapped closure return type: {}", .{err});
+                                    return error.TypeMismatch;
+                                };
+                                return self.layout_cache.getLayout(ret_layout_idx);
+                            }
+
+                            // Need to use the closure module's type system if it's different
+                            if (&closure_module.types != self.layout_cache.types_store) {
+                                // We're in a different module - need to get layout from that module's types
+                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                defer temp_layout_cache.deinit();
+
+                                const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
+                                    self.traceError("Failed to get layout for closure return type: {}", .{err});
+                                    return error.TypeMismatch;
+                                };
+
+                                return temp_layout_cache.getLayout(ret_layout_idx);
+                            }
+
                             const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                 self.traceError("Failed to get layout for closure return type: {}", .{err});
                                 return error.TypeMismatch;
@@ -2607,7 +2726,29 @@ pub const Interpreter = struct {
             // The type system should have already verified this, but we add runtime validation as a safety check
             const expected_layout = self.layout_cache.getLayout(frame.return_layout_idx);
             const expected_size = self.layout_cache.layoutSize(expected_layout);
-            if (actual_return_size != expected_size) {
+
+            // When crossing module boundaries, layouts might have different indices but same structure
+            // Compare the actual layout content, not just sizes
+            const layouts_compatible = if (expected_layout.tag == actual_return_layout.tag) blk: {
+                if (expected_layout.tag == .scalar) {
+                    // For scalars, check if they're the same type
+                    const expected_scalar = expected_layout.data.scalar;
+                    const actual_scalar = actual_return_layout.data.scalar;
+                    if (expected_scalar.tag == actual_scalar.tag) {
+                        // Same scalar type - check precision for ints
+                        if (expected_scalar.tag == .int) {
+                            break :blk expected_scalar.data.int == actual_scalar.data.int;
+                        }
+                        // Same scalar type (bool, float, etc.)
+                        break :blk true;
+                    }
+                    break :blk false;
+                }
+                // For non-scalars, fall back to size comparison for now
+                break :blk actual_return_size == expected_size;
+            } else false;
+
+            if (!layouts_compatible) {
                 self.traceInfo("Type mismatch: expected size {} != actual size {}", .{ expected_size, actual_return_size });
                 self.traceInfo("  Expected layout: {}", .{expected_layout});
                 self.traceInfo("  Actual layout: {}", .{actual_return_layout});

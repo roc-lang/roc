@@ -953,8 +953,9 @@ pub fn canonicalizeFile(
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 
-    // Freeze the interners after canonicalization is complete
-    self.env.freezeInterners();
+    // NOTE: We do NOT freeze interners here anymore!
+    // Interners are frozen in Check.zig after importing types from other modules,
+    // because type imports can introduce new field names that need to be interned.
 }
 
 fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.AutoHashMapUnmanaged(Pattern.Idx, void)) !void {
