@@ -764,9 +764,10 @@ pub fn canonicalizeFile(
                         // Get the interned identifier - it should already exist from parsing
                         const ident = base.Ident.for_text(ident_text);
                         const idx = try self.env.insertIdent(ident);
-                        // Store the def index as u16 in exposed_items
-                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(idx, def_idx_u16);
+                        // Store the pattern index as u16 in exposed_items
+                        const def = self.env.store.getDef(def_idx);
+                        const pattern_idx_u16: u16 = @intCast(@intFromEnum(def.pattern));
+                        try self.env.setExposedNodeIndexById(idx, pattern_idx_u16);
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);

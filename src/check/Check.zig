@@ -1303,11 +1303,18 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                                 // Need to convert identifier from current module to target module
                                 const method_name_str = self.cir.getIdent(dot_access.field_name);
 
-                                // Search through the module's exposed items
-                                const node_idx_opt = if (module.common.findIdent(method_name_str)) |target_ident|
-                                    module.getExposedNodeIndexById(target_ident)
-                                else
-                                    null;
+                                // Search through the module's exposed items by comparing string values
+                                // We can't use findIdent because the target module's interner is frozen
+                                var node_idx_opt: ?u16 = null;
+                                const exposed_entries = module.common.exposed_items.items.entries.items;
+                                for (exposed_entries) |entry| {
+                                    const exposed_ident = @as(base.Ident.Idx, @bitCast(entry.key));
+                                    const exposed_name = module.getIdent(exposed_ident);
+                                    if (std.mem.eql(u8, exposed_name, method_name_str)) {
+                                        node_idx_opt = entry.value;
+                                        break;
+                                    }
+                                }
 
                                 if (node_idx_opt) |node_idx| {
                                     // Found the method!

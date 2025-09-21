@@ -90,7 +90,8 @@ fn copyAlias(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
+    const translated_ident = dest_idents.findByString(type_name_str) orelse
+        try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();
@@ -236,7 +237,8 @@ fn copyRecordFields(
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         const name_str = source_idents.getText(name);
-        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
+        const translated_name = dest_idents.findByString(name_str) orelse
+            try dest_idents.insert(allocator, base.Ident.for_text(name_str));
         _ = try fresh_fields.append(.{
             .name = translated_name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
@@ -299,7 +301,8 @@ fn copyTagUnion(
         const dest_args_range = try dest_store.appendVars(dest_args.items);
 
         const name_str = source_idents.getText(name);
-        const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
+        const translated_name = dest_idents.findByString(name_str) orelse
+            try dest_idents.insert(allocator, base.Ident.for_text(name_str));
 
         _ = try fresh_tags.append(.{
             .name = translated_name, // Tag names are local to the union type
@@ -326,11 +329,13 @@ fn copyNominalType(
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
-    const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
+    const translated_ident = dest_idents.findByString(type_name_str) orelse
+        try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
     // Translate the origin module ident
     const origin_str = source_idents.getText(source_nominal.origin_module);
-    const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
+    const translated_origin = dest_idents.findByString(origin_str) orelse
+        try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
     var dest_args = std.ArrayList(Var).init(dest_store.gpa);
     defer dest_args.deinit();

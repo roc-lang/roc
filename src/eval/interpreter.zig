@@ -117,7 +117,6 @@ const MAX_CAPTURE_FIELDS = 256;
 const WorkKind = enum {
     w_eval_expr_structural, // Structural: evaluate expression using its own type
     w_eval_expr_nominal, // Nominal: evaluate backing expression using nominal type's layout
-    w_eval_cross_module, // Evaluate expression from another module
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -170,6 +169,8 @@ pub const WorkItem = struct {
     kind: WorkKind,
     /// The expression index this work item operates on
     expr_idx: CIR.Expr.Idx,
+    /// Module context for this work item (null means use current interpreter module)
+    module_ctx: ?*const ModuleEnv,
     /// Optional extra data for e.g. if-expressions and lambda call
     extra: union {
         nothing: void,
@@ -184,10 +185,6 @@ pub const WorkItem = struct {
         segment_count: usize,
         /// pre-determined layout for expression evaluation (when not nothing)
         layout_idx: layout.Idx,
-        /// Cross-module evaluation data
-        cross_module: struct {
-            module_ptr: *const ModuleEnv,
-        },
     },
 };
 
@@ -444,43 +441,40 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr_structural,
             .expr_idx = expr_idx,
+            .module_ctx = null,
             .extra = .{ .nothing = {} },
         });
 
         // Main evaluation loop
         while (self.take_work()) |work| {
+            // Handle module context switching if needed
+            var saved_env: ?*const ModuleEnv = null;
+            var saved_type_store: ?*TypeStore = null;
+
+            if (work.module_ctx) |work_module| {
+                if (work_module != self.env) {
+                    // Save current context
+                    saved_env = self.env;
+                    saved_type_store = self.type_store;
+
+                    // Switch to work item's module context
+                    self.env = work_module;
+                    self.type_store = @constCast(&work_module.types);
+                }
+            }
+
+            // Restore context after work item execution
+            defer {
+                if (saved_env) |env| {
+                    self.env = env;
+                    self.type_store = saved_type_store.?;
+                }
+            }
+
             switch (work.kind) {
                 .w_eval_expr_structural => {
                     // For regular eval_expr calls, we don't have a predetermined layout
                     try self.evalExpr(work.expr_idx, roc_ops, null);
-                },
-                .w_eval_cross_module => {
-                    // Evaluate expression from another module
-                    const other_module = work.extra.cross_module.module_ptr;
-                    self.traceInfo("Evaluating cross-module expression {} from module '{s}'", .{ work.expr_idx, other_module.module_name });
-
-                    // Check what we're evaluating
-                    const expr = other_module.store.getExpr(work.expr_idx);
-                    self.traceInfo("Cross-module expression type: {s}", .{@tagName(expr)});
-
-                    // Temporarily switch to the other module's environment
-                    const saved_env = self.env;
-                    const saved_store = self.type_store;
-
-                    // Use the other module's environment and type store
-                    self.env = other_module;
-                    self.type_store = @constCast(&other_module.types);
-                    defer {
-                        // Restore original environment
-                        self.traceInfo("Restoring environment to module '{s}'", .{saved_env.module_name});
-                        self.env = saved_env;
-                        self.type_store = saved_store;
-                    }
-
-                    // Evaluate the expression in the other module's context
-                    try self.evalExpr(work.expr_idx, roc_ops, null);
-
-                    self.traceInfo("Cross-module evaluation completed, stack depth: {}", .{self.value_stack.items.len});
                 },
                 .w_eval_expr_nominal => {
                     // For nominal backing expressions, use the predetermined layout
@@ -720,7 +714,11 @@ pub const Interpreter = struct {
 
         // Check for runtime errors first
         switch (expr) {
-            .e_runtime_error => return error.Crash,
+            .e_runtime_error => {
+                std.debug.print("ERROR: Encountered e_runtime_error at expr_idx={}\n", .{@intFromEnum(expr_idx)});
+                std.debug.print("  Current module: {s}\n", .{self.env.module_name});
+                return error.Crash;
+            },
             else => {},
         }
 
@@ -842,6 +840,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = binop_kind,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -850,11 +849,13 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = binop.rhs,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = binop.lhs,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
             },
@@ -867,6 +868,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_if_check_condition,
                         .expr_idx = expr_idx,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
 
@@ -877,6 +879,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = branch.cond,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                 } else {
@@ -884,6 +887,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = if_expr.final_else,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                 }
@@ -915,6 +919,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = def_expr,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                     return;
@@ -976,6 +981,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(.{
                     .kind = .w_eval_expr_nominal,
                     .expr_idx = nominal.backing_expr,
+                    .module_ctx = self.env,
                     .extra = .{ .layout_idx = nominal_layout_idx },
                 });
             },
@@ -1048,6 +1054,8 @@ pub const Interpreter = struct {
                         }
 
                         self.traceError("Could not find definition with target_node_idx={} in module '{s}'", .{lookup.target_node_idx, module_name});
+                        std.debug.print("ERROR: target_node_idx={} not found in defs\n", .{lookup.target_node_idx});
+                        std.debug.print("  Checked {} definitions\n", .{other_defs.len});
                         return error.MethodNotFound;
                     }
                 }
@@ -1107,6 +1115,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_lambda_call,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .arg_count = arg_count },
                 });
 
@@ -1114,6 +1123,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = function_expr,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -1124,6 +1134,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = arg_exprs[i],
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                 }
@@ -1135,6 +1146,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(WorkItem{
                     .kind = .w_unary_minus,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -1142,6 +1154,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
             },
@@ -1152,6 +1165,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(WorkItem{
                     .kind = .w_unary_not,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -1159,6 +1173,7 @@ pub const Interpreter = struct {
                 try self.work_stack.append(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = unary.expr,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
             },
@@ -1168,6 +1183,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_block_cleanup,
                     .expr_idx = @enumFromInt(self.value_stack.items.len), // Pass value stack length
+                    .module_ctx = self.env,
                     .extra = .{ .bindings_stack_len = self.bindings_stack.items.len },
                 });
 
@@ -1175,6 +1191,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = block.final_expr,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -1197,18 +1214,21 @@ pub const Interpreter = struct {
                                 self.schedule_work(WorkItem{
                                     .kind = .w_recursive_bind_update,
                                     .expr_idx = expr_idx, // e_block's index for tracing
+                                    .module_ctx = self.env,
                                     .extra = .{ .decl_pattern_idx = decl.pattern },
                                 });
 
                                 self.schedule_work(WorkItem{
                                     .kind = .w_eval_expr_structural,
                                     .expr_idx = decl.expr,
+                                    .module_ctx = self.env,
                                     .extra = .{ .nothing = {} },
                                 });
 
                                 self.schedule_work(WorkItem{
                                     .kind = .w_recursive_bind_init,
                                     .expr_idx = decl.expr, // Pass the closure expr for layout info
+                                    .module_ctx = self.env,
                                     .extra = .{ .decl_pattern_idx = decl.pattern },
                                 });
                             } else {
@@ -1217,12 +1237,14 @@ pub const Interpreter = struct {
                                 self.schedule_work(WorkItem{
                                     .kind = .w_let_bind,
                                     .expr_idx = expr_idx, // e_block's index for tracing
+                                    .module_ctx = self.env,
                                     .extra = .{ .decl_pattern_idx = decl.pattern },
                                 });
                                 // Schedule evaluation of the expression.
                                 self.schedule_work(WorkItem{
                                     .kind = .w_eval_expr_structural,
                                     .expr_idx = decl.expr,
+                                    .module_ctx = self.env,
                                     .extra = .{ .nothing = {} },
                                 });
                             }
@@ -1232,6 +1254,7 @@ pub const Interpreter = struct {
                             self.schedule_work(WorkItem{
                                 .kind = .w_crash,
                                 .expr_idx = expr_idx, // e_block's index for tracing
+                                .module_ctx = self.env,
                                 .extra = .{ .crash_msg = crash.msg },
                             });
                         },
@@ -1430,8 +1453,12 @@ pub const Interpreter = struct {
                                         method_expr_idx = other_def.expr;
                                         method_module = other_module;
                                         self.traceInfo("Found method '{s}' in module '{s}' at expr_idx {}", .{ method_name, other_module.module_name, @intFromEnum(method_expr_idx.?) });
-                                        if (@intFromEnum(method_expr_idx.?) == 81) {
-                                            std.debug.print("!!! WARNING: Method '{s}' is at expr_idx 81 in module '{s}'\n", .{ method_name, other_module.module_name });
+
+                                        // Debug: Check what kind of expression this is
+                                        const method_expr = other_module.store.getExpr(method_expr_idx.?);
+                                        std.debug.print("DEBUG: Method '{s}' expr type: {s}\n", .{ method_name, @tagName(method_expr) });
+                                        if (method_expr == .e_runtime_error) {
+                                            std.debug.print("ERROR: Method expression is a runtime error!\n", .{});
                                         }
                                         break;
                                     }
@@ -1455,28 +1482,17 @@ pub const Interpreter = struct {
                     try self.work_stack.append(WorkItem{
                         .kind = .w_lambda_call,
                         .expr_idx = expr_idx,
+                        .module_ctx = self.env,
                         .extra = .{ .arg_count = total_arg_count },
                     });
 
                     // 2. Function (the method)
-                    if (method_module != self.env) {
-                        // Cross-module method - use special work item
-                        self.traceInfo("Scheduling cross-module method from '{s}'", .{method_module.?.module_name});
-                        try self.work_stack.append(WorkItem{
-                            .kind = .w_eval_cross_module,
-                            .expr_idx = method_expr_idx.?,
-                            .extra = .{ .cross_module = .{
-                                .module_ptr = method_module.?,
-                            } },
-                        });
-                    } else {
-                        // Local method - evaluate normally
-                        try self.work_stack.append(WorkItem{
-                            .kind = .w_eval_expr_structural,
-                            .expr_idx = method_expr_idx.?,
-                            .extra = .{ .nothing = {} },
-                        });
-                    }
+                    try self.work_stack.append(WorkItem{
+                        .kind = .w_eval_expr_structural,
+                        .expr_idx = method_expr_idx.?,
+                        .module_ctx = method_module,
+                        .extra = .{ .nothing = {} },
+                    });
 
                     // 1b. Provided arguments (in reverse order for LIFO)
                     var i = provided_args.len;
@@ -1485,6 +1501,7 @@ pub const Interpreter = struct {
                         try self.work_stack.append(WorkItem{
                             .kind = .w_eval_expr_structural,
                             .expr_idx = provided_args[i],
+                            .module_ctx = self.env,
                             .extra = .{ .nothing = {} },
                         });
                     }
@@ -1493,6 +1510,7 @@ pub const Interpreter = struct {
                     try self.work_stack.append(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = dot_access.receiver,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                 } else {
@@ -1501,6 +1519,7 @@ pub const Interpreter = struct {
                     try self.work_stack.append(WorkItem{
                         .kind = .w_dot_access,
                         .expr_idx = expr_idx,
+                        .module_ctx = self.env,
                         .extra = .{ .dot_access_field_name = dot_access.field_name },
                     });
 
@@ -1508,6 +1527,7 @@ pub const Interpreter = struct {
                     try self.work_stack.append(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = dot_access.receiver,
+                        .module_ctx = self.env,
                         .extra = .{ .nothing = {} },
                     });
                 }
@@ -1561,6 +1581,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_str_interpolate_combine,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .segment_count = segments.len },
                 });
 
@@ -1570,6 +1591,7 @@ pub const Interpreter = struct {
                     self.schedule_work(WorkItem{
                         .kind = .w_eval_expr_structural,
                         .expr_idx = segments[i - 1],
+                        .module_ctx = self.env,
                         .extra = .{ .none = {} },
                     });
                 }
@@ -1596,6 +1618,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_record_fields,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     // Start with current_field_idx = 0
                     .extra = .{ .current_field_idx = 0 },
                 });
@@ -1645,6 +1668,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_tuple_elements,
                     .expr_idx = expr_idx,
+                    .module_ctx = self.env,
                     // Start with current_element_idx = 0
                     .extra = .{ .current_element_idx = 0 },
                 });
@@ -2043,8 +2067,8 @@ pub const Interpreter = struct {
         }
         const arg_exprs = all_exprs[1..]; // Skip the function expression
 
-        // Get parameter types
-        const param_types = self.env.types.sliceVars(func_type.args);
+        // Get parameter types from the closure module's type store
+        const param_types = closure_module.types.sliceVars(func_type.args);
         self.traceInfo("  func_type.args slice: start={}, count={}", .{ func_type.args.start, func_type.args.count });
         self.traceInfo("  param_types.len={}, arg_count={}", .{ param_types.len, arg_count });
         for (param_types, 0..) |param_var, i| {
@@ -2373,6 +2397,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr_structural,
                 .expr_idx = branch.body,
+                .module_ctx = self.env,
                 .extra = .{ .nothing = {} },
             });
         } else {
@@ -2389,6 +2414,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_if_check_condition,
                     .expr_idx = encoded_idx,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
 
@@ -2396,6 +2422,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = next_branch.cond,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
             } else {
@@ -2403,6 +2430,7 @@ pub const Interpreter = struct {
                 self.schedule_work(WorkItem{
                     .kind = .w_eval_expr_structural,
                     .expr_idx = if_expr.final_else,
+                    .module_ctx = self.env,
                     .extra = .{ .nothing = {} },
                 });
             }
@@ -2534,38 +2562,23 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_lambda_return,
             .expr_idx = closure.body_idx,
+            .module_ctx = self.env,
             .extra = .{ .nothing = {} },
         });
 
         // 5. Schedule body evaluation.
         // If the closure is from another module, evaluate its body in that module's context
-        if (closure.module_ptr) |module_ptr| {
-            const closure_origin_module: *const ModuleEnv = @ptrCast(@alignCast(module_ptr));
-            if (closure_origin_module != self.env) {
-                // Cross-module closure body evaluation
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_cross_module,
-                    .expr_idx = closure.body_idx,
-                    .extra = .{ .cross_module = .{
-                        .module_ptr = closure_origin_module,
-                    } },
-                });
-            } else {
-                // Same module, evaluate normally
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = closure.body_idx,
-                    .extra = .{ .nothing = {} },
-                });
-            }
-        } else {
-            // No module info, evaluate in current context (backward compatibility)
-            self.schedule_work(WorkItem{
-                .kind = .w_eval_expr_structural,
-                .expr_idx = closure.body_idx,
-                .extra = .{ .nothing = {} },
-            });
-        }
+        const closure_module_ctx = if (closure.module_ptr) |module_ptr|
+            @as(*const ModuleEnv, @ptrCast(@alignCast(module_ptr)))
+        else
+            self.env;
+
+        self.schedule_work(WorkItem{
+            .kind = .w_eval_expr_structural,
+            .expr_idx = closure.body_idx,
+            .module_ctx = closure_module_ctx,
+            .extra = .{ .nothing = {} },
+        });
     }
 
     fn handleLambdaReturn(self: *Interpreter, roc_ops: *builtins.host_abi.RocOps) !void {
@@ -2709,6 +2722,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_record_fields,
                 .expr_idx = record_expr_idx,
+                .module_ctx = self.env,
                 .extra = .{ .current_field_idx = current_field_idx + 1 },
             });
 
@@ -2744,6 +2758,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr_structural,
                 .expr_idx = current_field_value_expr_idx,
+                .module_ctx = self.env,
                 .extra = .{ .nothing = {} },
             });
         } else {
@@ -3084,6 +3099,7 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_lambda_call,
             .expr_idx = closure_expr_idx,
+            .module_ctx = self.env,
             .extra = .{ .arg_count = arg_count },
         });
 
@@ -3091,6 +3107,7 @@ pub const Interpreter = struct {
         self.schedule_work(WorkItem{
             .kind = .w_eval_expr_structural,
             .expr_idx = closure_expr_idx,
+            .module_ctx = self.env,
             .extra = .{ .nothing = {} },
         });
 
@@ -4229,6 +4246,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_tuple_elements,
                 .expr_idx = tuple_expr_idx,
+                .module_ctx = self.env,
                 .extra = .{ .current_element_idx = current_element_idx + 1 },
             });
 
@@ -4243,6 +4261,7 @@ pub const Interpreter = struct {
             self.schedule_work(WorkItem{
                 .kind = .w_eval_expr_structural,
                 .expr_idx = current_element_expr_idx,
+                .module_ctx = self.env,
                 .extra = .{ .nothing = {} },
             });
         } else {
