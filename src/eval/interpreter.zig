@@ -117,6 +117,7 @@ const MAX_CAPTURE_FIELDS = 256;
 const WorkKind = enum {
     w_eval_expr_structural, // Structural: evaluate expression using its own type
     w_eval_expr_nominal, // Nominal: evaluate backing expression using nominal type's layout
+    w_eval_cross_module, // Evaluate expression from another module
     w_binop_add,
     w_binop_sub,
     w_binop_mul,
@@ -183,6 +184,10 @@ pub const WorkItem = struct {
         segment_count: usize,
         /// pre-determined layout for expression evaluation (when not nothing)
         layout_idx: layout.Idx,
+        /// Cross-module evaluation data
+        cross_module: struct {
+            module_ptr: *const ModuleEnv,
+        },
     },
 };
 
@@ -261,6 +266,8 @@ pub const Interpreter = struct {
     allocator: std.mem.Allocator,
     /// Canonicalized Intermediate Representation containing expressions to evaluate
     env: *const ModuleEnv,
+    /// Other modules that might be referenced (for cross-module static dispatch)
+    other_modules: []const *const ModuleEnv,
     /// Stack memory for storing expression values during evaluation
     stack_memory: *stack.Stack,
     /// Cache for type layout information and size calculations
@@ -299,9 +306,21 @@ pub const Interpreter = struct {
         layout_cache: *LayoutStore,
         type_store: *TypeStore,
     ) !Interpreter {
+        return initWithModules(allocator, cir, &.{}, stack_memory, layout_cache, type_store);
+    }
+
+    pub fn initWithModules(
+        allocator: std.mem.Allocator,
+        cir: *const ModuleEnv,
+        other_modules: []const *const ModuleEnv,
+        stack_memory: *stack.Stack,
+        layout_cache: *LayoutStore,
+        type_store: *TypeStore,
+    ) !Interpreter {
         const interp = Interpreter{
             .allocator = allocator,
             .env = cir,
+            .other_modules = other_modules,
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
             .type_store = type_store,
@@ -383,7 +402,7 @@ pub const Interpreter = struct {
         for (defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (@intFromEnum(def.pattern) == @intFromEnum(pattern_idx)) {
-                self.traceInfo("Found global definition for pattern_idx={}", .{@intFromEnum(pattern_idx)});
+                self.traceInfo("Found global definition for pattern_idx={}, returning expr_idx={}", .{ @intFromEnum(pattern_idx), @intFromEnum(def.expr) });
                 return def.expr;
             }
         }
@@ -434,6 +453,34 @@ pub const Interpreter = struct {
                 .w_eval_expr_structural => {
                     // For regular eval_expr calls, we don't have a predetermined layout
                     try self.evalExpr(work.expr_idx, roc_ops, null);
+                },
+                .w_eval_cross_module => {
+                    // Evaluate expression from another module
+                    const other_module = work.extra.cross_module.module_ptr;
+                    self.traceInfo("Evaluating cross-module expression {} from module '{s}'", .{ work.expr_idx, other_module.module_name });
+
+                    // Check what we're evaluating
+                    const expr = other_module.store.getExpr(work.expr_idx);
+                    self.traceInfo("Cross-module expression type: {s}", .{@tagName(expr)});
+
+                    // Temporarily switch to the other module's environment
+                    const saved_env = self.env;
+                    const saved_store = self.type_store;
+
+                    // Use the other module's environment and type store
+                    self.env = other_module;
+                    self.type_store = @constCast(&other_module.types);
+                    defer {
+                        // Restore original environment
+                        self.traceInfo("Restoring environment to module '{s}'", .{saved_env.module_name});
+                        self.env = saved_env;
+                        self.type_store = saved_store;
+                    }
+
+                    // Evaluate the expression in the other module's context
+                    try self.evalExpr(work.expr_idx, roc_ops, null);
+
+                    self.traceInfo("Cross-module evaluation completed, stack depth: {}", .{self.value_stack.items.len});
                 },
                 .w_eval_expr_nominal => {
                     // For nominal backing expressions, use the predetermined layout
@@ -937,6 +984,78 @@ pub const Interpreter = struct {
                 return error.LayoutError;
             },
 
+            .e_lookup_external => |lookup| {
+                self.traceInfo("evalExpr e_lookup_external module_idx={}, target_node_idx={}", .{@intFromEnum(lookup.module_idx), lookup.target_node_idx});
+
+                // Get the module name from the imports store
+                const import_idx_int = @intFromEnum(lookup.module_idx);
+                const string_idx = self.env.imports.imports.items.items[import_idx_int];
+                const module_name = self.env.common.strings.get(string_idx);
+
+                self.traceInfo("Looking up external identifier from module '{s}' with target_node_idx={}", .{module_name, lookup.target_node_idx});
+
+                // Find the module among other_modules
+                for (self.other_modules) |other_module| {
+                    if (std.mem.eql(u8, other_module.module_name, module_name)) {
+                        // The target_node_idx points to a node in the other module
+                        // For imported identifiers, the target_node_idx typically points to
+                        // the pattern (identifier) in the export list or definition
+
+                        // Look through the other module's definitions to find the right one
+                        const other_defs = other_module.store.sliceDefs(other_module.all_defs);
+
+                        // The target_node_idx should point to a pattern node in the other module
+                        // Let's find the definition with the matching pattern
+                        for (other_defs) |other_def_idx| {
+                            const other_def = other_module.store.getDef(other_def_idx);
+
+                            // Check if this definition's pattern matches our target
+                            const pattern_node_idx = @intFromEnum(other_def.pattern);
+
+                            self.traceInfo("Checking def with pattern_node_idx={}", .{pattern_node_idx});
+
+                            if (pattern_node_idx == lookup.target_node_idx) {
+                                // Found the matching definition!
+                                self.traceInfo("Found matching definition by target_node_idx", .{});
+
+                                const pattern = other_module.store.getPattern(other_def.pattern);
+                                if (pattern == .assign) {
+                                    const def_name = other_module.getIdent(pattern.assign.ident);
+                                    self.traceInfo("Matched definition: '{s}'", .{def_name});
+                                }
+
+                                // Found it! We need to evaluate this expression from the other module
+                                // to get its closure value
+                                self.traceInfo("Evaluating matched definition from module '{s}'", .{module_name});
+
+                                // Save current environment
+                                const saved_env = self.env;
+                                const saved_store = self.type_store;
+
+                                // Switch to the other module's environment
+                                self.env = other_module;
+                                self.type_store = @constCast(&other_module.types);
+                                defer {
+                                    // Restore original environment
+                                    self.env = saved_env;
+                                    self.type_store = saved_store;
+                                }
+
+                                // Evaluate the expression directly in the other module's context
+                                try self.evalExpr(other_def.expr, roc_ops, null);
+                                return;
+                            }
+                        }
+
+                        self.traceError("Could not find definition with target_node_idx={} in module '{s}'", .{lookup.target_node_idx, module_name});
+                        return error.MethodNotFound;
+                    }
+                }
+
+                self.traceError("Module '{s}' not found", .{module_name});
+                return error.MethodNotFound;
+            },
+
             // Tags with arguments
             .e_tag => |tag| {
                 const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
@@ -1181,10 +1300,10 @@ pub const Interpreter = struct {
                     self.traceInfo("Static dispatch: looking for method '{s}'", .{method_name});
 
                     // Try to find the method in the current module's definitions
-                    // This is a simplified approach that assumes the method is defined locally
                     var method_expr_idx: ?CIR.Expr.Idx = null;
+                    var method_module: ?*const ModuleEnv = null;
 
-                    // Look through all definitions to find the method
+                    // First, check if it's an imported identifier
                     const all_defs = self.env.store.sliceDefs(self.env.all_defs);
                     for (all_defs) |def_idx| {
                         const def = self.env.store.getDef(def_idx);
@@ -1196,16 +1315,60 @@ pub const Interpreter = struct {
                                 const def_name = self.env.getIdent(assign.ident);
                                 if (std.mem.eql(u8, def_name, method_name)) {
                                     // Found a matching method name
-                                    // Get the expression - need to check if it's a lambda
                                     const def_expr = self.env.store.getExpr(def.expr);
                                     switch (def_expr) {
                                         .e_lambda => {
+                                            // Local lambda definition
                                             method_expr_idx = def.expr;
-                                            self.traceInfo("Found method '{s}' at expr_idx {}", .{ method_name, method_expr_idx.? });
+                                            method_module = self.env;
+                                            self.traceInfo("Found local method '{s}' at expr_idx {}", .{ method_name, method_expr_idx.? });
                                             break;
                                         },
+                                        .e_lookup_external => |lookup| {
+                                            // This is an imported identifier
+                                            // Get the module name from the imports store
+                                            const import_idx_int = @intFromEnum(lookup.module_idx);
+                                            const string_idx = self.env.imports.imports.items.items[import_idx_int];
+                                            const module_name = self.env.common.strings.get(string_idx);
+
+                                            self.traceInfo("Method '{s}' is imported from module '{s}' with target_node_idx {}", .{ method_name, module_name, lookup.target_node_idx });
+
+                                            // Find the module among other_modules
+                                            for (self.other_modules) |other_module| {
+                                                if (std.mem.eql(u8, other_module.module_name, module_name)) {
+                                                    // Found the module
+                                                    // The target_node_idx points to a pattern node in the other module
+                                                    // We need to find the definition that uses this pattern
+
+                                                    const other_defs = other_module.store.sliceDefs(other_module.all_defs);
+                                                    self.traceInfo("Looking for definition with pattern idx {} in module '{s}' (checking {} defs)", .{ lookup.target_node_idx, module_name, other_defs.len });
+
+                                                    for (other_defs, 0..) |other_def_idx, j| {
+                                                        const other_def = other_module.store.getDef(other_def_idx);
+                                                        const pattern_idx_int = @intFromEnum(other_def.pattern);
+                                                        self.traceInfo("  Def[{}]: pattern_idx={}, expr_idx={}", .{ j, pattern_idx_int, @intFromEnum(other_def.expr) });
+
+                                                        // Check if this def's pattern matches the target_node_idx
+                                                        if (pattern_idx_int == lookup.target_node_idx) {
+                                                            // Found it! This is the definition we're looking for
+                                                            method_expr_idx = other_def.expr;
+                                                            method_module = other_module;
+                                                            self.traceInfo("FOUND: Exported method via pattern idx {} at expr_idx {} (int: {}) in module '{s}'", .{ lookup.target_node_idx, method_expr_idx.?, @intFromEnum(method_expr_idx.?), module_name });
+
+                                                            // Verify it's actually an expression in the target module
+                                                            const test_expr = other_module.store.getExpr(method_expr_idx.?);
+                                                            self.traceInfo("Method expression type in target module: {s}", .{@tagName(test_expr)});
+                                                            break;
+                                                        }
+                                                    }
+
+                                                    if (method_expr_idx != null) break;
+                                                }
+                                            }
+                                            if (method_expr_idx != null) break;
+                                        },
                                         else => {
-                                            // Not a function, keep looking
+                                            // Not a function or import, keep looking
                                         },
                                     }
                                 }
@@ -1216,9 +1379,71 @@ pub const Interpreter = struct {
                         }
                     }
 
-                    if (method_expr_idx == null) {
-                        self.traceError("Static dispatch: method '{s}' not found", .{method_name});
-                        return error.MethodNotFound;
+                    // If we didn't find the method in defs, try to resolve it as an imported identifier
+                    // This handles the case where `import Module exposing [func]` makes `func` available
+                    // but it doesn't create a def entry
+                    if (method_expr_idx == null or method_module == null) {
+                        self.traceInfo("Method '{s}' not found in defs, checking if it's directly imported", .{method_name});
+
+                        // For cross-module static dispatch with exposing imports,
+                        // we need to check if the method name corresponds to an exposed import
+                        // Since the canonicalizer handles this at compile time, we may need
+                        // additional metadata to resolve this at runtime
+
+                        // For now, let's check other modules directly for the exported function
+                        for (self.other_modules) |other_module| {
+                            // Look through the other module's exports
+                            const other_defs = other_module.store.sliceDefs(other_module.all_defs);
+                            for (other_defs) |def_idx| {
+                                const def = other_module.store.getDef(def_idx);
+                                const pattern = other_module.store.getPattern(def.pattern);
+                                if (pattern == .assign) {
+                                    const def_name = other_module.getIdent(pattern.assign.ident);
+                                    if (std.mem.eql(u8, def_name, method_name)) {
+                                        // Found the method in another module
+                                        method_expr_idx = def.expr;
+                                        method_module = other_module;
+                                        self.traceInfo("Found method '{s}' exported from module '{s}'", .{ method_name, other_module.module_name });
+                                        break;
+                                    }
+                                }
+                            }
+                            if (method_expr_idx != null) break;
+                        }
+                    }
+
+                    if (method_expr_idx == null or method_module == null) {
+                        // Method not found in definitions - try looking in imported modules
+                        // This handles the case where imports don't create definitions
+                        self.traceInfo("Method '{s}' not found in definitions, checking imports", .{method_name});
+
+                        // Check all other modules for an exported function with this name
+                        for (self.other_modules) |other_module| {
+                            const other_defs = other_module.store.sliceDefs(other_module.all_defs);
+                            for (other_defs) |other_def_idx| {
+                                const other_def = other_module.store.getDef(other_def_idx);
+                                const other_pattern = other_module.store.getPattern(other_def.pattern);
+                                if (other_pattern == .assign) {
+                                    const other_def_name = other_module.getIdent(other_pattern.assign.ident);
+                                    if (std.mem.eql(u8, other_def_name, method_name)) {
+                                        // Found the method in another module
+                                        method_expr_idx = other_def.expr;
+                                        method_module = other_module;
+                                        self.traceInfo("Found method '{s}' in module '{s}' at expr_idx {}", .{ method_name, other_module.module_name, @intFromEnum(method_expr_idx.?) });
+                                        if (@intFromEnum(method_expr_idx.?) == 81) {
+                                            std.debug.print("!!! WARNING: Method '{s}' is at expr_idx 81 in module '{s}'\n", .{ method_name, other_module.module_name });
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            if (method_expr_idx != null) break;
+                        }
+
+                        if (method_expr_idx == null or method_module == null) {
+                            self.traceError("Static dispatch: method '{s}' not found in any module", .{method_name});
+                            return error.MethodNotFound;
+                        }
                     }
 
                     // Get all the arguments (receiver + provided args)
@@ -1234,11 +1459,24 @@ pub const Interpreter = struct {
                     });
 
                     // 2. Function (the method)
-                    try self.work_stack.append(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = method_expr_idx.?,
-                        .extra = .{ .nothing = {} },
-                    });
+                    if (method_module != self.env) {
+                        // Cross-module method - use special work item
+                        self.traceInfo("Scheduling cross-module method from '{s}'", .{method_module.?.module_name});
+                        try self.work_stack.append(WorkItem{
+                            .kind = .w_eval_cross_module,
+                            .expr_idx = method_expr_idx.?,
+                            .extra = .{ .cross_module = .{
+                                .module_ptr = method_module.?,
+                            } },
+                        });
+                    } else {
+                        // Local method - evaluate normally
+                        try self.work_stack.append(WorkItem{
+                            .kind = .w_eval_expr_structural,
+                            .expr_idx = method_expr_idx.?,
+                            .extra = .{ .nothing = {} },
+                        });
+                    }
 
                     // 1b. Provided arguments (in reverse order for LIFO)
                     var i = provided_args.len;
@@ -1337,7 +1575,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
+            .e_list, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
                 return error.LayoutError;
             },
 
@@ -1386,6 +1624,7 @@ pub const Interpreter = struct {
                 // Skip setting captures_pattern_idx - leave it uninitialized
                 // Setting this field causes string corruption
                 closure.captures_layout_idx = captures_layout_idx;
+                closure.module_ptr = @ptrCast(self.env);
                 closure.lambda_expr_idx = expr_idx;
             },
 
@@ -1768,9 +2007,15 @@ pub const Interpreter = struct {
         arg_count: u32,
         scope_map: *types.VarMap,
     ) !void {
+        // Get the module where the closure was defined
+        const closure_module: *const ModuleEnv = if (closure.module_ptr) |ptr|
+            @ptrCast(@alignCast(ptr))
+        else
+            self.env;
+
         // Get the lambda's function type
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
-        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+        const lambda_resolved = closure_module.types.resolveVar(lambda_var);
 
         self.traceInfo("buildTypeScopeForCall: lambda_var={}, lambda_expr_idx={}", .{ lambda_var, closure.lambda_expr_idx });
         self.traceInfo("  lambda type content: {s}", .{@tagName(lambda_resolved.desc.content)});
@@ -1803,7 +2048,7 @@ pub const Interpreter = struct {
         self.traceInfo("  func_type.args slice: start={}, count={}", .{ func_type.args.start, func_type.args.count });
         self.traceInfo("  param_types.len={}, arg_count={}", .{ param_types.len, arg_count });
         for (param_types, 0..) |param_var, i| {
-            const param_resolved = self.env.types.resolveVar(param_var);
+            const param_resolved = closure_module.types.resolveVar(param_var);
             self.traceInfo("  param[{}]: var={}, content={s}", .{ i, param_var, @tagName(param_resolved.desc.content) });
         }
         if (param_types.len != arg_count or arg_exprs.len != arg_count) {
@@ -1916,8 +2161,14 @@ pub const Interpreter = struct {
         // Get the type Var for the lambda expression
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
 
-        // Resolve the lambda's type to get the function type
-        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+        // Get the module where the closure was defined
+        const closure_module: *const ModuleEnv = if (closure.module_ptr) |ptr|
+            @ptrCast(@alignCast(ptr))
+        else
+            self.env;
+
+        // Resolve the lambda's type using the closure's module's type store
+        const lambda_resolved = closure_module.types.resolveVar(lambda_var);
 
         // Extract the return type from the function
         switch (lambda_resolved.desc.content) {
@@ -1932,7 +2183,7 @@ pub const Interpreter = struct {
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
+                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -1980,7 +2231,7 @@ pub const Interpreter = struct {
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
+                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2034,7 +2285,7 @@ pub const Interpreter = struct {
                     }
 
                     // Ensure the return type variable is fully resolved before getting layout
-                    const ret_resolved = self.env.types.resolveVar(return_type_var);
+                    const ret_resolved = closure_module.types.resolveVar(return_type_var);
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2172,6 +2423,12 @@ pub const Interpreter = struct {
 
         const closure: *const Closure = @ptrCast(@alignCast(closure_value.ptr.?));
 
+        // Get the module where the closure was defined
+        const closure_module: *const ModuleEnv = if (closure.module_ptr) |ptr|
+            @ptrCast(@alignCast(ptr))
+        else
+            self.env;
+
         // Calculate value_base before allocating return slot
         const value_base: usize = self.value_stack.items.len - @as(usize, arg_count) - 1; // -1 for closure
 
@@ -2255,7 +2512,7 @@ pub const Interpreter = struct {
         });
 
         // 2. Bind the explicit parameters to their arguments.
-        const param_ids = self.env.store.slicePatterns(closure.params);
+        const param_ids = closure_module.store.slicePatterns(closure.params);
         std.debug.assert(param_ids.len == arg_count);
 
         // Current stack layout: `[arg1, ..., argN, closure, return_slot, captures_view]`
@@ -2270,7 +2527,7 @@ pub const Interpreter = struct {
             const arg_index_from_top = 3 + arg_count - i;
             const arg = try self.peekStackValue(arg_index_from_top);
 
-            try self.bindPattern(param_idx, arg, roc_ops);
+            try self.bindPatternFromModule(param_idx, arg, closure_module, roc_ops);
         }
 
         // 4. Schedule the work to copy the return value and break down the stack frame.
@@ -2281,11 +2538,34 @@ pub const Interpreter = struct {
         });
 
         // 5. Schedule body evaluation.
-        self.schedule_work(WorkItem{
-            .kind = .w_eval_expr_structural,
-            .expr_idx = closure.body_idx,
-            .extra = .{ .nothing = {} },
-        });
+        // If the closure is from another module, evaluate its body in that module's context
+        if (closure.module_ptr) |module_ptr| {
+            const closure_origin_module: *const ModuleEnv = @ptrCast(@alignCast(module_ptr));
+            if (closure_origin_module != self.env) {
+                // Cross-module closure body evaluation
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_cross_module,
+                    .expr_idx = closure.body_idx,
+                    .extra = .{ .cross_module = .{
+                        .module_ptr = closure_origin_module,
+                    } },
+                });
+            } else {
+                // Same module, evaluate normally
+                self.schedule_work(WorkItem{
+                    .kind = .w_eval_expr_structural,
+                    .expr_idx = closure.body_idx,
+                    .extra = .{ .nothing = {} },
+                });
+            }
+        } else {
+            // No module info, evaluate in current context (backward compatibility)
+            self.schedule_work(WorkItem{
+                .kind = .w_eval_expr_structural,
+                .expr_idx = closure.body_idx,
+                .extra = .{ .nothing = {} },
+            });
+        }
     }
 
     fn handleLambdaReturn(self: *Interpreter, roc_ops: *builtins.host_abi.RocOps) !void {
@@ -2617,6 +2897,13 @@ pub const Interpreter = struct {
     /// Helper to pretty print a CIR.Pattern in a trace
     pub fn tracePattern(self: *const Interpreter, pattern_idx: CIR.Pattern.Idx) void {
         if (self.trace_writer) |writer| {
+            // Check if this pattern index is valid for the current module
+            // Pattern indices from other modules won't be valid here
+            const pattern_idx_int = @intFromEnum(pattern_idx);
+            if (pattern_idx_int >= 999999) { // Just use a large number for now
+                writer.print("[cross-module pattern_idx={}]", .{pattern_idx_int}) catch {};
+                return;
+            }
             const pattern = self.env.store.getPattern(pattern_idx);
 
             var tree = SExprTree.init(self.env.gpa);
@@ -2728,8 +3015,8 @@ pub const Interpreter = struct {
         }
     }
 
-    fn bindPattern(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue, roc_ops: *RocOps) EvalError!void {
-        const pattern = self.env.store.getPattern(pattern_idx);
+    fn bindPatternFromModule(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue, module: *const ModuleEnv, roc_ops: *RocOps) EvalError!void {
+        const pattern = module.store.getPattern(pattern_idx);
         switch (pattern) {
             .assign => |assign_pattern| {
                 const binding = Binding{
@@ -2737,66 +3024,54 @@ pub const Interpreter = struct {
                     .value = value.moveForBinding(),
                 };
                 self.traceInfo("Binding '{s}' (pattern_idx={})", .{
-                    self.env.getIdent(assign_pattern.ident),
+                    module.getIdent(assign_pattern.ident),
                     @intFromEnum(pattern_idx),
                 });
                 try self.traceValue("value", value);
                 try self.bindings_stack.append(binding);
             },
             .record_destructure => |record_destruct| {
-                const destructs = self.env.store.sliceRecordDestructs(record_destruct.destructs);
+                const destructs = module.store.sliceRecordDestructs(record_destruct.destructs);
 
                 // Get the record layout
                 if (value.layout.tag != .record) {
-                    return error.LayoutError;
+                    return error.TypeMismatch;
                 }
 
                 // Use RecordAccessor for safe field access
                 const record_accessor = try value.asRecord(self.layout_cache);
 
-                // For each field in the pattern
+                // Iterate through the destruct patterns
                 for (destructs) |destruct_idx| {
-                    const destruct = self.env.store.getRecordDestruct(destruct_idx);
-                    const field_name = self.env.getIdent(destruct.label);
+                    const destruct = module.store.getRecordDestruct(destruct_idx);
 
-                    // Find the field by name using RecordAccessor
-                    const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse return error.LayoutError;
+                    // Find the matching field in the record by name
+                    const field_name = module.getIdent(destruct.label);
+                    const field_index = record_accessor.findFieldIndex(module, field_name) orelse {
+                        self.traceError("Field '{s}' not found in record", .{field_name});
+                        return error.TypeMismatch;
+                    };
 
                     // Get the field value using RecordAccessor
                     const field_value = try record_accessor.getFieldByIndex(field_index);
 
-                    // Recursively bind the sub-pattern
+                    // Bind the pattern based on its kind
                     const inner_pattern_idx = switch (destruct.kind) {
-                        .Required => |p_idx| p_idx,
-                        .SubPattern => |p_idx| p_idx,
+                        .Required => |p| p,
+                        .SubPattern => |p| p,
                     };
-                    try self.bindPattern(inner_pattern_idx, field_value, roc_ops);
-                }
-            },
-            .tuple => |tuple_pattern| {
-                const patterns = self.env.store.slicePatterns(tuple_pattern.patterns);
-
-                if (value.layout.tag != .tuple) {
-                    return error.LayoutError;
-                }
-
-                // Use TupleAccessor for safe tuple element access
-                const tuple_accessor = try value.asTuple(self.layout_cache);
-
-                if (patterns.len != tuple_accessor.getElementCount()) {
-                    return error.ArityMismatch;
-                }
-
-                for (patterns, 0..) |inner_pattern_idx, i| {
-                    const element_value = try tuple_accessor.getElement(i);
-                    try self.bindPattern(inner_pattern_idx, element_value, roc_ops);
+                    try self.bindPatternFromModule(inner_pattern_idx, field_value, module, roc_ops);
                 }
             },
             else => {
-                // TODO: handle other patterns
-                return error.LayoutError;
+                self.traceError("bindPattern: Unhandled pattern type: {s}", .{@tagName(pattern)});
+                return error.NotImplemented;
             },
         }
+    }
+
+    fn bindPattern(self: *Interpreter, pattern_idx: CIR.Pattern.Idx, value: StackValue, roc_ops: *RocOps) EvalError!void {
+        return self.bindPatternFromModule(pattern_idx, value, self.env, roc_ops);
     }
 
     /// Public method to call a closure with arguments already on the stack
@@ -3320,6 +3595,7 @@ pub const Interpreter = struct {
             .captures_pattern_idx = @enumFromInt(0), // Not used in our direct binding approach
             .captures_layout_idx = captures_layout_idx,
             .lambda_expr_idx = expr_idx, // Store the e_closure's index
+            .module_ptr = @ptrCast(self.env),
         };
 
         // Copy captures to closure memory

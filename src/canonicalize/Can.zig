@@ -1366,13 +1366,13 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
-    // 5. Convert exposed items and introduce them into scope
+    // 5. Store the mapping from module name to Import.Idx (needed before introducing exposed items)
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+
+    // 6. Convert exposed items and introduce them into scope
     const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
     try self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
-
-    // 6. Store the mapping from module name to Import.Idx
-    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
 
     // 7. Create CIR import statement
     const cir_import = Statement{
@@ -1526,6 +1526,51 @@ fn convertASTExposesToCIR(
 }
 
 /// Introduce converted exposed items into scope for identifier resolution
+fn createDefinitionForExposedItem(
+    self: *Self,
+    local_name: Ident.Idx,
+    module_name: Ident.Idx,
+    _: Ident.Idx, // original_name - will be used when we resolve the actual target
+    region: Region,
+) std.mem.Allocator.Error!void {
+    // Get the module import index
+    const module_name_text = self.env.getIdent(module_name);
+    const module_import_idx = self.import_indices.get(module_name_text) orelse {
+        // If we don't have the module index yet, we can't create the definition
+        // This shouldn't happen in normal flow, but we'll handle it gracefully
+        return;
+    };
+
+    // Find the target node in the other module
+    // For now, we'll use a placeholder node index (0) since we don't have
+    // direct access to the other module's node indices here
+    // The type checker will resolve this properly
+    const target_node_idx = 0; // This will be resolved during type checking
+
+    // Create the pattern for the local name
+    const pattern = Pattern{ .assign = .{ .ident = local_name } };
+    const pattern_idx = try self.env.addPatternAndTypeVar(pattern, Content{ .flex_var = null }, region);
+
+    // Create the e_lookup_external expression
+    const expr = Expr{ .e_lookup_external = .{
+        .module_idx = module_import_idx,
+        .target_node_idx = target_node_idx,
+        .region = region,
+    } };
+    const expr_idx = try self.env.addExprAndTypeVar(expr, Content{ .flex_var = null }, region);
+
+    // Create the definition
+    const def_idx = try self.env.addDefAndTypeVar(.{
+        .pattern = pattern_idx,
+        .expr = expr_idx,
+        .annotation = null,
+        .kind = .let,  // Use let for import definitions
+    }, Content{ .flex_var = null }, region);
+
+    // Add to the module's definitions
+    try self.env.store.addScratchDef(def_idx);
+}
+
 fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
@@ -1590,6 +1635,11 @@ fn introduceExposedItemsIntoScope(
                 .original_name = exposed_item.name,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info);
+
+            // Create a definition for this exposed item
+            // This is needed so that the exposed value has a proper definition
+            // in the importing module, not just a scope entry
+            try self.createDefinitionForExposedItem(item_name, module_name, exposed_item.name, import_region);
         }
     } else {
         // No module_envs provided, introduce all items without validation
@@ -1601,6 +1651,9 @@ fn introduceExposedItemsIntoScope(
                 .original_name = exposed_item.name,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info);
+
+            // Create a definition for this exposed item
+            try self.createDefinitionForExposedItem(item_name, module_name, exposed_item.name, import_region);
         }
     }
 }

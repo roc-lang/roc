@@ -1030,3 +1030,353 @@ test "eval static dispatch - method call with arguments" {
     // Verify the result, which should be 42 (10 + 32)
     try testing.expectEqual(@as(i128, 42), result.asI128());
 }
+
+test "eval static dispatch - simple import test" {
+    // First understand how imports work before tackling cross-module static dispatch
+    const allocator = testing.allocator;
+
+    // Math module with simple functions
+    const math_source =
+        \\module [addFive]
+        \\
+        \\addFive = |x| x + 5
+    ;
+
+    // Main module that imports and uses the function
+    const main_source =
+        \\module []
+        \\
+        \\import Math exposing [addFive]
+        \\
+        \\main = addFive(10)
+    ;
+
+    // Create module environments
+    var math_env = try ModuleEnv.init(allocator, math_source);
+    defer math_env.deinit();
+
+    math_env.module_name = "Math";
+    math_env.common.source = math_source;
+    try math_env.common.calcLineStarts(allocator);
+
+    // Parse the Math module
+    var math_parse = try parse.parse(&math_env.common, allocator);
+    defer math_parse.deinit(allocator);
+
+    // Initialize CIR fields for Math
+    try math_env.initCIRFields(allocator, "Math");
+
+    // Canonicalize Math module
+    var math_czer = try Can.init(&math_env, &math_parse, null);
+    defer math_czer.deinit();
+    try math_czer.canonicalizeFile();
+
+    // Type check Math module
+    var math_checker = try Check.init(allocator, &math_env.types, &math_env, &.{}, &math_env.store.regions);
+    defer math_checker.deinit();
+    try math_checker.checkDefs();
+
+    // Create Main module environment
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+
+    main_env.module_name = "Main";
+    main_env.common.source = main_source;
+    try main_env.common.calcLineStarts(allocator);
+
+    // Parse the Main module
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+
+    // Initialize CIR fields for Main
+    try main_env.initCIRFields(allocator, "Main");
+
+    // Canonicalize Main module with Math module available
+    var deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer deps.deinit();
+    try deps.put("Math", &math_env);
+    var main_czer = try Can.init(&main_env, &main_parse, &deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    // Find the main expression
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+
+    std.debug.print("\n=== Simple import test definitions ===\n", .{});
+    for (defs) |def_idx| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            const expr = main_env.store.getExpr(def.expr);
+            std.debug.print("  {s}: {s}\n", .{ ident_text, @tagName(expr) });
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+
+                // Print more info about the expression
+                switch (expr) {
+                    .e_call => |call| {
+                        const args = main_env.store.sliceExpr(call.args);
+                        if (args.len > 0) {
+                            const fn_expr = main_env.store.getExpr(args[0]);
+                            std.debug.print("    -> e_call with function: {s}\n", .{@tagName(fn_expr)});
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
+    std.debug.print("================================\n\n", .{});
+
+    // For now just check that canonicalization worked
+    try testing.expect(main_expr_idx != null);
+}
+
+test "eval - minimal import definition issue" {
+    // Minimal test to reproduce the import definition issue
+    const allocator = testing.allocator;
+
+    // Math module with a simple value
+    const math_source =
+        \\module [myValue]
+        \\
+        \\myValue = 42
+    ;
+
+    // Main module that imports the value
+    const main_source =
+        \\module []
+        \\
+        \\import Math exposing [myValue]
+        \\
+        \\main = myValue
+    ;
+
+    // Create and set up Math module
+    var math_env = try ModuleEnv.init(allocator, math_source);
+    defer math_env.deinit();
+    math_env.module_name = "Math";
+    math_env.common.source = math_source;
+    try math_env.common.calcLineStarts(allocator);
+
+    var math_parse = try parse.parse(&math_env.common, allocator);
+    defer math_parse.deinit(allocator);
+
+    try math_env.initCIRFields(allocator, "Math");
+
+    var math_czer = try Can.init(&math_env, &math_parse, null);
+    defer math_czer.deinit();
+    try math_czer.canonicalizeFile();
+
+    // Create and set up Main module
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+    main_env.module_name = "Main";
+    main_env.common.source = main_source;
+    try main_env.common.calcLineStarts(allocator);
+
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+
+    try main_env.initCIRFields(allocator, "Main");
+
+    var deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer deps.deinit();
+    try deps.put("Math", &math_env);
+
+    var main_czer = try Can.init(&main_env, &main_parse, &deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    // Check what definitions were created in Main
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+
+    std.debug.print("\n=== Minimal import test - Main module definitions ===\n", .{});
+    for (defs, 0..) |def_idx, i| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            const expr = main_env.store.getExpr(def.expr);
+            std.debug.print("  Def[{}]: '{s}' -> {s} (pattern_idx={}, expr_idx={})\n", .{
+                i, ident_text, @tagName(expr),
+                @intFromEnum(def.pattern), @intFromEnum(def.expr)
+            });
+        }
+    }
+    std.debug.print("======================================================\n\n", .{});
+
+    // The issue: We expect TWO definitions in Main:
+    // 1. myValue -> e_lookup_external (from the import)
+    // 2. main -> e_lookup_local (referencing myValue)
+    // But we probably only get one (main)
+
+    var found_myValue = false;
+    var found_main = false;
+
+    for (defs) |def_idx| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "myValue")) {
+                found_myValue = true;
+                // Check that it's an e_lookup_external
+                const expr = main_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_lookup_external);
+            } else if (std.mem.eql(u8, ident_text, "main")) {
+                found_main = true;
+            }
+        }
+    }
+
+    try testing.expect(found_main);
+
+    // This is the key test - does importing create a definition?
+    if (!found_myValue) {
+        std.debug.print("ERROR: Import did not create a definition for 'myValue' in Main module!\n", .{});
+        std.debug.print("This is the root cause of the cross-module static dispatch issue.\n", .{});
+    }
+    try testing.expect(found_myValue);
+}
+
+test "eval static dispatch - cross-module method call" {
+    // Test static dispatch where the method is called from another module
+    const allocator = testing.allocator;
+
+    // First module with the method definition
+    const math_source =
+        \\module [double, triple]
+        \\
+        \\double = |obj| obj.value * 2
+        \\
+        \\triple = |obj| obj.value * 3
+    ;
+
+    // Main module that imports and uses the method via static dispatch
+    const main_source =
+        \\module []
+        \\
+        \\import Math exposing [double, triple]
+        \\
+        \\obj = { value: 7 }
+        \\
+        \\main = obj.double()
+    ;
+
+    // Create and set up Math module
+    var math_env = try ModuleEnv.init(allocator, math_source);
+    defer math_env.deinit();
+
+    math_env.module_name = "Math";
+    math_env.common.source = math_source;
+    try math_env.common.calcLineStarts(allocator);
+
+    var math_parse = try parse.parse(&math_env.common, allocator);
+    defer math_parse.deinit(allocator);
+
+    try math_env.initCIRFields(allocator, "Math");
+
+    var math_czer = try Can.init(&math_env, &math_parse, null);
+    defer math_czer.deinit();
+    try math_czer.canonicalizeFile();
+
+    var math_checker = try Check.init(allocator, &math_env.types, &math_env, &.{}, &math_env.store.regions);
+    defer math_checker.deinit();
+    try math_checker.checkDefs();
+
+    try testing.expectEqual(@as(usize, 0), math_checker.problems.problems.items.len);
+
+    // Create and set up Main module
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+
+    main_env.module_name = "Main";
+    main_env.common.source = main_source;
+    try main_env.common.calcLineStarts(allocator);
+
+    var deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer deps.deinit();
+    try deps.put("Math", &math_env);
+
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+
+    try main_env.initCIRFields(allocator, "Main");
+
+    var main_czer = try Can.init(&main_env, &main_parse, &deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    const other_modules = [_]*ModuleEnv{&math_env};
+    var main_checker = try Check.init(allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
+    defer main_checker.deinit();
+    try main_checker.checkDefs();
+
+    try testing.expectEqual(@as(usize, 0), main_checker.problems.problems.items.len);
+
+    // Find the main expression
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+
+    std.debug.print("\n=== Main module definitions ===\n", .{});
+    for (defs, 0..) |def_idx, i| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            std.debug.print("  Def[{}]: '{s}' - pattern_idx={}, expr_idx={}\n", .{ i, ident_text, @intFromEnum(def.pattern), @intFromEnum(def.expr) });
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+            }
+        }
+    }
+    std.debug.print("=================================\n\n", .{});
+
+    try testing.expect(main_expr_idx != null);
+    std.debug.print("\ncross-module test: main_expr_idx = {}\n", .{@intFromEnum(main_expr_idx.?)});
+    const main_expr = main_env.store.getExpr(main_expr_idx.?);
+    std.debug.print("main expression type: {s}\n", .{@tagName(main_expr)});
+    if (main_expr == .e_dot_access) {
+        std.debug.print("  receiver expr_idx: {}\n", .{@intFromEnum(main_expr.e_dot_access.receiver)});
+        const receiver_expr = main_env.store.getExpr(main_expr.e_dot_access.receiver);
+        std.debug.print("  receiver type: {s}\n", .{@tagName(receiver_expr)});
+        if (receiver_expr == .e_lookup_local) {
+            std.debug.print("    e_lookup_local pattern_idx: {}\n", .{@intFromEnum(receiver_expr.e_lookup_local.pattern_idx)});
+        }
+        std.debug.print("  field: {s}\n", .{main_env.getIdent(main_expr.e_dot_access.field_name)});
+        if (main_expr.e_dot_access.args) |args| {
+            const arg_exprs = main_env.store.sliceExpr(args);
+            std.debug.print("  args count: {}\n", .{arg_exprs.len});
+        }
+    }
+
+    // Set up interpreter
+    var eval_stack = try stack.Stack.initCapacity(allocator, 4096);
+    defer eval_stack.deinit();
+
+    var layout_cache = try LayoutStore.init(&main_env, &main_env.types);
+    defer layout_cache.deinit();
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const other_envs = [_]*const ModuleEnv{&math_env};
+    var interpreter = try eval.Interpreter.initWithModules(
+        allocator,
+        &main_env,
+        &other_envs,
+        &eval_stack,
+        &layout_cache,
+        &main_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+
+    // Evaluate the main expression
+    const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
+
+    // Verify the result: 7 * 2 = 14
+    try testing.expectEqual(@as(i128, 14), result.asI128());
+}
