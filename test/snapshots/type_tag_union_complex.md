@@ -202,19 +202,6 @@ NO CHANGE
 			(args
 				(p-underscore @24.10-24.11))
 			(e-empty_record @24.13-24.15)))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
@@ -254,13 +241,6 @@ NO CHANGE
 		(patt @22.1-22.15 (type "Response -> Str"))
 		(patt @24.1-24.6 (type "_arg -> {}")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.37 (type "Status")
 			(ty-header @4.1-4.7 (name "Status")))
 		(alias @7.1-7.55 (type "Result")

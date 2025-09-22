@@ -53,34 +53,13 @@ topLevelVar_ = 0
 (can-ir
 	(d-let
 		(p-assign @4.5-4.17 (ident "topLevelVar_"))
-		(e-num @4.20-4.21 (value "0")))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+		(e-num @4.20-4.21 (value "0"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.5-4.17 (type "Num(_size)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.20-4.21 (type "Num(_size)"))))
 ~~~

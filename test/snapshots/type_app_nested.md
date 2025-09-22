@@ -120,20 +120,7 @@ main! = |_| processNested([])
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.30
-					(e-empty_list @6.27-6.29)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(e-empty_list @6.27-6.29))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -141,14 +128,6 @@ main! = |_| processNested([])
 	(defs
 		(patt @4.1-4.14 (type "List(Result(Str, Error)) -> List(Str)"))
 		(patt @6.1-6.6 (type "_arg -> List(Str)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.17-4.38 (type "List(Result(Str, Error)) -> List(Str)"))
 		(expr @6.9-6.30 (type "_arg -> List(Str)"))))

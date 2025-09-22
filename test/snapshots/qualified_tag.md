@@ -51,19 +51,6 @@ NO CHANGE
 		(p-assign @5.1-5.5 (ident "test"))
 		(e-nominal @5.8-5.17 (nominal "Color")
 			(e-tag @5.8-5.17 (name "Red"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.21
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.21
@@ -76,13 +63,6 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.5 (type "Color")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.21 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

@@ -99,5 +99,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "b -> { full_record: b, greeting: Str, is_adult: Error }"))
+(expr @1.1-1.103 (type "b -> { full_record: b, greeting: Str, is_adult: Bool }"))
 ~~~

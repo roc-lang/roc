@@ -81,20 +81,7 @@ NO CHANGE
 		(e-lambda @7.9-7.15
 			(args
 				(p-underscore @7.10-7.11))
-			(e-empty_record @7.13-7.15)))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-empty_record @7.13-7.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -102,14 +89,6 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @7.1-7.6 (type "_arg -> {}")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @7.9-7.15 (type "_arg -> {}"))))

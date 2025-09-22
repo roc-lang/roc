@@ -125,20 +125,7 @@ main! = |_| getName({ namee: "luke", age: 21 })
 								(e-string @6.29-6.35
 									(e-literal @6.30-6.34 (string "luke"))))
 							(field (name "age")
-								(e-num @6.41-6.43 (value "21")))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+								(e-num @6.41-6.43 (value "21"))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -146,14 +133,6 @@ main! = |_| getName({ namee: "luke", age: 21 })
 	(defs
 		(patt @4.1-4.8 (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(patt @6.1-6.6 (type "_arg -> Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.28 (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(expr @6.9-6.45 (type "_arg -> Error"))))

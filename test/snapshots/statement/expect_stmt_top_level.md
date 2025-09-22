@@ -49,19 +49,6 @@ NO CHANGE
 		(p-assign @3.1-3.4 (ident "foo"))
 		(e-nominal @3.7-3.16 (nominal "Bool")
 			(e-tag @3.7-3.16 (name "True"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-expect @5.1-5.25
 		(e-binop @5.8-5.25 (op "ne")
 			(e-lookup-local @5.8-5.11
@@ -74,14 +61,6 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @3.1-3.4 (type "Bool")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.7-3.16 (type "Bool"))))
 ~~~

@@ -83,19 +83,6 @@ NO CHANGE
 						(ty-rigid-var @3.27-3.49 (name "a"))
 						(ty-tag-union @3.27-3.49
 							(tag_name @3.38-3.47 (name "DecodeErr"))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-type-anno @3.1-4.61 (name "deserialize")
 		(ty-fn @3.15-3.49 (effectful false)
 			(ty-apply @3.15-3.23 (name "List") (builtin)
@@ -120,14 +107,6 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.12 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.15-5.22 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
 ~~~

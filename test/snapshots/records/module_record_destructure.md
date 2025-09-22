@@ -117,34 +117,13 @@ extract_age = |person| {
 					(ty-record @3.15-3.28
 						(field (field "age")
 							(ty-lookup @3.23-3.26 (name "U64") (builtin))))
-					(ty-lookup @3.32-3.35 (name "U64") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(ty-lookup @3.32-3.35 (name "U64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.12 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.15-8.2 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))"))))
 ~~~

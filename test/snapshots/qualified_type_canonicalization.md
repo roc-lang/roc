@@ -645,19 +645,6 @@ transform = |result|
 				(ty-fn @39.13-39.76 (effectful false)
 					(ty-malformed @39.13-39.26)
 					(ty-malformed @39.55-39.76)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @9.1-9.13 (module "Color")
 		(exposes))
 	(s-import @10.1-10.15 (module "ModuleA")
@@ -676,14 +663,6 @@ transform = |result|
 		(patt @31.1-31.9 (type "{  } -> Error"))
 		(patt @35.1-35.13 (type "Error -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Error")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.20-19.43 (type "Error"))

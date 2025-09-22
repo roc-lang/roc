@@ -383,19 +383,6 @@ data = json
 		(annotation @14.1-14.5
 			(declared-type
 				(ty-malformed @13.8-13.34))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
 		(exposes)))
 ~~~
@@ -406,14 +393,6 @@ data = json
 		(patt @6.1-6.13 (type "Error"))
 		(patt @10.1-10.8 (type "Error -> Str"))
 		(patt @14.1-14.5 (type "Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.16-6.45 (type "Error"))
 		(expr @10.11-10.33 (type "Error -> Str"))

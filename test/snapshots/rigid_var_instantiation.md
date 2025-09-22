@@ -195,20 +195,7 @@ main! = |_| {
 									(e-num @16.21-16.22 (value "1"))
 									(e-num @16.24-16.25 (value "2"))
 									(e-num @16.27-16.28 (value "3"))))))
-					(e-empty_record @18.5-18.7)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(e-empty_record @18.5-18.7))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -216,14 +203,6 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @8.1-8.6 (type "_arg -> {}")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @8.9-19.2 (type "_arg -> {}"))))

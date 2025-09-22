@@ -81,19 +81,6 @@ NO CHANGE
 							(ty-lookup @5.26-5.28 (name "U8") (builtin))))
 					(ty-apply @5.34-5.41 (name "List") (builtin)
 						(ty-rigid-var @5.39-5.40 (name "a")))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
@@ -113,14 +100,6 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @7.1-7.13 (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @1.1-1.1 (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
 ~~~

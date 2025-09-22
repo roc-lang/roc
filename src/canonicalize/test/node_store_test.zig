@@ -264,6 +264,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_call = .{
+            .func = rand_idx(CIR.Expr.Idx),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .called_via = CalledVia.apply,
         },
@@ -781,6 +782,11 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(CIR.TypeAnno{
         .rigid_var = .{
             .name = rand_ident_idx(),
+        },
+    });
+    try type_annos.append(CIR.TypeAnno{
+        .rigid_var_lookup = .{
+            .ref = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 

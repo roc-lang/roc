@@ -138,19 +138,6 @@ AnotherType : SomeModule.MissingType
 				(ty-fn @5.16-5.39 (effectful false)
 					(ty-malformed @5.16-5.32)
 					(ty-lookup @5.36-5.39 (name "Str") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-malformed @3.10-3.21))
@@ -164,13 +151,6 @@ AnotherType : SomeModule.MissingType
 	(defs
 		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.21 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")

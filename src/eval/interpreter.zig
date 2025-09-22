@@ -1337,8 +1337,8 @@ pub const Interpreter = struct {
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
                 if (all.len == 0) return error.TypeMismatch;
-                const func_idx = all[0];
-                const arg_indices = all[1..];
+                const func_idx = call.func;
+                const arg_indices = all[0..];
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);

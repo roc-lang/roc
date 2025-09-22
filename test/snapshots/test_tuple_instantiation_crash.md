@@ -114,20 +114,7 @@ NO CHANGE
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18
 			(e-num @9.13-9.14 (value "1"))
-			(e-num @9.16-9.17 (value "2"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-num @9.16-9.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -135,14 +122,6 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.5 (type "(a, b) -> (b, a)"))
 		(patt @9.1-9.5 (type "_c")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.8-5.23 (type "(a, b) -> (b, a)"))
 		(expr @9.8-9.18 (type "_c"))))

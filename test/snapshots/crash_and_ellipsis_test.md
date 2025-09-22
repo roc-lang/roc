@@ -257,20 +257,7 @@ main! = |_| {
 						(p-assign @22.5-22.12 (ident "result3"))
 						(e-call @22.15-22.34
 							(e-num @22.31-22.33 (value "42"))))
-					(e-empty_list @23.5-23.7)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(e-empty_list @23.5-23.7))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -280,14 +267,6 @@ main! = |_| {
 		(patt @9.1-9.10 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @15.1-15.16 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @19.1-19.6 (type "_arg -> List(_elem)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.16-5.23 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @9.13-11.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))

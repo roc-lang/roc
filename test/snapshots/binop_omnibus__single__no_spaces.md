@@ -9,6 +9,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
+INVALID BOOL OPERATION - binop_omnibus__single__no_spaces.md:1:21:1:21
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -20,6 +21,19 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
     ^^^
 
+
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**binop_omnibus__single__no_spaces.md:1:21:**
+```roc
+Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
+```
+                               ^^
+
+Both sides of `and` must be _Bool_ values, but the right side is:
+    _Num(_size)_
+
+Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
 
 # TOKENS
 ~~~zig

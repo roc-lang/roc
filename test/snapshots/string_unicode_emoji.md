@@ -57,20 +57,7 @@ NO CHANGE
 	(d-let
 		(p-assign @7.1-7.6 (ident "greet"))
 		(e-string @7.9-7.85
-			(e-literal @7.10-7.84 (string "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-literal @7.10-7.84 (string "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -78,14 +65,6 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.8 (type "Str"))
 		(patt @7.1-7.6 (type "Str")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.56 (type "Str"))
 		(expr @7.9-7.85 (type "Str"))))

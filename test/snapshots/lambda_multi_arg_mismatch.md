@@ -245,20 +245,7 @@ result = multi_arg_fn(
 			(e-nominal @17.5-17.9 (nominal "Bool")
 				(e-tag @17.5-17.9 (name "True")))
 			(e-string @18.5-18.11
-				(e-literal @18.6-18.10 (string "done")))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+				(e-literal @18.6-18.10 (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -266,14 +253,6 @@ result = multi_arg_fn(
 	(defs
 		(patt @5.1-5.13 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
 		(patt @10.1-10.7 (type "Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.16-6.25 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
 		(expr @10.10-19.2 (type "Error"))))

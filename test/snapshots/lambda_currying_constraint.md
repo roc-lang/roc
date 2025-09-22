@@ -196,20 +196,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @16.17-16.27 (effectful false)
 					(ty-lookup @16.17-16.20 (name "I64") (builtin))
-					(ty-lookup @16.24-16.27 (name "I64") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(ty-lookup @16.24-16.27 (name "I64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -219,14 +206,6 @@ NO CHANGE
 		(patt @9.1-9.11 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(patt @13.1-13.11 (type "a -> a, a -> a"))
 		(patt @17.1-17.14 (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.13-5.26 (type "a -> a -> a"))
 		(expr @9.14-9.26 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))

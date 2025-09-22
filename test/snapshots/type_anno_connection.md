@@ -83,20 +83,7 @@ NO CHANGE
 			(e-num @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type
-				(ty-lookup @6.13-6.16 (name "U64") (builtin)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+				(ty-lookup @6.13-6.16 (name "U64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -104,14 +91,6 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @7.1-7.10 (type "Num(Int(Unsigned64))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.20 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @7.13-7.24 (type "Num(Int(Unsigned64))"))))

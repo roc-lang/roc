@@ -345,20 +345,7 @@ main = |_| "done"
 			(args
 				(p-underscore @28.9-28.10))
 			(e-string @28.12-28.18
-				(e-literal @28.13-28.17 (string "done")))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+				(e-literal @28.13-28.17 (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -370,14 +357,6 @@ main = |_| "done"
 		(patt @22.1-22.12 (type "List(_a) -> Num(Int(Unsigned64))"))
 		(patt @26.1-26.15 (type "a -> Result(Result(a, Str), Str)"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.14-10.2 (type "Result(a, e), a -> b -> Result(b, e)"))
 		(expr @14.12-14.17 (type "a -> a"))

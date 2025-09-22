@@ -73,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.84 (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))
+(expr @1.1-1.84 (type "(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)"))
 ~~~

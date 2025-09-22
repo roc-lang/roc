@@ -77,20 +77,7 @@ NO CHANGE
 		(e-frac-dec @10.5-10.12 (value "123.456"))
 		(annotation @10.1-10.2
 			(declared-type
-				(ty-lookup @9.5-9.8 (name "Dec") (builtin)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+				(ty-lookup @9.5-9.8 (name "Dec") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -99,14 +86,6 @@ NO CHANGE
 		(patt @4.1-4.2 (type "Num(Frac(Float32))"))
 		(patt @7.1-7.2 (type "Num(Frac(Float64))"))
 		(patt @10.1-10.2 (type "Num(Frac(Decimal))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.9 (type "Num(Frac(Float32))"))
 		(expr @7.5-7.12 (type "Num(Frac(Float64))"))

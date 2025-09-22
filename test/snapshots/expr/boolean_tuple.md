@@ -37,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "(Error, Error)"))
+(expr @1.1-1.14 (type "(Bool, Bool)"))
 ~~~

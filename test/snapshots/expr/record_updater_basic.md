@@ -71,20 +71,7 @@ NO CHANGE
 					(p-assign @3.1-3.7 (ident "person"))))
 			(fields
 				(field (name "age")
-					(e-num @4.28-4.30 (value "31"))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(e-num @4.28-4.30 (value "31")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -92,14 +79,6 @@ NO CHANGE
 	(defs
 		(patt @3.1-3.7 (type "{ age: Num(_size), name: Str }"))
 		(patt @4.1-4.8 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.10-3.36 (type "{ age: Num(_size), name: Str }"))
 		(expr @4.11-4.32 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }"))))

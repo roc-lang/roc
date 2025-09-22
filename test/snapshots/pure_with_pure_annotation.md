@@ -135,20 +135,7 @@ NO CHANGE
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18
 			(e-num @11.13-11.14 (value "1"))
-			(e-num @11.16-11.17 (value "2"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-num @11.16-11.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -157,14 +144,6 @@ NO CHANGE
 		(patt @5.1-5.4 (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
 		(patt @9.1-9.7 (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
 		(patt @11.1-11.6 (type "Num(Int(Signed32))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.7-5.30 (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
 		(expr @9.10-9.23 (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))

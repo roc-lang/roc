@@ -148,19 +148,6 @@ handleResult = |result| {
 						(ty-lookup @5.44-5.47 (name "Str") (builtin))
 						(ty-lookup @5.49-5.52 (name "I32") (builtin)))
 					(ty-lookup @5.57-5.60 (name "Str") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes)))
 ~~~
@@ -169,14 +156,6 @@ handleResult = |result| {
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error -> Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.16-11.2 (type "Error -> Error"))))
 ~~~

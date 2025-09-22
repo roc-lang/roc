@@ -91,19 +91,6 @@ NO CHANGE
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-lookup @8.10-8.15 (name "Color") (local)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
@@ -118,13 +105,6 @@ NO CHANGE
 		(patt @6.1-6.5 (type "Color"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(nominal @3.1-3.28 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

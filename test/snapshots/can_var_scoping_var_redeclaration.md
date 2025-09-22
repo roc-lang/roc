@@ -104,20 +104,7 @@ NO CHANGE
 	(d-let
 		(p-assign @11.1-11.7 (ident "result"))
 		(e-call @11.10-11.27
-			(e-empty_record @11.24-11.26)))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-empty_record @11.24-11.26))))
 ~~~
 # TYPES
 ~~~clojure
@@ -125,14 +112,6 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.14 (type "_arg -> Error"))
 		(patt @11.1-11.7 (type "Error")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.17-9.2 (type "_arg -> Error"))
 		(expr @11.10-11.27 (type "Error"))))

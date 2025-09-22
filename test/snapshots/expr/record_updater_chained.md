@@ -121,20 +121,7 @@ NO CHANGE
 					(e-string @6.29-6.42
 						(e-literal @6.30-6.41 (string "Alice Smith"))))
 				(field (name "age")
-					(e-num @6.49-6.51 (value "32"))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(e-num @6.49-6.51 (value "32")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -144,14 +131,6 @@ NO CHANGE
 		(patt @4.1-4.12 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
 		(patt @5.1-5.9 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
 		(patt @6.1-6.6 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @3.10-3.52 (type "{ age: Num(_size), city: Str, name: Str }"))
 		(expr @4.15-4.36 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))

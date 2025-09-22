@@ -571,20 +571,7 @@ main! = |_| {
 						(e-lookup-local @64.5-64.6
 							(p-assign @4.1-4.2 (ident "a")))
 						(e-lookup-local @64.9-64.10
-							(p-assign @23.1-23.2 (ident "f"))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+							(p-assign @23.1-23.2 (ident "f")))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -624,14 +611,6 @@ main! = |_| {
 		(patt @50.1-50.3 (type "Num(_size)"))
 		(patt @53.1-53.14 (type "ac -> ac"))
 		(patt @55.1-55.6 (type "_arg2 -> Num(_size)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.7 (type "Num(_size)"))
 		(expr @7.12-7.17 (type "ac -> ac"))

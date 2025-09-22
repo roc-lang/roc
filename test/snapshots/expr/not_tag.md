@@ -8,9 +8,22 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - not_tag.md:1:3:1:7
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**not_tag.md:1:3:1:7:**
+```roc
+!(C(2))
+```
+  ^^^^
+
+It has the type:
+    _[C(Num(_size))]_others_
+
+But I expected it to be:
+    _Bool_
+
 # TOKENS
 ~~~zig
 OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),CloseRound(1:6-1:7),CloseRound(1:7-1:8),

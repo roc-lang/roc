@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const playground_step = b.step("playground", "Build the WASM playground");
-    const playground_test_step = b.step("playground-test", "Build the integration test suite for the WASM playground");
+    const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{

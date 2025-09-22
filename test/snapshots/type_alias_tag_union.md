@@ -180,19 +180,6 @@ NO CHANGE
 			(args
 				(p-underscore @20.10-20.11))
 			(e-empty_record @20.13-20.15)))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @4.1-4.41
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
@@ -218,13 +205,6 @@ NO CHANGE
 		(patt @18.1-18.10 (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(patt @20.1-20.6 (type "_arg -> {}")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @4.1-4.41 (type "MyResult(ok, err)")
 			(ty-header @4.1-4.18 (name "MyResult")
 				(ty-args

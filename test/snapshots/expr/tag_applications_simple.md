@@ -19,9 +19,29 @@ type=expr
 ]
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
 # PROBLEMS
-NIL
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**tag_applications_simple.md:3:5:**
+```roc
+    None,
+    Ok("hello"),
+```
+    ^^^^
+    ^^^^^^^^^^^
+
+The second element has this type:
+    _[Some(Num(_size)), None]_others_
+
+However, the third element has this type:
+    _Result(ok, err)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),

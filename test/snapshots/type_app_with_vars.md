@@ -139,20 +139,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 							(e-num @6.24-6.25 (value "2"))
 							(e-num @6.26-6.27 (value "3"))
 							(e-num @6.28-6.29 (value "4"))
-							(e-num @6.30-6.31 (value "5"))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+							(e-num @6.30-6.31 (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -160,14 +147,6 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 	(defs
 		(patt @4.1-4.8 (type "List(a), a -> b -> List(b)"))
 		(patt @6.1-6.6 (type "_arg -> _ret")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.34 (type "List(a), a -> b -> List(b)"))
 		(expr @6.9-6.33 (type "_arg -> _ret"))))

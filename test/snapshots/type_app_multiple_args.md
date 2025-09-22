@@ -126,20 +126,7 @@ NO CHANGE
 						(args
 							(e-string @6.45-6.50
 								(e-literal @6.46-6.49 (string "one")))
-							(e-num @6.52-6.53 (value "1"))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+							(e-num @6.52-6.53 (value "1")))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -147,14 +134,6 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.12 (type "Error -> List(Str)"))
 		(patt @6.1-6.6 (type "_arg -> List(Str)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.15-4.25 (type "Error -> List(Str)"))
 		(expr @6.9-6.55 (type "_arg -> List(Str)"))))

@@ -513,8 +513,16 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     defer trace.end();
 
     // First, iterate over the statements, generating types for each type declaration
-    const stms_slice = self.cir.store.sliceStatements(self.cir.all_statements);
-    for (stms_slice) |stmt_idx| {
+    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
+    for (builtin_stmts_slice) |builtin_stmt_idx| {
+        // If the statement is a type declaration, then generate the it's type
+        // The resulting generalized type is saved at the type var slot at `stmt_idx`
+        try self.generateStmtTypeDeclType(builtin_stmt_idx);
+    }
+
+    // First, iterate over the statements, generating types for each type declaration
+    const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
+    for (stmts_slice) |stmt_idx| {
         // If the statement is a type declaration, then generate the it's type
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(stmt_idx);
@@ -530,6 +538,14 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    // First, iterate over the statements, generating types for each type declaration
+    const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
+    for (stms_slice) |stmt_idx| {
+        // If the statement is a type declaration, then generate the it's type
+        // The resulting generalized type is saved at the type var slot at `stmt_idx`
+        try self.generateStmtTypeDeclType(stmt_idx);
+    }
+
     // Push the rank for this definitoin
     try self.var_pool.pushRank();
     defer self.var_pool.popRank();

@@ -138,19 +138,6 @@ NO CHANGE
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-call @14.9-14.21
 			(e-num @14.18-14.20 (value "42"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -162,14 +149,6 @@ NO CHANGE
 		(patt @9.1-9.14 (type "_arg -> _ret"))
 		(patt @12.1-12.9 (type "Num(_size) -> _ret"))
 		(patt @14.1-14.6 (type "_a")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @6.12-6.24 (type "Num(_size), Num(_size2) -> Num(_size3)"))
 		(expr @9.17-9.36 (type "_arg -> _ret"))

@@ -1046,20 +1046,7 @@ main = |_| {
 							(receiver
 								(e-lookup-local @107.5-107.15
 									(p-assign @60.1-60.11 (ident "container1")))))
-						(e-num @107.24-107.26 (value "10")))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+						(e-num @107.24-107.26 (value "10"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1093,14 +1080,6 @@ main = |_| {
 		(patt @87.1-87.9 (type "{ base: Num(_size), derived: List(Num(_size2)) }"))
 		(patt @90.1-90.6 (type "{ computations: { from_frac: Frac(_size), from_num: Num(_size2), list_from_num: List(Num(_size3)) }, empty_lists: { in_list: List(List(Num(_size4))), in_record: { data: List(Num(_size5)) }, raw: List(Num(_size6)) }, numbers: { float: Frac(_size7), list: List(Num(_size8)), value: Num(_size9) }, strings: { list: List(Str), value: Str } }"))
 		(patt @105.1-105.5 (type "_arg -> Num(_size)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.7-4.9 (type "Num(_size)"))
 		(expr @5.8-5.11 (type "Frac(_size)"))

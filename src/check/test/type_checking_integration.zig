@@ -8,6 +8,7 @@ const can = @import("can");
 const types_mod = @import("types");
 const problem_mod = @import("../problem.zig");
 const Check = @import("../Check.zig");
+const TestEnv = @import("./TestEnv.zig");
 
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
@@ -21,49 +22,49 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertExprTypeCheckPass(source, "Num(_size)");
 }
 
 test "check type - num - int suffix 1" {
     const source =
         \\10u8
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Unsigned8))");
+    try assertExprTypeCheckPass(source, "Num(Int(Unsigned8))");
 }
 
 test "check type - num - int suffix 2" {
     const source =
         \\10i128
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Int(Signed128))");
+    try assertExprTypeCheckPass(source, "Num(Int(Signed128))");
 }
 
 test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(_size))");
+    try assertExprTypeCheckPass(source, "Num(Frac(_size))");
 }
 
 test "check type - num - float suffix 1" {
     const source =
         \\10.1f32
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float32))");
+    try assertExprTypeCheckPass(source, "Num(Frac(Float32))");
 }
 
 test "check type - num - float suffix 2" {
     const source =
         \\10.1f64
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Float64))");
+    try assertExprTypeCheckPass(source, "Num(Frac(Float64))");
 }
 
 test "check type - num - float suffix 3" {
     const source =
         \\10.1dec
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Num(Frac(Decimal))");
+    try assertExprTypeCheckPass(source, "Num(Frac(Decimal))");
 }
 
 // primitives - strs //
@@ -72,7 +73,7 @@ test "check type - str" {
     const source =
         \\"hello"
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
+    try assertExprTypeCheckPass(source, "Str");
 }
 
 // primitives - lists //
@@ -81,42 +82,42 @@ test "check type - list empty" {
     const source =
         \\[]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(_elem)");
+    try assertExprTypeCheckPass(source, "List(_elem)");
 }
 
 test "check type - list - same elems 1" {
     const source =
         \\["hello", "world"]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Str)");
+    try assertExprTypeCheckPass(source, "List(Str)");
 }
 
 test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(_size))");
+    try assertExprTypeCheckPass(source, "List(Num(_size))");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
         \\[100u64, 200]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned64)))");
+    try assertExprTypeCheckPass(source, "List(Num(Int(Unsigned64)))");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
         \\[100, 200u32]
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "List(Num(Int(Unsigned32)))");
+    try assertExprTypeCheckPass(source, "List(Num(Int(Unsigned32)))");
 }
 
 test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try assertExprTypeCheckFail(test_allocator, source, "INCOMPATIBLE LIST ELEMENTS");
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE LIST ELEMENTS");
 }
 
 // number requirements //
@@ -125,7 +126,7 @@ test "check type - num - cannot coerce 500 to u8" {
     const source =
         \\[500, 200u8]
     ;
-    try assertExprTypeCheckFail(test_allocator, source, "NUMBER DOES NOT FIT IN TYPE");
+    try assertExprTypeCheckFail(source, "NUMBER DOES NOT FIT IN TYPE");
 }
 
 // records //
@@ -137,7 +138,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "{ hello: Str, world: Num(_size) }");
+    try assertExprTypeCheckPass(source, "{ hello: Str, world: Num(_size) }");
 }
 
 // tags //
@@ -146,14 +147,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "[MyTag]_others");
+    try assertExprTypeCheckPass(source, "[MyTag]_others");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "[MyTag(Str, Num(_size))]_others");
+    try assertExprTypeCheckPass(source, "[MyTag(Str, Num(_size))]_others");
 }
 
 // blocks //
@@ -164,16 +165,16 @@ test "check type - block - return expr" {
         \\    "Hello"
         \\}
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
+    try assertExprTypeCheckPass(source, "Str");
 }
 
 test "check type - block - implicit empty record" {
     const source =
         \\{
-        \\    test = "hello"
+        \\    _test = "hello"
         \\}
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "{}");
+    try assertExprTypeCheckPass(source, "{}");
 }
 
 test "check type - block - local value decl" {
@@ -184,7 +185,7 @@ test "check type - block - local value decl" {
         \\    test
         \\}
     ;
-    try assertExprTypeCheckPass(test_allocator, source, "Str");
+    try assertExprTypeCheckPass(source, "Str");
 }
 
 // function //
@@ -195,7 +196,7 @@ test "check type - def - value" {
         \\
         \\pairU64 = "hello"
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - def - func" {
@@ -204,7 +205,7 @@ test "check type - def - func" {
         \\
         \\id = |_| 20
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "_arg -> Num(_size)");
+    try assertFileTypeCheckPass(source, "_arg -> Num(_size)");
 }
 
 test "check type - def - id without annotation" {
@@ -213,7 +214,7 @@ test "check type - def - id without annotation" {
         \\
         \\id = |x| x
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+    try assertFileTypeCheckPass(source, "a -> a");
 }
 
 test "check type - def - id with annotation" {
@@ -223,7 +224,7 @@ test "check type - def - id with annotation" {
         \\id : a -> a
         \\id = |x| x
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> a");
+    try assertFileTypeCheckPass(source, "a -> a");
 }
 
 test "check type - def - func with annotation 1" {
@@ -233,7 +234,7 @@ test "check type - def - func with annotation 1" {
         \\id : x -> Str
         \\id = |_| "test"
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "x -> Str");
+    try assertFileTypeCheckPass(source, "x -> Str");
 }
 
 test "check type - def - func with annotation 2" {
@@ -243,7 +244,7 @@ test "check type - def - func with annotation 2" {
         \\id : x -> Num(_size)
         \\id = |_| 15
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "x -> Num(_size)");
+    try assertFileTypeCheckPass(source, "x -> Num(_size)");
 }
 
 test "check type - def - nested lambda" {
@@ -252,7 +253,7 @@ test "check type - def - nested lambda" {
         \\
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
 // calling functions
@@ -266,7 +267,7 @@ test "check type - def - monomorphic id" {
         \\
         \\test = idStr("hello")
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - def - polymorphic id 1" {
@@ -278,7 +279,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -290,7 +291,7 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "(Num(_size), Str)");
+    try assertFileTypeCheckPass(source, "(Num(_size), Str)");
 }
 
 test "check type - def - polymorphic higher order 1" {
@@ -299,7 +300,7 @@ test "check type - def - polymorphic higher order 1" {
         \\
         \\f = |g, v| g(v)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "a -> b, a -> b");
+    try assertFileTypeCheckPass(source, "a -> b, a -> b");
 }
 
 test "check type - top level polymorphic function is generalized" {
@@ -308,27 +309,27 @@ test "check type - top level polymorphic function is generalized" {
         \\
         \\id = |x| x
         \\
-        \\result = {
+        \\main = {
         \\    a = id(42)
-        \\    b = id("hello")
+        \\    _b = id("hello")
         \\    a
         \\}
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
 test "check type - let-def polymorphic function is generalized" {
     const source =
         \\module []
         \\
-        \\result = {
+        \\main = {
         \\    id = |x| x
         \\    a = id(42)
         \\    b = id("hello")
         \\    a
         \\}
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -344,7 +345,7 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -358,7 +359,7 @@ test "check type - basic alias" {
         \\x : MyAlias
         \\x = "hello"
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyAlias");
+    try assertFileTypeCheckPass(source, "MyAlias");
 }
 
 test "check type - alias with arg" {
@@ -370,7 +371,7 @@ test "check type - alias with arg" {
         \\x : MyListAlias(Num(size))
         \\x = [15]
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyListAlias(Num(size))");
+    try assertFileTypeCheckPass(source, "MyListAlias(Num(size))");
 }
 
 test "check type - alias with mismatch arg" {
@@ -382,7 +383,7 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 // nominal types //
@@ -396,7 +397,7 @@ test "check type - basic nominal" {
         \\x : MyNominal
         \\x = MyNominal.MyNominal
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+    try assertFileTypeCheckPass(source, "MyNominal");
 }
 
 test "check type - nominal with tag arg" {
@@ -408,7 +409,7 @@ test "check type - nominal with tag arg" {
         \\x : MyNominal
         \\x = MyNominal.MyNominal("hello")
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal");
+    try assertFileTypeCheckPass(source, "MyNominal");
 }
 
 test "check type - nominal with type and tag arg" {
@@ -420,7 +421,7 @@ test "check type - nominal with type and tag arg" {
         \\x : MyNominal(U8)
         \\x = MyNominal.MyNominal(10)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "MyNominal(Num(Int(Unsigned8)))");
+    try assertFileTypeCheckPass(source, "MyNominal(Num(Int(Unsigned8)))");
 }
 
 test "check type - nominal with with rigid vars" {
@@ -432,7 +433,7 @@ test "check type - nominal with with rigid vars" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, 2)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Pair(Num(Int(Unsigned64)))");
+    try assertFileTypeCheckPass(source, "Pair(Num(Int(Unsigned64)))");
 }
 
 test "check type - nominal with with rigid vars mismatch" {
@@ -444,7 +445,7 @@ test "check type - nominal with with rigid vars mismatch" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, "Str")
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal recursive type" {
@@ -456,7 +457,7 @@ test "check type - nominal recursive type" {
         \\x : ConsList(Str)
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Str)");
+    try assertFileTypeCheckPass(source, "ConsList(Str)");
 }
 
 test "check type - nominal recursive type anno mismatch" {
@@ -468,7 +469,7 @@ test "check type - nominal recursive type anno mismatch" {
         \\x : ConsList(Num(size))
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 test "check type - two nominal types" {
@@ -481,7 +482,7 @@ test "check type - two nominal types" {
         \\
         \\x = ConsList.Cons(Elem.Elem("hello"), ConsList.Nil)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "ConsList(Elem(Str))");
+    try assertFileTypeCheckPass(source, "ConsList(Elem(Str))");
 }
 
 test "check type - nominal recursive type no args" {
@@ -493,7 +494,7 @@ test "check type - nominal recursive type no args" {
         \\x : StrConsList
         \\x = StrConsList.Cons("hello", StrConsList.Nil)
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "StrConsList");
+    try assertFileTypeCheckPass(source, "StrConsList");
 }
 
 test "check type - nominal recursive type wrong type" {
@@ -505,7 +506,7 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -517,7 +518,7 @@ test "check type - nominal w/ polymorphic function with bad args" {
         \\mkPairInvalid : a, b -> Pair(a)
         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal w/ polymorphic function" {
@@ -531,7 +532,36 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = |_| swapPair((1, "test"))
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "_arg -> Pair(Str, Num(_size))");
+    try assertFileTypeCheckPass(source, "_arg -> Pair(Str, Num(_size))");
+}
+
+// bool
+
+test "check type - bool unqualified" {
+    const source =
+        \\module []
+        \\
+        \\x = True
+    ;
+    try assertFileTypeCheckPass(source, "Bool");
+}
+
+test "check type - bool qualified" {
+    const source =
+        \\module []
+        \\
+        \\x = Bool.True
+    ;
+    try assertFileTypeCheckPass(source, "Bool");
+}
+
+test "check type - bool lambda" {
+    const source =
+        \\module []
+        \\
+        \\x = (|x| !x)(Bool.True)
+    ;
+    try assertFileTypeCheckPass(source, "Bool");
 }
 
 // if-else
@@ -543,7 +573,7 @@ test "check type - if else" {
         \\x : Str
         \\x = if True "true" else "false"
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - if else - qualified bool" {
@@ -553,7 +583,7 @@ test "check type - if else - qualified bool" {
         \\x : Str
         \\x = if Bool.True "true" else "false"
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - if else - invalid condition 1" {
@@ -563,7 +593,7 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if Truee "true" else "false"
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -573,7 +603,7 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if Bool.Falsee "true" else "false"
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID NOMINAL TAG");
+    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -583,7 +613,7 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID IF CONDITION");
+    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
 }
 
 test "check type - if else - different branch types 1" {
@@ -592,7 +622,7 @@ test "check type - if else - different branch types 1" {
         \\
         \\x = if True "true" else 10
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
 }
 
 test "check type - if else - different branch types 2" {
@@ -601,7 +631,7 @@ test "check type - if else - different branch types 2" {
         \\
         \\x = if True "true" else if False "false" else 10
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
 }
 
 test "check type - if else - different branch types 3" {
@@ -610,7 +640,7 @@ test "check type - if else - different branch types 3" {
         \\
         \\x = if True "true" else if False 10 else "last"
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE IF BRANCHES");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
 }
 
 // match
@@ -625,7 +655,7 @@ test "check type - match" {
         \\    False => "false"
         \\  }
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - match - diff cond types 1" {
@@ -638,7 +668,7 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH PATTERNS");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - match - diff branch types" {
@@ -651,7 +681,7 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INCOMPATIBLE MATCH BRANCHES");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE MATCH BRANCHES");
 }
 
 // unary not
@@ -662,7 +692,7 @@ test "check type - unary not" {
         \\
         \\x = !True
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+    try assertFileTypeCheckPass(source, "Bool");
 }
 
 test "check type - unary not mismatch" {
@@ -671,7 +701,7 @@ test "check type - unary not mismatch" {
         \\
         \\x = !"Hello"
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 // unary not
@@ -682,7 +712,7 @@ test "check type - unary minus" {
         \\
         \\x = -10
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(_size)");
+    try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
 test "check type - unary minus mismatch" {
@@ -693,18 +723,27 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 // binops
 
-test "check type - binops math" {
+test "check type - binops math plus" {
     const source =
         \\module []
         \\
         \\x = 10 + 10u32
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Num(Int(Unsigned32))");
+    try assertFileTypeCheckPass(source, "Num(Int(Unsigned32))");
+}
+
+test "check type - binops math sub" {
+    const source =
+        \\module []
+        \\
+        \\x = 1 - 0.2
+    ;
+    try assertFileTypeCheckPass(source, "Num(Int(Unsigned32))");
 }
 
 test "check type - binops ord" {
@@ -713,7 +752,7 @@ test "check type - binops ord" {
         \\
         \\x = 10.0f32 > 15
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+    try assertFileTypeCheckPass(source, "Bool");
 }
 
 test "check type - binops and" {
@@ -722,7 +761,7 @@ test "check type - binops and" {
         \\
         \\x = True and False
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+    try assertFileTypeCheckPass(source, "Bool");
 }
 
 test "check type - binops and mismatch" {
@@ -731,7 +770,7 @@ test "check type - binops and mismatch" {
         \\
         \\x = "Hello" and False
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+    try assertFileTypeCheckFail(source, "INVALID BOOL OPERATION");
 }
 
 test "check type - binops or" {
@@ -740,7 +779,7 @@ test "check type - binops or" {
         \\
         \\x = True or False
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Bool");
+    try assertFileTypeCheckPass(source, "Bool");
 }
 
 test "check type - binops or mismatch" {
@@ -749,7 +788,7 @@ test "check type - binops or mismatch" {
         \\
         \\x = "Hello" or False
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "INVALID BOOL OPERATION");
+    try assertFileTypeCheckFail(source, "INVALID BOOL OPERATION");
 }
 
 // record access
@@ -766,7 +805,7 @@ test "check type - record access" {
         \\
         \\x = r.hello
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "Str");
+    try assertFileTypeCheckPass(source, "Str");
 }
 
 test "check type - record access func polymorphic" {
@@ -775,7 +814,7 @@ test "check type - record access func polymorphic" {
         \\
         \\x = |r| r.my_field
     ;
-    try assertFileTypeCheckPass(test_allocator, source, "{ my_field: a } -> a");
+    try assertFileTypeCheckPass(source, "{ my_field: a } -> a");
 }
 
 test "check type - record access - not a record" {
@@ -786,160 +825,39 @@ test "check type - record access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try assertFileTypeCheckFail(test_allocator, source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
-// helpers - expr //
+// helpers  //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 /// Asserts that type checking the expr passes
-fn assertExprTypeCheckPass(allocator: std.mem.Allocator, comptime source_expr: []const u8, expected_type: []const u8) !void {
-    const source_wrapper =
-        \\module []
-        \\ 
-        \\test =
-    ;
-
-    var source: [source_wrapper.len + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], source_expr);
-
-    return assertFileTypeCheckPass(allocator, &source, expected_type);
+fn assertExprTypeCheckPass(comptime source_expr: []const u8, expected_type: []const u8) !void {
+    var test_env = try TestEnv.initExpr(source_expr);
+    defer test_env.deinit();
+    return test_env.assertLastDefType(expected_type);
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 /// Asserts that type checking the expr fails with exactly one problem, and the title of the problem matches the provided one.
-fn assertExprTypeCheckFail(allocator: std.mem.Allocator, comptime source_expr: []const u8, expected_problem_title: []const u8) !void {
-    const source_wrapper =
-        \\module []
-        \\ 
-        \\test =
-    ;
-
-    var source: [source_wrapper.len + source_expr.len]u8 = undefined;
-    std.mem.copyForwards(u8, source[0..], source_wrapper);
-    std.mem.copyForwards(u8, source[source_wrapper.len..], source_expr);
-
-    return assertFileTypeCheckFail(allocator, &source, expected_problem_title);
-}
-
-// helpers - whole file //
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-/// Asserts that the type of the final definition in the source matches the one provided
-fn assertFileTypeCheckPass(allocator: std.mem.Allocator, source: []const u8, expected_type: []const u8) !void {
-    // Set up module environment
-    var module_env = try ModuleEnv.init(allocator, source);
-    defer module_env.deinit();
-
-    try module_env.initCIRFields(allocator, "test");
-    const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-    };
-
-    // Parse
-    var parse_ast = try parse.parse(&module_env.common, allocator);
-    defer parse_ast.deinit(allocator);
-    try testing.expectEqual(false, parse_ast.hasErrors());
-
-    // Canonicalize
-    var czer = try Can.init(&module_env, &parse_ast, null);
-    defer czer.deinit();
-    try czer.canonicalizeFile();
-
-    try testing.expect(czer.env.all_defs.span.len > 0);
-    const defs_slice = czer.env.store.sliceDefs(czer.env.all_defs);
-    const last_def_idx = defs_slice[defs_slice.len - 1];
-
-    // Type check
-    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
-    defer checker.deinit();
-    try checker.checkFile();
-
-    // Assert no problems
-    var report_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer report_buf.deinit();
-
-    var report_builder = problem_mod.ReportBuilder.init(
-        allocator,
-        &module_env,
-        &module_env,
-        &checker.snapshots,
-        "test",
-        &.{},
-    );
-    defer report_builder.deinit();
-
-    for (checker.problems.problems.items) |problem| {
-        var report = try report_builder.build(problem);
-        defer report.deinit();
-
-        report_buf.clearRetainingCapacity();
-        try report.render(report_buf.writer(), .markdown);
-
-        try testing.expectEqualStrings("EXPECT NO ERROR", report_buf.items);
-    }
-    try testing.expectEqual(0, checker.problems.problems.items.len);
-
-    // Assert the rendered type string matches what we expect
-    var type_writer = try module_env.initTypeWriter();
-    defer type_writer.deinit();
-    try type_writer.write(ModuleEnv.varFrom(last_def_idx));
-    try testing.expectEqualStrings(expected_type, type_writer.get());
+fn assertExprTypeCheckFail(comptime source_expr: []const u8, expected_problem_title: []const u8) !void {
+    var test_env = try TestEnv.initExpr(source_expr);
+    defer test_env.deinit();
+    return test_env.assertOneTypeError(expected_problem_title);
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 /// Asserts that the type of the final definition in the source matches the one provided
-fn assertFileTypeCheckFail(allocator: std.mem.Allocator, source: []const u8, expected_problem_title: []const u8) !void {
-    // Set up module environment
-    var module_env = try ModuleEnv.init(allocator, source);
-    defer module_env.deinit();
+fn assertFileTypeCheckPass(source: []const u8, expected_type: []const u8) !void {
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+    return test_env.assertLastDefType(expected_type);
+}
 
-    try module_env.initCIRFields(allocator, "test");
-    const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-    };
-
-    // Parse
-    var parse_ast = try parse.parse(&module_env.common, allocator);
-    defer parse_ast.deinit(allocator);
-    try testing.expectEqual(false, parse_ast.hasErrors());
-
-    // Canonicalize
-    var czer = try Can.init(&module_env, &parse_ast, null);
-    defer czer.deinit();
-    try czer.canonicalizeFile();
-
-    try testing.expect(czer.env.all_defs.span.len > 0);
-    // const defs_slice = czer.env.store.sliceDefs(czer.env.all_defs);
-    // const last_def_idx = defs_slice[defs_slice.len - 1];
-
-    // Type check
-    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions, module_common_idents);
-    defer checker.deinit();
-    try checker.checkFile();
-
-    // Assert 1 problem
-    try testing.expectEqual(1, checker.problems.problems.items.len);
-    const problem = checker.problems.problems.items[0];
-
-    // Assert the rendered problem matches the expected problem
-    var report_builder = problem_mod.ReportBuilder.init(
-        allocator,
-        &module_env,
-        &module_env,
-        &checker.snapshots,
-        "test",
-        &.{},
-    );
-    defer report_builder.deinit();
-
-    var report = try report_builder.build(problem);
-    defer report.deinit();
-
-    try testing.expectEqualStrings(expected_problem_title, report.title);
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+/// Asserts that the type of the final definition in the source matches the one provided
+fn assertFileTypeCheckFail(source: []const u8, expected_problem_title: []const u8) !void {
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+    return test_env.assertOneTypeError(expected_problem_title);
 }

@@ -97,20 +97,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
 					(ty-lookup @8.13-8.16 (name "F64") (builtin))
-					(ty-lookup @8.20-8.23 (name "F64") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+					(ty-lookup @8.20-8.23 (name "F64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -118,14 +105,6 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.7 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(patt @9.1-9.10 (type "Num(Frac(Float64)) -> Num(Frac(Float64))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @5.10-5.19 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(expr @9.13-9.24 (type "Num(Frac(Float64)) -> Num(Frac(Float64))"))))

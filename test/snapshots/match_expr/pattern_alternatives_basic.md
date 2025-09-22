@@ -129,19 +129,6 @@ kind = |color| match color {
 				(ty-fn @5.8-5.20 (effectful false)
 					(ty-lookup @5.8-5.13 (name "Color") (local))
 					(ty-lookup @5.17-5.20 (name "Str") (builtin))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @3.1-3.51
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.9-3.51
@@ -158,13 +145,6 @@ kind = |color| match color {
 	(defs
 		(patt @6.1-6.5 (type "Color -> Str")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @3.1-3.51 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

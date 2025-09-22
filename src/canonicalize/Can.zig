@@ -200,11 +200,17 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
     // Top-level scope is not a function boundary
     try result.scopeEnter(gpa, false);
 
+    const scratch_statements_start = result.env.store.scratch_statements.top();
+
     // Simulate the builtins by add type declarations
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
     try result.addBuiltinTypeBool(env);
     try result.addBuiltinTypeResult(env);
-    // Below, these are addded to the list of stmts in the file
+
+    // Add builtins to builtin stmts
+    try result.env.store.addScratchStatement(BUILTIN_BOOL);
+    try result.env.store.addScratchStatement(BUILTIN_RESULT);
+    result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
 
     // Assert that the node store is completely empty
     env.debugAssertArraysInSync();
@@ -412,10 +418,6 @@ pub fn canonicalizeFile(
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.env.store.scratchDefTop();
     const scratch_statements_start = self.env.store.scratch_statements.top();
-
-    // Add builtins to scratch stmts
-    try self.env.store.addScratchStatement(BUILTIN_BOOL);
-    try self.env.store.addScratchStatement(BUILTIN_RESULT);
 
     // First pass: Process all type declarations to introduce them into scope
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -1913,7 +1915,7 @@ pub fn canonicalizeExpr(
             const adjusted_val = u128_val - is_minimum_signed;
 
             const requirements = types.Num.Int.Requirements{
-                .sign_needed = is_negated,
+                .sign_needed = is_negated and u128_val != 0,
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
             const int_requirements = types.Num.IntRequirements{

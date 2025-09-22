@@ -318,20 +318,7 @@ j = -17011687303715884105728
 		(e-num @27.5-27.29 (value "-17011687303715884105728"))
 		(annotation @27.1-27.2
 			(declared-type
-				(ty-lookup @26.5-26.9 (name "I128") (builtin)))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+				(ty-lookup @26.5-26.9 (name "I128") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -345,14 +332,6 @@ j = -17011687303715884105728
 		(patt @21.1-21.2 (type "Num(Int(Signed32))"))
 		(patt @24.1-24.2 (type "Num(Int(Signed64))"))
 		(patt @27.1-27.2 (type "Num(Int(Signed128))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.5-4.8 (type "Num(Int(Unsigned8))"))
 		(expr @7.5-7.10 (type "Num(Int(Unsigned16))"))

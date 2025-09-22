@@ -282,20 +282,7 @@ main! = |_| {}
 		(e-lambda @18.9-18.15
 			(args
 				(p-underscore @18.10-18.11))
-			(e-empty_record @18.13-18.15)))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+			(e-empty_record @18.13-18.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -305,14 +292,6 @@ main! = |_| {}
 		(patt @7.1-7.27 (type "[Err(_err), Ok(_ok)] -> Bool"))
 		(patt @13.1-13.15 (type "[Err(_err2), Ok(_ok2)] -> Bool"))
 		(patt @18.1-18.6 (type "_arg -> {}")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Error")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.11-4.27 (type "[None, Some(Str)] -> Str"))
 		(expr @7.30-10.2 (type "[Err(_err), Ok(_ok)] -> Bool"))

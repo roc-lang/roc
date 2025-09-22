@@ -106,19 +106,6 @@ NO CHANGE
 	(d-let
 		(p-assign @8.1-8.4 (ident "foo"))
 		(e-num @8.7-8.9 (value "42")))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @10.1-10.19
 		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
@@ -132,13 +119,6 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @10.1-10.19 (type "MyType")
 			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions

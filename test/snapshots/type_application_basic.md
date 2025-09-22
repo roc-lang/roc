@@ -113,20 +113,7 @@ main! = |_| processList(["one", "two", "three"])
 							(e-string @6.32-6.37
 								(e-literal @6.33-6.36 (string "two")))
 							(e-string @6.38-6.45
-								(e-literal @6.39-6.44 (string "three")))))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err")))))
+								(e-literal @6.39-6.44 (string "three"))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -134,14 +121,6 @@ main! = |_| processList(["one", "two", "three"])
 	(defs
 		(patt @4.1-4.12 (type "List(Str) -> Num(Int(Unsigned64))"))
 		(patt @6.1-6.6 (type "_arg -> Num(Int(Unsigned64))")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @4.15-4.32 (type "List(Str) -> Num(Int(Unsigned64))"))
 		(expr @6.9-6.47 (type "_arg -> Num(Int(Unsigned64))"))))

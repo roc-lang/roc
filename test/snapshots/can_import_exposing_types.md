@@ -822,19 +822,6 @@ combineResults = |jsonResult, httpStatus|
 					(ty-apply @49.50-49.73 (name "Result") (local)
 						(ty-malformed @49.50-49.73)
 						(ty-malformed @49.50-49.73))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-alias-decl @30.1-34.2
 		(ty-header @30.1-30.13 (name "ServerConfig"))
 		(ty-record @30.16-34.2
@@ -869,13 +856,6 @@ combineResults = |jsonResult, httpStatus|
 		(patt @42.1-42.15 (type "Error -> Str"))
 		(patt @50.1-50.15 (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(Error, Error)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err")))))
 		(alias @30.1-34.2 (type "ServerConfig")
 			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions

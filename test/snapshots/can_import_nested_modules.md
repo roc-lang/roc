@@ -612,19 +612,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-apply @25.40-25.78 (name "Result") (local)
 						(ty-malformed @25.40-25.78)
 						(ty-malformed @25.40-25.78))))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Bool"))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "True"))
-			(tag_name @1.1-1.1 (name "False"))))
-	(s-nominal-decl @1.1-1.1
-		(ty-header @1.1-1.1 (name "Result")
-			(ty-args
-				(ty-rigid-var @1.1-1.1 (name "ok"))
-				(ty-rigid-var @1.1-1.1 (name "err"))))
-		(ty-tag-union @1.1-1.1
-			(tag_name @1.1-1.1 (name "Ok"))
-			(tag_name @1.1-1.1 (name "Err"))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
@@ -639,14 +626,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(patt @17.1-17.12 (type "Error, Str -> Result(Str, Error)"))
 		(patt @22.1-22.13 (type "Str -> Str"))
 		(patt @26.1-26.13 (type "Error -> Result(Error, Error)")))
-	(type_decls
-		(nominal @1.1-1.1 (type "Bool")
-			(ty-header @1.1-1.1 (name "Bool")))
-		(nominal @1.1-1.1 (type "Result(ok, err)")
-			(ty-header @1.1-1.1 (name "Result")
-				(ty-args
-					(ty-rigid-var @1.1-1.1 (name "ok"))
-					(ty-rigid-var @1.1-1.1 (name "err"))))))
 	(expressions
 		(expr @9.15-9.51 (type "Error -> Str"))
 		(expr @13.16-13.55 (type "Str, Str -> Error"))
