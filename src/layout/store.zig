@@ -63,7 +63,8 @@ pub const Store = struct {
 
     // Layout-specific string interner for field names
     // This ensures field names are consistent across all modules
-    field_name_interner: base.Ident.Store,
+    // Use a pointer so it can be shared between layout caches
+    field_name_interner: *base.Ident.Store,
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
@@ -110,6 +111,15 @@ pub const Store = struct {
         env: *ModuleEnv,
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
+        return initWithInterner(env, type_store, null);
+    }
+
+    pub fn initWithInterner(
+        env: *ModuleEnv,
+        type_store: *const types_store.Store,
+        shared_interner: ?*base.Ident.Store,
+    ) std.mem.Allocator.Error!Self {
+        std.debug.print("LayoutStore.initWithInterner called with env.module_name='{}' at ptr {*}, shared_interner={any}\n", .{std.zig.fmtEscapes(env.module_name), env, shared_interner != null});
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, @intCast(capacity));
@@ -148,7 +158,11 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
-            .field_name_interner = try base.Ident.Store.initCapacity(env.gpa, 256),
+            .field_name_interner = if (shared_interner) |ptr| ptr else interner: {
+                const new_ptr = try env.gpa.create(base.Ident.Store);
+                new_ptr.* = try base.Ident.Store.initCapacity(env.gpa, 256);
+                break :interner new_ptr;
+            },
         };
     }
 
@@ -157,9 +171,16 @@ pub const Store = struct {
         // Get the string from the module's ident store
         const field_str = module_env.getIdent(module_ident);
 
+        // Debug - always print for any record field interning
+        std.debug.print("internFieldName in module '{}': '{}' (idx {})\n", .{std.zig.fmtEscapes(module_env.module_name), std.zig.fmtEscapes(field_str), module_ident.idx});
+
         // Intern it in the layout's field name interner
         const interned = self.field_name_interner.findByString(field_str) orelse
             try self.field_name_interner.insert(self.env.gpa, base.Ident.for_text(field_str));
+
+        std.debug.print("  -> interned as idx {}\n", .{interned.idx});
+        const check = self.field_name_interner.getText(interned);
+        std.debug.print("  -> checking: getText({}) = '{}'\n", .{interned.idx, std.zig.fmtEscapes(check)});
 
         return interned;
     }
@@ -173,7 +194,18 @@ pub const Store = struct {
         self.tuple_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
+        // Don't deinit or destroy the field_name_interner here
+        // The main layout cache owns it and will clean it up
+        // Temp caches share the pointer and shouldn't destroy it
+    }
+
+    /// Deinitialize the store and also clean up the field name interner
+    /// This should only be called on the main layout cache that owns the interner
+    pub fn deinitWithInterner(self: *Self) void {
+        self.deinit();
+        // Clean up the field name interner since we own it
         self.field_name_interner.deinit(self.env.gpa);
+        self.env.gpa.destroy(self.field_name_interner);
     }
 
     /// Insert a Box layout with the given element layout.
@@ -436,6 +468,9 @@ pub const Store = struct {
         self: *Self,
         record_type: types.Record,
     ) (LayoutError || std.mem.Allocator.Error)!usize {
+        // Debug for any module
+        std.debug.print("gatherRecordFields in module '{}': {} fields\n", .{std.zig.fmtEscapes(self.env.module_name), record_type.fields.len()});
+
         var num_fields = record_type.fields.len();
 
         const field_slice = self.types_store.getRecordFieldsSlice(record_type.fields);
@@ -755,21 +790,17 @@ pub const Store = struct {
         unresolved_var: Var,
         type_scope: *const TypeScope,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
+        std.debug.print("addTypeVar called in module '{}' for var {}\n", .{std.zig.fmtEscapes(self.env.module_name), unresolved_var});
         var current = self.types_store.resolveVar(unresolved_var);
-
-        // Debug problematic var 85
-        if (@intFromEnum(unresolved_var) == 85) {
-            std.debug.print("\n=== addTypeVar: Debugging Var(85) ===\n", .{});
-            std.debug.print("  Module: {s}\n", .{self.env.module_name});
-            std.debug.print("  Resolved to var: {}\n", .{current.var_});
-            std.debug.print("  Content: {s}\n", .{@tagName(current.desc.content)});
-            if (current.desc.content == .structure) {
-                std.debug.print("  Structure type: {s}\n", .{@tagName(current.desc.content.structure)});
-            }
+        std.debug.print("  -> Resolved to type: {s}\n", .{@tagName(current.desc.content)});
+        if (current.desc.content == .structure) {
+            std.debug.print("  -> Structure type: {s}\n", .{@tagName(current.desc.content.structure)});
         }
+
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
+            std.debug.print("  -> var {} already cached as layout {}\n", .{current.var_, cached_idx});
             return cached_idx;
         }
 
@@ -824,9 +855,12 @@ pub const Store = struct {
                         // origin module's context to get the correct layout. We implement lazy
                         // layout resolution - only resolve when actually needed at runtime.
 
+                        std.debug.print("  -> Found nominal_type in module '{}'\n", .{std.zig.fmtEscapes(self.env.module_name)});
+
                         const backing_var = self.types_store.getNominalBackingVar(nominal_type);
 
                         const resolved = self.types_store.resolveVar(backing_var);
+                        std.debug.print("  -> Resolved to: {s}\n", .{@tagName(resolved.desc.content)});
                         current = resolved;
                         continue;
                     },
@@ -888,6 +922,7 @@ pub const Store = struct {
                         break :flat_type Layout.closure(empty_captures_idx);
                     },
                     .record => |record_type| {
+                        std.debug.print("  -> Found record type in module '{}'\n", .{std.zig.fmtEscapes(self.env.module_name)});
                         const num_fields = try self.gatherRecordFields(record_type);
 
                         if (num_fields == 0) {
@@ -980,7 +1015,9 @@ pub const Store = struct {
                             num_fields = fields.len();
                             const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
                             for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                                // Intern the field name in the layout's field name interner
+                                const interned_name = try self.internFieldName(name, self.env);
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = interned_name, .var_ = var_ });
                             }
                         }
 
@@ -1250,6 +1287,18 @@ pub const Store = struct {
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // Debug for test_28
+        if (std.mem.eql(u8, self.env.module_name, "test_28") and layout.tag == .record) {
+            std.debug.print("insertLayout record in test_28\n", .{});
+            const record_data = self.getRecordData(layout.data.record.idx);
+            const fields = self.record_fields.sliceRange(record_data.getFields());
+            std.debug.print("  Record has {} fields\n", .{fields.len});
+            for (0..fields.len) |i| {
+                const field = fields.get(i);
+                std.debug.print("  Field {}: idx {}\n", .{i, field.name.idx});
+            }
+        }
+
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
             return idxFromScalar(layout.data.scalar);

@@ -88,6 +88,11 @@ pub const Instantiate = struct {
 
         // Check if we've already instantiated this variable
         if (self.seen_vars_subs.get(resolved_var)) |fresh_var| {
+            // std.debug.print("  Instantiate: Reusing Var({}) -> Var({}) from cache (initial was Var({}))\n", .{
+            //     @intFromEnum(resolved_var),
+            //     @intFromEnum(fresh_var),
+            //     @intFromEnum(initial_var),
+            // });
             return fresh_var;
         }
 
@@ -110,6 +115,23 @@ pub const Instantiate = struct {
                     return fresh_var;
                 }
             },
+            .flex_var => |maybe_ident| {
+                // IMPORTANT: When instantiating a polymorphic function, flex_vars need to be replaced
+                // with fresh variables. This ensures that each instantiation gets its own set of
+                // type variables that can be unified independently.
+                const fresh_var = try self.store.freshFromContentWithRank(Content{ .flex_var = maybe_ident }, ctx.current_rank);
+
+                // Remember this substitution for recursive references (important for linked variables like in |x| x)
+                try self.seen_vars_subs.put(resolved_var, fresh_var);
+
+                // std.debug.print("  Instantiate: Created fresh Var({}) for flex_var Var({}) (initial was Var({}))\n", .{
+                //     @intFromEnum(fresh_var),
+                //     @intFromEnum(resolved_var),
+                //     @intFromEnum(initial_var),
+                // });
+
+                return fresh_var;
+            },
             else => {
                 const fresh_content = try self.instantiateContent(resolved.desc.content, ctx);
 
@@ -126,7 +148,8 @@ pub const Instantiate = struct {
 
     fn instantiateContent(self: *Self, content: Content, ctx: *Ctx) std.mem.Allocator.Error!Content {
         return switch (content) {
-            .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
+            // flex_var is now handled directly in instantiateVar
+            .flex_var => unreachable,
             // .rigid_var => |maybe_ident| Content{ .rigid_var = maybe_ident },
             .rigid_var => unreachable,
             .alias => |alias| {

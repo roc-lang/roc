@@ -280,7 +280,9 @@ fn instantiateVar(
     rigid_to_flex_subs: *Instantiate.RigidToFlexSubs,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    self.var_map.clearRetainingCapacity();
+    // Don't clear here - we clear once per definition in checkDef
+    // This preserves mappings across related instantiations
+    // self.var_map.clearRetainingCapacity();
 
     var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), &self.var_map);
     var instantiate_ctx = Instantiate.Ctx{
@@ -339,7 +341,8 @@ fn copyVar(
     other_module_var: Var,
     other_module_env: *ModuleEnv,
 ) std.mem.Allocator.Error!Var {
-    self.var_map.clearRetainingCapacity();
+    // Don't clear - preserve mappings from any previous instantiation
+    // self.var_map.clearRetainingCapacity();
     const copied_var = try copy_import.copyVar(
         &other_module_env.*.types,
         self.types,
@@ -485,6 +488,7 @@ pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
 fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
 
     const def = self.cir.store.getDef(def_idx);
     const expr_var: Var = ModuleEnv.varFrom(def.expr);
@@ -978,10 +982,28 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };
-                const instantiated_copy = try self.instantiateVarAnon(copied_var, .use_last_var);
 
-                // Unify our expression with the copied type
-                const result = try self.unify(expr_var, instantiated_copy);
+                // Check if the copied type is a polymorphic function
+                // If so, DON'T instantiate it here - let the call site handle instantiation
+                const copied_resolved = self.types.resolveVar(copied_var);
+                const should_instantiate_now = switch (copied_resolved.desc.content) {
+                    .structure => |flat_type| switch (flat_type) {
+                        // Don't instantiate functions at import time - let call sites handle it
+                        .fn_pure, .fn_effectful, .fn_unbound => false,
+                        // Other structures should be instantiated
+                        else => self.types.needsInstantiation(copied_var),
+                    },
+                    // Non-functions should be instantiated if they need it
+                    else => self.types.needsInstantiation(copied_var),
+                };
+
+                const final_var = if (should_instantiate_now)
+                    try self.instantiateVarAnon(copied_var, .use_last_var)
+                else
+                    copied_var;
+
+                // Unify our expression with the type (instantiated or not)
+                const result = try self.unify(expr_var, final_var);
                 if (result.isProblem()) {
                     self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
@@ -1041,6 +1063,10 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             does_fx = try self.checkIfElseExpr(expr_idx, expr_region, if_expr);
         },
         .e_call => |call| {
+            // Don't clear here - we clear once per definition
+            // This preserves mappings for nested calls
+            // self.var_map.clearRetainingCapacity();
+
             // Get all expressions - first is function, rest are arguments
             const all_exprs = self.cir.store.sliceExpr(call.args);
 
@@ -1098,7 +1124,15 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                             }
                         },
                         .fn_pure => |_| {
-                            if (self.types.needsInstantiation(cur_call_func_var)) {
+                            const needs_inst = self.types.needsInstantiation(cur_call_func_var);
+                            // const resolved_func_var = self.types.resolveVar(cur_call_func_var);
+                            // std.debug.print("At call site: func var={}, needs_instantiation()={}, func.needs_instantiation={}, rank={}\n", .{
+                            //     cur_call_func_var,
+                            //     needs_inst,
+                            //     func.needs_instantiation,
+                            //     resolved_func_var.desc.rank,
+                            // });
+                            if (needs_inst) {
                                 const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
                                 const resolved_expected_func = self.types.resolveVar(expected_func_var);
 
@@ -1121,7 +1155,15 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                             }
                         },
                         .fn_unbound => |_| {
-                            if (self.types.needsInstantiation(cur_call_func_var)) {
+                            const needs_inst = self.types.needsInstantiation(cur_call_func_var);
+                            // const resolved_func_var = self.types.resolveVar(cur_call_func_var);
+                            // std.debug.print("At call site (fn_unbound): func var={}, needsInstantiation()={}, func.needs_instantiation={}, rank={}\n", .{
+                            //     cur_call_func_var,
+                            //     needs_inst,
+                            //     func.needs_instantiation,
+                            //     resolved_func_var.desc.rank,
+                            // });
+                            if (needs_inst) {
                                 const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
                                 const resolved_expected_func = self.types.resolveVar(expected_func_var);
 
@@ -1254,6 +1296,10 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
+                // Clear instantiation map for each statement
+                // This ensures each statement's polymorphic calls get fresh variables
+                self.var_map.clearRetainingCapacity();
+
                 const stmt = self.cir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
@@ -1640,15 +1686,14 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                 },
                 .flex_var => {
                     // Receiver is unbound, we need to constrain it to be a record with the field
-                    // Create a fresh variable for the field type
-                    const field_var = try self.fresh(expr_region);
+                    // IMPORTANT: The dot_access_var IS the field type - don't create a new one!
+                    // This ensures that for |record| record.x, we get { x: a } -> a with the SAME a
                     const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    _ = try self.unify(dot_access_var, field_var);
 
-                    // Create a record type with this field
+                    // Create a record type with THIS SAME variable as the field type
                     const field_idx = try self.types.appendRecordField(.{
                         .name = dot_access.field_name,
-                        .var_ = field_var,
+                        .var_ = dot_access_var,  // USE THE SAME VAR!
                     });
                     const fields_range = types_mod.RecordField.SafeMultiList.Range{
                         .start = field_idx,
@@ -1677,8 +1722,34 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                     try self.constraint_origins.put(receiver_var, dot_access_var);
                     // Constraint origin recorded for better error reporting
                 },
+                .rigid_var => {
+                    // Same as flex_var - the dot_access_var IS the field type
+                    const dot_access_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+                    // Create a record type with THIS SAME variable as the field type
+                    const field_idx = try self.types.appendRecordField(.{
+                        .name = dot_access.field_name,
+                        .var_ = dot_access_var,
+                    });
+                    const fields_range = types_mod.RecordField.SafeMultiList.Range{
+                        .start = field_idx,
+                        .count = 1,
+                    };
+
+                    // Create the record content
+                    const record_content = types_mod.Content{
+                        .structure = .{
+                            .record_unbound = fields_range,
+                        },
+                    };
+
+                    // Unify the receiver with this record type
+                    const record_var = try self.freshFromContent(record_content, expr_region);
+                    _ = try self.unifyWithConstraintOrigin(receiver_var, record_var, dot_access_var);
+                    try self.constraint_origins.put(receiver_var, dot_access_var);
+                },
                 else => {
-                    // Other cases (rigid_var, alias, etc.) - let unification handle errors
+                    // Other cases (alias, etc.) - let unification handle errors
                 },
             }
         },
@@ -1803,6 +1874,27 @@ fn unifyFunctionCall(
             arg_index += 1;
         }
         // The call's type is the instantiated return type
+        // IMPORTANT: After unifying arguments, the return type may have been constrained
+        // For example, in |pair| pair.a, after unifying pair with {a: 42, b: 99},
+        // the return type should resolve to Num, not remain as flex_var
+
+        // First resolve to see current state
+        var ret_resolved = self.types.resolveVar(expected_func.ret);
+
+        // If the return type is still a flex_var after argument unification,
+        // it might be because it's linked to a field access or other expression
+        // that needs to be re-evaluated with the now-known argument types
+        if (ret_resolved.desc.content == .flex_var) {
+            // Try to resolve through any redirects that may have been created during argument unification
+            // This is a workaround for the case where return type is linked to parameter fields
+            ret_resolved = self.types.resolveVar(ret_resolved.var_);
+        }
+
+        // std.debug.print("unifyFunctionCall: unifying call_var={} with return type={}, content={s}\n", .{
+        //     call_var,
+        //     expected_func.ret,
+        //     @tagName(ret_resolved.desc.content),
+        // });
         _ = try self.unify(call_var, expected_func.ret);
     } else {
         // Arity mismatch - arguments already checked

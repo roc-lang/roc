@@ -28,6 +28,27 @@ const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError }
 // Thread-safe counter for generating unique test module names to prevent test interference
 var test_module_counter = std.atomic.Value(u32).init(0);
 
+// Global field name interner shared by all test modules to ensure field names are consistent
+// across module boundaries. This prevents the "field name indices get misinterpreted" bug.
+var global_field_interner: ?*base.Ident.Store = null;
+var global_interner_mutex = std.Thread.Mutex{};
+
+pub fn getGlobalFieldInterner() !*base.Ident.Store {
+    global_interner_mutex.lock();
+    defer global_interner_mutex.unlock();
+
+    if (global_field_interner) |interner| {
+        return interner;
+    }
+
+    // Create the global interner on first use
+    const ptr = try test_allocator.create(base.Ident.Store);
+    ptr.* = try base.Ident.Store.initCapacity(test_allocator, 1024);
+    global_field_interner = ptr;
+    std.debug.print("Created global field interner at {*}\n", .{ptr});
+    return ptr;
+}
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -36,8 +57,10 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -73,8 +96,10 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -91,6 +116,18 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     if (should_trace == .trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+
+    // Debug: Check what we're evaluating
+    if (std.mem.indexOf(u8, src, "{x: 42}") != null or
+        std.mem.indexOf(u8, src, "{foo: 100}") != null or
+        std.mem.indexOf(u8, src, "{bar: 1 + 2}") != null) {
+        std.debug.print("\n=== EVALUATING SINGLE ELEMENT RECORD TEST ===\n", .{});
+        std.debug.print("  Source: {s}\n", .{src});
+        std.debug.print("  Module: {s}\n", .{resources.module_env.module_name});
+        std.debug.print("  Expr idx: {}\n", .{resources.expr_idx});
+        const the_expr = resources.module_env.store.getExpr(resources.expr_idx);
+        std.debug.print("  Top-level expr type: {s}\n", .{@tagName(the_expr)});
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -110,8 +147,10 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -162,8 +201,10 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -227,8 +268,10 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -282,8 +325,10 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
     defer eval_stack.deinit();
 
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -488,8 +533,10 @@ test "eval runtime error - returns crash error" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -520,8 +567,10 @@ test "eval tag - already primitive" {
     defer eval_stack.deinit();
 
     // Create layout store
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
+    const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+    defer layout_cache.deinit(); // Don't destroy the global interner
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
@@ -560,8 +609,10 @@ test "interpreter reuse across multiple evaluations" {
 
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
-        var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
+        const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
+    var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
+        defer layout_cache.deinit(); // Don't destroy the global interner
 
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();

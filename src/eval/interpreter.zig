@@ -689,13 +689,26 @@ pub const Interpreter = struct {
     fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
         const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
 
+        // Debug: check what we're getting
+        if (std.mem.eql(u8, self.env.module_name, "test_28") and @intFromEnum(expr_idx) == 80) {
+            std.debug.print("DEBUG getLayoutIdx for test_28 record: expr_idx={}, expr_var={}\n", .{expr_idx, expr_var});
+            const expr = self.env.store.getExpr(@as(CIR.Expr.Idx, @enumFromInt(@intFromEnum(expr_idx))));
+            std.debug.print("  Expr type: {s}\n", .{@tagName(expr)});
+        }
+
         // When getting layouts, we need to use the current module's type information
         // The layout cache was initialized with Main's types, but when evaluating
         // expressions from other modules, we need to use their type stores
         if (self.type_store != self.layout_cache.types_store) {
             // We're in a different module - need to get layout from that module's types
-            // For now, create a temporary layout store with the correct types
-            var temp_layout_cache = LayoutStore.init(@constCast(self.env), self.type_store) catch return error.LayoutError;
+            // CRITICAL: Use the same field_name_interner as the main layout cache!
+            // This ensures field names are consistent across modules.
+            std.debug.print("Creating temp layout cache with shared interner: self.env.module_name='{}'\n", .{std.zig.fmtEscapes(self.env.module_name)});
+            var temp_layout_cache = LayoutStore.initWithInterner(
+                @constCast(self.env),
+                self.type_store,
+                self.layout_cache.field_name_interner
+            ) catch return error.LayoutError;
             defer temp_layout_cache.deinit();
 
             const layout_idx = temp_layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
@@ -719,8 +732,25 @@ pub const Interpreter = struct {
                     const field_layout = temp_layout_cache.getLayout(field_layout_idx);
                     const new_field_layout_idx = self.layout_cache.insertLayout(field_layout) catch return error.LayoutError;
 
+                    // Re-intern the field name into the main cache's interner
+                    const field_name_str = temp_layout_cache.field_name_interner.getText(field_name);
+
+                    // Debug for test_28
+                    if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+                        std.debug.print("Re-interning field name: idx {} -> '{}'\n", .{field_name.idx, std.zig.fmtEscapes(field_name_str)});
+                    }
+
+                    const new_field_name = self.layout_cache.field_name_interner.findByString(field_name_str) orelse
+                        self.layout_cache.field_name_interner.insert(self.allocator, base.Ident.for_text(field_name_str)) catch return error.LayoutError;
+
+                    if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+                        std.debug.print("  -> new idx {}\n", .{new_field_name.idx});
+                        const check = self.layout_cache.field_name_interner.getText(new_field_name);
+                        std.debug.print("  -> verify: getText({}) = '{}'\n", .{new_field_name.idx, std.zig.fmtEscapes(check)});
+                    }
+
                     _ = self.layout_cache.record_fields.append(self.allocator, .{
-                        .name = field_name,
+                        .name = new_field_name,
                         .layout = new_field_layout_idx,
                     }) catch return error.LayoutError;
                 }
@@ -771,6 +801,12 @@ pub const Interpreter = struct {
     /// than evaluation failure.
     fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
         const expr = self.env.store.getExpr(expr_idx);
+
+        // Debug: Check what's happening with the test
+        const expr_num = @intFromEnum(expr_idx);
+        if (expr_num >= 80 and expr_num <= 90) {
+            std.debug.print("evalExpr: idx={}, type={s}, module={s}\n", .{expr_idx, @tagName(expr), self.env.module_name});
+        }
 
         self.traceEnter("evalExpr {s}", .{@tagName(expr)});
         defer self.traceExit("", .{});
@@ -1674,6 +1710,17 @@ pub const Interpreter = struct {
             .e_record => |record_expr| {
                 const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
                 const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
+
+                // Debug: Check what layout we got for the record
+                if (@intFromEnum(expr_idx) == 80 and std.mem.eql(u8, self.env.module_name, "test_28")) {
+                    std.debug.print("DEBUG e_record in test_28:\n", .{});
+                    std.debug.print("  Expr idx: {}\n", .{expr_idx});
+                    std.debug.print("  Computed layout idx: {}\n", .{computed_layout_idx});
+                    std.debug.print("  Layout tag: {}\n", .{expr_layout.tag});
+                    if (expr_layout.tag != .record) {
+                        std.debug.print("  ERROR: Expected record layout, got {}\n", .{expr_layout.tag});
+                    }
+                }
                 const fields = self.env.store.sliceRecordFields(record_expr.fields);
                 if (fields.len == 0) {
                     // Per the test, `{}` should be a zero-sized type error.
@@ -2267,12 +2314,8 @@ pub const Interpreter = struct {
 
     /// Ensures a layout has its field data properly copied when crossing module boundaries
     fn ensureLayoutWithFields(self: *Interpreter, in_layout: Layout, closure: *const Closure) EvalError!layout.Idx {
-        std.debug.print("\n=== ensureLayoutWithFields ===\n", .{});
-        std.debug.print("  Layout tag: {}\n", .{in_layout.tag});
-
         // If it's not a record, just insert it
         if (in_layout.tag != .record) {
-            std.debug.print("  Not a record, inserting as-is\n", .{});
             return self.layout_cache.insertLayout(in_layout) catch return error.LayoutError;
         }
 
@@ -2289,9 +2332,6 @@ pub const Interpreter = struct {
         }
 
         std.debug.print("  Cross-module record detected!\n", .{});
-        std.debug.print("    Closure module: {s}\n", .{closure_module.module_name});
-        std.debug.print("    Current module: {s}\n", .{self.env.module_name});
-        std.debug.print("    Record idx in layout: {}\n", .{in_layout.data.record.idx.int_idx});
 
         // The in_layout has a record idx that refers to data in the closure module
         // We need to copy that data to our module
@@ -2301,8 +2341,12 @@ pub const Interpreter = struct {
         // We need to reconstruct the record layout from the type information.
 
         // Create a temporary layout cache for the closure's module to get the type data
-        var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch {
-            std.debug.print("  ERROR: Failed to create temp layout cache\n", .{});
+        // Use the shared field_name_interner to ensure field names are consistent across modules
+        var temp_layout_cache = LayoutStore.initWithInterner(
+            @constCast(closure_module),
+            &closure_module.types,
+            self.layout_cache.field_name_interner
+        ) catch {
             return error.LayoutError;
         };
         defer temp_layout_cache.deinit();
@@ -2340,7 +2384,6 @@ pub const Interpreter = struct {
 
         // If it's not actually a record after all, just use the original
         if (temp_full_layout.tag != .record) {
-            std.debug.print("  ERROR: Return type is not a record (it's {})\n", .{temp_full_layout.tag});
             return self.layout_cache.insertLayout(in_layout) catch return error.LayoutError;
         }
 
@@ -2359,7 +2402,6 @@ pub const Interpreter = struct {
             // For each field layout, copy it from the temp cache
             const field_layout = temp_layout_cache.getLayout(field_layout_idx);
             const new_field_layout_idx = self.layout_cache.insertLayout(field_layout) catch {
-                std.debug.print("    ERROR: Failed to insert field layout\n", .{});
                 return error.LayoutError;
             };
 
@@ -2400,11 +2442,9 @@ pub const Interpreter = struct {
         };
 
         const result_idx = self.layout_cache.insertLayout(new_layout) catch {
-            std.debug.print("  ERROR: Failed to insert final layout\n", .{});
             return error.LayoutError;
         };
 
-        std.debug.print("  SUCCESS: Created layout idx {} with record idx {}\n", .{ result_idx, @intFromEnum(new_record_idx) });
         return result_idx;
     }
 
@@ -2457,7 +2497,6 @@ pub const Interpreter = struct {
                     else
                         closure_module.types.resolveVar(return_type_var);
 
-                    std.debug.print("  Resolved return type: {s}\n", .{@tagName(ret_resolved.desc.content)});
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
@@ -2471,26 +2510,21 @@ pub const Interpreter = struct {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
                             }
 
-                            // Try to infer the return type from the function body
-                            // For now, default to i128 for unresolved types
-                            // This is a temporary workaround until we fix the type system
-                            self.traceInfo("WARNING: Using default i128 layout for unresolved return type", .{});
-                            return Layout{
-                                .tag = .scalar,
-                                .data = .{
-                                    .scalar = .{
-                                        .tag = .int,
-                                        .data = .{ .int = .i128 },
-                                    },
-                                },
-                            };
+                            // The return type is still polymorphic - this means we haven't properly
+                            // instantiated it. This is a type system issue that needs proper fixing.
+                            // TODO: Implement proper type instantiation/unification
+                            return error.TypeMismatch;
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
                             // Need to use the closure module's type system if it's different
                             if (&closure_module.types != self.layout_cache.types_store) {
                                 // We're in a different module - need to get layout from that module's types
-                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                var temp_layout_cache = LayoutStore.initWithInterner(
+                                    @constCast(closure_module),
+                                    &closure_module.types,
+                                    self.layout_cache.field_name_interner
+                                ) catch return error.LayoutError;
                                 defer temp_layout_cache.deinit();
 
                                 const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
@@ -2559,7 +2593,11 @@ pub const Interpreter = struct {
                             // Need to use the closure module's type system if it's different
                             if (&closure_module.types != self.layout_cache.types_store) {
                                 // We're in a different module - need to get layout from that module's types
-                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                var temp_layout_cache = LayoutStore.initWithInterner(
+                                    @constCast(closure_module),
+                                    &closure_module.types,
+                                    self.layout_cache.field_name_interner
+                                ) catch return error.LayoutError;
                                 defer temp_layout_cache.deinit();
 
                                 const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
@@ -2640,25 +2678,17 @@ pub const Interpreter = struct {
                     // If the return type is itself a structure (like another function), check what kind
                     if (ret_resolved.desc.content == .structure) {
                         const ret_structure = ret_resolved.desc.content.structure;
-                        std.debug.print("    Return is a structure type: {s}\n", .{@tagName(ret_structure)});
 
                         // If it's a nominal_type, let's see what it actually represents
                         if (ret_structure == .nominal_type) {
-                            const nominal = ret_structure.nominal_type;
-                            std.debug.print("      Nominal type ident: {}\n", .{nominal.ident});
-                            std.debug.print("      Nominal type origin_module: {}\n", .{nominal.origin_module});
-
-                            // Try to resolve what this nominal type actually is
                             // Nominal types can wrap records, so we need to look deeper
-                            const nominal_var = return_type_var;
-                            std.debug.print("      Trying to get layout for nominal type var: {}\n", .{nominal_var});
                         }
                     }
 
                     // Check if it's still unresolved (flex_var/rigid_var)
                     switch (ret_resolved.desc.content) {
                         .flex_var, .rigid_var => {
-                            self.traceInfo("Lambda return type is still unresolved after TypeScope lookup", .{});
+                            self.traceInfo("fn_unbound: Lambda return type is still unresolved after TypeScope lookup", .{});
                             self.traceInfo("  Original var: {}", .{func.ret});
                             self.traceInfo("  After TypeScope: {}", .{return_type_var});
                             self.traceInfo("  Resolved content: {s}", .{@tagName(ret_resolved.desc.content)});
@@ -2667,42 +2697,33 @@ pub const Interpreter = struct {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
                             }
 
-                            // Try to infer the return type from the function body
-                            // For now, default to i128 for unresolved types
-                            // This is a temporary workaround until we fix the type system
-                            self.traceInfo("WARNING: Using default i128 layout for unresolved return type", .{});
-                            return Layout{
-                                .tag = .scalar,
-                                .data = .{
-                                    .scalar = .{
-                                        .tag = .int,
-                                        .data = .{ .int = .i128 },
-                                    },
-                                },
-                            };
+                            // The return type is still polymorphic - this means we haven't properly
+                            // instantiated it. This is a type system issue that needs proper fixing.
+                            // TODO: Implement proper type instantiation/unification
+                            return error.TypeMismatch;
                         },
                         else => {
                             // Type is resolved to a concrete type, use layout cache
-                            std.debug.print("  Resolved to concrete type, getting layout\n", .{});
 
                             // If we used the current type store to resolve, use current layout cache
                             if (use_current_type_store) {
-                                std.debug.print("  Using current module's layout cache\n", .{});
                                 // The mapped variable is in the current module's type system
                                 const ret_layout_idx = self.layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
                                     self.traceError("Failed to get layout for mapped closure return type: {}", .{err});
                                     return error.TypeMismatch;
                                 };
                                 const ret_layout = self.layout_cache.getLayout(ret_layout_idx);
-                                std.debug.print("  Got layout from current module: {s}\n", .{@tagName(ret_layout.tag)});
                                 return ret_layout;
                             }
 
                             // Need to use the closure module's type system if it's different
                             if (&closure_module.types != self.layout_cache.types_store) {
-                                std.debug.print("  Using closure module's layout cache\n", .{});
                                 // We're in a different module - need to get layout from that module's types
-                                var temp_layout_cache = LayoutStore.init(@constCast(closure_module), &closure_module.types) catch return error.LayoutError;
+                                var temp_layout_cache = LayoutStore.initWithInterner(
+                                    @constCast(closure_module),
+                                    &closure_module.types,
+                                    self.layout_cache.field_name_interner
+                                ) catch return error.LayoutError;
                                 defer temp_layout_cache.deinit();
 
                                 const ret_layout_idx = temp_layout_cache.addTypeVar(return_type_var, &self.type_scope) catch |err| {
@@ -2711,7 +2732,6 @@ pub const Interpreter = struct {
                                 };
 
                                 const ret_layout = temp_layout_cache.getLayout(ret_layout_idx);
-                                std.debug.print("  Got layout from closure module: {s}\n", .{@tagName(ret_layout.tag)});
                                 return ret_layout;
                             }
 
@@ -2883,9 +2903,40 @@ pub const Interpreter = struct {
             }
         }
 
-        // Pre-allocate return slot with the correct return type layout using the new TypeScope
-        const return_layout = try self.getClosureReturnLayout(closure);
-        self.traceInfo("getClosureReturnLayout returned: {}", .{return_layout});
+        // Get the return type from the call expression, which has the properly instantiated type
+        // The type checker has already instantiated any polymorphic types at the call site
+        const call_var = ModuleEnv.varFrom(expr_idx);
+        const call_resolved = self.env.types.resolveVar(call_var);
+
+        std.debug.print("=== Getting return type from call expression ===\n", .{});
+        std.debug.print("  Call expr_idx: {}\n", .{expr_idx});
+        std.debug.print("  Call var: {}\n", .{call_var});
+        std.debug.print("  Call type content: {s}\n", .{@tagName(call_resolved.desc.content)});
+
+        const return_layout = switch (call_resolved.desc.content) {
+            .structure => blk: {
+                // The call expression's type should be the return type of the function
+                // This is the instantiated, concrete type after type checking
+                const return_layout_idx = self.layout_cache.addTypeVar(call_var, &self.type_scope) catch |err| {
+                    self.traceError("Failed to get layout for call return type: {}", .{err});
+                    return error.TypeMismatch;
+                };
+                break :blk self.layout_cache.getLayout(return_layout_idx);
+            },
+            .flex_var, .rigid_var => blk: {
+                // The call expression's type is still polymorphic
+                // This can happen with cross-module polymorphic functions
+                // We need to try to resolve it using the closure's type
+                self.traceInfo("Call expression has polymorphic type, using closure analysis", .{});
+                break :blk try self.getClosureReturnLayout(closure);
+            },
+            else => blk: {
+                self.traceWarn("Unexpected call expression type: {s}", .{@tagName(call_resolved.desc.content)});
+                break :blk try self.getClosureReturnLayout(closure);
+            },
+        };
+
+        self.traceInfo("Return layout from call expression: {}", .{return_layout});
 
         // For cross-module records, we need to ensure field data is copied
         const return_layout_idx = try self.ensureLayoutWithFields(return_layout, closure);
@@ -3167,10 +3218,26 @@ pub const Interpreter = struct {
             };
 
             // Look for the current field CIR.Expr.Idx
+            // IMPORTANT: current_field_name is from the layout's field_name_interner,
+            // while field.name is from the module's ident store. We need to compare strings!
             var value_expr_idx: ?CIR.Expr.Idx = null;
+            const current_field_str = self.layout_cache.field_name_interner.getText(current_field_name);
+
+            // Debug for test_28
+            if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+                std.debug.print("Looking for field '{}' in record\n", .{std.zig.fmtEscapes(current_field_str)});
+            }
+
             for (cir_fields) |field_idx| {
                 const field = self.env.store.getRecordField(field_idx);
-                if (field.name == current_field_name) {
+                const field_str = self.env.getIdent(field.name);
+
+                // Debug for test_28
+                if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+                    std.debug.print("  Comparing with field '{}'\n", .{std.zig.fmtEscapes(field_str)});
+                }
+
+                if (std.mem.eql(u8, field_str, current_field_str)) {
                     value_expr_idx = field.value;
                     break;
                 }
@@ -3178,7 +3245,7 @@ pub const Interpreter = struct {
 
             const current_field_value_expr_idx = value_expr_idx orelse {
                 // This should be impossible if the CIR and layout are consistent.
-                self.traceError("Could not find value for field '{s}'", .{self.env.getIdent(current_field_name)});
+                self.traceError("Could not find value for field '{s}'", .{current_field_str});
                 return error.LayoutError;
             };
 
@@ -3206,18 +3273,18 @@ pub const Interpreter = struct {
         // Get the field name
         const field_name = self.env.getIdent(field_name_idx);
 
+        // Debug for test_28
+        if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+            std.debug.print("DEBUG handleDotAccess in test_28:\n", .{});
+            std.debug.print("  Field name: {s}\n", .{field_name});
+            std.debug.print("  Record value layout tag: {}\n", .{record_value.layout.tag});
+            if (record_value.layout.tag == .scalar) {
+                std.debug.print("  Scalar type: {}\n", .{record_value.layout.data.scalar.tag});
+            }
+        }
+
         // The record must have a record layout
         if (record_value.layout.tag != .record) {
-            std.debug.print("\n=== RECORD LAYOUT ERROR ===\n", .{});
-            std.debug.print("Field access on non-record value\n", .{});
-            std.debug.print("  Field name: {s}\n", .{field_name});
-            std.debug.print("  Expected: record layout\n", .{});
-            std.debug.print("  Got: {} layout\n", .{record_value.layout.tag});
-            std.debug.print("  Module: {s}\n", .{self.env.module_name});
-            if (record_value.ptr) |ptr| {
-                std.debug.print("  Value ptr: {*}\n", .{ptr});
-            }
-            std.debug.print("===========================\n", .{});
             self.traceError("Record field access: expected record layout, got {}", .{record_value.layout.tag});
             return error.TypeMismatch;
         }
@@ -3227,6 +3294,17 @@ pub const Interpreter = struct {
 
         // Find the field by name using the helper function
         const field_index = record_accessor.findFieldIndex(self.env, field_name) orelse {
+            // Debug for test_28
+            if (std.mem.eql(u8, self.env.module_name, "test_28")) {
+                std.debug.print("ERROR: Field not found in record!\n", .{});
+                std.debug.print("  Looking for field: '{s}'\n", .{field_name});
+                std.debug.print("  Record has {} fields\n", .{record_accessor.getFieldCount()});
+                for (0..record_accessor.getFieldCount()) |i| {
+                    const field = record_accessor.field_layouts.get(i);
+                    const field_name_str = self.layout_cache.field_name_interner.getText(field.name);
+                    std.debug.print("  Field {}: '{}' (idx {})\n", .{i, std.zig.fmtEscapes(field_name_str), field.name.idx});
+                }
+            }
             self.traceError("Record field access: field '{s}' not found", .{field_name});
             return error.TypeMismatch;
         };

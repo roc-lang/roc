@@ -37,4 +37,5 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/literal_size_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_type_origin_test.zig"));
     std.testing.refAllDecls(@import("test/static_dispatch_test.zig"));
+    std.testing.refAllDecls(@import("test/field_type_reuse_test.zig"));
 }

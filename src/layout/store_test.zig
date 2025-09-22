@@ -27,7 +27,7 @@ const LayoutTest = struct {
     type_scope: TypeScope,
 
     fn deinit(self: *LayoutTest) void {
-        self.layout_store.deinit();
+        self.layout_store.deinitWithInterner();
         self.type_scope.deinit();
         self.type_store.deinit();
         self.module_env.deinit();
@@ -43,7 +43,7 @@ test "addTypeVar - basic scalar types" {
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
-    defer layout_store.deinit();
+    defer layout_store.deinitWithInterner();
 
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
@@ -351,9 +351,10 @@ test "record with chained extensions" {
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 
     // Expected order by alignment: x (str), y (f64), z (u8)
-    try testing.expectEqualStrings("x", lt.module_env.getIdent(field_slice.get(0).name));
-    try testing.expectEqualStrings("y", lt.module_env.getIdent(field_slice.get(1).name));
-    try testing.expectEqualStrings("z", lt.module_env.getIdent(field_slice.get(2).name));
+    // Field names are now in the layout's field name interner, not the module's ident store
+    try testing.expectEqualStrings("x", lt.layout_store.field_name_interner.getText(field_slice.get(0).name));
+    try testing.expectEqualStrings("y", lt.layout_store.field_name_interner.getText(field_slice.get(1).name));
+    try testing.expectEqualStrings("z", lt.layout_store.field_name_interner.getText(field_slice.get(2).name));
 }
 
 test "record extension with non-record type fails" {
