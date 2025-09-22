@@ -1199,10 +1199,7 @@ test "eval - minimal import definition issue" {
         if (pattern == .assign) {
             const ident_text = main_env.getIdent(pattern.assign.ident);
             const expr = main_env.store.getExpr(def.expr);
-            std.debug.print("  Def[{}]: '{s}' -> {s} (pattern_idx={}, expr_idx={})\n", .{
-                i, ident_text, @tagName(expr),
-                @intFromEnum(def.pattern), @intFromEnum(def.expr)
-            });
+            std.debug.print("  Def[{}]: '{s}' -> {s} (pattern_idx={}, expr_idx={})\n", .{ i, ident_text, @tagName(expr), @intFromEnum(def.pattern), @intFromEnum(def.expr) });
         }
     }
     std.debug.print("======================================================\n\n", .{});
@@ -1405,10 +1402,7 @@ test "eval static dispatch - cross-module method call" {
             const func_expr = main_env.store.getExpr(args[0]);
             std.debug.print("  function expr type: {s}\n", .{@tagName(func_expr)});
             if (func_expr == .e_lookup_external) {
-                std.debug.print("    lookup_external module_idx={}, target_node_idx={}\n", .{
-                    @intFromEnum(func_expr.e_lookup_external.module_idx),
-                    func_expr.e_lookup_external.target_node_idx
-                });
+                std.debug.print("    lookup_external module_idx={}, target_node_idx={}\n", .{ @intFromEnum(func_expr.e_lookup_external.module_idx), func_expr.e_lookup_external.target_node_idx });
             }
         }
     }
@@ -2066,12 +2060,7 @@ test "minimal import lookup" {
         if (pattern == .assign) {
             const name = lib_env.getIdent(pattern.assign.ident);
             const expr = lib_env.store.getExpr(def.expr);
-            std.debug.print("  {s}: pattern_idx={}, expr_idx={}, type={s}\n", .{
-                name,
-                @intFromEnum(def.pattern),
-                @intFromEnum(def.expr),
-                @tagName(expr)
-            });
+            std.debug.print("  {s}: pattern_idx={}, expr_idx={}, type={s}\n", .{ name, @intFromEnum(def.pattern), @intFromEnum(def.expr), @tagName(expr) });
         }
     }
 
@@ -2105,11 +2094,7 @@ test "minimal import lookup" {
         if (pattern == .assign) {
             const name = main_env.getIdent(pattern.assign.ident);
             const expr = main_env.store.getExpr(def.expr);
-            std.debug.print("  {s}: expr_idx={}, type={s}\n", .{
-                name,
-                @intFromEnum(def.expr),
-                @tagName(expr)
-            });
+            std.debug.print("  {s}: expr_idx={}, type={s}\n", .{ name, @intFromEnum(def.expr), @tagName(expr) });
 
             // If it's a call, inspect it
             if (expr == .e_call) {
@@ -2119,10 +2104,7 @@ test "minimal import lookup" {
                     const func_expr = main_env.store.getExpr(args[0]);
                     std.debug.print("    function: {s}\n", .{@tagName(func_expr)});
                     if (func_expr == .e_lookup_external) {
-                        std.debug.print("      lookup_external: module_idx={}, target_node_idx={}\n", .{
-                            @intFromEnum(func_expr.e_lookup_external.module_idx),
-                            func_expr.e_lookup_external.target_node_idx
-                        });
+                        std.debug.print("      lookup_external: module_idx={}, target_node_idx={}\n", .{ @intFromEnum(func_expr.e_lookup_external.module_idx), func_expr.e_lookup_external.target_node_idx });
                     }
                 }
             }
@@ -2306,7 +2288,6 @@ test "minimal closure import - return closure from module" {
 
     try testing.expect(result.layout.tag == .closure);
 }
-
 
 // Import comprehensive test suite
 test {

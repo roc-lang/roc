@@ -2628,7 +2628,7 @@ pub const Expr = union(enum) {
                 // Push method name
                 try tree.pushStaticAtom("method");
                 // Use resolveQualifiedName to handle dot stripping, just like ident does
-                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent };
+                const strip_tokens = [_]Token.Tag{.NoSpaceDotLowerIdent};
                 const empty_qualifiers = Token.Span{ .span = .{ .start = 0, .len = 0 } };
                 const method_name = ast.resolveQualifiedName(empty_qualifiers, a.method_name, &strip_tokens);
                 try tree.pushString(method_name);

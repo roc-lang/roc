@@ -1054,14 +1054,14 @@ pub const Interpreter = struct {
             },
 
             .e_lookup_external => |lookup| {
-                self.traceInfo("evalExpr e_lookup_external module_idx={}, target_node_idx={}", .{@intFromEnum(lookup.module_idx), lookup.target_node_idx});
+                self.traceInfo("evalExpr e_lookup_external module_idx={}, target_node_idx={}", .{ @intFromEnum(lookup.module_idx), lookup.target_node_idx });
 
                 // Get the module name from the imports store
                 const import_idx_int = @intFromEnum(lookup.module_idx);
                 const string_idx = self.env.imports.imports.items.items[import_idx_int];
                 const module_name = self.env.common.strings.get(string_idx);
 
-                self.traceInfo("Looking up external identifier from module '{s}' with target_node_idx={}", .{module_name, lookup.target_node_idx});
+                self.traceInfo("Looking up external identifier from module '{s}' with target_node_idx={}", .{ module_name, lookup.target_node_idx });
 
                 // Find the module among other_modules
                 for (self.other_modules) |other_module| {
@@ -1123,7 +1123,7 @@ pub const Interpreter = struct {
                             }
                         }
 
-                        self.traceError("Could not find definition with target_node_idx={} in module '{s}'", .{lookup.target_node_idx, module_name});
+                        self.traceError("Could not find definition with target_node_idx={} in module '{s}'", .{ lookup.target_node_idx, module_name });
                         std.debug.print("ERROR: target_node_idx={} not found in defs\n", .{lookup.target_node_idx});
                         std.debug.print("  Checked {} definitions\n", .{other_defs.len});
                         return error.MethodNotFound;
@@ -1697,7 +1697,7 @@ pub const Interpreter = struct {
             .e_closure => |closure_expr| try self.createClosure(expr_idx, closure_expr),
 
             .e_lambda => |lambda_expr| {
-                std.debug.print("=== Creating e_lambda closure in module '{s}', expr_idx: {} ===\n", .{self.env.module_name, expr_idx});
+                std.debug.print("=== Creating e_lambda closure in module '{s}', expr_idx: {} ===\n", .{ self.env.module_name, expr_idx });
 
                 // Debug: Check if this is the problematic expression
                 if (@intFromEnum(expr_idx) == 81 and std.mem.eql(u8, self.env.module_name, "test")) {
@@ -1732,7 +1732,7 @@ pub const Interpreter = struct {
                 closure.captures_layout_idx = captures_layout_idx;
                 closure.module_ptr = @ptrCast(self.env);
                 closure.lambda_expr_idx = expr_idx;
-                std.debug.print("  Created closure at {*} with module_ptr pointing to '{s}', lambda_expr_idx: {}\n", .{closure, self.env.module_name, expr_idx});
+                std.debug.print("  Created closure at {*} with module_ptr pointing to '{s}', lambda_expr_idx: {}\n", .{ closure, self.env.module_name, expr_idx });
             },
 
             .e_tuple => |tuple_expr| {
@@ -2322,12 +2322,12 @@ pub const Interpreter = struct {
                     // If it's not a function, the lambda_expr_idx might be pointing to the wrong thing
                     // Just try to copy the record data directly if we have it
                     return self.layout_cache.insertLayout(in_layout) catch return error.LayoutError;
-                }
+                },
             },
             else => {
                 std.debug.print("  ERROR: Lambda type is not a structure\n", .{});
                 return self.layout_cache.insertLayout(in_layout) catch return error.LayoutError;
-            }
+            },
         };
 
         // Get the full layout with field data from the type
@@ -2373,11 +2373,7 @@ pub const Interpreter = struct {
         }
         const new_fields_end = self.layout_cache.record_fields.len();
 
-        std.debug.print("  Copied fields to range: {} - {} ({} fields)\n", .{
-            new_fields_start,
-            new_fields_end,
-            new_fields_end - new_fields_start
-        });
+        std.debug.print("  Copied fields to range: {} - {} ({} fields)\n", .{ new_fields_start, new_fields_end, new_fields_end - new_fields_start });
 
         // Create new record data with the copied fields
         const new_record_data = layout.RecordData{
@@ -2408,10 +2404,7 @@ pub const Interpreter = struct {
             return error.LayoutError;
         };
 
-        std.debug.print("  SUCCESS: Created layout idx {} with record idx {}\n", .{
-            result_idx,
-            @intFromEnum(new_record_idx)
-        });
+        std.debug.print("  SUCCESS: Created layout idx {} with record idx {}\n", .{ result_idx, @intFromEnum(new_record_idx) });
         return result_idx;
     }
 
@@ -3042,8 +3035,8 @@ pub const Interpreter = struct {
 
             if (!layouts_compatible) {
                 std.debug.print("\n=== handleLambdaReturn: Type mismatch ===\n", .{});
-                std.debug.print("  Expected layout tag: {s}, size: {}\n", .{@tagName(expected_layout.tag), expected_size});
-                std.debug.print("  Actual layout tag: {s}, size: {}\n", .{@tagName(actual_return_layout.tag), actual_return_size});
+                std.debug.print("  Expected layout tag: {s}, size: {}\n", .{ @tagName(expected_layout.tag), expected_size });
+                std.debug.print("  Actual layout tag: {s}, size: {}\n", .{ @tagName(actual_return_layout.tag), actual_return_size });
                 self.traceInfo("Type mismatch: expected size {} != actual size {}", .{ expected_size, actual_return_size });
                 self.traceInfo("  Expected layout: {}", .{expected_layout});
                 self.traceInfo("  Actual layout: {}", .{actual_return_layout});
@@ -4060,7 +4053,7 @@ pub const Interpreter = struct {
             .lambda_expr_idx = expr_idx, // Store the e_closure's index
             .module_ptr = @ptrCast(self.env),
         };
-        std.debug.print("  Created closure at {*} with module_ptr pointing to '{s}', lambda_expr_idx: {}\n", .{closure_ptr, self.env.module_name, expr_idx});
+        std.debug.print("  Created closure at {*} with module_ptr pointing to '{s}', lambda_expr_idx: {}\n", .{ closure_ptr, self.env.module_name, expr_idx });
 
         // Copy captures to closure memory
         if (final_captures.items.len > 0) {

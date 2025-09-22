@@ -148,7 +148,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
-            .field_name_interner = base.Ident.Store.init(),
+            .field_name_interner = try base.Ident.Store.initCapacity(env.gpa, 256),
         };
     }
 
@@ -212,8 +212,10 @@ pub const Store = struct {
 
         for (field_layouts, field_names) |field_layout, field_name| {
             const field_layout_idx = try self.insertLayout(field_layout);
+            // Intern the field name in the layout's field name interner
+            const interned_name = try self.internFieldName(field_name, self.env);
             try temp_fields.append(.{
-                .name = field_name,
+                .name = interned_name,
                 .layout = field_layout_idx,
             });
         }
@@ -221,7 +223,6 @@ pub const Store = struct {
         // Sort fields
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -231,8 +232,9 @@ pub const Store = struct {
                 if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
                     return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                 }
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                // Use the layout's field name interner to get the field names
+                const lhs_str = ctx.store.field_name_interner.getText(lhs.name);
+                const rhs_str = ctx.store.field_name_interner.getText(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -240,7 +242,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -462,7 +464,10 @@ pub const Store = struct {
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
                                 // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+
+                                // Intern the field name in the layout's field name interner
+                                const interned_name = try self.internFieldName(name, self.env);
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = interned_name, .var_ = var_ });
                             }
                             current_ext = ext_record.ext;
                         } else {
@@ -478,7 +483,10 @@ pub const Store = struct {
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
                                 // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+
+                                // Intern the field name in the layout's field name interner
+                                const interned_name = try self.internFieldName(name, self.env);
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = interned_name, .var_ = var_ });
                             }
                         }
                         // record_unbound has no extension, so stop here
@@ -493,7 +501,10 @@ pub const Store = struct {
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
                                 // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+
+                                // Intern the field name in the layout's field name interner
+                                const interned_name = try self.internFieldName(name, self.env);
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = interned_name, .var_ = var_ });
                             }
                         }
                         current_ext = poly.record.ext;
@@ -552,7 +563,6 @@ pub const Store = struct {
         // Sort fields by alignment (descending) first, then by name (ascending)
         const AlignmentSortCtx = struct {
             store: *Self,
-            env: *ModuleEnv,
             target_usize: target.TargetUsize,
             pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                 const lhs_layout = ctx.store.getLayout(lhs.layout);
@@ -567,8 +577,9 @@ pub const Store = struct {
                 }
 
                 // Then sort by name (ascending)
-                const lhs_str = ctx.env.getIdent(lhs.name);
-                const rhs_str = ctx.env.getIdent(rhs.name);
+                // Use the layout's field name interner since names are already interned
+                const lhs_str = ctx.store.field_name_interner.getText(lhs.name);
+                const rhs_str = ctx.store.field_name_interner.getText(rhs.name);
                 return std.mem.order(u8, lhs_str, rhs_str) == .lt;
             }
         };
@@ -576,7 +587,7 @@ pub const Store = struct {
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -1248,5 +1259,4 @@ pub const Store = struct {
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
         return @enumFromInt(@intFromEnum(safe_list_idx));
     }
-
 };

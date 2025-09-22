@@ -25,7 +25,7 @@ test "minimal type-checking bug reproduction" {
         \\obj = { value: 7 }
         \\
         \\main = obj.double {}
-    ;  // Note: Roc uses `obj.double {}` not `obj.double()`
+    ; // Note: Roc uses `obj.double {}` not `obj.double()`
 
     // Set up Math module
     var math_env = try ModuleEnv.init(allocator, math_source);

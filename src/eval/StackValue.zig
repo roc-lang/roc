@@ -437,11 +437,15 @@ pub const RecordAccessor = struct {
         return self.layout_cache.getLayout(field_layout_info.layout);
     }
 
-    /// Find field index by comparing field names (requires env access for name comparison)
+    /// Find field index by comparing field names
+    /// Now uses the layout store's field name interner instead of the module's ident store
     pub fn findFieldIndex(self: RecordAccessor, env: anytype, field_name: []const u8) ?usize {
+        _ = env; // No longer need the env parameter, but keeping it for compatibility
         for (0..self.field_layouts.len) |idx| {
             const field = self.field_layouts.get(idx);
-            if (std.mem.eql(u8, env.getIdent(field.name), field_name)) {
+            // Get the field name from the layout store's field name interner
+            const interned_field_name = self.layout_cache.field_name_interner.getText(field.name);
+            if (std.mem.eql(u8, interned_field_name, field_name)) {
                 return idx;
             }
         }

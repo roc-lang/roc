@@ -768,7 +768,6 @@ pub fn canonicalizeFile(
                         const def = self.env.store.getDef(def_idx);
                         const pattern_idx_u16: u16 = @intCast(@intFromEnum(def.pattern));
                         try self.env.setExposedNodeIndexById(idx, pattern_idx_u16);
-
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -1570,7 +1569,7 @@ fn createDefinitionForExposedItem(
         .pattern = pattern_idx,
         .expr = expr_idx,
         .annotation = null,
-        .kind = .let,  // Use let for import definitions
+        .kind = .let, // Use let for import definitions
     }, Content{ .flex_var = null }, region);
 
     // Add to the module's definitions
