@@ -435,7 +435,7 @@ fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_na
     defer llvm_builder.deinit();
 
     // Create entrypoints array from the provided names
-    var entrypoints = std.ArrayList(platform_host_shim.EntryPoint).init(gpa);
+    var entrypoints = std.array_list.Managed(platform_host_shim.EntryPoint).init(gpa);
     defer entrypoints.deinit();
 
     for (entrypoint_names, 0..) |name, idx| {
@@ -589,7 +589,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     const shim_target = builder.RocTarget.detectNative();
 
     // Extract entrypoints from platform source file
-    var entrypoints = std.ArrayList([]const u8).init(gpa);
+    var entrypoints = std.array_list.Managed([]const u8).init(gpa);
     defer {
         for (entrypoints.items) |entrypoint| {
             gpa.free(entrypoint);
@@ -663,7 +663,7 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
 
         // Create object files list - include platform shim if available
-        var object_files = std.ArrayList([]const u8).init(gpa);
+        var object_files = std.array_list.Managed([]const u8).init(gpa);
         defer object_files.deinit();
         object_files.append(platform_paths.host_lib_path) catch {
             std.log.err("Failed to add host path to object files", .{});
@@ -681,9 +681,9 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         };
 
         // Determine platform-specific dependencies based on platform spec
-        var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+        var platform_files_pre = std.array_list.Managed([]const u8).init(gpa);
         defer platform_files_pre.deinit();
-        var platform_files_post = std.ArrayList([]const u8).init(gpa);
+        var platform_files_post = std.array_list.Managed([]const u8).init(gpa);
         defer platform_files_post.deinit();
         var target_abi: ?linker.TargetAbi = null;
 
@@ -1691,7 +1691,7 @@ fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8,
 
 /// Extract all entrypoint names from platform header provides record into ArrayList
 /// TODO: Replace this with proper BuildEnv solution in the future
-fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8, entrypoints: *std.ArrayList([]const u8)) !void {
+fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
     defer gpa.free(source);
@@ -2201,7 +2201,7 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     const crt_files = try target_mod.getVendoredCRTFiles(gpa, target, platform_dir);
 
     // Create object files list for linking
-    var object_files = std.ArrayList([]const u8).init(gpa);
+    var object_files = std.array_list.Managed([]const u8).init(gpa);
     defer object_files.deinit();
 
     // Add our app stub and host library
@@ -2209,11 +2209,11 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
     try object_files.append(host_lib_path);
 
     // Setup platform files based on target
-    var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+    var platform_files_pre = std.array_list.Managed([]const u8).init(gpa);
     defer platform_files_pre.deinit();
-    var platform_files_post = std.ArrayList([]const u8).init(gpa);
+    var platform_files_post = std.array_list.Managed([]const u8).init(gpa);
     defer platform_files_post.deinit();
-    var extra_args = std.ArrayList([]const u8).init(gpa);
+    var extra_args = std.array_list.Managed([]const u8).init(gpa);
     defer extra_args.deinit();
 
     // Add CRT files in correct order

@@ -439,9 +439,8 @@ fn addMainExe(
     }
 
     // Create builtins static library at build time with minimal dependencies
-    const builtins_obj = b.addLibrary(.{
+    const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
-        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
             .target = target,
@@ -942,7 +941,7 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
 
     // Generate assembly stub with comprehensive symbols using the new build module
-    var assembly_buf = std.ArrayList(u8).init(b.allocator);
+    var assembly_buf = std.array_list.Managed(u8).init(b.allocator);
     defer assembly_buf.deinit();
 
     const writer = assembly_buf.writer();
