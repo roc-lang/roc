@@ -202,7 +202,7 @@ fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) Read
     const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
-    const contents = try file.reader().readAllAlloc(allocator, max_file_size);
+    const contents = try file.deprecatedReader().readAllAlloc(allocator, max_file_size);
 
     return contents;
 }
@@ -213,7 +213,7 @@ fn readFileIntoDefault(path: []const u8, buffer: []u8) ReadError!usize {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    return try file.reader().readAll(buffer);
+    return try file.deprecatedReader().readAll(buffer);
 }
 
 fn openDirDefault(absolute_path: []const u8) OpenError!Dir {

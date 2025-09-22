@@ -1935,7 +1935,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
-        temp_file.writer(),
+        temp_file.deprecatedWriter(),
         cwd,
         null, // path_prefix parameter - null means no stripping
         &error_ctx,
@@ -2027,7 +2027,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         var error_ctx: unbundle.ErrorContext = undefined;
         unbundle.unbundleFiles(
             allocator,
-            archive_file.reader(),
+            archive_file.deprecatedReader(),
             output_dir,
             basename,
             &error_ctx,
@@ -2105,7 +2105,7 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
             std.log.info("Cross-compilation from {s} to {s} is supported", .{ @tagName(host_target), @tagName(target) });
         },
         .unsupported_host_target, .unsupported_cross_compilation, .missing_toolchain => {
-            const stderr = std.io.getStdErr().writer();
+            const stderr = std.fs.File.stderr().deprecatedWriter();
             try cross_compilation.printCrossCompilationError(stderr, cross_validation);
             std.process.exit(1);
         },
