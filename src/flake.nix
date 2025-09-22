@@ -1,8 +1,11 @@
+
+# Use this flake with `nix develop ./src`
+
 {
   description = "Roc flake for the new compiler, written in Zig.";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
