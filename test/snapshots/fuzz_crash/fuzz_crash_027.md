@@ -1805,6 +1805,26 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @4.1-4.38 (ident "line!"))
+		(e-lookup-external @4.1-4.38
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.38 (ident "e!"))
+		(e-lookup-external @4.1-4.38
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @10.1-10.46 (ident "fry"))
+		(e-lookup-external @10.1-10.46
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @10.1-10.46 (ident "Custom"))
+		(e-lookup-external @10.1-10.46
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @45.1-45.4 (ident "ane"))
 		(e-lambda @45.7-45.28
 			(args
@@ -2302,6 +2322,10 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @4.1-4.38 (type "Error"))
+		(patt @4.1-4.38 (type "Error"))
+		(patt @10.1-10.46 (type "Error"))
+		(patt @10.1-10.46 (type "Error"))
 		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
@@ -2337,6 +2361,10 @@ expect {
 				(ty-args
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
+		(expr @4.1-4.38 (type "Error"))
+		(expr @4.1-4.38 (type "Error"))
+		(expr @10.1-10.46 (type "Error"))
+		(expr @10.1-10.46 (type "Error"))
 		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))

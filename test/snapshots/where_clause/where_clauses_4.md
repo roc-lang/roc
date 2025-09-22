@@ -71,6 +71,11 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.32 (ident "Decode"))
+		(e-lookup-external @3.1-3.32
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @7.1-7.13 (ident "decodeThings"))
 		(e-not-implemented @1.1-1.1)
 		(annotation @7.1-7.13
@@ -99,7 +104,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.32 (type "Error"))
 		(patt @7.1-7.13 (type "List(item) -> List(a)")))
 	(expressions
+		(expr @3.1-3.32 (type "Error"))
 		(expr @1.1-1.1 (type "List(item) -> List(a)"))))
 ~~~

@@ -1533,6 +1533,16 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @4.1-4.34 (ident "line!"))
+		(e-lookup-external @4.1-4.34
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @6.1-8.6 (ident "Cust"))
+		(e-lookup-external @6.1-8.6
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @35.1-35.4 (ident "ane"))
 		(e-lambda @35.7-35.28
 			(args
@@ -1898,6 +1908,8 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @4.1-4.34 (type "Error"))
+		(patt @6.1-8.6 (type "Error"))
 		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
 		(patt @38.1-38.4 (type "[Rum]_others -> Error"))
 		(patt @49.1-49.3 (type "[Blue]_others -> Error"))
@@ -1930,6 +1942,8 @@ expect {
 				(ty-args
 					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
+		(expr @4.1-4.34 (type "Error"))
+		(expr @6.1-8.6 (type "Error"))
 		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
 		(expr @38.7-47.2 (type "[Rum]_others -> Error"))
 		(expr @49.6-69.3 (type "[Blue]_others -> Error"))

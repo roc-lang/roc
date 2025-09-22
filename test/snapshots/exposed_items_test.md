@@ -58,6 +58,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.42 (ident "line!"))
+		(e-lookup-external @3.1-3.42
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @3.1-3.42 (ident "write!"))
+		(e-lookup-external @3.1-3.42
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-int @5.8-5.10 (value "42")))
 	(s-import @3.1-3.42 (module "pf.Stdout") (qualifier "pf")
@@ -69,7 +79,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.42 (type "Error"))
+		(patt @3.1-3.42 (type "Error"))
 		(patt @5.1-5.5 (type "Num(_size)")))
 	(expressions
+		(expr @3.1-3.42 (type "Error"))
+		(expr @3.1-3.42 (type "Error"))
 		(expr @5.8-5.10 (type "Num(_size)"))))
 ~~~

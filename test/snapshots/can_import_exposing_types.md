@@ -624,6 +624,41 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.49 (ident "Value"))
+		(e-lookup-external @3.1-3.49
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @3.1-3.49 (ident "Error"))
+		(e-lookup-external @3.1-3.49
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @3.1-3.49 (ident "Config"))
+		(e-lookup-external @3.1-3.49
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.64 (ident "Request"))
+		(e-lookup-external @4.1-4.64
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.64 (ident "Response"))
+		(e-lookup-external @4.1-4.64
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.64 (ident "Status"))
+		(e-lookup-external @4.1-4.64
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @5.1-5.38 (ident "Result"))
+		(e-lookup-external @5.1-5.38
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @9.1-9.10 (ident "parseJson"))
 		(e-lambda @9.13-9.38
 			(args
@@ -752,8 +787,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @42.1-42.15 (ident "handleResponse"))
 		(e-closure @42.18-46.6
 			(captures
-				(capture @44.12-44.18 (ident "status"))
-				(capture @45.13-45.18 (ident "error")))
+				(capture @45.13-45.18 (ident "error"))
+				(capture @44.12-44.18 (ident "status")))
 			(e-lambda @42.18-46.6
 				(args
 					(p-assign @42.19-42.27 (ident "response")))
@@ -796,8 +831,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @50.1-50.15 (ident "combineResults"))
 		(e-closure @50.18-54.6
 			(captures
-				(capture @52.12-52.17 (ident "value"))
-				(capture @53.13-53.18 (ident "error")))
+				(capture @53.13-53.18 (ident "error"))
+				(capture @52.12-52.17 (ident "value")))
 			(e-lambda @50.18-54.6
 				(args
 					(p-assign @50.19-50.29 (ident "jsonResult"))
@@ -877,6 +912,13 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.49 (type "Error"))
+		(patt @3.1-3.49 (type "Error"))
+		(patt @3.1-3.49 (type "Error"))
+		(patt @4.1-4.64 (type "Error"))
+		(patt @4.1-4.64 (type "Error"))
+		(patt @4.1-4.64 (type "Error"))
+		(patt @5.1-5.38 (type "Error"))
 		(patt @9.1-9.10 (type "Str -> Result(Error, Error)"))
 		(patt @13.1-13.14 (type "Error -> Error"))
 		(patt @23.1-23.12 (type "Error, List(Error) -> Result(List(item), Error)"))
@@ -887,6 +929,13 @@ combineResults = |jsonResult, httpStatus|
 		(alias @30.1-34.2 (type "ServerConfig")
 			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions
+		(expr @3.1-3.49 (type "Error"))
+		(expr @3.1-3.49 (type "Error"))
+		(expr @3.1-3.49 (type "Error"))
+		(expr @4.1-4.64 (type "Error"))
+		(expr @4.1-4.64 (type "Error"))
+		(expr @4.1-4.64 (type "Error"))
+		(expr @5.1-5.38 (type "Error"))
 		(expr @9.13-9.38 (type "Str -> Result(Error, Error)"))
 		(expr @13.17-19.2 (type "Error -> Error"))
 		(expr @23.15-27.6 (type "Error, List(Error) -> Result(List(item), Error)"))

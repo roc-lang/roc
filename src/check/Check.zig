@@ -906,6 +906,7 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                 const other_module_env = other_module_cir;
 
                 // The idx of the expression in the other module
+                // Note: e.target_node_idx comes from exposed_items and should be a pattern index
                 const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(e.target_node_idx));
 
                 // Check if we've already copied this import
@@ -940,9 +941,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                     // If we still don't have a var, this might be a builtin or error
                     if (imported_var == null) {
-                        // For builtins or missing items, we should have a proper error
-                        // For now, fallback to treating the pattern index as a var
-                        // This is likely wrong and the source of our bug
+                        // The target_node_idx is supposedly a pattern index but we couldn't find it.
+                        // This happens when exposed_items hasn't been properly set up.
+                        // Fall back to using the node idx directly as a Var (this is likely wrong)
                         imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
                     }
 

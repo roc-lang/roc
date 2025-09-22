@@ -109,6 +109,11 @@ main =
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.30 (ident "Person"))
+		(e-lookup-external @3.1-3.30
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @6.1-6.14 (ident "expectsPerson"))
 		(e-lambda @6.17-6.35
 			(args
@@ -135,9 +140,11 @@ main =
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.30 (type "Error"))
 		(patt @6.1-6.14 (type "Error -> Str"))
 		(patt @8.1-8.5 (type "Str")))
 	(expressions
+		(expr @3.1-3.30 (type "Error"))
 		(expr @6.17-6.35 (type "Error -> Str"))
 		(expr @10.5-10.34 (type "Str"))))
 ~~~

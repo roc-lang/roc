@@ -97,6 +97,16 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.43 (ident "decode"))
+		(e-lookup-external @3.1-3.43
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @3.1-3.43 (ident "encode"))
+		(e-lookup-external @3.1-3.43
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-block @5.8-10.2
 			(s-let @6.5-6.38
@@ -135,7 +145,11 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.43 (type "Error"))
+		(patt @3.1-3.43 (type "Error"))
 		(patt @5.1-5.5 (type "_a")))
 	(expressions
+		(expr @3.1-3.43 (type "Error"))
+		(expr @3.1-3.43 (type "Error"))
 		(expr @5.8-10.2 (type "_a"))))
 ~~~

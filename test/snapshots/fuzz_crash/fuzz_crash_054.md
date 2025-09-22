@@ -57,6 +57,11 @@ import S exposing [
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @1.20-2.3 (ident "f"))
+		(e-lookup-external @1.20-2.3
+			(module-idx "0")
+			(target-node-idx "0")))
 	(s-import @1.20-2.3 (module "S")
 		(exposes
 			(exposed (name "c") (alias "f") (wildcard false)))))
@@ -64,6 +69,8 @@ import S exposing [
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @1.20-2.3 (type "Error")))
+	(expressions
+		(expr @1.20-2.3 (type "Error"))))
 ~~~

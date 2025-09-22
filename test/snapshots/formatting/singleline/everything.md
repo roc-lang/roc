@@ -398,13 +398,33 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @4.1-4.30 (ident "I11"))
+		(e-lookup-external @4.1-4.30
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.30 (ident "I12"))
+		(e-lookup-external @4.1-4.30
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @5.1-5.46 (ident "Ias1"))
+		(e-lookup-external @5.1-5.46
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @5.1-5.46 (ident "Ias2"))
+		(e-lookup-external @5.1-5.46
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @18.1-18.2 (ident "h"))
 		(e-closure @18.5-31.2
 			(captures
-				(capture @18.1-18.2 (ident "h"))
-				(capture @26.7-26.8 (ident "a"))
-				(capture @28.8-28.9 (ident "a"))
 				(capture @27.6-27.7 (ident "a"))
+				(capture @26.7-26.8 (ident "a"))
+				(capture @18.1-18.2 (ident "h"))
+				(capture @28.8-28.9 (ident "a"))
 				(capture @29.7-29.8 (ident "a")))
 			(e-lambda @18.5-31.2
 				(args
@@ -557,6 +577,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @4.1-4.30 (type "Error"))
+		(patt @4.1-4.30 (type "Error"))
+		(patt @5.1-5.46 (type "Error"))
+		(patt @5.1-5.46 (type "Error"))
 		(patt @18.1-18.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
@@ -582,5 +606,9 @@ NO CHANGE
 		(alias @14.1-14.11 (type "F")
 			(ty-header @14.1-14.2 (name "F"))))
 	(expressions
+		(expr @4.1-4.30 (type "Error"))
+		(expr @4.1-4.30 (type "Error"))
+		(expr @5.1-5.46 (type "Error"))
+		(expr @5.1-5.46 (type "Error"))
 		(expr @18.5-31.2 (type "[Z1((field, field2)), Z2(c, d), Z3(f), Z4(List(elem))]others, [Z1((field3, field4)), Z2(i, j), Z3(k), Z4(List(elem2))]others2 -> _ret"))))
 ~~~

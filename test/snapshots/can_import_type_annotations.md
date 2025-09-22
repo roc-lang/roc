@@ -424,6 +424,21 @@ combineResults = |result1, result2|
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @3.1-3.56 (ident "Request"))
+		(e-lookup-external @3.1-3.56
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @3.1-3.56 (ident "Response"))
+		(e-lookup-external @3.1-3.56
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @5.1-5.38 (ident "Result"))
+		(e-lookup-external @5.1-5.38
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @8.1-8.15 (ident "processRequest"))
 		(e-lambda @8.18-8.44
 			(args
@@ -557,9 +572,9 @@ combineResults = |result1, result2|
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @38.13-38.16 (ident "err"))
-				(capture @36.21-36.24 (ident "err"))
 				(capture @33.12-33.18 (ident "value1"))
+				(capture @36.21-36.24 (ident "err"))
+				(capture @38.13-38.16 (ident "err"))
 				(capture @35.20-35.26 (ident "value2")))
 			(e-lambda @31.18-39.6
 				(args
@@ -648,6 +663,9 @@ combineResults = |result1, result2|
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @3.1-3.56 (type "Error"))
+		(patt @3.1-3.56 (type "Error"))
+		(patt @5.1-5.38 (type "Error"))
 		(patt @8.1-8.15 (type "Error -> Error"))
 		(patt @11.1-11.10 (type "Str -> Error"))
 		(patt @14.1-14.10 (type "Error -> Result(Error, Error)"))
@@ -655,6 +673,9 @@ combineResults = |result1, result2|
 		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
 		(patt @31.1-31.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
+		(expr @3.1-3.56 (type "Error"))
+		(expr @3.1-3.56 (type "Error"))
+		(expr @5.1-5.38 (type "Error"))
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Error"))
 		(expr @14.13-20.2 (type "Error -> Result(Error, Error)"))

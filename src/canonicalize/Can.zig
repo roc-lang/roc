@@ -768,6 +768,7 @@ pub fn canonicalizeFile(
                         const def = self.env.store.getDef(def_idx);
                         const pattern_idx_u16: u16 = @intCast(@intFromEnum(def.pattern));
                         try self.env.setExposedNodeIndexById(idx, pattern_idx_u16);
+
                     }
 
                     _ = self.exposed_ident_texts.remove(ident_text);
@@ -952,6 +953,9 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
+
+    // Ensure exposed items are sorted for efficient lookup
+    self.env.ensureExposedSorted(self.env.gpa);
 
     // NOTE: We do NOT freeze interners here anymore!
     // Interners are frozen in Check.zig after importing types from other modules,

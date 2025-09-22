@@ -386,6 +386,11 @@ import Module exposing [Pair]
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @3.1-3.30 (ident "Pair"))
+		(e-lookup-external @3.1-3.30
+			(module-idx "0")
+			(target-node-idx "0")))
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
@@ -393,6 +398,8 @@ import Module exposing [Pair]
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @3.1-3.30 (type "Error")))
+	(expressions
+		(expr @3.1-3.30 (type "Error"))))
 ~~~

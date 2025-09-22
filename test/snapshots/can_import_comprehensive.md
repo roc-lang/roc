@@ -201,6 +201,16 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @4.1-4.48 (ident "get"))
+		(e-lookup-external @4.1-4.48
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.48 (ident "post"))
+		(e-lookup-external @4.1-4.48
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @7.1-7.5 (ident "main"))
 		(e-block @7.8-35.2
 			(s-let @8.5-8.22
@@ -274,7 +284,11 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @4.1-4.48 (type "Error"))
+		(patt @4.1-4.48 (type "Error"))
 		(patt @7.1-7.5 (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
 	(expressions
+		(expr @4.1-4.48 (type "Error"))
+		(expr @4.1-4.48 (type "Error"))
 		(expr @7.8-35.2 (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
 ~~~

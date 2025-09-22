@@ -82,6 +82,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @3.1-3.32 (ident "Decode"))
+		(e-lookup-external @3.1-3.32
+			(module-idx "0")
+			(target-node-idx "0")))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
@@ -99,6 +104,8 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt @3.1-3.32 (type "Error")))
+	(expressions
+		(expr @3.1-3.32 (type "Error"))))
 ~~~

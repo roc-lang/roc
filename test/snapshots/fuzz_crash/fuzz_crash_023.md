@@ -1983,6 +1983,41 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @4.1-4.42 (ident "line!"))
+		(e-lookup-external @4.1-4.42
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @4.1-4.42 (ident "write!"))
+		(e-lookup-external @4.1-4.42
+			(module-idx "0")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @6.1-12.4 (ident "line!"))
+		(e-lookup-external @6.1-12.4
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @6.1-12.4 (ident "write!"))
+		(e-lookup-external @6.1-12.4
+			(module-idx "1")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @14.1-14.82 (ident "function"))
+		(e-lookup-external @14.1-14.82
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @14.1-14.82 (ident "ValueCategory"))
+		(e-lookup-external @14.1-14.82
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
+		(p-assign @14.1-14.82 (ident "Custom"))
+		(e-lookup-external @14.1-14.82
+			(module-idx "2")
+			(target-node-idx "0")))
+	(d-let
 		(p-assign @65.1-65.16 (ident "add_one_oneline"))
 		(e-lambda @65.19-65.40
 			(args
@@ -2029,9 +2064,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @86.4-86.5 (ident "x"))
+				(capture @136.11-136.15 (ident "dude"))
 				(capture @94.5-94.6 (ident "x"))
-				(capture @136.11-136.15 (ident "dude")))
+				(capture @86.4-86.5 (ident "x")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2245,8 +2280,8 @@ expect {
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-closure @144.9-196.2
 			(captures
-				(capture @68.1-68.8 (ident "add_one"))
-				(capture @80.1-80.11 (ident "match_time")))
+				(capture @80.1-80.11 (ident "match_time"))
+				(capture @68.1-68.8 (ident "add_one")))
 			(e-lambda @144.9-196.2
 				(args
 					(p-underscore @144.10-144.11))
@@ -2571,6 +2606,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @4.1-4.42 (type "Error"))
+		(patt @4.1-4.42 (type "Error"))
+		(patt @6.1-12.4 (type "Error"))
+		(patt @6.1-12.4 (type "Error"))
+		(patt @14.1-14.82 (type "Error"))
+		(patt @14.1-14.82 (type "Error"))
+		(patt @14.1-14.82 (type "Error"))
 		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
@@ -2616,6 +2658,13 @@ expect {
 				(ty-args
 					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
+		(expr @4.1-4.42 (type "Error"))
+		(expr @4.1-4.42 (type "Error"))
+		(expr @6.1-12.4 (type "Error"))
+		(expr @6.1-12.4 (type "Error"))
+		(expr @14.1-14.82 (type "Error"))
+		(expr @14.1-14.82 (type "Error"))
+		(expr @14.1-14.82 (type "Error"))
 		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
