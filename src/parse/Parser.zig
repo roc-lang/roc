@@ -513,26 +513,26 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         );
     };
     const provides_start = self.pos;
-    self.expect(.OpenSquare) catch {
+    self.expect(.OpenCurly) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
-            .expected_provides_open_square,
+            .expected_provides_open_curly,
             self.pos,
         );
     };
-    const provides_top = self.store.scratchExposedItemTop();
+    const provides_top = self.store.scratchRecordFieldTop();
     self.parseCollectionSpan(
-        AST.ExposedItem.Idx,
-        .CloseSquare,
-        NodeStore.addScratchExposedItem,
-        Parser.parseExposedItem,
+        AST.RecordField.Idx,
+        .CloseCurly,
+        NodeStore.addScratchRecordField,
+        Parser.parseRecordField,
     ) catch |err| {
         switch (err) {
             error.ExpectedNotFound => {
-                self.store.clearScratchExposedItemsFrom(provides_top);
+                self.store.clearScratchRecordFieldsFrom(provides_top);
                 return try self.pushMalformed(
                     AST.Header.Idx,
-                    .expected_provides_close_square,
+                    .expected_provides_close_curly,
                     provides_start,
                 );
             },
@@ -540,9 +540,9 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
             error.TooNested => return error.TooNested,
         }
     };
-    const provides_span = try self.store.exposedItemSpanFrom(provides_top);
+    const provides_span = try self.store.recordFieldSpanFrom(provides_top);
     const provides = try self.store.addCollection(
-        .collection_exposed,
+        .collection_record_fields,
         .{
             .span = provides_span.span,
             .region = .{ .start = provides_start, .end = self.pos },

@@ -38,7 +38,6 @@ jobs:
 
       - name: zig check
         run: |
-          # -Dllvm incurs a costly download step, leave that for later.
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
@@ -99,7 +98,7 @@ jobs:
 
       - name: build roc
         run: |
-          zig build -Dllvm -Dfuzz -Dsystem-afl=false
+          zig build -Dfuzz -Dsystem-afl=false
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
@@ -119,6 +118,11 @@ jobs:
           zig-out\bin\roc.exe --no-cache test/str/app.roc
           zig-out\bin\roc.exe --no-cache test/int/app.roc
 
+      - name: Build Test Platforms (cross-compile)
+        if: runner.os != 'Windows'
+        run: |
+          ./ci/test_int_platform.sh
+
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -134,7 +138,7 @@ jobs:
 
       - name: zig tests
         run: |
-          zig build test -Dllvm -Dfuzz -Dsystem-afl=false
+          zig build test -Dfuzz -Dsystem-afl=false
 
       - name: Check for snapshot changes
         run: |
@@ -223,4 +227,8 @@ jobs:
 
       - name: cross compile with llvm
         run: |
-          ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }} -Dllvm
+          ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }}
+
+  # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
+  roc-cross-compile:
+    uses: ./.github/workflows/ci_cross_compile.yml

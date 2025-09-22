@@ -1,8 +1,9 @@
 platform ""
-    requires {} { main : I64, I64 -> I64 }
+    requires {} { addInts : I64, I64 -> I64, multiplyInts : I64, I64 -> I64 }
     exposes []
     packages {}
-    imports []
-    provides [main]
+    provides { addInts: "addInts", multiplyInts: "multiplyInts" }
 
-main : I64, I64 -> I64
+addInts : I64, I64 -> I64
+
+multiplyInts : I64, I64 -> I64

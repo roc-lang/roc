@@ -1,4 +1,4 @@
-app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.20.0/X73hGh05nNTkDHU06FHC0YfFaQB1pimX7gncRcao5mU.tar.br" }
 
 import cli.Arg exposing [Arg]
 import cli.File
@@ -32,23 +32,39 @@ main! = |raw_args|
     median_results = calculate_medians(all_timing_data)
 
     # calculate bench file hash so we're aware of changes
-    bench_file_hash_out = run_cmd_w_output!("sha256sum", ["src/PROFILING/bench_repeated_check.roc"])?
+    bench_file_hash_out =
+        Cmd.new("sha256sum")
+        |> Cmd.arg("src/PROFILING/bench_repeated_check.roc")
+        |> Cmd.exec_output!()?
+
     bench_file_hash =
-        bench_file_hash_out
+        bench_file_hash_out.stdout_utf8
         |> Str.split_on(" ")
         |> List.get(0)?
     
     # Get the current commit hash
-    commit_hash_out = run_cmd_w_output!("git", ["rev-parse", "HEAD"])?
-    commit_hash = Str.trim(commit_hash_out)
+    commit_hash_out =
+        Cmd.new("git")
+        |> Cmd.args(["rev-parse", "HEAD"])
+        |> Cmd.exec_output!()?
+
+    commit_hash = Str.trim(commit_hash_out.stdout_utf8)
 
     # Get zig version
-    zig_version_out = run_cmd_w_output!("zig", ["version"])?
-    zig_version = Str.trim(zig_version_out)
+    zig_version_out =
+        Cmd.new("zig")
+        |> Cmd.arg("version")
+        |> Cmd.exec_output!()?
+
+    zig_version = Str.trim(zig_version_out.stdout_utf8)
 
     # Get operating system with version
-    operating_system_out = run_cmd_w_output!("uname", ["-sr"])?
-    operating_system = Str.trim(operating_system_out)
+    operating_system_out =
+        Cmd.new("uname")
+        |> Cmd.args(["-sr"])
+        |> Cmd.exec_output!()?
+
+    operating_system = Str.trim(operating_system_out.stdout_utf8)
 
     # Create the AllBenchmarkData record
     benchmark_data : AllBenchmarkData
@@ -66,7 +82,12 @@ main! = |raw_args|
 
 run_benchmark_command! : {} => Result Str _
 run_benchmark_command! = |{}|
-    run_cmd_w_output!("./zig-out/bin/roc", ["check", "src/PROFILING/bench_repeated_check.roc", "--time", "--no-cache"])
+    bench_output =
+        Cmd.new("./zig-out/bin/roc")
+        |> Cmd.args(["check", "src/PROFILING/bench_repeated_check.roc", "--time", "--no-cache"])
+        |> Cmd.exec_output!()?
+
+    Ok(bench_output.stdout_utf8)
 
 parse_bench_stdout : Str -> Result TimingData _
 parse_bench_stdout = |output|
@@ -257,30 +278,6 @@ AllBenchmarkData : {
     operating_system : Str,
     median_results : MedianResults,
 }
-
-run_cmd_w_output! : Str, List Str => Result Str [BadCmdOutput(Str)]_
-run_cmd_w_output! = |cmd_str, args|
-    cmd_out =
-        Cmd.new(cmd_str)
-        |> Cmd.args(args)
-        |> Cmd.output!()
-
-    stdout_utf8 = Str.from_utf8_lossy(cmd_out.stdout)
-
-    when cmd_out.status is
-        Ok(0) ->
-            Ok(stdout_utf8)
-        _ ->
-            stderr_utf8 = Str.from_utf8_lossy(cmd_out.stderr)
-            err_data =
-                """
-                Cmd `${cmd_str} ${Str.join_with(args, " ")}` failed:
-                - status: ${Inspect.to_str(cmd_out.status)}
-                - stdout: ${stdout_utf8}
-                - stderr: ${stderr_utf8}
-                """
-
-            Err(BadCmdOutput(err_data))
 
 # Test functions
 expect

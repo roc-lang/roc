@@ -441,6 +441,9 @@ pub const Tag = enum {
     /// Collection of packages fields
     collection_packages,
 
+    /// Collection of record fields
+    collection_record_fields,
+
     /// Collection of where clauses
     collection_where_clause,
 

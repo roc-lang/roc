@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+#  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 9 * * *"
@@ -12,17 +12,34 @@ permissions: {}
 jobs:
   build:
     name: build and package nightly release
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: [ubuntu-22.04-arm]
     timeout-minutes: 110
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update PATH to use zig 13
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0
+        with:
+          version: 0.13.0
+
+      - name: install apt dependencies
         run: |
-          echo "PATH=/home/username/Downloads/zig-linux-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+          sudo apt -y install wget git
+          sudo apt -y install libunwind-dev pkg-config zlib1g-dev
+          sudo apt -y install unzip # for www/build.sh
+          sudo apt -y install lsb-release software-properties-common gnupg # for llvm
 
       - run: zig version
+
+      - name: install llvm
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo rm -rf /usr/bin/clang
+          sudo ln -s /usr/bin/clang-18 /usr/bin/clang
+          sudo ln -s /usr/bin/lld-18 /usr/bin/ld.lld
+          sudo apt -y install libpolly-18-dev # required by llvm-sys crate
 
       - name: create version.txt
         run: ./ci/write_version.sh

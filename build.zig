@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const modules = @import("src/build/modules.zig");
+const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const Dependency = std.Build.Dependency;
 const Import = std.Build.Module.Import;
 const InstallDir = std.Build.InstallDir;
@@ -31,7 +32,7 @@ pub fn build(b: *std.Build) void {
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
+    const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -364,8 +365,8 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
-    test_platform_host_lib.linkLibC();
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_host_lib.bundle_compiler_rt = true;
 
@@ -375,7 +376,7 @@ fn addMainExe(
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
     b.getInstallStep().dependOn(&copy_test_host.step);
 
-    // Create test platform host static library (int)
+    // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
         .linkage = .static,
@@ -387,8 +388,9 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
-    test_platform_int_host_lib.linkLibC();
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    test_platform_int_host_lib.bundle_compiler_rt = true;
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
@@ -396,8 +398,48 @@ fn addMainExe(
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
     b.getInstallStep().dependOn(&copy_test_int_host.step);
 
+    // Cross-compile int platform host libraries for musl and glibc targets
+    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+    };
+
+    for (cross_compile_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Create cross-compiled int host library
+        const cross_int_host_lib = b.addLibrary(.{
+            .name = b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/int/platform/host.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = true,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        cross_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
+        cross_int_host_lib.bundle_compiler_rt = true;
+
+        // Copy to target-specific directory
+        const copy_cross_int_host = b.addUpdateSourceFiles();
+        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_int_host.step);
+
+        // Generate glibc stubs for gnu targets
+        if (cross_target.query.abi == .gnu) {
+            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
+            if (glibc_stub) |stub| {
+                b.getInstallStep().dependOn(&stub.step);
+            }
+        }
+    }
+
     // Create builtins static library at build time with minimal dependencies
-    const builtins_lib = b.addLibrary(.{
+    const builtins_obj = b.addLibrary(.{
         .name = "roc_builtins",
         .linkage = .static,
         .root_module = b.createModule(.{
@@ -408,41 +450,36 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
-    // Add the builtins module so it can import "builtins"
-    builtins_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Force bundle compiler-rt to resolve math symbols
-    builtins_lib.bundle_compiler_rt = true;
 
-    // Create shim static library at build time
+    // Create shim static library at build time - fully static without libc
+    //
+    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
     const shim_lib = b.addLibrary(.{
-        .name = "roc_shim",
-        .linkage = .static,
+        .name = "roc_interpreter_shim",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
+            .strip = true,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
+        .linkage = .static,
     });
-    shim_lib.linkLibC();
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
-    shim_lib.linkLibrary(builtins_lib);
-    // Force bundle compiler-rt to resolve math symbols
+    shim_lib.addObject(builtins_obj);
+    // Bundle compiler-rt for our math symbols
     shim_lib.bundle_compiler_rt = true;
-
     // Install shim library to the output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
-
-    // We need to copy the shim library to the src/ directory for embedding as binary data
+    // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_shim = b.addUpdateSourceFiles();
-    const shim_filename = if (target.result.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", shim_filename }));
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();
@@ -890,4 +927,139 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 
     // Git not available or failed, use fallback
     return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+}
+
+/// Generate glibc stubs at build time for cross-compilation
+///
+/// This is a minimal implementation that generates essential symbols needed for basic
+/// cross-compilation to glibc targets. It creates assembly stubs with required symbols
+/// like __libc_start_main, abort, getauxval, and _IO_stdin_used.
+///
+/// Future work: Parse Zig's abilists file to generate comprehensive
+/// symbol coverage with proper versioning (e.g., symbol@@GLIBC_2.17). The abilists
+/// contains thousands of glibc symbols across different versions and architectures
+/// that could provide more complete stub coverage for complex applications.
+fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
+
+    // Generate assembly stub with comprehensive symbols using the new build module
+    var assembly_buf = std.ArrayList(u8).init(b.allocator);
+    defer assembly_buf.deinit();
+
+    const writer = assembly_buf.writer();
+    const target_arch = target.result.cpu.arch;
+    const target_abi = target.result.abi;
+
+    glibc_stub_build.generateComprehensiveStub(b.allocator, writer, target_arch, target_abi) catch |err| {
+        std.log.warn("Failed to generate comprehensive stub assembly for {s}: {}, using minimal ELF", .{ target_name, err });
+        // Fall back to minimal ELF
+        const stub_content = switch (target.result.cpu.arch) {
+            .aarch64 => createMinimalElfArm64(),
+            .x86_64 => createMinimalElfX64(),
+            else => return null,
+        };
+
+        const write_stub = b.addWriteFiles();
+        const libc_so_6 = write_stub.add("libc.so.6", stub_content);
+        const libc_so = write_stub.add("libc.so", stub_content);
+
+        const copy_stubs = b.addUpdateSourceFiles();
+        copy_stubs.addCopyFileToSource(libc_so_6, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
+        copy_stubs.addCopyFileToSource(libc_so, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
+        copy_stubs.step.dependOn(&write_stub.step);
+
+        return copy_stubs;
+    };
+
+    // Write the assembly file to the targets directory
+    const write_stub = b.addWriteFiles();
+    const asm_file = write_stub.add("libc_stub.s", assembly_buf.items);
+
+    // Compile the assembly into a proper shared library using Zig's build system
+    const libc_stub = glibc_stub_build.compileAssemblyStub(b, asm_file, target, .ReleaseSmall);
+
+    // Copy the generated files to the target directory
+    const copy_stubs = b.addUpdateSourceFiles();
+    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
+    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
+    copy_stubs.addCopyFileToSource(asm_file, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc_stub.s" }));
+    copy_stubs.step.dependOn(&libc_stub.step);
+    copy_stubs.step.dependOn(&write_stub.step);
+
+    return copy_stubs;
+}
+
+/// Create a minimal ELF shared object for ARM64
+fn createMinimalElfArm64() []const u8 {
+    // ARM64 minimal ELF shared object
+    return &[_]u8{
+        // ELF Header (64 bytes)
+        0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
+        2, // e_ident[EI_CLASS] - ELFCLASS64
+        1, // e_ident[EI_DATA] - ELFDATA2LSB (little endian)
+        1, // e_ident[EI_VERSION] - EV_CURRENT
+        0, // e_ident[EI_OSABI] - ELFOSABI_NONE
+        0, // e_ident[EI_ABIVERSION]
+        0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
+        0x03, 0x00, // e_type - ET_DYN (shared object)
+        0xB7, 0x00, // e_machine - EM_AARCH64
+        0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff - section header offset
+        0x00, 0x00, 0x00, 0x00, // e_flags
+        0x40, 0x00, // e_ehsize - ELF header size
+        0x38, 0x00, // e_phentsize - program header entry size
+        0x01, 0x00, // e_phnum - number of program headers
+        0x40, 0x00, // e_shentsize - section header entry size
+        0x00, 0x00, // e_shnum - number of section headers
+        0x00, 0x00, // e_shstrndx - section header string table index
+
+        // Program Header (56 bytes) - PT_LOAD
+        0x01, 0x00, 0x00, 0x00, // p_type - PT_LOAD
+        0x05, 0x00, 0x00, 0x00, // p_flags - PF_R | PF_X
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_vaddr
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_paddr
+        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz
+        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
+    };
+}
+
+/// Create a minimal ELF shared object for x86-64
+fn createMinimalElfX64() []const u8 {
+    // x86-64 minimal ELF shared object
+    return &[_]u8{
+        // ELF Header (64 bytes)
+        0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
+        2, // e_ident[EI_CLASS] - ELFCLASS64
+        1, // e_ident[EI_DATA] - ELFDATA2LSB (little endian)
+        1, // e_ident[EI_VERSION] - EV_CURRENT
+        0, // e_ident[EI_OSABI] - ELFOSABI_NONE
+        0, // e_ident[EI_ABIVERSION]
+        0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
+        0x03, 0x00, // e_type - ET_DYN (shared object)
+        0x3E, 0x00, // e_machine - EM_X86_64
+        0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff - section header offset
+        0x00, 0x00, 0x00, 0x00, // e_flags
+        0x40, 0x00, // e_ehsize - ELF header size
+        0x38, 0x00, // e_phentsize - program header entry size
+        0x01, 0x00, // e_phnum - number of program headers
+        0x40, 0x00, // e_shentsize - section header entry size
+        0x00, 0x00, // e_shnum - number of section headers
+        0x00, 0x00, // e_shstrndx - section header string table index
+
+        // Program Header (56 bytes) - PT_LOAD
+        0x01, 0x00, 0x00, 0x00, // p_type - PT_LOAD
+        0x05, 0x00, 0x00, 0x00, // p_flags - PF_R | PF_X
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_vaddr
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_paddr
+        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz
+        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
+    };
 }

@@ -1,5 +1,5 @@
 //! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
-//! Build with `zig build -Dllvm -Dfuzz -Dsystem-afl=false`.
+//! Build with `zig build -Dfuzz -Dsystem-afl=false`.
 //! Result is at `./zig-out/bin/roc`
 
 const std = @import("std");
@@ -25,6 +25,11 @@ const builtins = @import("builtins");
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
+const platform_host_shim = @import("platform_host_shim.zig");
+const builder = @import("builder.zig");
+
+/// Check if LLVM is available
+const llvm_available = builder.isLLVMAvailable();
 
 const Can = can.Can;
 const Check = check.Check;
@@ -36,7 +41,7 @@ const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
-const Interpreter = eval.Interpreter;
+const TestRunner = eval.TestRunner;
 const LayoutStore = layout.Store;
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -45,11 +50,14 @@ const RocRealloc = builtins.host_abi.RocRealloc;
 const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
+const TestOpsEnv = eval.TestOpsEnv;
 
-const roc_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_shim.lib") else @embedFile("libroc_shim.a");
+const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
 
-test {
+test "main cli tests" {
     _ = @import("test_bundle_logic.zig");
+    _ = @import("libc_finder.zig");
+    _ = @import("test_shared_memory_system.zig");
 }
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -156,6 +164,7 @@ const windows = if (is_windows) struct {
         lpProcessInformation: *PROCESS_INFORMATION,
     ) BOOL;
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) DWORD;
+    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) BOOL;
 
     const HANDLE_FLAG_INHERIT = 0x00000001;
     const INFINITE = 0xFFFFFFFF;
@@ -390,19 +399,117 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .format => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
-        .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
+        .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(gpa, docs_args),
         .help => |help_message| stdout.writeAll(help_message),
         .licenses => stdout.writeAll(legalDetailsFileContent),
         .problem => |problem| {
             try switch (problem) {
-                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}", .{details.flag}),
+                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`", .{ details.cmd, details.arg }),
+                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}", .{ details.value, details.flag, details.valid_options }),
             };
             std.process.exit(1);
         },
     };
+}
+
+fn generatePlatformHostShim(gpa: Allocator, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget) !?[]const u8 {
+    // Check if LLVM is available (this is a compile-time check)
+    if (!llvm_available) {
+        std.log.debug("LLVM not available, skipping platform host shim generation", .{});
+        return null;
+    }
+
+    const std_zig_llvm = @import("std").zig.llvm;
+    const Builder = std_zig_llvm.Builder;
+
+    // Create LLVM Builder
+    var llvm_builder = Builder.init(.{
+        .allocator = gpa,
+        .name = "roc_platform_shim",
+    }) catch |err| {
+        std.log.err("Failed to initialize LLVM Builder: {}", .{err});
+        return err;
+    };
+    defer llvm_builder.deinit();
+
+    // Create entrypoints array from the provided names
+    var entrypoints = std.ArrayList(platform_host_shim.EntryPoint).init(gpa);
+    defer entrypoints.deinit();
+
+    for (entrypoint_names, 0..) |name, idx| {
+        try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
+    }
+
+    // Create the complete platform shim
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items) catch |err| {
+        std.log.err("Failed to create interpreter shim: {}", .{err});
+        return err;
+    };
+
+    // Generate paths for temporary files
+    const bitcode_path = std.fs.path.join(gpa, &.{ cache_dir, "platform_shim.bc" }) catch |err| {
+        std.log.err("Failed to create bitcode path: {}", .{err});
+        return err;
+    };
+    defer gpa.free(bitcode_path);
+
+    const object_path = std.fs.path.join(gpa, &.{ cache_dir, "platform_shim.o" }) catch |err| {
+        std.log.err("Failed to create object path: {}", .{err});
+        return err;
+    };
+    // Don't defer free object_path since we return it
+
+    // Generate bitcode first
+    const producer = Builder.Producer{
+        .name = "Roc Platform Host Shim Generator",
+        .version = .{ .major = 1, .minor = 0, .patch = 0 },
+    };
+
+    const bitcode = llvm_builder.toBitcode(gpa, producer) catch |err| {
+        std.log.err("Failed to generate bitcode: {}", .{err});
+        gpa.free(object_path);
+        return err;
+    };
+    defer gpa.free(bitcode);
+
+    // Write bitcode to file
+    const bc_file = std.fs.cwd().createFile(bitcode_path, .{}) catch |err| {
+        std.log.err("Failed to create bitcode file: {}", .{err});
+        gpa.free(object_path);
+        return err;
+    };
+    defer bc_file.close();
+
+    // Convert u32 array to bytes for writing
+    const bytes = std.mem.sliceAsBytes(bitcode);
+    bc_file.writeAll(bytes) catch |err| {
+        std.log.err("Failed to write bitcode: {}", .{err});
+        gpa.free(object_path);
+        return err;
+    };
+
+    const compile_config = builder.CompileConfig{
+        .input_path = bitcode_path,
+        .output_path = object_path,
+        .optimization = .speed,
+        .target = target,
+    };
+
+    if (builder.compileBitcodeToObject(gpa, compile_config)) |success| {
+        if (!success) {
+            std.log.warn("LLVM compilation not ready, falling back to clang", .{});
+            return error.LLVMCompilationFailed;
+        }
+    } else |err| {
+        std.log.warn("Failed to compile with embedded LLVM: {}, falling back to clang", .{err});
+        return error.LLVMCompilationFailed;
+    }
+
+    std.log.debug("Generated platform host shim: {s}", .{object_path});
+
+    return object_path;
 }
 
 fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
@@ -418,12 +525,12 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     // Create cache directory for linked interpreter executables
     const cache_dir = cache_manager.config.getCacheEntriesDir(gpa) catch |err| {
-        std.log.err("Failed to get cache directory: {}\n", .{err});
+        std.log.err("Failed to get cache directory: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(cache_dir);
     const exe_cache_dir = std.fs.path.join(gpa, &.{ cache_dir, "executables" }) catch |err| {
-        std.log.err("Failed to create executable cache path: {}\n", .{err});
+        std.log.err("Failed to create executable cache path: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_cache_dir);
@@ -431,24 +538,74 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            std.log.err("Failed to create cache directory: {}\n", .{err});
+            std.log.err("Failed to create cache directory: {}", .{err});
             std.process.exit(1);
         },
     };
 
     // Generate executable name based on the roc file path
     // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
-    const exe_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        std.log.err("Failed to generate executable name: {}\n", .{err});
+    const exe_base_name = std.fmt.allocPrint(gpa, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
+        std.log.err("Failed to generate executable name: {}", .{err});
         std.process.exit(1);
     };
-    defer gpa.free(exe_name);
+    defer gpa.free(exe_base_name);
+
+    // Add .exe extension on Windows
+    const exe_name = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(gpa, "{s}.exe", .{exe_base_name}) catch |err| {
+            std.log.err("Failed to generate executable name with extension: {}", .{err});
+            std.process.exit(1);
+        }
+    else
+        gpa.dupe(u8, exe_base_name) catch |err| {
+            std.log.err("Failed to duplicate executable name: {}", .{err});
+            std.process.exit(1);
+        };
+    defer if (exe_name.ptr != exe_base_name.ptr) gpa.free(exe_name);
 
     const exe_path = std.fs.path.join(gpa, &.{ exe_cache_dir, exe_name }) catch |err| {
-        std.log.err("Failed to create executable path: {}\n", .{err});
+        std.log.err("Failed to create executable path: {}", .{err});
         std.process.exit(1);
     };
     defer gpa.free(exe_path);
+
+    // First, parse the app file to get the platform reference
+    const platform_spec = extractPlatformSpecFromApp(gpa, args.path) catch |err| {
+        std.log.err("Failed to extract platform spec from app file: {}", .{err});
+        std.process.exit(1);
+    };
+    defer gpa.free(platform_spec);
+
+    // Resolve platform paths from the platform spec (relative to app file directory)
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_paths = resolvePlatformSpecToPaths(gpa, platform_spec, app_dir) catch |err| {
+        std.log.err("Failed to resolve platform spec '{s}': {}", .{ platform_spec, err });
+        std.process.exit(1);
+    };
+    defer platform_paths.deinit(gpa);
+
+    // Use native detection (typically musl) for shim generation to match embedded shim library
+    const shim_target = builder.RocTarget.detectNative();
+
+    // Extract entrypoints from platform source file
+    var entrypoints = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (entrypoints.items) |entrypoint| {
+            gpa.free(entrypoint);
+        }
+        entrypoints.deinit();
+    }
+
+    if (platform_paths.platform_source_path) |platform_source| {
+        extractEntrypointsFromPlatform(gpa, platform_source, &entrypoints) catch |err| {
+            std.log.err("Failed to extract entrypoints from platform header: {}", .{err});
+            std.process.exit(1);
+        };
+    } else {
+        std.log.err("No platform source file found for entrypoint extraction", .{});
+        std.process.exit(1);
+    }
 
     // Check if the interpreter executable already exists (cached)
     const exe_exists = if (args.no_cache) false else blk: {
@@ -460,17 +617,10 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
     if (!exe_exists) {
 
-        // Resolve platform from app header
-        const host_path = resolvePlatformHost(gpa, args.path) catch |err| {
-            std.log.err("Failed to resolve platform: {}\n", .{err});
-            std.process.exit(1);
-        };
-        defer gpa.free(host_path);
-
         // Check for cached shim library, extract if not present
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
         const shim_path = std.fs.path.join(gpa, &.{ exe_cache_dir, shim_filename }) catch |err| {
-            std.log.err("Failed to create shim library path: {}\n", .{err});
+            std.log.err("Failed to create shim library path: {}", .{err});
             std.process.exit(1);
         };
         defer gpa.free(shim_path);
@@ -486,10 +636,18 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         if (!shim_exists) {
             // Shim not found in cache or cache disabled, extract it
             extractReadRocFilePathShimLibrary(gpa, shim_path) catch |err| {
-                std.log.err("Failed to extract read roc file path shim library: {}\n", .{err});
+                std.log.err("Failed to extract read roc file path shim library: {}", .{err});
                 std.process.exit(1);
             };
         }
+
+        // Generate platform host shim using the detected entrypoints
+
+        const platform_shim_path = generatePlatformHostShim(gpa, exe_cache_dir, entrypoints.items, shim_target) catch |err| {
+            std.log.err("Failed to generate platform host shim: {}", .{err});
+            std.process.exit(1);
+        };
+        defer if (platform_shim_path) |path| gpa.free(path);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -499,14 +657,301 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         // Add system libraries for macOS
         if (builtin.target.os.tag == .macos) {
             extra_args.append("-lSystem") catch {
-                std.log.err("Failed to allocate memory for linker args\n", .{});
+                std.log.err("Failed to allocate memory for linker args", .{});
                 std.process.exit(1);
             };
         }
 
+        // Create object files list - include platform shim if available
+        var object_files = std.ArrayList([]const u8).init(gpa);
+        defer object_files.deinit();
+        object_files.append(platform_paths.host_lib_path) catch {
+            std.log.err("Failed to add host path to object files", .{});
+            std.process.exit(1);
+        };
+        if (platform_shim_path) |path| {
+            object_files.append(path) catch {
+                std.log.err("Failed to add platform shim path to object files", .{});
+                std.process.exit(1);
+            };
+        }
+        object_files.append(shim_path) catch {
+            std.log.err("Failed to add shim path to object files", .{});
+            std.process.exit(1);
+        };
+
+        // Determine platform-specific dependencies based on platform spec
+        var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+        defer platform_files_pre.deinit();
+        var platform_files_post = std.ArrayList([]const u8).init(gpa);
+        defer platform_files_post.deinit();
+        var target_abi: ?linker.TargetAbi = null;
+
+        // Determine platform type from host library path to configure dependencies
+        std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
+
+        // Check if path contains "int" and "platform" directories using cross-platform path handling
+        const contains_int_platform = blk: {
+            var has_int = false;
+            var has_platform = false;
+            var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
+            while (iter.next()) |component| {
+                if (std.mem.eql(u8, component.name, "int")) {
+                    has_int = true;
+                } else if (std.mem.eql(u8, component.name, "platform")) {
+                    has_platform = true;
+                }
+            }
+            break :blk has_int and has_platform;
+        };
+
+        if (contains_int_platform) {
+            std.log.debug("Detected int platform - using musl static linking", .{});
+            // Int platform: use musl static linking with target-specific libraries
+            target_abi = .musl;
+            if (builtin.target.os.tag == .linux) {
+                // Use native target-specific libraries (x64musl for x64 hosts, etc.)
+                const native_target = if (builtin.target.cpu.arch.isX86())
+                    "x64musl"
+                else if (builtin.target.cpu.arch == .aarch64)
+                    "arm64musl"
+                else
+                    "x64musl"; // fallback
+
+                const crt1_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch {
+                    std.log.err("Failed to allocate crt1 path", .{});
+                    std.process.exit(1);
+                };
+                defer gpa.free(crt1_path);
+                const libc_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch {
+                    std.log.err("Failed to allocate libc path", .{});
+                    std.process.exit(1);
+                };
+                defer gpa.free(libc_path);
+
+                platform_files_pre.append(gpa.dupe(u8, crt1_path) catch {
+                    std.log.err("Failed to duplicate crt1 path", .{});
+                    std.process.exit(1);
+                }) catch {
+                    std.log.err("Failed to add musl crt1.o", .{});
+                    std.process.exit(1);
+                };
+                platform_files_post.append(gpa.dupe(u8, libc_path) catch {
+                    std.log.err("Failed to duplicate libc path", .{});
+                    std.process.exit(1);
+                }) catch {
+                    std.log.err("Failed to add musl libc.a", .{});
+                    std.process.exit(1);
+                };
+            }
+        } else {
+            // Check if path contains "str" and "platform" directories using cross-platform path handling
+            const contains_str_platform = blk: {
+                var has_str = false;
+                var has_platform = false;
+                var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
+                while (iter.next()) |component| {
+                    if (std.mem.eql(u8, component.name, "str")) {
+                        has_str = true;
+                    } else if (std.mem.eql(u8, component.name, "platform")) {
+                        has_platform = true;
+                    }
+                }
+                break :blk has_str and has_platform;
+            };
+
+            if (contains_str_platform) {
+                std.log.debug("Detected str platform - using musl static linking like int platform", .{});
+                // Str platform: use musl static linking to match the embedded shim library ABI
+                target_abi = .musl;
+                if (builtin.target.os.tag == .linux) {
+                    // Use the same musl approach as int platform
+                    const native_target = if (builtin.target.cpu.arch.isX86())
+                        "x64musl"
+                    else if (builtin.target.cpu.arch == .aarch64)
+                        "arm64musl"
+                    else
+                        "x64musl"; // fallback
+
+                    const crt1_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch {
+                        std.log.err("Failed to allocate crt1 path", .{});
+                        std.process.exit(1);
+                    };
+                    defer gpa.free(crt1_path);
+                    const libc_path = std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch {
+                        std.log.err("Failed to allocate libc path", .{});
+                        std.process.exit(1);
+                    };
+                    defer gpa.free(libc_path);
+
+                    platform_files_pre.append(gpa.dupe(u8, crt1_path) catch {
+                        std.log.err("Failed to duplicate crt1 path", .{});
+                        std.process.exit(1);
+                    }) catch {
+                        std.log.err("Failed to add musl crt1.o", .{});
+                        std.process.exit(1);
+                    };
+                    platform_files_post.append(gpa.dupe(u8, libc_path) catch {
+                        std.log.err("Failed to duplicate libc path", .{});
+                        std.process.exit(1);
+                    }) catch {
+                        std.log.err("Failed to add musl libc.a", .{});
+                        std.process.exit(1);
+                    };
+                }
+            } else if (false) { // Disable the old str platform GNU logic for now
+                std.log.debug("OLD str platform GNU logic (disabled)", .{});
+                if (builtin.target.os.tag == .linux) {
+                    // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths (DISABLED)
+                    //
+                    // According to the platform design (see Platform modules and linking design.md),
+                    // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
+                    // crtn.o) in their platform's targets/ directory. For example:
+                    //   targets/x64glibc/crti.o
+                    //   targets/x64glibc/crtn.o
+                    //   targets/x64musl/crti.o
+                    //   targets/x64musl/crtn.o
+                    //
+                    // The platform module header would then specify these in the targets section:
+                    //   shared_lib: {
+                    //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
+                    //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
+                    //   }
+                    //
+                    // Current implementation: We auto-detect system libc and use system CRT files as a
+                    // convenience during platform development. This allows platform authors to develop
+                    // and test without immediately vendoring architecture-specific CRT files.
+                    //
+                    // This auto-detection will be removed once platforms properly vendor their CRT files
+                    // as specified in the design document.
+
+                    const libc_finder = @import("libc_finder.zig");
+                    if (libc_finder.findLibc(gpa)) |libc_info| {
+                        defer {
+                            var info = libc_info;
+                            info.deinit();
+                        }
+
+                        // Use system CRT files from the detected lib directory
+                        // TODO: Remove this once platforms provide their own CRT files
+                        const scrt1_path = std.fmt.allocPrint(gpa, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate Scrt1.o path", .{});
+                            std.process.exit(1);
+                        };
+                        const crti_path = std.fmt.allocPrint(gpa, "{s}/crti.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate crti.o path", .{});
+                            std.process.exit(1);
+                        };
+                        const crtn_path = std.fmt.allocPrint(gpa, "{s}/crtn.o", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate crtn.o path", .{});
+                            std.process.exit(1);
+                        };
+
+                        // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
+                        if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
+                            file.close();
+                            platform_files_pre.append(scrt1_path) catch {
+                                std.log.err("Failed to add system Scrt1.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                                    std.log.err("Failed to add vendored Scrt1.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
+                                std.process.exit(1);
+                            }
+                        }
+
+                        if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
+                            file.close();
+                            platform_files_pre.append(crti_path) catch {
+                                std.log.err("Failed to add system crti.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                                    std.log.err("Failed to add vendored crti.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
+                                std.process.exit(1);
+                            }
+                        }
+
+                        if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
+                            file.close();
+                            platform_files_post.append(crtn_path) catch {
+                                std.log.err("Failed to add system crtn.o", .{});
+                                std.process.exit(1);
+                            };
+                        } else |_| {
+                            if (builtin.target.cpu.arch == .x86_64) {
+                                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                                    std.log.err("Failed to add vendored crtn.o", .{});
+                                    std.process.exit(1);
+                                };
+                            } else {
+                                std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
+                                std.process.exit(1);
+                            }
+                        }
+
+                        const lib_path = std.fmt.allocPrint(gpa, "-L{s}", .{libc_info.lib_dir}) catch {
+                            std.log.err("Failed to allocate library path", .{});
+                            std.process.exit(1);
+                        };
+                        extra_args.append(lib_path) catch {
+                            std.log.err("Failed to add library path", .{});
+                            std.process.exit(1);
+                        };
+                    } else |_| {
+                        // Fallback to vendored files for x86_64 or error for other architectures
+                        if (builtin.target.cpu.arch == .x86_64) {
+                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch {
+                                std.log.err("Failed to add gnu Scrt1.o", .{});
+                                std.process.exit(1);
+                            };
+                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch {
+                                std.log.err("Failed to add gnu crti.o", .{});
+                                std.process.exit(1);
+                            };
+                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch {
+                                std.log.err("Failed to add gnu crtn.o", .{});
+                                std.process.exit(1);
+                            };
+                            extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch {
+                                std.log.err("Failed to add library path", .{});
+                                std.process.exit(1);
+                            };
+                        } else {
+                            std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
+                            std.process.exit(1);
+                        }
+                    }
+                    extra_args.append("-lc") catch {
+                        std.log.err("Failed to add libc", .{});
+                        std.process.exit(1);
+                    };
+                }
+            } else {
+                std.log.debug("No platform-specific configuration found, using defaults", .{});
+            }
+        }
+
+        std.log.debug("Final target_abi: {?}", .{target_abi});
+
         const link_config = linker.LinkConfig{
+            .target_abi = target_abi,
             .output_path = exe_path,
-            .object_files = &.{ host_path, shim_path },
+            .object_files = object_files.items,
+            .platform_files_pre = platform_files_pre.items,
+            .platform_files_post = platform_files_post.items,
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
@@ -514,43 +959,27 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
 
         linker.link(gpa, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                // Fallback to clang when LLVM is not available
-                const link_result = std.process.Child.run(.{
-                    .allocator = gpa,
-                    .argv = &.{ "clang", "-o", exe_path, host_path, shim_path },
-                }) catch |clang_err| {
-                    std.log.err("Failed to link executable with both LLD and clang: LLD unavailable, clang error: {}\n", .{clang_err});
-                    std.process.exit(1);
-                };
-                defer gpa.free(link_result.stdout);
-                defer gpa.free(link_result.stderr);
-                if (link_result.term.Exited != 0) {
-                    std.log.err("Linker failed with exit code: {}\n", .{link_result.term.Exited});
-                    if (link_result.stderr.len > 0) {
-                        std.log.err("Linker stderr: {s}\n", .{link_result.stderr});
-                    }
-                    if (link_result.stdout.len > 0) {
-                        std.log.err("Linker stdout: {s}\n", .{link_result.stdout});
-                    }
-                    std.process.exit(1);
-                }
+                std.log.err("LLD linker not available -- this is likely a test executable that was built without LLVM", .{});
+                std.process.exit(1);
             },
             linker.LinkError.LinkFailed => {
-                std.log.err("LLD linker failed to create executable\n", .{});
+                std.log.err("LLD linker failed to create executable", .{});
                 std.process.exit(1);
             },
             else => {
-                std.log.err("Failed to link executable: {}\n", .{err});
+                std.log.err("Failed to link executable: {}", .{err});
                 std.process.exit(1);
             },
         };
     }
 
     // Set up shared memory with ModuleEnv
+    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
     const shm_handle = setupSharedMemoryWithModuleEnv(gpa, args.path) catch |err| {
-        std.log.err("Failed to set up shared memory with ModuleEnv: {}\n", .{err});
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         std.process.exit(1);
     };
+    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
 
     // Ensure we clean up shared memory resources on all exit paths
     defer {
@@ -563,26 +992,30 @@ fn rocRun(gpa: Allocator, args: cli_args.RunArgs) void {
         }
     }
 
+    std.log.debug("Launching interpreter executable: {s}", .{exe_path});
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
+        std.log.debug("Using Windows handle inheritance approach", .{});
         runWithWindowsHandleInheritance(gpa, exe_path, shm_handle) catch |err| {
-            std.log.err("Failed to run with Windows handle inheritance: {}\n", .{err});
+            std.log.err("Failed to run with Windows handle inheritance: {}", .{err});
             std.process.exit(1);
         };
     } else {
         // POSIX: Use existing file descriptor inheritance approach
+        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
         runWithPosixFdInheritance(gpa, exe_path, shm_handle, &cache_manager) catch |err| {
-            std.log.err("Failed to run with POSIX fd inheritance: {}\n", .{err});
+            std.log.err("Failed to run with POSIX fd inheritance: {}", .{err});
             std.process.exit(1);
         };
     }
+    std.log.debug("Interpreter execution completed", .{});
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
 fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
-        std.log.err("Failed to set handle as inheritable\n", .{});
+        std.log.err("Failed to set handle as inheritable", .{});
         return error.HandleInheritanceFailed;
     }
 
@@ -625,28 +1058,56 @@ fn runWithWindowsHandleInheritance(gpa: Allocator, exe_path: []const u8, shm_han
     );
 
     if (success == 0) {
-        std.log.err("CreateProcessW failed\n", .{});
+        std.log.err("CreateProcessW failed", .{});
         return error.ProcessCreationFailed;
     }
 
     // Child process spawned successfully
 
     // Wait for the child process to complete
+    std.log.debug("Waiting for child process to complete: {s}", .{exe_path});
     const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
     if (wait_result != 0) { // WAIT_OBJECT_0 = 0
-        std.log.err("WaitForSingleObject failed or timed out\n", .{});
+        std.log.err("WaitForSingleObject failed or timed out (result: {})", .{wait_result});
+        // Clean up handles before returning
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return error.ProcessWaitFailed;
+    }
+
+    // Get the exit code
+    var exit_code: windows.DWORD = undefined;
+    if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
+        std.log.err("Failed to get exit code for child process", .{});
+        // Clean up handles before returning
+        _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
+        _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+        return error.ProcessExitCodeFailed;
     }
 
     // Clean up process handles
     _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
     _ = ipc.platform.windows.CloseHandle(process_info.hThread);
+
+    // Check exit code
+    if (exit_code != 0) {
+        std.log.err("Child process {s} exited with code: {}", .{ exe_path, exit_code });
+        if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
+            std.log.err("Child process crashed with access violation (segfault)", .{});
+        } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
+            std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
+        }
+        return error.ProcessExitedWithError;
+    }
+
+    std.log.debug("Child process completed successfully", .{});
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
 fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager) !void {
     // Get cache directory for temporary files
     const temp_cache_dir = cache_manager.config.getTempDir(gpa) catch |err| {
-        std.log.err("Failed to get temp cache directory: {}\n", .{err});
+        std.log.err("Failed to get temp cache directory: {}", .{err});
         return err;
     };
     defer gpa.free(temp_cache_dir);
@@ -655,36 +1116,38 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            std.log.err("Failed to create temp cache directory: {}\n", .{err});
+            std.log.err("Failed to create temp cache directory: {}", .{err});
             return err;
         },
     };
 
     // Create temporary directory structure for fd communication
+    std.log.debug("Creating temporary directory structure for fd communication", .{});
     const temp_exe_path = createTempDirStructure(gpa, exe_path, shm_handle, temp_cache_dir) catch |err| {
-        std.log.err("Failed to create temp dir structure: {}\n", .{err});
+        std.log.err("Failed to create temp dir structure: {}", .{err});
         return err;
     };
     defer gpa.free(temp_exe_path);
+    std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
     if (flags < 0) {
-        std.log.err("Failed to get fd flags: {}\n", .{c._errno().*});
+        std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
     flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
     if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
-        std.log.err("Failed to set fd flags: {}\n", .{c._errno().*});
+        std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(&.{temp_exe_path}, gpa);
     child.cwd = std.fs.cwd().realpathAlloc(gpa, ".") catch |err| {
-        std.log.err("Failed to get current directory: {}\n", .{err});
+        std.log.err("Failed to get current directory: {}", .{err});
         return err;
     };
     defer gpa.free(child.cwd.?);
@@ -694,17 +1157,50 @@ fn runWithPosixFdInheritance(gpa: Allocator, exe_path: []const u8, shm_handle: S
     child.stderr_behavior = .Inherit;
 
     // Spawn the child process
+    std.log.debug("Spawning child process: {s}", .{temp_exe_path});
+    std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}\n", .{ exe_path, err });
+        std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
         return err;
     };
-    // Child process spawned successfully
+    std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
 
     // Wait for child to complete
-    _ = child.wait() catch |err| {
-        std.log.err("Failed waiting for child process: {}\n", .{err});
+    const term = child.wait() catch |err| {
+        std.log.err("Failed waiting for child process: {}", .{err});
         return err;
     };
+
+    // Check the termination status
+    switch (term) {
+        .Exited => |exit_code| {
+            if (exit_code == 0) {
+                std.log.debug("Child process completed successfully", .{});
+            } else {
+                std.log.err("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+                return error.ProcessExitedWithError;
+            }
+        },
+        .Signal => |signal| {
+            std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
+            if (signal == 11) { // SIGSEGV
+                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
+            } else if (signal == 6) { // SIGABRT
+                std.log.err("Child process aborted (SIGABRT)", .{});
+            } else if (signal == 9) { // SIGKILL
+                std.log.err("Child process was killed (SIGKILL)", .{});
+            }
+            return error.ProcessKilledBySignal;
+        },
+        .Stopped => |signal| {
+            std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
+            return error.ProcessStopped;
+        },
+        .Unknown => |status| {
+            std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
+            return error.ProcessUnknownTermination;
+        },
+    }
 }
 
 /// Handle for cross-platform shared memory operations.
@@ -739,7 +1235,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         @intCast(total_size),
         null, // Anonymous - no name needed for handle inheritance
     ) orelse {
-        std.log.err("Failed to create shared memory mapping\n", .{});
+        std.log.err("Failed to create shared memory mapping", .{});
         return error.SharedMemoryCreateFailed;
     };
 
@@ -773,6 +1269,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// Set up shared memory with a compiled ModuleEnv from a Roc file.
 /// This parses, canonicalizes, and type-checks the Roc file, with the resulting ModuleEnv
 /// ending up in shared memory because all allocations were done into shared memory.
+/// Stores all exported definitions for multi-entrypoint evaluation.
 pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []const u8) !SharedMemoryHandle {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -781,22 +1278,30 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     const shm_allocator = shm.allocator();
 
-    // Allocate space for the offset value at the beginning
-    const offset_ptr = try shm_allocator.alloc(u64, 1);
-    // Also store the canonicalized expression index for the child to evaluate
-    const expr_idx_ptr = try shm_allocator.alloc(u32, 1);
+    // Create a properly aligned header structure
+    const Header = struct {
+        parent_base_addr: u64,
+        entry_count: u32,
+        _padding: u32, // Ensure 8-byte alignment
+        def_indices_offset: u64,
+        module_env_offset: u64,
+    };
+
+    const header_ptr = try shm_allocator.create(Header);
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
     const shm_base_addr = @intFromPtr(shm.base_ptr);
-    offset_ptr[0] = shm_base_addr;
+    header_ptr.parent_base_addr = shm_base_addr;
 
-    // Allocate and store a pointer to the ModuleEnv
+    // Allocate the ModuleEnv right after the header for predictable layout
     const env_ptr = try shm_allocator.create(ModuleEnv);
+    const module_env_offset = @intFromPtr(env_ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.module_env_offset = module_env_offset;
 
     // Read the actual Roc file
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        std.log.err("Failed to open Roc file '{s}': {}\n", .{ roc_file_path, err });
+        std.log.err("Failed to open Roc file '{s}': {}", .{ roc_file_path, err });
         return error.FileNotFound;
     };
     defer roc_file.close();
@@ -830,28 +1335,29 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
 
-    // Find the "main" definition in the module
-    // Look through all definitions to find one named "main"
-    var main_expr_idx: ?u32 = null;
-    const defs = env.store.sliceDefs(env.all_defs);
-    for (defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const ident_idx = pattern.assign.ident;
-            const ident_text = env.getIdent(ident_idx);
-            if (std.mem.eql(u8, ident_text, "main")) {
-                main_expr_idx = @intFromEnum(def.expr);
-                break;
-            }
-        }
+    // Validation check - ensure exports were populated during canonicalization
+    if (env.exports.span.len == 0) {
+        std.log.err("No exported definitions found after canonicalization", .{});
+        return error.NoMainFunction;
     }
 
-    // Store the main expression index for the child
-    expr_idx_ptr[0] = main_expr_idx orelse {
-        std.log.err("No 'main' definition found in module\n", .{});
-        return error.NoMainFunction;
-    };
+    // Get the exported definitions from the canonicalization process
+    const exports_slice = env.store.sliceDefs(env.exports);
+
+    // Store entry count based on exports
+    header_ptr.entry_count = @intCast(exports_slice.len);
+
+    // Allocate space for exported def indices array
+    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+
+    // Store the def_indices location in the header
+    const def_indices_location = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
+    header_ptr.def_indices_offset = def_indices_location;
+
+    // Store definition index for each exported function
+    for (exports_slice, 0..) |def_idx, i| {
+        def_indices_ptr[i] = @intFromEnum(def_idx);
+    }
 
     // Type check the module
     var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
@@ -928,8 +1434,21 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
     };
 }
 
-/// Resolve platform specification from a Roc file to find the host library
-pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })![]u8 {
+/// Platform resolution result containing both host library and platform source paths
+pub const PlatformPaths = struct {
+    host_lib_path: []const u8,
+    platform_source_path: ?[]const u8, // Optional - may not exist for some platforms
+
+    pub fn deinit(self: *const PlatformPaths, gpa: std.mem.Allocator) void {
+        gpa.free(self.host_lib_path);
+        if (self.platform_source_path) |path| {
+            gpa.free(path);
+        }
+    }
+};
+
+/// Resolve platform specification from a Roc file to find both host library and platform source
+pub fn resolvePlatformPaths(gpa: std.mem.Allocator, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })!PlatformPaths {
     // Read the Roc file to parse the app header
     const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return error.NoPlatformFound,
@@ -976,11 +1495,34 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
                                 return error.PlatformNotSupported;
                             };
 
-                            return try gpa.dupe(u8, host_path);
+                            // Try to find platform source file (commonly main.roc but could be anything)
+                            const platform_source_path = blk: {
+                                // First try the exact path if it's a .roc file
+                                if (std.mem.endsWith(u8, platform_path, ".roc")) {
+                                    std.fs.cwd().access(platform_path, .{}) catch break :blk null;
+                                    break :blk try gpa.dupe(u8, platform_path);
+                                }
+
+                                // Try common platform source names in the platform directory
+                                const common_names = [_][]const u8{ "main.roc", "platform.roc", "Platform.roc" };
+                                for (common_names) |name| {
+                                    const source_path = try std.fs.path.join(gpa, &.{ platform_dir, name });
+                                    defer gpa.free(source_path);
+                                    std.fs.cwd().access(source_path, .{}) catch continue;
+                                    break :blk try gpa.dupe(u8, source_path);
+                                }
+                                break :blk null;
+                            };
+
+                            return PlatformPaths{
+                                .host_lib_path = try gpa.dupe(u8, host_path),
+                                .platform_source_path = platform_source_path,
+                            };
                         }
 
-                        // Try to resolve platform to a local host library
-                        return resolvePlatformSpecToHostLib(gpa, platform_spec);
+                        // Try to resolve platform to a local host library and source
+                        const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+                        return resolvePlatformSpecToPaths(gpa, platform_spec, app_dir);
                     }
                 }
             }
@@ -990,13 +1532,51 @@ pub fn resolvePlatformHost(gpa: std.mem.Allocator, roc_file_path: []const u8) (s
     return error.NoPlatformFound;
 }
 
-/// Resolve a platform specification to a local host library path
-fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})![]u8 {
+/// Extract platform specification from app file header using simple string parsing
+///
+/// TODO use this information from BuildEnv once we have the parser/can/typechcking setup
+/// for multiple modules, and we have this information available. This is just a temporary hack
+/// for testing now.
+fn extractPlatformSpecFromApp(gpa: std.mem.Allocator, app_file_path: []const u8) ![]const u8 {
+    // Read the app file
+    const source = std.fs.cwd().readFileAlloc(gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
+    defer gpa.free(source);
+
+    // Simple string parsing to find platform specification
+    // Look for pattern: platform "..." or platform ".../..."
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "app ")) {
+            // Look for pf: platform "..." pattern
+            if (std.mem.indexOf(u8, trimmed, "pf: platform \"")) |start_idx| {
+                const after_quote = start_idx + 14; // length of "pf: platform \""
+                if (std.mem.indexOfScalarPos(u8, trimmed, after_quote, '"')) |end_idx| {
+                    const platform_path = trimmed[after_quote..end_idx];
+                    return try gpa.dupe(u8, platform_path);
+                }
+            }
+            // Also try alternative format: platform "..."
+            if (std.mem.indexOf(u8, trimmed, "platform \"")) |start_idx| {
+                const quote_start = start_idx + 10; // length of "platform \""
+                if (std.mem.indexOfScalarPos(u8, trimmed, quote_start, '"')) |end_idx| {
+                    const platform_path = trimmed[quote_start..end_idx];
+                    return try gpa.dupe(u8, platform_path);
+                }
+            }
+        }
+    }
+
+    return error.NotAppFile;
+}
+
+/// Resolve a platform specification to both host library and platform source paths
+fn resolvePlatformSpecToPaths(gpa: std.mem.Allocator, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
 
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
         // Try to find CLI platform host library
-        const cli_paths = if (comptime builtin.target.os.tag == .windows)
+        const cli_host_paths = if (comptime builtin.target.os.tag == .windows)
             [_][]const u8{
                 "zig-out/lib/platform_host_cli.lib",
                 "platform/cli/host.lib",
@@ -1009,13 +1589,30 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
                 "platforms/cli/host.a",
             };
 
-        for (cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
+        const cli_source_paths = [_][]const u8{
+            "platform/cli/platform.roc",
+            "platforms/cli/platform.roc",
+        };
+
+        for (cli_host_paths) |host_path| {
+            std.fs.cwd().access(host_path, .{}) catch continue;
+
+            // Found host library, now try to find platform source
+            var platform_source_path: ?[]const u8 = null;
+            for (cli_source_paths) |source_path| {
+                std.fs.cwd().access(source_path, .{}) catch continue;
+                platform_source_path = try gpa.dupe(u8, source_path);
+                break;
+            }
+
+            return PlatformPaths{
+                .host_lib_path = try gpa.dupe(u8, host_path),
+                .platform_source_path = platform_source_path,
+            };
         }
     } else if (std.mem.eql(u8, platform_spec, "basic-cli")) {
         // Try to find basic-cli platform host library
-        const basic_cli_paths = if (comptime builtin.target.os.tag == .windows)
+        const basic_cli_host_paths = if (comptime builtin.target.os.tag == .windows)
             [_][]const u8{
                 "zig-out/lib/platform_host_basic_cli.lib",
                 "platform/basic-cli/host.lib",
@@ -1028,9 +1625,26 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
                 "platforms/basic-cli/host.a",
             };
 
-        for (basic_cli_paths) |path| {
-            std.fs.cwd().access(path, .{}) catch continue;
-            return try gpa.dupe(u8, path);
+        const basic_cli_source_paths = [_][]const u8{
+            "platform/basic-cli/platform.roc",
+            "platforms/basic-cli/platform.roc",
+        };
+
+        for (basic_cli_host_paths) |host_path| {
+            std.fs.cwd().access(host_path, .{}) catch continue;
+
+            // Found host library, now try to find platform source
+            var platform_source_path: ?[]const u8 = null;
+            for (basic_cli_source_paths) |source_path| {
+                std.fs.cwd().access(source_path, .{}) catch continue;
+                platform_source_path = try gpa.dupe(u8, source_path);
+                break;
+            }
+
+            return PlatformPaths{
+                .host_lib_path = try gpa.dupe(u8, host_path),
+                .platform_source_path = platform_source_path,
+            };
         }
     } else if (std.mem.startsWith(u8, platform_spec, "http")) {
         // This is a URL - for production, would download and resolve
@@ -1038,12 +1652,93 @@ fn resolvePlatformSpecToHostLib(gpa: std.mem.Allocator, platform_spec: []const u
         return error.PlatformNotSupported;
     }
 
-    // Try to interpret as a direct file path
-    std.fs.cwd().access(platform_spec, .{}) catch {
+    // Try to interpret as a file path (resolve relative to base_dir)
+    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
+        try gpa.dupe(u8, platform_spec)
+    else
+        try std.fs.path.join(gpa, &.{ base_dir, platform_spec });
+    defer if (!std.fs.path.isAbsolute(platform_spec)) gpa.free(resolved_path);
+
+    std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
     };
 
-    return try gpa.dupe(u8, platform_spec);
+    // For file paths, we need to determine if it's a host library or platform source
+    // Host libraries typically have .a/.lib extensions, platform sources have .roc extension
+    if (std.mem.endsWith(u8, resolved_path, ".roc")) {
+        // This is a platform source file - look for host library near it
+        const platform_dir = std.fs.path.dirname(resolved_path) orelse ".";
+        const host_filename = if (comptime builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
+        const host_path = try std.fs.path.join(gpa, &.{ platform_dir, host_filename });
+        defer gpa.free(host_path);
+
+        std.fs.cwd().access(host_path, .{}) catch {
+            return error.PlatformNotSupported;
+        };
+
+        return PlatformPaths{
+            .host_lib_path = try gpa.dupe(u8, host_path),
+            .platform_source_path = try gpa.dupe(u8, resolved_path),
+        };
+    } else {
+        // Assume it's a host library file
+        return PlatformPaths{
+            .host_lib_path = try gpa.dupe(u8, resolved_path),
+            .platform_source_path = null,
+        };
+    }
+}
+
+/// Extract all entrypoint names from platform header provides record into ArrayList
+/// TODO: Replace this with proper BuildEnv solution in the future
+fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const u8, entrypoints: *std.ArrayList([]const u8)) !void {
+    // Read the Roc file
+    const source = std.fs.cwd().readFileAlloc(gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    defer gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(roc_file_path);
+    const module_name = try gpa.dupe(u8, basename);
+    defer gpa.free(module_name);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(gpa);
+
+    // Parse the source code as a full module
+    var parse_ast = parse.parse(&env.common, gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(gpa);
+
+    // Look for platform header in the AST
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file with a platform header
+    switch (header) {
+        .platform => |platform_header| {
+            // Get the provides collection and its record fields
+            const provides_coll = parse_ast.store.getCollection(platform_header.provides);
+            const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
+
+            // Extract all field names as entrypoints
+            for (provides_fields) |field_idx| {
+                const field = parse_ast.store.getRecordField(field_idx);
+                const field_name = parse_ast.resolve(field.name);
+                try entrypoints.append(try gpa.dupe(u8, field_name));
+            }
+
+            if (provides_fields.len == 0) {
+                return error.NoEntrypointFound;
+            }
+        },
+        else => {
+            return error.NotPlatformFile;
+        },
+    }
 }
 
 /// Extract the embedded roc_shim library to the specified path
@@ -1062,7 +1757,7 @@ pub fn extractReadRocFilePathShimLibrary(gpa: Allocator, output_path: []const u8
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
-    try shim_file.writeAll(roc_shim_lib);
+    try shim_file.writeAll(roc_interpreter_shim_lib);
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
@@ -1164,7 +1859,7 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     // Check that all files exist and collect their sizes
     for (paths_to_use) |path| {
         const file = cwd.openFile(path, .{}) catch |err| {
-            try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
+            try stderr.print("Error: Could not open file '{s}': {}", .{ path, err });
             return err;
         };
         defer file.close();
@@ -1246,8 +1941,8 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
         &error_ctx,
     ) catch |err| {
         if (err == error.InvalidPath) {
-            try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
-            try stderr.print("Path: {s}\n", .{error_ctx.path});
+            try stderr.print("Error: Invalid file path - {s}", .{formatBundlePathValidationReason(error_ctx.reason)});
+            try stderr.print("Path: {s}", .{error_ctx.path});
         }
         return err;
     };
@@ -1273,11 +1968,11 @@ pub fn rocBundle(gpa: Allocator, args: cli_args.BundleArgs) !void {
     // No need to free when using arena allocator
 
     // Print results
-    try stdout.print("Created: {s}\n", .{display_path});
-    try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
-    try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
-    try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
-    try stdout.print("Time: {} ms\n", .{elapsed_ms});
+    try stdout.print("Created: {s}", .{display_path});
+    try stdout.print("Compressed size: {} bytes", .{compressed_size});
+    try stdout.print("Uncompressed size: {} bytes", .{uncompressed_size});
+    try stdout.print("Compression ratio: {d:.2}:1", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
+    try stdout.print("Time: {} ms", .{elapsed_ms});
 }
 
 fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
@@ -1295,7 +1990,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         if (std.mem.endsWith(u8, basename, ".tar.zst")) {
             dir_name = basename[0 .. basename.len - 8];
         } else {
-            try stderr.print("Error: {s} is not a .tar.zst file\n", .{archive_path});
+            try stderr.print("Error: {s} is not a .tar.zst file", .{archive_path});
             had_errors = true;
             continue;
         }
@@ -1309,7 +2004,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         };
 
         if (cwd.openDir(dir_name, .{})) |_| {
-            try stderr.print("Error: Directory {s} already exists\n", .{dir_name});
+            try stderr.print("Error: Directory {s} already exists", .{dir_name});
             had_errors = true;
             continue;
         } else |_| {
@@ -1322,7 +2017,7 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
 
         // Open the archive file
         const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
-            try stderr.print("Error opening {s}: {s}\n", .{ archive_path, @errorName(err) });
+            try stderr.print("Error opening {s}: {s}", .{ archive_path, @errorName(err) });
             had_errors = true;
             continue;
         };
@@ -1339,28 +2034,28 @@ fn rocUnbundle(allocator: Allocator, args: cli_args.UnbundleArgs) !void {
         ) catch |err| {
             switch (err) {
                 error.HashMismatch => {
-                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted\n", .{archive_path});
+                    try stderr.print("Error: Hash mismatch for {s} - file may be corrupted", .{archive_path});
                     had_errors = true;
                 },
                 error.InvalidFilename => {
-                    try stderr.print("Error: Invalid filename format for {s}\n", .{archive_path});
+                    try stderr.print("Error: Invalid filename format for {s}", .{archive_path});
                     had_errors = true;
                 },
                 error.InvalidPath => {
-                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
-                    try stderr.print("Path: {s}\n", .{error_ctx.path});
-                    try stderr.print("Archive: {s}\n", .{archive_path});
+                    try stderr.print("Error: Invalid path in archive - {s}", .{formatUnbundlePathValidationReason(error_ctx.reason)});
+                    try stderr.print("Path: {s}", .{error_ctx.path});
+                    try stderr.print("Archive: {s}", .{archive_path});
                     had_errors = true;
                 },
                 else => {
-                    try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
+                    try stderr.print("Error unbundling {s}: {s}", .{ archive_path, @errorName(err) });
                     had_errors = true;
                 },
             }
             continue; // Skip success message on error
         };
 
-        try stdout.print("Extracted: {s}\n", .{dir_name});
+        try stdout.print("Extracted: {s}", .{dir_name});
     }
 
     if (had_errors) {
@@ -1381,7 +2076,259 @@ fn rocBuild(gpa: Allocator, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    fatal("build not implemented", .{});
+    // Import needed modules
+    const target_mod = @import("target.zig");
+    const app_stub = @import("app_stub.zig");
+    const cross_compilation = @import("cross_compilation.zig");
+
+    std.log.info("Building {s} for cross-compilation", .{args.path});
+
+    // Detect host target
+    const host_target = cross_compilation.detectHostTarget();
+    std.log.info("Host: {} ({s})", .{ host_target, host_target.toTriple() });
+
+    // Parse target if provided, otherwise use native with musl preference
+    const target = if (args.target) |target_str| blk: {
+        break :blk target_mod.RocTarget.fromString(target_str) orelse {
+            std.log.err("Invalid target: {s}", .{target_str});
+            std.log.err("Valid targets: x64musl, x64glibc, arm64musl, arm64glibc, etc.", .{});
+            std.process.exit(1);
+        };
+    } else target_mod.RocTarget.detectNative();
+
+    std.log.info("Target: {} ({s})", .{ target, target.toTriple() });
+
+    // Validate cross-compilation support
+    const cross_validation = cross_compilation.validateCrossCompilation(host_target, target);
+    switch (cross_validation) {
+        .supported => {
+            std.log.info("Cross-compilation from {s} to {s} is supported", .{ @tagName(host_target), @tagName(target) });
+        },
+        .unsupported_host_target, .unsupported_cross_compilation, .missing_toolchain => {
+            const stderr = std.io.getStdErr().writer();
+            try cross_compilation.printCrossCompilationError(stderr, cross_validation);
+            std.process.exit(1);
+        },
+    }
+
+    // Only support int test platform for cross-compilation
+    // Check if path contains "int" directory using cross-platform path handling
+    const path_contains_int = blk: {
+        var iter = std.fs.path.componentIterator(args.path) catch break :blk false;
+        while (iter.next()) |component| {
+            if (std.mem.eql(u8, component.name, "int")) {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    const platform_type = if (path_contains_int)
+        "int"
+    else {
+        std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
+        std.log.err("Your app path: {s}", .{args.path});
+        std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
+        std.process.exit(1);
+    };
+
+    std.log.info("Detected platform type: {s}", .{platform_type});
+
+    // Get platform directory path
+    const platform_dir = if (std.mem.eql(u8, platform_type, "int"))
+        try std.fs.path.join(gpa, &.{ "test", "int", "platform" })
+    else
+        try std.fs.path.join(gpa, &.{ "test", "str", "platform" });
+    defer gpa.free(platform_dir);
+
+    // Check that platform exists
+    std.fs.cwd().access(platform_dir, .{}) catch |err| {
+        std.log.err("Platform directory not found: {s} ({})", .{ platform_dir, err });
+        std.process.exit(1);
+    };
+
+    // Get target-specific host library path
+    // Use target OS to determine library filename, not host OS
+    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
+    const host_lib_path = blk: {
+        // Try target-specific host library first
+        const target_specific_path = try std.fs.path.join(gpa, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
+        std.fs.cwd().access(target_specific_path, .{}) catch {
+            // Fallback to generic host library
+            std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
+            gpa.free(target_specific_path);
+            break :blk try std.fs.path.join(gpa, &.{ platform_dir, host_lib_filename });
+        };
+        break :blk target_specific_path;
+    };
+    defer gpa.free(host_lib_path);
+
+    std.fs.cwd().access(host_lib_path, .{}) catch |err| {
+        std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
+        std.process.exit(1);
+    };
+
+    // Get expected entrypoints for this platform
+    const entrypoints = try app_stub.getTestPlatformEntrypoints(gpa, platform_type);
+    defer gpa.free(entrypoints);
+
+    std.log.info("Expected entrypoints: {}", .{entrypoints.len});
+    for (entrypoints, 0..) |ep, i| {
+        std.log.info("  {}: roc__{s}", .{ i, ep.name });
+    }
+
+    // Create temp directory for build artifacts using Roc's cache system
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(gpa, cache_config, Filesystem.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(gpa);
+    defer gpa.free(cache_dir);
+    const temp_dir = try std.fs.path.join(gpa, &.{ cache_dir, "roc_build" });
+    defer gpa.free(temp_dir);
+
+    std.fs.cwd().makePath(temp_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Generate app stub object file
+    const app_stub_obj = try app_stub.generateAppStubObject(gpa, temp_dir, entrypoints, target);
+    defer gpa.free(app_stub_obj);
+
+    // Get CRT files for the target
+    const crt_files = try target_mod.getVendoredCRTFiles(gpa, target, platform_dir);
+
+    // Create object files list for linking
+    var object_files = std.ArrayList([]const u8).init(gpa);
+    defer object_files.deinit();
+
+    // Add our app stub and host library
+    try object_files.append(app_stub_obj);
+    try object_files.append(host_lib_path);
+
+    // Setup platform files based on target
+    var platform_files_pre = std.ArrayList([]const u8).init(gpa);
+    defer platform_files_pre.deinit();
+    var platform_files_post = std.ArrayList([]const u8).init(gpa);
+    defer platform_files_post.deinit();
+    var extra_args = std.ArrayList([]const u8).init(gpa);
+    defer extra_args.deinit();
+
+    // Add CRT files in correct order
+    if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
+    if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
+    if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
+
+    // For static linking with musl, add libc.a
+    if (crt_files.libc_a) |libc| {
+        try platform_files_post.append(libc);
+    } else if (target.isDynamic()) {
+        // For dynamic linking with glibc, generate stub library for cross-compilation
+        // Check if we're doing actual cross-compilation
+        const is_cross_compiling = host_target != target;
+
+        if (is_cross_compiling) {
+            // For cross-compilation, use pre-built vendored stubs from the platform targets folder
+            const target_name = switch (target) {
+                .x64glibc => "x64glibc",
+                .arm64glibc => "arm64glibc",
+                else => {
+                    std.log.err("Cross-compilation target {} not supported for glibc", .{target});
+                    std.process.exit(1);
+                },
+            };
+
+            // Check if vendored stubs exist in the platform targets folder
+            const stub_dir = try std.fmt.allocPrint(gpa, "test/int/platform/targets/{s}", .{target_name});
+            defer gpa.free(stub_dir);
+
+            const stub_so_path = try std.fmt.allocPrint(gpa, "{s}/libc.so.6", .{stub_dir});
+            defer gpa.free(stub_so_path);
+
+            // Verify the vendored stub exists
+            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
+                std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});
+                std.log.err("Error: {}", .{err});
+                std.log.err("This suggests the build system didn't generate the required stubs.", .{});
+                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
+                std.process.exit(1);
+            };
+
+            // Use the vendored stub library
+            const stub_dir_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{stub_dir});
+            try extra_args.append(stub_dir_arg);
+            try extra_args.append("-lc");
+            std.log.info("Using pre-built glibc stub from platform targets: {s}", .{stub_dir});
+        } else {
+            // For native compilation, use system libraries
+            const common_lib_paths = [_][]const u8{
+                "/lib/x86_64-linux-gnu",
+                "/usr/lib/x86_64-linux-gnu",
+                "/lib/aarch64-linux-gnu",
+                "/usr/lib/aarch64-linux-gnu",
+                "/lib64",
+                "/usr/lib64",
+                "/lib",
+                "/usr/lib",
+            };
+
+            for (common_lib_paths) |lib_path| {
+                // Check if the directory exists before adding it
+                std.fs.cwd().access(lib_path, .{}) catch continue;
+                const search_arg = try std.fmt.allocPrint(gpa, "-L{s}", .{lib_path});
+                try extra_args.append(search_arg);
+            }
+
+            try extra_args.append("-lc");
+        }
+
+        // Add dynamic linker path
+        if (target.getDynamicLinkerPath()) |dl_path| {
+            const dl_arg = try std.fmt.allocPrint(gpa, "--dynamic-linker={s}", .{dl_path});
+            try extra_args.append(dl_arg);
+        } else |_| {}
+    }
+
+    // Determine output path
+    const base_output_path = if (args.output) |output|
+        try gpa.dupe(u8, output)
+    else blk: {
+        const basename = std.fs.path.basename(args.path);
+        const name_without_ext = if (std.mem.endsWith(u8, basename, ".roc"))
+            basename[0 .. basename.len - 4]
+        else
+            basename;
+        break :blk try gpa.dupe(u8, name_without_ext);
+    };
+    defer gpa.free(base_output_path);
+
+    // Add .exe extension on Windows if not already present
+    const output_path = if (target.toOsTag() == .windows and !std.mem.endsWith(u8, base_output_path, ".exe"))
+        try std.fmt.allocPrint(gpa, "{s}.exe", .{base_output_path})
+    else
+        try gpa.dupe(u8, base_output_path);
+    defer if (output_path.ptr != base_output_path.ptr) gpa.free(output_path);
+
+    // Use LLD for linking
+    const linker_mod = @import("linker.zig");
+    const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+    const link_config = linker_mod.LinkConfig{
+        .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
+        .object_files = object_files.items,
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+        .extra_args = extra_args.items,
+        .output_path = output_path,
+        .target_abi = target_abi,
+        .target_os = target.toOsTag(),
+        .target_arch = target.toCpuArch(),
+    };
+
+    try linker_mod.link(gpa, link_config);
+
+    std.log.info("Successfully built executable: {s}", .{output_path});
 }
 
 /// Information about a test (expect statement) to be evaluated
@@ -1389,120 +2336,6 @@ const ExpectTest = struct {
     expr_idx: can.CIR.Expr.Idx,
     region: base.Region,
 };
-
-/// Simple test environment for evaluating expects
-const TestOpsEnv = struct {
-    allocator: Allocator,
-    interpreter: ?*Interpreter,
-    roc_ops: ?RocOps,
-
-    fn init(allocator: Allocator) TestOpsEnv {
-        return TestOpsEnv{
-            .allocator = allocator,
-            .interpreter = null,
-            .roc_ops = null,
-        };
-    }
-
-    fn setInterpreter(self: *TestOpsEnv, interp: *Interpreter) void {
-        self.interpreter = interp;
-    }
-
-    fn get_ops(self: *TestOpsEnv) *RocOps {
-        if (self.roc_ops == null) {
-            self.roc_ops = RocOps{
-                .env = @ptrCast(self),
-                .roc_alloc = testRocAlloc,
-                .roc_dealloc = testRocDealloc,
-                .roc_realloc = testRocRealloc,
-                .roc_dbg = testRocDbg,
-                .roc_expect_failed = testRocExpectFailed,
-                .roc_crashed = testRocCrashed,
-                .host_fns = undefined, // Not used in tests
-            };
-        }
-        return &(self.roc_ops.?);
-    }
-
-    fn deinit(self: *TestOpsEnv) void {
-        if (self.interpreter) |interp| {
-            if (interp.crash_message) |msg| {
-                // Only free if we allocated it (not a string literal)
-                if (!std.mem.eql(u8, msg, "Failed to store crash message")) {
-                    self.allocator.free(msg);
-                }
-            }
-        }
-    }
-};
-
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
-    const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
-    const total_size = alloc_args.length + size_storage_bytes;
-    const result = test_env.allocator.rawAlloc(total_size, align_enum, @returnAddress());
-    const base_ptr = result orelse {
-        std.debug.panic("Out of memory during testRocAlloc", .{});
-    };
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-    alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-}
-
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
-    const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
-    const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    test_env.allocator.rawFree(slice, align_enum, @returnAddress());
-}
-
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
-    const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
-    const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(realloc_args.answer) - size_storage_bytes);
-    const new_total_size = realloc_args.new_length + size_storage_bytes;
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during testRocRealloc", .{});
-    };
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-}
-
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
-    @panic("testRocDbg not implemented yet");
-}
-
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
-}
-
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    const test_env: *TestOpsEnv = @ptrCast(@alignCast(env));
-    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    if (test_env.interpreter) |interp| {
-        interp.has_crashed = true;
-        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
-            std.log.err("Failed to allocate crash message: {}", .{err});
-            interp.crash_message = "Failed to store crash message";
-            return;
-        };
-        interp.crash_message = owned_msg;
-    }
-}
 
 fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const trace = tracy.trace(@src());
@@ -1516,7 +2349,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(gpa, args.path, std.math.maxInt(usize)) catch |err| {
-        try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+        try stderr.print("Failed to read file '{s}': {}", .{ args.path, err });
         std.process.exit(1);
     };
     defer gpa.free(source);
@@ -1528,7 +2361,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch |err| {
-        try stderr.print("Failed to initialize module environment: {}\n", .{err});
+        try stderr.print("Failed to initialize module environment: {}", .{err});
         std.process.exit(1);
     };
     defer env.deinit();
@@ -1539,7 +2372,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Parse the source code as a full module
     var parse_ast = parse.parse(&env.common, gpa) catch |err| {
-        try stderr.print("Failed to parse file: {}\n", .{err});
+        try stderr.print("Failed to parse file: {}", .{err});
         std.process.exit(1);
     };
     defer parse_ast.deinit(gpa);
@@ -1552,135 +2385,68 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
 
     // Create canonicalizer
     var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
-        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
+        try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
     defer canonicalizer.deinit();
 
     // Canonicalize the entire module
     canonicalizer.canonicalizeFile() catch |err| {
-        try stderr.print("Failed to canonicalize file: {}\n", .{err});
+        try stderr.print("Failed to canonicalize file: {}", .{err});
         std.process.exit(1);
     };
 
     // Type check the module
     var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions) catch |err| {
-        try stderr.print("Failed to initialize type checker: {}\n", .{err});
+        try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };
     defer checker.deinit();
 
     checker.checkDefs() catch |err| {
-        try stderr.print("Type checking failed: {}\n", .{err});
+        try stderr.print("Type checking failed: {}", .{err});
         std.process.exit(1);
     };
 
-    // Find all expect statements
-    const statements = env.store.sliceStatements(env.all_statements);
-    var expects = std.array_list.Managed(ExpectTest).init(gpa);
-    defer expects.deinit();
-
-    for (statements) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_expect) {
-            const region = env.store.getStatementRegion(stmt_idx);
-            try expects.append(.{
-                .expr_idx = stmt.s_expect.body,
-                .region = region,
-            });
-        }
-    }
-
-    if (expects.items.len == 0) {
-        try stdout.print("No tests found in {s}\n", .{args.path});
-        return;
-    }
-
-    // Create interpreter infrastructure for test evaluation
+    // Create test runner infrastructure for test evaluation
     var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
-        try stderr.print("Failed to create stack memory: {}\n", .{err});
+        try stderr.print("Failed to create stack memory: {}", .{err});
         std.process.exit(1);
     };
     defer stack_memory.deinit();
 
     var layout_cache = LayoutStore.init(&env, &env.types) catch |err| {
-        try stderr.print("Failed to create layout cache: {}\n", .{err});
+        try stderr.print("Failed to create layout cache: {}", .{err});
         std.process.exit(1);
     };
     defer layout_cache.deinit();
 
-    var test_env = TestOpsEnv.init(gpa);
-    defer test_env.deinit();
-
-    var interpreter = Interpreter.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
-        try stderr.print("Failed to create interpreter: {}\n", .{err});
+    var test_runner = TestRunner.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
+        try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };
-    defer interpreter.deinit(test_env.get_ops());
-    test_env.setInterpreter(&interpreter);
+    defer test_runner.deinit();
 
-    // Track test results for verbose output
-    const TestResult = struct {
-        line_number: u32,
-        passed: bool,
-        error_msg: ?[]const u8 = null,
+    const summary = test_runner.eval_all() catch |err| {
+        try stderr.print("Failed to evaluate tests: {}\n", .{err});
+        std.process.exit(1);
     };
-
-    var test_results = std.array_list.Managed(TestResult).init(gpa);
-    defer test_results.deinit();
-
-    // Evaluate each expect statement
-    var passed: u32 = 0;
-    var failed: u32 = 0;
-
-    for (expects.items) |expect_test| {
-        const region_info = env.calcRegionInfo(expect_test.region);
-        const line_number = region_info.start_line_idx + 1;
-
-        // Evaluate the expect expression
-        const result = interpreter.eval(expect_test.expr_idx, test_env.get_ops()) catch |err| {
-            const error_msg = try std.fmt.allocPrint(gpa, "Test evaluation failed: {}", .{err});
-            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
-            failed += 1;
-            continue;
-        };
-
-        // Check if the result is a boolean true
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
-            const is_true = result.asBool();
-            if (is_true) {
-                try test_results.append(.{ .line_number = line_number, .passed = true });
-                passed += 1;
-            } else {
-                try test_results.append(.{ .line_number = line_number, .passed = false });
-                failed += 1;
-            }
-        } else {
-            const error_msg = try gpa.dupe(u8, "Test did not evaluate to a boolean");
-            try test_results.append(.{ .line_number = line_number, .passed = false, .error_msg = error_msg });
-            failed += 1;
-        }
-    }
+    const passed = summary.passed;
+    const failed = summary.failed;
 
     // Calculate elapsed time
     const end_time = std.time.nanoTimestamp();
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
-    // Free allocated error messages
-    defer for (test_results.items) |test_result| {
-        if (test_result.error_msg) |msg| {
-            gpa.free(msg);
-        }
-    };
-
     // Report results
     if (failed == 0) {
         // Success case: only print if verbose, exit with 0
         if (args.verbose) {
             try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
-            for (test_results.items) |test_result| {
-                try stdout.print("PASS: line {}\n", .{test_result.line_number});
+            for (test_runner.test_results.items) |test_result| {
+                const region_info = env.calcRegionInfo(test_result.region);
+                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
             }
         }
         // Otherwise print nothing at all
@@ -1690,14 +2456,15 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
 
         if (args.verbose) {
-            for (test_results.items) |test_result| {
+            for (test_runner.test_results.items) |test_result| {
+                const region_info = env.calcRegionInfo(test_result.region);
                 if (test_result.passed) {
-                    try stderr.print("PASS: line {}\n", .{test_result.line_number});
+                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 } else {
                     if (test_result.error_msg) |msg| {
-                        try stderr.print("FAIL: line {} - {s}\n", .{ test_result.line_number, msg });
+                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{} - {s}\n", .{ args.path, region_info.start_line_idx + 1, msg });
                     } else {
-                        try stderr.print("FAIL: line {}\n", .{test_result.line_number});
+                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                     }
                 }
             }
@@ -1744,17 +2511,17 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
 
         elapsed = timer.read();
         if (unformatted_files.items.len > 0) {
-            try stdout.print("The following file(s) failed `roc format --check`:\n", .{});
+            try stdout.print("The following file(s) failed `roc format --check`:", .{});
             for (unformatted_files.items) |file_name| {
                 try stdout.print("    {s}\n", .{file_name});
             }
-            try stdout.print("You can fix this with `roc format FILENAME.roc`.\n", .{});
+            try stdout.print("You can fix this with `roc format FILENAME.roc`.", .{});
             exit_code = 1;
         } else {
-            try stdout.print("All formatting valid\n", .{});
+            try stdout.print("All formatting valid", .{});
         }
         if (failure_count > 0) {
-            try stdout.print("Failed to check {} files.\n", .{failure_count});
+            try stdout.print("Failed to check {} files.", .{failure_count});
             exit_code = 1;
         }
     } else {
@@ -1774,7 +2541,7 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
 
     try stdout.print("Took ", .{});
     try formatElapsedTime(stdout, elapsed);
-    try stdout.print(".\n", .{});
+    try stdout.print(".", .{});
 
     std.process.exit(exit_code);
 }
@@ -1789,18 +2556,18 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
-        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
-        error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
-        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
-        error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
-        error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
-        error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
-        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
+        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type", .{}) catch {},
+        error.ExpectedPlatformString => stderr.print("Expected platform string in header", .{}) catch {},
+        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed", .{}) catch {},
+        error.UnsupportedHeader => stderr.print("Unsupported header type", .{}) catch {},
+        error.ExpectedString => stderr.print("Expected string in header", .{}) catch {},
+        error.Internal => stderr.print("Internal compiler error", .{}) catch {},
+        error.InvalidDependency => stderr.print("Invalid dependency relationship", .{}) catch {},
+        error.TooNested => stderr.print("Too deeply nested", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
+        else => stderr.print("{s}", .{@errorName(err)}) catch {},
     }
     std.process.exit(1);
 }
@@ -1977,12 +2744,12 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 total_warnings,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).\n", .{args.path}) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)\n", .{args.path}) catch {};
+            stdout.print(" for {s} (loaded from cache)", .{args.path}) catch {};
         }
     } else {
         // For fresh compilation, process and display reports normally
@@ -1994,9 +2761,9 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
                 // Render the diagnostic report to stderr
                 reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
-                    stderr.print("  {s}\n", .{report.title}) catch {};
+                    stderr.print("  {s}", .{report.title}) catch {};
                 };
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
@@ -2012,13 +2779,13 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
                 check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.\n", .{args.path}) catch {};
+            stderr.print(" for {s}.", .{args.path}) catch {};
 
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}\n", .{args.path}) catch {};
+            stdout.print(" for {s}", .{args.path}) catch {};
         }
     }
 
@@ -2030,22 +2797,22 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
 fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     if (timing) |t| {
-        writer.print("\nTiming breakdown:\n", .{}) catch {};
+        writer.print("\nTiming breakdown:", .{}) catch {};
         writer.print("  tokenize + parse:             ", .{}) catch {};
         formatElapsedTime(writer, t.tokenize_parse_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.tokenize_parse_ns}) catch {};
+        writer.print("  ({} ns)", .{t.tokenize_parse_ns}) catch {};
         writer.print("  canonicalize:                 ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.canonicalize_ns}) catch {};
+        writer.print("  ({} ns)", .{t.canonicalize_ns}) catch {};
         writer.print("  can diagnostics:              ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.canonicalize_diagnostics_ns}) catch {};
+        writer.print("  ({} ns)", .{t.canonicalize_diagnostics_ns}) catch {};
         writer.print("  type checking:                ", .{}) catch {};
         formatElapsedTime(writer, t.type_checking_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.type_checking_ns}) catch {};
+        writer.print("  ({} ns)", .{t.type_checking_ns}) catch {};
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
-        writer.print("  ({} ns)\n", .{t.check_diagnostics_ns}) catch {};
+        writer.print("  ({} ns)", .{t.check_diagnostics_ns}) catch {};
     }
 }
 
@@ -2062,9 +2829,4 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
         tracy.waitForShutdown() catch unreachable;
     }
     std.process.exit(1);
-}
-
-// Include tests from other files
-test {
-    _ = @import("test_shared_memory_system.zig");
 }

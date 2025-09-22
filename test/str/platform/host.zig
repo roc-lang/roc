@@ -80,14 +80,37 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_entrypoint(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
-// Windows __main stub for MinGW-style initialization
-pub export fn __main() void {}
+// OS-specific entry point handling
+comptime {
+    // Export main for all platforms
+    @export(&main, .{ .name = "main" });
+    
+    // Windows MinGW/MSVCRT compatibility: export __main stub
+    if (@import("builtin").os.tag == .windows) {
+        @export(&__main, .{ .name = "__main" });
+    }
+}
+
+// Windows MinGW/MSVCRT compatibility stub
+// The C runtime on Windows calls __main from main for constructor initialization
+fn __main() callconv(.C) void {}
+
+// C compatible main for runtime
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
+    _ = argc;
+    _ = argv;
+    platform_main() catch |err| {
+        std.io.getStdErr().writer().print("HOST ERROR: {?}", .{err}) catch unreachable;
+        return 1;
+    };
+    return 0;
+}
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-pub export fn main() void {
+fn platform_main() !void {
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };
@@ -114,32 +137,23 @@ pub export fn main() void {
 
     // Arguments struct for single string parameter - consistent with struct-based approach
     // `extern struct` has well-defined in-memory layout matching the C ABI for the target
-    const Args = extern struct {
-        str: RocStr,
-    };
-
-    var args = Args{
-        .str = input_roc_str,
-    };
+    const Args = extern struct { str: RocStr };
+    var args = Args{ .str = input_roc_str };
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc_entrypoint(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
+    roc__processString(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
     const result_slice = roc_str.asSlice();
-    stdout.print("{s}", .{result_slice}) catch {
-        std.log.err("Failed to write to stdout\n", .{});
-        std.process.exit(1);
-    };
+    try stdout.print("{s}", .{result_slice});
 
     // Verify the result contains the expected input
     const expected_substring = "Got the following from the host: string from host";
     if (std.mem.indexOf(u8, result_slice, expected_substring) != null) {
-        stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{}) catch {};
+        try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
-        stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{}) catch {};
-        std.process.exit(1);
+        try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
     }
 }

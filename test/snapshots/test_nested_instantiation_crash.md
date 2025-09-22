@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app [] { pf: platform "../basic-cli/platform.roc" }
 # TODO: if you do this whole thing as an expr block, with `composed` at
 # the end instead of `answer =`, it triggers a parser bug!
 
@@ -39,7 +39,7 @@ But here it's being used as:
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),CloseSquare(1:6-1:7),OpenCurly(1:8-1:9),LowerIdent(1:10-1:12),OpColon(1:12-1:13),KwPlatform(1:14-1:22),StringStart(1:23-1:24),StringPart(1:24-1:49),StringEnd(1:49-1:50),CloseCurly(1:51-1:52),
 LowerIdent(5:1-5:12),OpColon(5:13-5:14),LowerIdent(5:15-5:16),OpArrow(5:17-5:19),OpenCurly(5:20-5:21),LowerIdent(5:22-5:27),OpColon(5:27-5:28),LowerIdent(5:29-5:30),Comma(5:30-5:31),LowerIdent(5:32-5:35),OpColon(5:35-5:36),UpperIdent(5:37-5:40),CloseCurly(5:41-5:42),
 LowerIdent(6:1-6:12),OpAssign(6:13-6:14),OpBar(6:15-6:16),LowerIdent(6:16-6:17),OpBar(6:17-6:18),OpenCurly(6:19-6:20),LowerIdent(6:21-6:26),OpColon(6:26-6:27),LowerIdent(6:28-6:29),Comma(6:29-6:30),LowerIdent(6:31-6:34),OpColon(6:34-6:35),StringStart(6:36-6:37),StringPart(6:37-6:41),StringEnd(6:41-6:42),CloseCurly(6:43-6:44),
 LowerIdent(8:1-8:10),OpColon(8:11-8:12),OpenCurly(8:13-8:14),LowerIdent(8:15-8:20),OpColon(8:20-8:21),LowerIdent(8:22-8:23),Comma(8:23-8:24),LowerIdent(8:25-8:28),OpColon(8:28-8:29),UpperIdent(8:30-8:33),CloseCurly(8:34-8:35),OpArrow(8:36-8:38),LowerIdent(8:39-8:40),
@@ -52,17 +52,15 @@ EndOfFile(15:1-15:1),
 # PARSE
 ~~~clojure
 (file @1.1-14.24
-	(app @1.1-1.56
-		(provides @1.5-1.11
-			(exposed-lower-ident @1.6-1.10
-				(text "main")))
-		(record-field @1.14-1.54 (name "pf")
-			(e-string @1.27-1.54
-				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
-		(packages @1.12-1.56
-			(record-field @1.14-1.54 (name "pf")
-				(e-string @1.27-1.54
-					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
+	(app @1.1-1.52
+		(provides @1.5-1.7)
+		(record-field @1.10-1.50 (name "pf")
+			(e-string @1.23-1.50
+				(e-string-part @1.24-1.49 (raw "../basic-cli/platform.roc"))))
+		(packages @1.8-1.52
+			(record-field @1.10-1.50 (name "pf")
+				(e-string @1.23-1.50
+					(e-string-part @1.24-1.49 (raw "../basic-cli/platform.roc"))))))
 	(statements
 		(s-type-anno @5.1-5.42 (name "make_record")
 			(ty-fn @5.15-5.42
@@ -124,7 +122,7 @@ EndOfFile(15:1-15:1),
 ~~~
 # FORMATTED
 ~~~roc
-app [main] { pf: platform "../basic-cli/platform.roc" }
+app [] { pf: platform "../basic-cli/platform.roc" }
 # TODO: if you do this whole thing as an expr block, with `composed` at
 # the end instead of `answer =`, it triggers a parser bug!
 

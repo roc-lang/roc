@@ -1620,10 +1620,10 @@ const Formatter = struct {
                 }
                 try fmt.formatCollection(
                     provides.region,
-                    .square,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
-                    Formatter.formatExposedItem,
+                    .curly,
+                    AST.RecordField.Idx,
+                    fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
+                    Formatter.formatRecordField,
                 );
             },
             .malformed => {},
@@ -2228,6 +2228,19 @@ const Formatter = struct {
 
                         return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages);
                     },
+                    .platform => |p| {
+                        if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.requires_rigids)) {
+                            return true;
+                        }
+                        if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.exposes)) {
+                            return true;
+                        }
+                        if (fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages)) {
+                            return true;
+                        }
+
+                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
+                    },
                     else => return false,
                 }
             },
@@ -2255,6 +2268,10 @@ const Formatter = struct {
             AST.RecordField.Idx => {
                 const record_field_slice = fmt.ast.store.recordFieldSlice(.{ .span = collection.span });
                 return fmt.nodesWillBeMultiline(AST.RecordField.Idx, record_field_slice);
+            },
+            AST.ExposedItem.Idx => {
+                const exposed_item_slice = fmt.ast.store.exposedItemSlice(.{ .span = collection.span });
+                return fmt.nodesWillBeMultiline(AST.ExposedItem.Idx, exposed_item_slice);
             },
             else => return false,
         }
