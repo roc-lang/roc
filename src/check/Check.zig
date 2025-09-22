@@ -919,8 +919,36 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                     cached_var
                 else blk: {
                     // First time importing this type - copy it and cache the result
-                    const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-                    const new_copy = try self.copyVar(imported_var, other_module_env);
+                    // The target_node_idx is a pattern index from exposed_items
+                    const target_pattern = @as(CIR.Pattern.Idx, @enumFromInt(@intFromEnum(target_node_idx)));
+
+                    // Find the definition that has this pattern
+                    var imported_var: ?Var = null;
+
+                    const other_defs = other_module_env.store.sliceDefs(other_module_env.all_defs);
+                    for (other_defs) |def_idx| {
+                        const def = other_module_env.store.getDef(def_idx);
+                        if (def.pattern == target_pattern) {
+                            // Found the def with this pattern
+                            // Use the expression's type, not the def's type
+                            // The def is just the binding, but we want the actual function type
+                            const def_expr_var = ModuleEnv.varFrom(def.expr);
+                            imported_var = def_expr_var;
+                            break;
+                        }
+                    }
+
+                    // If we still don't have a var, this might be a builtin or error
+                    if (imported_var == null) {
+                        // For builtins or missing items, we should have a proper error
+                        // For now, fallback to treating the pattern index as a var
+                        // This is likely wrong and the source of our bug
+                        imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+                    }
+
+                    const actual_imported_var = imported_var.?;
+
+                    const new_copy = try self.copyVar(actual_imported_var, other_module_env);
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };

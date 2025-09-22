@@ -2311,4 +2311,5 @@ test "SKIP: original cross-module test" {
 // Import comprehensive test suite
 test {
     _ = @import("static_dispatch_comprehensive_test.zig");
+    _ = @import("minimal_record_return_bug.zig");
 }

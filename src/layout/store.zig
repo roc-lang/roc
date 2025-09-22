@@ -724,6 +724,17 @@ pub const Store = struct {
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
         var current = self.types_store.resolveVar(unresolved_var);
 
+        // Debug problematic var 85
+        if (@intFromEnum(unresolved_var) == 85) {
+            std.debug.print("\n=== addTypeVar: Debugging Var(85) ===\n", .{});
+            std.debug.print("  Module: {s}\n", .{self.env.module_name});
+            std.debug.print("  Resolved to var: {}\n", .{current.var_});
+            std.debug.print("  Content: {s}\n", .{@tagName(current.desc.content)});
+            if (current.desc.content == .structure) {
+                std.debug.print("  Structure type: {s}\n", .{@tagName(current.desc.content.structure)});
+            }
+        }
+
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
             return cached_idx;
@@ -783,17 +794,28 @@ pub const Store = struct {
                         // Try to get the actual name of this nominal type
                         const ident_name = self.env.getIdent(nominal_type.ident.ident_idx);
 
+                        // Get the origin module name
+                        const origin_module_name = self.env.getIdent(nominal_type.origin_module);
+
                         const resolved = self.types_store.resolveVar(backing_var);
 
                         // Only debug non-Bool nominal types to reduce noise
                         if (!std.mem.eql(u8, ident_name, "Bool")) {
                             std.debug.print("\n=== Layout Store: Handling nominal_type ===\n", .{});
+                            std.debug.print("  Current module: {s}\n", .{self.env.module_name});
                             std.debug.print("  Nominal type ident idx: {}\n", .{nominal_type.ident.ident_idx.idx});
                             std.debug.print("  Nominal type name: {s}\n", .{ident_name});
+                            std.debug.print("  Origin module name: {s}\n", .{origin_module_name});
                             std.debug.print("  Backing var: {}\n", .{backing_var});
                             std.debug.print("  Resolved backing var content: {s}\n", .{@tagName(resolved.desc.content)});
                             if (resolved.desc.content == .structure) {
                                 std.debug.print("    Backing structure type: {s}\n", .{@tagName(resolved.desc.content.structure)});
+
+                                // If it's a tag_union (which Bool is), show what we're resolving to
+                                if (resolved.desc.content.structure == .tag_union) {
+                                    std.debug.print("    WARNING: Nominal type {s} from module {s} resolved to tag_union!\n", .{ident_name, origin_module_name});
+                                    std.debug.print("    This might be why records are becoming Bool!\n", .{});
+                                }
                             }
                         }
 

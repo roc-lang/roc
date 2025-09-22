@@ -2588,6 +2588,13 @@ pub const Interpreter = struct {
                 .fn_unbound => |func| {
                     std.debug.print("  fn_unbound return var: {}\n", .{func.ret});
 
+                    // Debug: Check what the return type actually is
+                    const ret_check = closure_module.types.resolveVar(func.ret);
+                    std.debug.print("  Return var content (before mapping): {s}\n", .{@tagName(ret_check.desc.content)});
+                    if (ret_check.desc.content == .structure) {
+                        std.debug.print("    Return structure type: {s}\n", .{@tagName(ret_check.desc.content.structure)});
+                    }
+
                     // First check if the return type is mapped in our TypeScope
                     var return_type_var = func.ret;
                     var use_current_type_store = false;
