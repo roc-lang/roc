@@ -950,6 +950,31 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                     const actual_imported_var = imported_var.?;
 
                     const new_copy = try self.copyVar(actual_imported_var, other_module_env);
+
+                    // After copying, check if this is a function with a nominal type return
+                    // If so, we need to resolve the nominal type to its backing type
+                    const copied_resolved = self.types.resolveVar(new_copy);
+                    if (copied_resolved.desc.content == .structure) {
+                        switch (copied_resolved.desc.content.structure) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                // Check if the return type is a nominal type
+                                const ret_resolved = self.types.resolveVar(func.ret);
+                                if (ret_resolved.desc.content == .structure and
+                                    ret_resolved.desc.content.structure == .nominal_type)
+                                {
+                                    const nominal = ret_resolved.desc.content.structure.nominal_type;
+                                    // Get the backing var that was already copied
+                                    const backing_var = self.types.getNominalBackingVar(nominal);
+                                    const backing_resolved = self.types.resolveVar(backing_var);
+                                    // Replace the nominal type with its backing type directly
+                                    // This "unwraps" the nominal type so we use the actual record type
+                                    try self.types.setVarContent(func.ret, backing_resolved.desc.content);
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+
                     try self.import_cache.put(self.gpa, cache_key, new_copy);
                     break :blk new_copy;
                 };

@@ -1462,8 +1462,12 @@ test "cross-module record field access bug" {
     // The panic happens at: src/eval/interpreter.zig:2832 in handleRecordFields
     // when record_data.getFields() returns an empty range (count = 0)
     //
-    // Partially fixed: Record layout preservation works but there's a type mismatch issue
-    // TODO: Fix TypeMismatch in handleLambdaReturn for cross-module records
+    // Known issue: Cross-module records have corrupted field names
+    // Root cause: Layouts store field names as ident indices which are module-specific.
+    // When a record created in module A is used in module B, the ident indices
+    // are misinterpreted (e.g., ident 11 means "x" in Factory but "kePoint" in Main).
+    // Proper fix requires either: 1) storing field names as strings in layouts,
+    // 2) recreating layouts when crossing module boundaries, or 3) shared ident store.
     if (true) return error.SkipZigTest;
 
     const allocator = testing.allocator;

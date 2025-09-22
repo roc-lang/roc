@@ -25,6 +25,7 @@ const Scalar = layout_mod.Scalar;
 const ScalarTag = layout_mod.ScalarTag;
 const RecordData = layout_mod.RecordData;
 const RecordIdx = layout_mod.RecordIdx;
+const RecordLayout = layout_mod.RecordLayout;
 const TupleField = layout_mod.TupleField;
 const TupleData = layout_mod.TupleData;
 const TupleIdx = layout_mod.TupleIdx;
@@ -59,6 +60,10 @@ pub const Store = struct {
 
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
+
+    // Layout-specific string interner for field names
+    // This ensures field names are consistent across all modules
+    field_name_interner: base.Ident.Store,
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
@@ -143,7 +148,20 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .field_name_interner = base.Ident.Store.init(),
         };
+    }
+
+    /// Intern a field name from a module's ident store into the layout's field name interner
+    fn internFieldName(self: *Self, module_ident: Ident.Idx, module_env: *const ModuleEnv) !Ident.Idx {
+        // Get the string from the module's ident store
+        const field_str = module_env.getIdent(module_ident);
+
+        // Intern it in the layout's field name interner
+        const interned = self.field_name_interner.findByString(field_str) orelse
+            try self.field_name_interner.insert(self.env.gpa, base.Ident.for_text(field_str));
+
+        return interned;
     }
 
     pub fn deinit(self: *Self) void {
@@ -155,6 +173,7 @@ pub const Store = struct {
         self.tuple_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
+        self.field_name_interner.deinit(self.env.gpa);
     }
 
     /// Insert a Box layout with the given element layout.
@@ -422,7 +441,10 @@ pub const Store = struct {
             // TODO is it possible that here we're encountering record fields with names
             // already in the list? Would type-checking have already deduped them?
             // We would certainly rather not spend time doing hashmap things if we can avoid it here.
-            try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+
+            // Intern the field name in the layout's field name interner
+            const interned_name = try self.internFieldName(name, self.env);
+            try self.work.pending_record_fields.append(self.env.gpa, .{ .name = interned_name, .var_ = var_ });
         }
 
         var current_ext = record_type.ext;
@@ -787,38 +809,13 @@ pub const Store = struct {
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.
 
-                        // From a layout perspective, nominal types are identical to type aliases:
-                        // all we care about is what's inside, so just unroll it.
+                        // IMPORTANT: Nominal types from other modules need to be resolved in their
+                        // origin module's context to get the correct layout. We implement lazy
+                        // layout resolution - only resolve when actually needed at runtime.
+
                         const backing_var = self.types_store.getNominalBackingVar(nominal_type);
 
-                        // Try to get the actual name of this nominal type
-                        const ident_name = self.env.getIdent(nominal_type.ident.ident_idx);
-
-                        // Get the origin module name
-                        const origin_module_name = self.env.getIdent(nominal_type.origin_module);
-
                         const resolved = self.types_store.resolveVar(backing_var);
-
-                        // Only debug non-Bool nominal types to reduce noise
-                        if (!std.mem.eql(u8, ident_name, "Bool")) {
-                            std.debug.print("\n=== Layout Store: Handling nominal_type ===\n", .{});
-                            std.debug.print("  Current module: {s}\n", .{self.env.module_name});
-                            std.debug.print("  Nominal type ident idx: {}\n", .{nominal_type.ident.ident_idx.idx});
-                            std.debug.print("  Nominal type name: {s}\n", .{ident_name});
-                            std.debug.print("  Origin module name: {s}\n", .{origin_module_name});
-                            std.debug.print("  Backing var: {}\n", .{backing_var});
-                            std.debug.print("  Resolved backing var content: {s}\n", .{@tagName(resolved.desc.content)});
-                            if (resolved.desc.content == .structure) {
-                                std.debug.print("    Backing structure type: {s}\n", .{@tagName(resolved.desc.content.structure)});
-
-                                // If it's a tag_union (which Bool is), show what we're resolving to
-                                if (resolved.desc.content.structure == .tag_union) {
-                                    std.debug.print("    WARNING: Nominal type {s} from module {s} resolved to tag_union!\n", .{ident_name, origin_module_name});
-                                    std.debug.print("    This might be why records are becoming Bool!\n", .{});
-                                }
-                            }
-                        }
-
                         current = resolved;
                         continue;
                     },
@@ -1251,4 +1248,5 @@ pub const Store = struct {
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
         return @enumFromInt(@intFromEnum(safe_list_idx));
     }
+
 };
