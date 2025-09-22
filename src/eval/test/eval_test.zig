@@ -1244,9 +1244,8 @@ test "eval - minimal import definition issue" {
 }
 
 test "eval static dispatch - cross-module method call" {
-    // TODO: Fix cross-module record layout issue - records from cross-module functions have no fields
-    // The static dispatch mechanism itself works, but the record layout is not preserved correctly
-    // When this is fixed, remove the early return below and the test should pass
+    // Record layout partially fixed but still has TypeMismatch in handleLambdaReturn
+    // TODO: Fix type handling for cross-module function returns
     if (true) return error.SkipZigTest;
 
     std.debug.print("\n=== STARTING 3-MODULE STATIC DISPATCH TEST ===\n", .{});
@@ -1465,7 +1464,8 @@ test "cross-module record field access bug" {
     // The panic happens at: src/eval/interpreter.zig:2832 in handleRecordFields
     // when record_data.getFields() returns an empty range (count = 0)
     //
-    // TODO: Fix record layout preservation for cross-module function returns
+    // Partially fixed: Record layout preservation works but there's a type mismatch issue
+    // TODO: Fix TypeMismatch in handleLambdaReturn for cross-module records
     if (true) return error.SkipZigTest;
 
     const allocator = testing.allocator;
@@ -1576,6 +1576,339 @@ test "cross-module record field access bug" {
     // returned from makePoint() has no fields in its layout
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
     try testing.expectEqual(@as(i128, 10), result.asI128());
+}
+
+test "record return type becomes Bool - bug reproduction" {
+    // This test reproduces the bug where a lambda returning a record
+    // gets incorrectly typed as returning Bool
+    const allocator = testing.allocator;
+
+    // Single module test - no cross-module complexity
+    const source =
+        \\module []
+        \\
+        \\makeRec = |n| { value: n }
+        \\
+        \\rec = makeRec(42)
+        \\
+        \\main = rec.value
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+
+    env.module_name = "Test";
+    env.common.source = source;
+    try env.common.calcLineStarts(allocator);
+
+    var parsed = try parse.parse(&env.common, allocator);
+    defer parsed.deinit(allocator);
+
+    try env.initCIRFields(allocator, "Test");
+
+    var czer = try Can.init(&env, &parsed, null);
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    var checker = try Check.init(allocator, &env.types, &env, &.{}, &env.store.regions);
+    defer checker.deinit();
+    try checker.checkDefs();
+
+    // Check the type of makeRec
+    const defs = env.store.sliceDefs(env.all_defs);
+    for (defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const name = env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, name, "makeRec")) {
+                // Get the type of makeRec
+                const makeRec_var = ModuleEnv.varFrom(def.expr);
+                const makeRec_resolved = env.types.resolveVar(makeRec_var);
+
+                std.debug.print("\n=== Type of makeRec ===\n", .{});
+                std.debug.print("  Content: {s}\n", .{@tagName(makeRec_resolved.desc.content)});
+
+                if (makeRec_resolved.desc.content == .structure) {
+                    const structure = makeRec_resolved.desc.content.structure;
+                    std.debug.print("  Structure type: {s}\n", .{@tagName(structure)});
+
+                    // Check the return type of the function
+                    switch (structure) {
+                        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                            const ret_var = func.ret;
+                            const ret_resolved = env.types.resolveVar(ret_var);
+                            std.debug.print("  Return type content: {s}\n", .{@tagName(ret_resolved.desc.content)});
+
+                            if (ret_resolved.desc.content == .structure) {
+                                const ret_structure = ret_resolved.desc.content.structure;
+                                std.debug.print("  Return structure: {s}\n", .{@tagName(ret_structure)});
+
+                                // This should be 'record' but we're getting 'record_unbound'
+                                // Let's check what record_unbound means
+                                if (ret_structure == .record_unbound) {
+                                    std.debug.print("  Got record_unbound - this might be the issue!\n", .{});
+
+                                    // Let's see what happens when we try to get the layout
+                                    var stack_memory = try stack.Stack.initCapacity(allocator, 4096);
+                                    defer stack_memory.deinit();
+
+                                    var layout_cache = try LayoutStore.init(&env, &env.types);
+                                    defer layout_cache.deinit();
+
+                                    // Try to get the layout for this return type
+                                    var type_scope = types.TypeScope.init(allocator);
+                                    defer type_scope.deinit();
+
+                                    const layout_idx = layout_cache.addTypeVar(ret_var, &type_scope) catch |err| {
+                                        std.debug.print("  ERROR getting layout: {}\n", .{err});
+                                        return err;
+                                    };
+
+                                    const ret_layout = layout_cache.getLayout(layout_idx);
+                                    std.debug.print("  Layout for record_unbound: {s}\n", .{@tagName(ret_layout.tag)});
+
+                                    // This is the bug - record_unbound should produce a record layout
+                                    try testing.expect(ret_layout.tag == .record);
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }
+    }
+}
+
+test "cross-module record_unbound becomes wrong layout" {
+    // This test reproduces the bug where record_unbound produces wrong layout
+    // when crossing module boundaries
+    const allocator = testing.allocator;
+
+    // Module that returns a record through a function
+    const lib_source =
+        \\module [makeRec]
+        \\
+        \\makeRec = |n| { value: n }
+    ;
+
+    // Main module that uses the function
+    const main_source =
+        \\module []
+        \\
+        \\import Lib exposing [makeRec]
+        \\
+        \\rec = makeRec(42)
+        \\
+        \\main = rec.value
+    ;
+
+    // Set up Lib module
+    var lib_env = try ModuleEnv.init(allocator, lib_source);
+    defer lib_env.deinit();
+
+    lib_env.module_name = "Lib";
+    lib_env.common.source = lib_source;
+    try lib_env.common.calcLineStarts(allocator);
+
+    var lib_parse = try parse.parse(&lib_env.common, allocator);
+    defer lib_parse.deinit(allocator);
+
+    try lib_env.initCIRFields(allocator, "Lib");
+
+    var lib_czer = try Can.init(&lib_env, &lib_parse, null);
+    defer lib_czer.deinit();
+    try lib_czer.canonicalizeFile();
+
+    var lib_checker = try Check.init(allocator, &lib_env.types, &lib_env, &.{}, &lib_env.store.regions);
+    defer lib_checker.deinit();
+    try lib_checker.checkDefs();
+
+    // Set up Main module
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+
+    main_env.module_name = "Main";
+    main_env.common.source = main_source;
+    try main_env.common.calcLineStarts(allocator);
+
+    var deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer deps.deinit();
+    try deps.put("Lib", &lib_env);
+
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+
+    try main_env.initCIRFields(allocator, "Main");
+
+    var main_czer = try Can.init(&main_env, &main_parse, &deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    const other_modules = [_]*ModuleEnv{&lib_env};
+    var main_checker = try Check.init(allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
+    defer main_checker.deinit();
+    try main_checker.checkDefs();
+
+    // Check the type of makeRec in Main module
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+    for (defs) |def_idx| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const name = main_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, name, "rec")) {
+                // rec = makeRec(42), so get its type
+                const rec_var = ModuleEnv.varFrom(def.expr);
+                const rec_resolved = main_env.types.resolveVar(rec_var);
+
+                std.debug.print("\n=== Type of rec (result of makeRec(42)) ===\n", .{});
+                std.debug.print("  Content: {s}\n", .{@tagName(rec_resolved.desc.content)});
+
+                // rec should be a record value, not a function
+                if (rec_resolved.desc.content == .structure) {
+                    const structure = rec_resolved.desc.content.structure;
+                    std.debug.print("  Structure type: {s}\n", .{@tagName(structure)});
+
+                    // Try to get the layout for rec
+                    var layout_cache = try LayoutStore.init(&main_env, &main_env.types);
+                    defer layout_cache.deinit();
+
+                    var type_scope = types.TypeScope.init(allocator);
+                    defer type_scope.deinit();
+
+                    const rec_type_var = rec_var;
+                    std.debug.print("  Calling addTypeVar on rec var {}\n", .{rec_type_var});
+                    const layout_idx = layout_cache.addTypeVar(rec_type_var, &type_scope) catch |err| {
+                        std.debug.print("  ERROR getting layout: {}\n", .{err});
+                        return err;
+                    };
+
+                    const rec_layout = layout_cache.getLayout(layout_idx);
+                    std.debug.print("  Layout for rec: {s}\n", .{@tagName(rec_layout.tag)});
+
+                    // This should be 'record' but might be something else
+                    try testing.expect(rec_layout.tag == .record);
+                }
+            }
+        }
+    }
+}
+
+test "minimal handleLambdaReturn type mismatch" {
+    // TODO: Fix cross-module record returns - the record layout field data is not being preserved
+    // correctly when a function from another module returns a record value
+    // if (true) return error.SkipZigTest;
+
+    // Minimal reproduction of TypeMismatch in handleLambdaReturn for cross-module returns
+    const allocator = testing.allocator;
+
+    // Module that returns a record through a function
+    const lib_source =
+        \\module [makeRec]
+        \\
+        \\makeRec = |n| { value: n }
+    ;
+
+    // Main module that uses the function to get a record
+    const main_source =
+        \\module []
+        \\
+        \\import Lib exposing [makeRec]
+        \\
+        \\rec = makeRec(42)
+        \\
+        \\main = rec.value
+    ;
+
+    // Set up Lib module
+    var lib_env = try ModuleEnv.init(allocator, lib_source);
+    defer lib_env.deinit();
+
+    lib_env.module_name = "Lib";
+    lib_env.common.source = lib_source;
+    try lib_env.common.calcLineStarts(allocator);
+
+    var lib_parse = try parse.parse(&lib_env.common, allocator);
+    defer lib_parse.deinit(allocator);
+
+    try lib_env.initCIRFields(allocator, "Lib");
+
+    var lib_czer = try Can.init(&lib_env, &lib_parse, null);
+    defer lib_czer.deinit();
+    try lib_czer.canonicalizeFile();
+
+    var lib_checker = try Check.init(allocator, &lib_env.types, &lib_env, &.{}, &lib_env.store.regions);
+    defer lib_checker.deinit();
+    try lib_checker.checkDefs();
+
+    // Set up Main module
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+
+    main_env.module_name = "Main";
+    main_env.common.source = main_source;
+    try main_env.common.calcLineStarts(allocator);
+
+    var deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer deps.deinit();
+    try deps.put("Lib", &lib_env);
+
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+
+    try main_env.initCIRFields(allocator, "Main");
+
+    var main_czer = try Can.init(&main_env, &main_parse, &deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    const other_modules = [_]*ModuleEnv{&lib_env};
+    var main_checker = try Check.init(allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
+    defer main_checker.deinit();
+    try main_checker.checkDefs();
+
+    // Find main expression
+    const defs = main_env.store.sliceDefs(main_env.all_defs);
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    for (defs) |def_idx| {
+        const def = main_env.store.getDef(def_idx);
+        const pattern = main_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "main")) {
+                main_expr_idx = def.expr;
+                break;
+            }
+        }
+    }
+    try testing.expect(main_expr_idx != null);
+
+    // Set up interpreter
+    var eval_stack = try stack.Stack.initCapacity(allocator, 4096);
+    defer eval_stack.deinit();
+
+    var layout_cache = try LayoutStore.init(&main_env, &main_env.types);
+    defer layout_cache.deinit();
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const other_envs = [_]*const ModuleEnv{&lib_env};
+    var interpreter = try eval.Interpreter.initWithModules(
+        allocator,
+        &main_env,
+        &other_envs,
+        &eval_stack,
+        &layout_cache,
+        &main_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+
+    // This should evaluate to 42 but may hit TypeMismatch in handleLambdaReturn
+    const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
 test "minimal cross-module typecheck bug" {
@@ -1973,4 +2306,9 @@ test "minimal closure import - return closure from module" {
 
 test "SKIP: original cross-module test" {
     return error.SkipZigTest;
+}
+
+// Import comprehensive test suite
+test {
+    _ = @import("static_dispatch_comprehensive_test.zig");
 }

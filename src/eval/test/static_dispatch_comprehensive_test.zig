@@ -168,14 +168,20 @@ test "comprehensive static dispatch - all features" {
         const pattern = main_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const name = main_env.getIdent(pattern.assign.ident);
+            std.debug.print("  Found def: {s}\n", .{name});
             if (std.mem.eql(u8, name, "test3")) {
                 test3_expr_idx = def.expr;
+                std.debug.print("  Found test3 at expr_idx: {}\n", .{def.expr});
                 break;
             }
         }
     }
     try testing.expect(test3_expr_idx != null);
     const result3 = try interpreter.eval(test3_expr_idx.?, test_env_instance.get_ops());
+    std.debug.print("\n=== Test3 result: tag={s} ===\n", .{@tagName(result3.layout.tag)});
+    if (result3.layout.tag == .scalar) {
+        std.debug.print("  Got scalar value: {}\n", .{result3.asI128()});
+    }
     try testing.expect(result3.layout.tag == .closure);
 
     // Test 4: Apply closure - should return 30

@@ -25,6 +25,9 @@ const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
+// Thread-safe counter for generating unique test module names to prevent test interference
+var test_module_counter = std.atomic.Value(u32).init(0);
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -384,8 +387,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(allocator, "test");
+    // Initialize CIR fields in ModuleEnv with unique name to prevent test interference
+    const test_id = test_module_counter.fetchAdd(1, .monotonic);
+    const module_name = try std.fmt.allocPrint(allocator, "test_{}", .{test_id});
+    try module_env.initCIRFields(allocator, module_name);
 
     // Create czer
     //
@@ -457,6 +462,8 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit(allocator);
+    // Free the allocated module name before deinit
+    allocator.free(resources.module_env.module_name);
     // module_env.source is freed by module_env.deinit()
     resources.module_env.deinit();
     allocator.destroy(resources.checker);

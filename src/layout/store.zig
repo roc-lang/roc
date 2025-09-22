@@ -779,7 +779,23 @@ pub const Store = struct {
                         // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
                         const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+
+                        // Try to get the actual name of this nominal type
+                        const ident_name = self.env.getIdent(nominal_type.ident.ident_idx);
+
                         const resolved = self.types_store.resolveVar(backing_var);
+
+                        // Only debug non-Bool nominal types to reduce noise
+                        if (!std.mem.eql(u8, ident_name, "Bool")) {
+                            std.debug.print("\n=== Layout Store: Handling nominal_type ===\n", .{});
+                            std.debug.print("  Nominal type ident idx: {}\n", .{nominal_type.ident.ident_idx.idx});
+                            std.debug.print("  Nominal type name: {s}\n", .{ident_name});
+                            std.debug.print("  Backing var: {}\n", .{backing_var});
+                            std.debug.print("  Resolved backing var content: {s}\n", .{@tagName(resolved.desc.content)});
+                            if (resolved.desc.content == .structure) {
+                                std.debug.print("    Backing structure type: {s}\n", .{@tagName(resolved.desc.content.structure)});
+                            }
+                        }
 
                         current = resolved;
                         continue;
