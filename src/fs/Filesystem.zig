@@ -96,7 +96,7 @@ pub const FileInfo = struct {
 pub const Dir = struct {
     dir: std.fs.Dir,
 
-    const openOptions = std.fs.Dir.OpenDirOptions{
+    const openOptions = std.fs.Dir.OpenOptions{
         .access_sub_paths = true,
         .iterate = true,
         // packages should have no symlinks, so don't follow them for better security!

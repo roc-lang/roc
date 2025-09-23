@@ -819,7 +819,9 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Generate formatted code
     var formatted_code_buffer = std.array_list.Managed(u8).init(temp_alloc);
-    fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
+    var formatted_code_writer = formatted_code_buffer.writer();
+    var formatted_code_adapter = formatted_code_writer.adaptToNewApi(&.{});
+    fmt.formatAst(parse_ast, &formatted_code_adapter.new_interface) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };

@@ -180,15 +180,18 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     if (unformatted_files != null) {
         var formatted = std.array_list.Managed(u8).init(gpa);
         defer formatted.deinit();
-        try formatAst(parse_ast, formatted.writer().any());
+        var formatted_writer = formatted.writer();
+        var formatted_adapter = formatted_writer.adaptToNewApi(&.{});
+        try formatAst(parse_ast, &formatted_adapter.new_interface);
         if (!std.mem.eql(u8, formatted.items, module_env.common.source)) {
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
         const output_file = try base_dir.createFile(path, .{});
         defer output_file.close();
-
-        try formatAst(parse_ast, output_file.writer().any());
+        var output_buffer: [4096]u8 = undefined;
+        var output_writer = output_file.writer(&output_buffer);
+        try formatAst(parse_ast, &output_writer.interface);
     }
 }
 
@@ -210,7 +213,9 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
         return error.ParsingFailed;
     }
 
-    try formatAst(parse_ast, std.fs.File.stdout().deprecatedWriter().any());
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    try formatAst(parse_ast, &stdout_writer.interface);
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
@@ -236,7 +241,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     }
 }
 
-fn formatIRNode(ast: AST, writer: std.io.AnyWriter, formatter: *const fn (*Formatter) anyerror!void) !void {
+fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatter) anyerror!void) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -248,13 +253,13 @@ fn formatIRNode(ast: AST, writer: std.io.AnyWriter, formatter: *const fn (*Forma
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatAst(ast: AST, writer: std.io.AnyWriter) !void {
+pub fn formatAst(ast: AST, writer: *std.Io.Writer) !void {
     return formatIRNode(ast, writer, Formatter.formatFile);
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatHeader(ast: AST, writer: std.io.AnyWriter) !void {
+pub fn formatHeader(ast: AST, writer: *std.Io.Writer) !void {
     return formatIRNode(ast, writer, formatHeaderInner);
 }
 
@@ -264,7 +269,7 @@ fn formatHeaderInner(fmt: *Formatter) !void {
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatStatement(ast: AST, writer: std.io.AnyWriter) !void {
+pub fn formatStatement(ast: AST, writer: *std.Io.Writer) !void {
     return formatIRNode(ast, writer, formatStatementInner);
 }
 
@@ -274,7 +279,7 @@ fn formatStatementInner(fmt: *Formatter) !void {
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatExpr(ast: AST, writer: std.io.AnyWriter) !void {
+pub fn formatExpr(ast: AST, writer: *std.Io.Writer) !void {
     return formatIRNode(ast, writer, formatExprNode);
 }
 
@@ -285,7 +290,7 @@ fn formatExprNode(fmt: *Formatter) !void {
 /// Formatter for the roc parse ast.
 const Formatter = struct {
     ast: AST,
-    buffer: std.io.BufferedWriter(16 * 1024, std.io.AnyWriter),
+    writer: *std.Io.Writer,
     curr_indent: u32 = 0,
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
@@ -293,16 +298,16 @@ const Formatter = struct {
     has_multiline_string: bool = false,
 
     /// Creates a new Formatter for the given parse IR.
-    fn init(ast: AST, writer: std.io.AnyWriter) Formatter {
+    fn init(ast: AST, writer: *std.Io.Writer) Formatter {
         return .{
             .ast = ast,
-            .buffer = .{ .unbuffered_writer = writer },
+            .writer = writer,
         };
     }
 
     /// Deinits all data owned by the formatter object.
     fn flush(fmt: *Formatter) !void {
-        try fmt.buffer.flush();
+        try fmt.writer.flush();
     }
 
     /// Emits a string containing the well-formed source of a Roc parse IR (AST).
@@ -2003,7 +2008,7 @@ const Formatter = struct {
             fmt.has_newline = c == '\n';
         }
         fmt.has_multiline_string = false;
-        try fmt.buffer.writer().writeByte(c);
+        try fmt.writer.writeByte(c);
     }
 
     fn pushAll(fmt: *Formatter, str: []const u8) !void {
@@ -2017,7 +2022,7 @@ const Formatter = struct {
             fmt.has_newline = str[str.len - 1] == '\n';
         }
         fmt.has_multiline_string = false;
-        try fmt.buffer.writer().writeAll(str);
+        try fmt.writer.writeAll(str);
     }
 
     fn pushIndent(fmt: *Formatter) !void {
@@ -2326,7 +2331,9 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     };
 
     var result = std.array_list.Managed(u8).init(gpa);
-    try formatAst(parse_ast, result.writer().any());
+    var result_writer = result.writer();
+    var result_adapter = result_writer.adaptToNewApi(&.{});
+    try formatAst(parse_ast, &result_adapter.new_interface);
 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});

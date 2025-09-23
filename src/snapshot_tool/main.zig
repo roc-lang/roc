@@ -2042,31 +2042,34 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
     var formatted = std.array_list.Managed(u8).init(output.gpa);
     defer formatted.deinit();
+    var formatted_writer = formatted.writer();
+    var formatted_adapter = formatted_writer.adaptToNewApi(&.{});
+    const formatted_io = &formatted_adapter.new_interface;
 
     switch (content.meta.node_type) {
         .file => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_io);
         },
         .header => {
-            try fmt.formatHeader(parse_ast.*, formatted.writer().any());
+            try fmt.formatHeader(parse_ast.*, formatted_io);
             try formatted.append('\n');
         },
         .expr => {
-            try fmt.formatExpr(parse_ast.*, formatted.writer().any());
+            try fmt.formatExpr(parse_ast.*, formatted_io);
             try formatted.append('\n');
         },
         .statement => {
-            try fmt.formatStatement(parse_ast.*, formatted.writer().any());
+            try fmt.formatStatement(parse_ast.*, formatted_io);
             try formatted.append('\n');
         },
         .package => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_io);
         },
         .platform => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_io);
         },
         .app => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, formatted_io);
         },
         .repl => {
             // REPL doesn't use formatting
