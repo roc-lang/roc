@@ -439,7 +439,7 @@ void ZigLLVMSetOptBisectLimit(LLVMContextRef context_ref, int limit) {
 }
 
 struct ZigDiagnosticHandler : public DiagnosticHandler {
-    bool BrokenDebugInfo;
+bool BrokenDebugInfo;
     ZigDiagnosticHandler() : BrokenDebugInfo(false) {}
     bool handleDiagnostics(const DiagnosticInfo &DI) override {
         // This dyn_cast should be casting to DiagnosticInfoIgnoringInvalidDebugMetadata
@@ -465,6 +465,15 @@ bool ZigLLVMGetBrokenDebugInfo(LLVMContextRef context_ref) {
 
 void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv) {
     cl::ParseCommandLineOptions(argc, argv);
+}
+
+// Initialize all LLVM targets for compilation
+void ZigLLVMInitializeAllTargets() {
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmParsers();
+    LLVMInitializeAllAsmPrinters();
 }
 
 bool ZigLLVMWriteImportLibrary(const char *def_path, unsigned int coff_machine,
@@ -552,6 +561,10 @@ namespace lld {
         bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
                 llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
     }
+    namespace macho {
+        bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+                llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+    }
     namespace wasm {
         bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
                 llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
@@ -566,6 +579,11 @@ bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disab
 bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
     std::vector<const char *> args(argv, argv + argc);
     return lld::elf::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+}
+
+bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output) {
+    std::vector<const char *> args(argv, argv + argc);
+    return lld::macho::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
 }
 
 bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output) {
