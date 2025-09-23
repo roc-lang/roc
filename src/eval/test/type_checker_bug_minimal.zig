@@ -99,19 +99,11 @@ test "type checker bug: polymorphic cross-module call has flex_var type" {
     const call_var = ModuleEnv.varFrom(main_expr_idx.?);
     const call_resolved = main_env.types.resolveVar(call_var);
 
-    std.debug.print("\n=== Type Checker Bug Demonstration ===\n", .{});
-    std.debug.print("Expression: id(42)\n", .{});
-    std.debug.print("Expected type: structure (specifically Num)\n", .{});
-    std.debug.print("Actual type: {s}\n", .{@tagName(call_resolved.desc.content)});
 
     if (call_resolved.desc.content == .flex_var) {
-        std.debug.print("\nBUG CONFIRMED: Call expression has flex_var type!\n", .{});
-        std.debug.print("This means the type checker didn't instantiate the polymorphic function.\n", .{});
-        std.debug.print("\nThis causes interpreter failures because it expects concrete types.\n", .{});
         return error.TypeCheckerBug;
     }
 
     // This is what we want - the type should be concrete
     try testing.expect(call_resolved.desc.content == .structure);
-    std.debug.print("\nSUCCESS: Type is properly instantiated!\n", .{});
 }

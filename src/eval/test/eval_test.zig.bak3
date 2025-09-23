@@ -197,7 +197,7 @@ test "minimal cross-module type size mismatch" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&lib_env};
+    const other_envs = [_]*const ModuleEnv{&lib_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -215,7 +215,7 @@ test "minimal cross-module type size mismatch" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Verify result - expecting 42 (the x field)
-    try testing.expectEqual(@as(i128, 42), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
 test "type checker analysis: cross-module polymorphic types are CORRECT" {
@@ -502,7 +502,7 @@ test "BUG: interpreter fails on cross-module polymorphic field accessor" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{ &module_a_env, &module_b_env };
+    const other_envs = [_]*const ModuleEnv{ &module_a_env, &module_b_env };
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -519,7 +519,7 @@ test "BUG: interpreter fails on cross-module polymorphic field accessor" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Should return 42
-    try testing.expectEqual(@as(i128, 42), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
 test "minimal cross-module flex_var return type" {
@@ -686,7 +686,7 @@ test "minimal cross-module flex_var return type" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&factory_env, &accessor_env};
+    const other_envs = [_]*const ModuleEnv{&factory_env, &accessor_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -703,7 +703,7 @@ test "minimal cross-module flex_var return type" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Verify result - expecting 10 (the first field)
-    try testing.expectEqual(@as(i128, 10), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 10), result.asI128());
 }
 
 test "eval multi-field record" {
@@ -821,7 +821,7 @@ test "type checker bug: cross-module polymorphic call remains flex_var" {
         const flat_type = func_resolved.desc.content.structure;
         switch (flat_type) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                _ = main_env.types.resolveVar(func.ret);
+                const ret_resolved = main_env.types.resolveVar(func.ret);
             },
             else => {},
         }
@@ -1498,7 +1498,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
 
-        try testing.expectEqual(@as(i128, 13), result.asI128(&interpreter));
+        try testing.expectEqual(@as(i128, 13), result.asI128());
     }
 
     // Test 2: Full serialization and deserialization with interpreter evaluation
@@ -1575,7 +1575,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
 
             // Verify we get the same result from the deserialized ModuleEnv
-            try testing.expectEqual(@as(i128, 13), result.asI128(&interpreter));
+            try testing.expectEqual(@as(i128, 13), result.asI128());
         }
     }
 }
@@ -1669,7 +1669,7 @@ test "eval static dispatch - basic syntax and name lookup" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Verify the result, which should be 75
-    try testing.expectEqual(@as(i128, 75), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 75), result.asI128());
 }
 
 test "eval static dispatch - method call with arguments" {
@@ -1757,7 +1757,7 @@ test "eval static dispatch - method call with arguments" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Verify the result, which should be 42 (10 + 32)
-    try testing.expectEqual(@as(i128, 42), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
 test "eval static dispatch - simple import test" {
@@ -1846,7 +1846,7 @@ test "eval static dispatch - simple import test" {
                     .e_call => |call| {
                         const args = main_env.store.sliceExpr(call.args);
                         if (args.len > 0) {
-                            _ = main_env.store.getExpr(args[0]);
+                            const fn_expr = main_env.store.getExpr(args[0]);
                         }
                     },
                     else => {},
@@ -1918,12 +1918,12 @@ test "eval - minimal import definition issue" {
     // Check what definitions were created in Main
     const defs = main_env.store.sliceDefs(main_env.all_defs);
 
-    for (defs) |def_idx| {
+    for (defs, 0..) |def_idx, i| {
         const def = main_env.store.getDef(def_idx);
         const pattern = main_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
-            _ = main_env.getIdent(pattern.assign.ident);
-            _ = main_env.store.getExpr(def.expr);
+            const ident_text = main_env.getIdent(pattern.assign.ident);
+            const expr = main_env.store.getExpr(def.expr);
         }
     }
 
@@ -2018,7 +2018,7 @@ test "eval static dispatch - cross-module method call" {
     defer types_checker.deinit();
     try types_checker.checkDefs();
 
-    for (types_checker.problems.problems.items) |_| {
+    for (types_checker.problems.problems.items) |problem| {
     }
 
     try testing.expectEqual(@as(usize, 0), types_checker.problems.problems.items.len);
@@ -2080,7 +2080,7 @@ test "eval static dispatch - cross-module method call" {
     defer main_checker.deinit();
     try main_checker.checkDefs();
 
-    for (main_checker.problems.problems.items) |_| {
+    for (main_checker.problems.problems.items) |problem| {
     }
     // Should have no problems if static dispatch works correctly
     try testing.expectEqual(@as(usize, 0), main_checker.problems.problems.items.len);
@@ -2105,7 +2105,7 @@ test "eval static dispatch - cross-module method call" {
     // Debug: Print what we're about to evaluate
     const main_expr = main_env.store.getExpr(main_expr_idx.?);
     if (main_expr == .e_dot_access) {
-        _ = main_env.store.getExpr(main_expr.e_dot_access.receiver);
+        const receiver_expr = main_env.store.getExpr(main_expr.e_dot_access.receiver);
     } else if (main_expr == .e_call) {
         const args = main_env.store.sliceExpr(main_expr.e_call.args);
         if (args.len > 0) {
@@ -2127,7 +2127,7 @@ test "eval static dispatch - cross-module method call" {
     defer test_env_instance.deinit();
 
     // Interpreter needs all modules: Factory and Types
-    const other_envs = [_]*ModuleEnv{ &factory_env, &types_env };
+    const other_envs = [_]*const ModuleEnv{ &factory_env, &types_env };
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -2150,7 +2150,7 @@ test "eval static dispatch - cross-module method call" {
     // Verify the result: myPoint.getX() should return 10
     // This tests that static dispatch can find methods from a module
     // that was never directly imported!
-    try testing.expectEqual(@as(i128, 10), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 10), result.asI128());
 
 }
 
@@ -2252,7 +2252,7 @@ test "cross-module record field access bug" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&factory_env};
+    const other_envs = [_]*const ModuleEnv{&factory_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -2266,7 +2266,7 @@ test "cross-module record field access bug" {
     // This should evaluate to 10, but currently panics because the record
     // returned from makePoint() has no fields in its layout
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 10), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 10), result.asI128());
 }
 
 test "record return type becomes Bool - bug reproduction" {
@@ -2450,7 +2450,7 @@ test "cross-module record_unbound becomes wrong layout" {
 
                 // rec should be a record value, not a function
                 if (rec_resolved.desc.content == .structure) {
-                    _ = rec_resolved.desc.content.structure;
+                    const structure = rec_resolved.desc.content.structure;
 
                     // Try to get the layout for rec
                     const global_interner = try getGlobalFieldInterner();
@@ -2574,7 +2574,7 @@ test "minimal handleLambdaReturn type mismatch" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&lib_env};
+    const other_envs = [_]*const ModuleEnv{&lib_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -2587,7 +2587,7 @@ test "minimal handleLambdaReturn type mismatch" {
 
     // This should evaluate to 42 but may hit TypeMismatch in handleLambdaReturn
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 42), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
 test "minimal cross-module typecheck bug" {
@@ -2662,13 +2662,13 @@ test "minimal cross-module typecheck bug" {
         const def = main_env.store.getDef(def_idx);
         const pattern = main_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
-            _ = main_env.getIdent(pattern.assign.ident);
+            const ident = main_env.getIdent(pattern.assign.ident);
             const expr = main_env.store.getExpr(def.expr);
 
             if (expr == .e_dot_access) {
-                _ = main_env.getIdent(expr.e_dot_access.field_name);
+                const field = main_env.getIdent(expr.e_dot_access.field_name);
                 if (expr.e_dot_access.args) |args| {
-                    _ = main_env.store.sliceExpr(args);
+                    const arg_exprs = main_env.store.sliceExpr(args);
                 } else {
                 }
             }
@@ -2730,8 +2730,8 @@ test "minimal import lookup" {
         const def = lib_env.store.getDef(def_idx);
         const pattern = lib_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
-            _ = lib_env.getIdent(pattern.assign.ident);
-            _ = lib_env.store.getExpr(def.expr);
+            const name = lib_env.getIdent(pattern.assign.ident);
+            const expr = lib_env.store.getExpr(def.expr);
         }
     }
 
@@ -2762,7 +2762,7 @@ test "minimal import lookup" {
         const def = main_env.store.getDef(def_idx);
         const pattern = main_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
-            _ = main_env.getIdent(pattern.assign.ident);
+            const name = main_env.getIdent(pattern.assign.ident);
             const expr = main_env.store.getExpr(def.expr);
 
             // If it's a call, inspect it
@@ -2811,7 +2811,7 @@ test "minimal import lookup" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&lib_env};
+    const other_envs = [_]*const ModuleEnv{&lib_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -2826,7 +2826,7 @@ test "minimal import lookup" {
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // Verify: 3 + 4 = 7
-    try testing.expectEqual(@as(i128, 7), result.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 7), result.asI128());
 }
 
 test "minimal closure import - return closure from module" {
@@ -2925,7 +2925,7 @@ test "minimal closure import - return closure from module" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&lib_env};
+    const other_envs = [_]*const ModuleEnv{&lib_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -2937,18 +2937,17 @@ test "minimal closure import - return closure from module" {
     defer interpreter.deinit(test_env_instance.get_ops());
 
     // Debug: Print what we're evaluating
-    _ = main_env.store.getExpr(main_expr_idx.?);
+    const main_expr = main_env.store.getExpr(main_expr_idx.?);
 
     // Evaluate main expression
     const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
 
     // The result should be a closure (a partially applied function)
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    if (layout_val.tag == .closure) {
-        _ = layout_cache.layoutSize(layout_val);
+    if (result.layout.tag == .closure) {
+        const closure_size = layout_cache.layoutSize(result.layout);
     }
 
-    try testing.expect(layout_val.tag == .closure);
+    try testing.expect(result.layout.tag == .closure);
 }
 
 test "cross-module record type chain - minimal" {
@@ -3144,7 +3143,7 @@ test "chained polymorphic bug - minimal" {
                             .fn_unbound => |f| f,
                             else => continue,
                         };
-                        _ = module_a_env.types.resolveVar(func_type.ret);
+                        const ret_resolved = module_a_env.types.resolveVar(func_type.ret);
 
                         // Check the parameter type
                         const args = module_a_env.types.sliceVars(func_type.args);
@@ -3154,7 +3153,7 @@ test "chained polymorphic bug - minimal" {
                             if (param_resolved.desc.content == .structure and
                                 param_resolved.desc.content.structure == .record_unbound) {
                                 const fields = module_a_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
-                                for (fields.items(.name), fields.items(.var_)) |field_name, _| {
+                                for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
                                     const name = module_a_env.getIdent(field_name);
                                     if (std.mem.eql(u8, name, "a")) {
                                     }
@@ -3198,6 +3197,59 @@ test "chained polymorphic bug - minimal" {
             const def = module_b_env.store.getDef(def_idx);
             const pattern = module_b_env.store.getPattern(def.pattern);
             if (pattern == .assign) {
+                const ident_text = module_b_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident_text, "processFirst")) {
+                    const proc_var = ModuleEnv.varFrom(def.expr);
+                    const proc_resolved = module_b_env.types.resolveVar(proc_var);
+                    if (proc_resolved.desc.content == .structure) {
+                        const func_type = switch(proc_resolved.desc.content.structure) {
+                            .fn_pure => |f| f,
+                            .fn_effectful => |f| f,
+                            .fn_unbound => |f| f,
+                            else => continue,
+                        };
+                        const ret_resolved = module_b_env.types.resolveVar(func_type.ret);
+                            @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
+                            @tagName(ret_resolved.desc.content),
+                            func_type.needs_instantiation,
+                        });
+
+                        // Let's also check the parameter type
+                        const args = module_b_env.types.sliceVars(func_type.args);
+                        if (args.len > 0) {
+                            const param_resolved = module_b_env.types.resolveVar(args[0]);
+                                @intFromEnum(args[0]),
+                                @tagName(param_resolved.desc.content),
+                            });
+
+                            // Check if param is a record with field 'a'
+                            if (param_resolved.desc.content == .structure) {
+                                if (param_resolved.desc.content.structure == .record_unbound) {
+                                    const fields = module_b_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                                    for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                        const name = module_b_env.getIdent(field_name);
+                                        if (std.mem.eql(u8, name, "a")) {
+                                            const field_resolved = module_b_env.types.resolveVar(field_var);
+                                                @intFromEnum(field_var),
+                                                @tagName(field_resolved.desc.content),
+                                            });
+                                            // Check if they resolve to the same variable
+                                            const field_resolved_var = module_b_env.types.resolveVar(field_var);
+                                            const ret_resolved_var = module_b_env.types.resolveVar(func_type.ret);
+                                            if (field_resolved_var.var_ == ret_resolved_var.var_) {
+                                            } else {
+                                                    @intFromEnum(field_resolved_var.var_),
+                                                    @intFromEnum(ret_resolved_var.var_),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3232,6 +3284,35 @@ test "chained polymorphic bug - minimal" {
             const def = module_c_env.store.getDef(def_idx);
             const pattern = module_c_env.store.getPattern(def.pattern);
             if (pattern == .assign) {
+                const ident_text = module_c_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident_text, "processFirst")) {
+                    const proc_var = ModuleEnv.varFrom(def.expr);
+                    const proc_resolved = module_c_env.types.resolveVar(proc_var);
+                        @intFromEnum(proc_var),
+                        @tagName(proc_resolved.desc.content),
+                    });
+                    if (proc_resolved.desc.content == .structure) {
+                        const func_type = switch(proc_resolved.desc.content.structure) {
+                            .fn_pure => |f| f,
+                            .fn_effectful => |f| f,
+                            .fn_unbound => |f| f,
+                            else => continue,
+                        };
+                        const ret_resolved = module_c_env.types.resolveVar(func_type.ret);
+                            @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
+                            @tagName(ret_resolved.desc.content),
+                        });
+
+                        const args = module_c_env.types.sliceVars(func_type.args);
+                        if (args.len > 0) {
+                            const param_resolved = module_c_env.types.resolveVar(args[0]);
+                                @intFromEnum(args[0]),
+                                @tagName(param_resolved.desc.content),
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -3248,6 +3329,10 @@ test "chained polymorphic bug - minimal" {
                 if (std.mem.eql(u8, ident_text, "processFirst")) {
                     const proc_var = ModuleEnv.varFrom(def.expr);
                     const proc_resolved = module_c_env.types.resolveVar(proc_var);
+                        @intFromEnum(proc_var),
+                        @intFromEnum(proc_resolved.var_),
+                        @tagName(proc_resolved.desc.content),
+                    });
                     if (proc_resolved.desc.content == .structure) {
                         const func_type = switch(proc_resolved.desc.content.structure) {
                             .fn_pure => |f| f,
@@ -3255,18 +3340,33 @@ test "chained polymorphic bug - minimal" {
                             .fn_unbound => |f| f,
                             else => continue,
                         };
+                        const ret_resolved = module_c_env.types.resolveVar(func_type.ret);
+                            @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
+                            @tagName(ret_resolved.desc.content),
+                        });
 
                         const args = module_c_env.types.sliceVars(func_type.args);
                         if (args.len > 0) {
                             const param_resolved = module_c_env.types.resolveVar(args[0]);
+                                @intFromEnum(args[0]),
+                                @intFromEnum(param_resolved.var_),
+                                @tagName(param_resolved.desc.content),
+                            });
 
                             // Check if param is a record with field 'a'
                             if (param_resolved.desc.content == .structure) {
                                 if (param_resolved.desc.content.structure == .record_unbound) {
                                     const fields = module_c_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
-                                    for (fields.items(.name), fields.items(.var_)) |field_name, _| {
+                                    for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
                                         const name = module_c_env.getIdent(field_name);
-                                        _ = name;
+                                        if (std.mem.eql(u8, name, "a")) {
+                                            const field_resolved = module_c_env.types.resolveVar(field_var);
+                                                @intFromEnum(field_var),
+                                                @intFromEnum(field_resolved.var_),
+                                                @tagName(field_resolved.desc.content),
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -3274,6 +3374,12 @@ test "chained polymorphic bug - minimal" {
                     }
                 }
                 if (std.mem.eql(u8, ident_text, "main")) {
+                    const main_var = ModuleEnv.varFrom(def.expr);
+                    const main_resolved = module_c_env.types.resolveVar(main_var);
+                        @intFromEnum(main_var),
+                        @intFromEnum(main_resolved.var_),
+                        @tagName(main_resolved.desc.content),
+                    });
 
                     // Check the components of the call
                     const main_expr = module_c_env.store.getExpr(def.expr);
@@ -3282,7 +3388,10 @@ test "chained polymorphic bug - minimal" {
                         if (args.len > 0) {
                             const func_var = ModuleEnv.varFrom(args[0]);
                             const func_resolved = module_c_env.types.resolveVar(func_var);
-                            _ = func_resolved;
+                                @intFromEnum(func_var),
+                                @intFromEnum(func_resolved.var_),
+                                @tagName(func_resolved.desc.content),
+                            });
                         }
                     }
                 }
@@ -3314,7 +3423,7 @@ test "chained polymorphic bug - minimal" {
 
     // Actually, let me check what the function call produces
     // The main expression should be a call to processFirst
-    _ = module_c_env.store.getExpr(main_expr_idx.?);
+    const main_expr = module_c_env.store.getExpr(main_expr_idx.?);
 
     if (main_resolved.desc.content == .flex_var) {
 

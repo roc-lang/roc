@@ -38,7 +38,6 @@ test "simple lambda parsing" {
         if (pattern == .assign) {
             const name = env.getIdent(pattern.assign.ident);
             const expr = env.store.getExpr(def.expr);
-            std.debug.print("{s}: {s}\n", .{ name, @tagName(expr) });
         }
     }
 }

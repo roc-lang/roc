@@ -639,6 +639,12 @@ fn Unifier(comptime StoreTypeB: type) type {
             switch (b_content) {
                 .flex_var => |_| {
                     // Debug: show what we're merging
+                    if (@intFromEnum(vars.a.var_) == 97 or @intFromEnum(vars.b.var_) == 86 or @intFromEnum(vars.b.var_) == 99) {
+                        std.debug.print("    unifyStructure: merging vars.a=Var({}) with vars.b=Var({}) to structure\n", .{
+                            @intFromEnum(vars.a.var_),
+                            @intFromEnum(vars.b.var_),
+                        });
+                    }
                     self.merge(vars, Content{ .structure = a_flat_type });
                 },
                 .rigid_var => return error.TypeMismatch,
@@ -937,6 +943,11 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             // Debug: print what we're unifying
                             if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                                std.debug.print("Unifying record_unbound: {} shared, {} only_in_a, {} only_in_b\n", .{
+                                    partitioned.in_both.len(),
+                                    partitioned.only_in_a.len(),
+                                    partitioned.only_in_b.len(),
+                                });
                             }
 
                             // For record_unbound, we allow extension - one record can have more fields than the other
@@ -2238,7 +2249,32 @@ fn Unifier(comptime StoreTypeB: type) type {
             // Here, iterate over shared fields, sub unifying the field variables.
             // At this point, the fields are know to be identical, so we arbitrary choose b
             for (shared_fields) |shared| {
+                // Debug field unification
+                if (@intFromEnum(shared.a.var_) == 98 or @intFromEnum(shared.b.var_) == 98 or
+                    @intFromEnum(shared.a.var_) == 85 or @intFromEnum(shared.b.var_) == 85) {
+                    const a_resolved = self.types_store.resolveVar(shared.a.var_);
+                    const b_resolved = self.types_store.resolveVar(shared.b.var_);
+                    std.debug.print("    Unifying field: Var({}) ({s}) with Var({}) ({s})\n", .{
+                        @intFromEnum(shared.a.var_),
+                        @tagName(a_resolved.desc.content),
+                        @intFromEnum(shared.b.var_),
+                        @tagName(b_resolved.desc.content),
+                    });
+                }
+
                 try self.unifyGuarded(shared.a.var_, shared.b.var_);
+
+                // Debug after unification
+                if (@intFromEnum(shared.a.var_) == 98 or @intFromEnum(shared.b.var_) == 98) {
+                    const a_resolved_after = self.types_store.resolveVar(shared.a.var_);
+                    const b_resolved_after = self.types_store.resolveVar(shared.b.var_);
+                    std.debug.print("      After field unify: Var({}) -> {s}, Var({}) -> {s}\n", .{
+                        @intFromEnum(shared.a.var_),
+                        @tagName(a_resolved_after.desc.content),
+                        @intFromEnum(shared.b.var_),
+                        @tagName(b_resolved_after.desc.content),
+                    });
+                }
 
                 _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                     .name = shared.b.name,

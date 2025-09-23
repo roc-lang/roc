@@ -49,6 +49,7 @@ test "minimal type-checking bug reproduction" {
     defer math_checker.deinit();
     try math_checker.checkDefs();
 
+    std.debug.print("\nMath module type-checked successfully\n", .{});
 
     // Set up Main module
     var main_env = try ModuleEnv.init(allocator, main_source);
@@ -70,12 +71,15 @@ test "minimal type-checking bug reproduction" {
     defer main_czer.deinit();
     try main_czer.canonicalizeFile();
 
+    std.debug.print("Main module canonicalized successfully\n", .{});
 
     // Type check Main module - THIS IS WHERE IT FAILS
     const other_modules = [_]*ModuleEnv{&math_env};
     var main_checker = try Check.init(allocator, &main_env.types, &main_env, &other_modules, &main_env.store.regions);
     defer main_checker.deinit();
 
+    std.debug.print("About to type-check Main module...\n", .{});
     try main_checker.checkDefs();
 
+    std.debug.print("Main module type-checked successfully!\n", .{});
 }

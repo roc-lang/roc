@@ -118,7 +118,7 @@ pub const Closure = struct {
     // Original lambda expression index for accessing captures
     lambda_expr_idx: CIR.Expr.Idx,
     // Module where this closure was defined (for type resolution)
-    module_ptr: ?*const anyopaque,
+    module_ptr: ?*anyopaque,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).

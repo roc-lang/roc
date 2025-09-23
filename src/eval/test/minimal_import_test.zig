@@ -56,7 +56,6 @@ test "minimal import function call" {
     try lib_checker.checkDefs();
 
     // Debug: Print Lib module definitions
-    std.debug.print("\n=== Lib module definitions ===\n", .{});
     const lib_defs = lib_env.store.sliceDefs(lib_env.all_defs);
     for (lib_defs) |def_idx| {
         const def = lib_env.store.getDef(def_idx);
@@ -64,7 +63,6 @@ test "minimal import function call" {
         if (pattern == .assign) {
             const name = lib_env.getIdent(pattern.assign.ident);
             const expr = lib_env.store.getExpr(def.expr);
-            std.debug.print("  {s}: pattern_idx={}, expr_idx={}, type={s}\n", .{ name, @intFromEnum(def.pattern), @intFromEnum(def.expr), @tagName(expr) });
         }
     }
 

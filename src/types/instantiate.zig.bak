@@ -87,11 +87,24 @@ pub const Instantiate = struct {
         const resolved_var = resolved.var_;
 
         // Debug instantiation
+        if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+            std.debug.print("  Instantiating Var({}): resolved to Var({}), content={s}\n", .{
+                @intFromEnum(initial_var),
+                @intFromEnum(resolved_var),
+                @tagName(resolved.desc.content),
+            });
+        }
 
 
         // Check if we've already instantiated this variable
         if (self.seen_vars_subs.get(resolved_var)) |fresh_var| {
             // Debug reuse
+            if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+                std.debug.print("    Reusing cached: Var({}) -> Var({})\n", .{
+                    @intFromEnum(resolved_var),
+                    @intFromEnum(fresh_var),
+                });
+            }
             // Reusing from cache
             return fresh_var;
         }
@@ -133,6 +146,14 @@ pub const Instantiate = struct {
                 // Create a fresh variable with the instantiated content
                 const fresh_var = try self.store.freshFromContentWithRank(fresh_content, ctx.current_rank);
 
+                // Debug cache insertion
+                if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+                    std.debug.print("    Caching: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(resolved_var),
+                        @intFromEnum(fresh_var),
+                        @tagName(fresh_content),
+                    });
+                }
 
                 // Remember this substitution for recursive references
                 try self.seen_vars_subs.put(resolved_var, fresh_var);

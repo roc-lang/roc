@@ -238,6 +238,10 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try testing.expectEqualStrings("test.Types", deserialized.module_name);
 
 //     // Debug: Check the length of types before and after serialization
+//     std.debug.print("\nOriginal types.len(): {}\n", .{original.types.len()});
+//     std.debug.print("Types serialized field - slots.len(): {}\n", .{deserialized_ptr.types.slots.len});
+//     std.debug.print("Types serialized field - descs.len(): {}\n", .{deserialized_ptr.types.descs.len});
+//     std.debug.print("Deserialized types.len(): {}\n", .{deserialized.types.len()});
 
 //     // Can't verify types directly as the internal structure is complex
 //     // but we can at least verify the module env is intact
@@ -405,6 +409,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const result_str = result.items;
 
     // Uncomment to debug:
+    // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
 
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);

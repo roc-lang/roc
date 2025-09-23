@@ -47,7 +47,9 @@ test "nominal type in block" {
     try solver.checkDefs();
 
     // Check for type errors
+    std.debug.print("\nNumber of type check problems: {}\n", .{solver.problems.len()});
     for (solver.problems.slice()) |problem| {
+        std.debug.print("Problem: {}\n", .{problem});
     }
 
     const defs = module_env.store.sliceDefs(module_env.all_defs);
@@ -61,8 +63,10 @@ test "nominal type in block" {
                 const resolved_main = module_env.types.resolveVar(main_var);
 
                 // Should be nominal type!
+                std.debug.print("\nmain type: {}\n", .{resolved_main.desc.content});
                 try testing.expect(resolved_main.desc.content == .structure);
                 if (resolved_main.desc.content == .structure) {
+                    std.debug.print("structure type: {}\n", .{resolved_main.desc.content.structure});
                     try testing.expect(resolved_main.desc.content.structure == .nominal_type);
                 }
                 break;

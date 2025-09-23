@@ -45,6 +45,14 @@ pub fn copyVar(
     // Check if we've already copied this RESOLVED variable
     // This ensures that variables redirecting to the same target get the same copy
     if (var_mapping.get(resolved_var)) |dest_var| {
+        // Debug: show reuse
+        if (source_var == @as(Var, @enumFromInt(87)) or source_var == @as(Var, @enumFromInt(96))) {
+            std.debug.print("copyVar: Reusing Var({}) -> Var({}) for source Var({})\n", .{
+                @intFromEnum(resolved_var),
+                @intFromEnum(dest_var),
+                @intFromEnum(source_var),
+            });
+        }
         // Also record the mapping for the original variable
         if (source_var != resolved_var) {
             try var_mapping.put(source_var, dest_var);

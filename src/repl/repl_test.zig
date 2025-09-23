@@ -229,11 +229,12 @@ test "Repl - minimal interpreter integration" {
     const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
 
     // Step 10: Verify result
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
+    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
+    try testing.expect(layout_val.tag == .scalar);
+    try testing.expect(layout_val.data.scalar.tag == .int);
 
     // Read the value back
-    const value = result.asI128();
+    const value = result.asI128(&interpreter);
 
     try testing.expectEqual(@as(i128, 42), value);
 }

@@ -45,6 +45,7 @@ pub fn getGlobalFieldInterner() !*base.Ident.Store {
     const ptr = try test_allocator.create(base.Ident.Store);
     ptr.* = try base.Ident.Store.initCapacity(test_allocator, 1024);
     global_field_interner = ptr;
+    std.debug.print("Created global field interner at {*}\n", .{ptr});
     return ptr;
 }
 
@@ -54,10 +55,12 @@ pub fn cleanupGlobalFieldInterner() void {
     defer global_interner_mutex.unlock();
 
     if (global_field_interner) |interner| {
+        std.debug.print("Cleaning up global field interner at {*}\n", .{interner});
         interner.deinit(test_allocator);
         test_allocator.destroy(interner);
         global_field_interner = null;
     } else {
+        std.debug.print("No global field interner to clean up\n", .{});
     }
 }
 
@@ -70,6 +73,7 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -108,6 +112,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -132,7 +137,12 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     if (std.mem.indexOf(u8, src, "{x: 42}") != null or
         std.mem.indexOf(u8, src, "{foo: 100}") != null or
         std.mem.indexOf(u8, src, "{bar: 1 + 2}") != null) {
-        _ = resources.module_env.store.getExpr(resources.expr_idx);
+        std.debug.print("\n=== EVALUATING SINGLE ELEMENT RECORD TEST ===\n", .{});
+        std.debug.print("  Source: {s}\n", .{src});
+        std.debug.print("  Module: {s}\n", .{resources.module_env.module_name});
+        std.debug.print("  Expr idx: {}\n", .{resources.expr_idx});
+        const the_expr = resources.module_env.store.getExpr(resources.expr_idx);
+        std.debug.print("  Top-level expr type: {s}\n", .{@tagName(the_expr)});
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
@@ -141,7 +151,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         interpreter.endTrace();
     }
 
-    try std.testing.expectEqual(expected_int, result.asI128(&interpreter));
+    try std.testing.expectEqual(expected_int, result.asI128());
 }
 
 /// Helper function to run an expression and expect a boolean result.
@@ -153,6 +163,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -174,6 +185,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     }
 
     const result = interpreter.eval(resources.expr_idx, roc_ops_ptr) catch |err| {
+        std.debug.print("Evaluation failed: {}\n", .{err});
         return err;
     };
 
@@ -182,10 +194,9 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     }
 
     // For boolean results, we can read the underlying byte value
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    if (layout_val.tag == .scalar and layout_val.data.scalar.tag == .int) {
+    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
         // Boolean represented as integer
-        const int_val = result.asI128(&interpreter);
+        const int_val = result.asI128();
         const bool_val = int_val != 0;
         try std.testing.expectEqual(expected_bool, bool_val);
     } else {
@@ -206,6 +217,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -233,9 +245,8 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     }
 
     // Verify we got a scalar string layout
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    try std.testing.expect(layout_val.tag == .scalar);
-    try std.testing.expect(layout_val.data.scalar.tag == .str);
+    try std.testing.expect(result.layout.tag == .scalar);
+    try std.testing.expect(result.layout.data.scalar.tag == .str);
 
     // Read the string result
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
@@ -273,6 +284,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -300,42 +312,23 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     }
 
     // Verify we got a tuple layout
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    try std.testing.expect(layout_val.tag == .tuple);
+    try std.testing.expect(result.layout.tag == .tuple);
 
-    // Access tuple elements directly using the layout
-    const tuple_layout = layout_val.data.tuple;
-    const tuple_data = layout_cache.getTupleData(tuple_layout.idx);
-    const tuple_fields = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+    // Use the TupleAccessor to safely access tuple elements
+    const tuple_accessor = try result.asTuple(&layout_cache);
 
-    // Get element layouts from the fields
-    var elem_layouts = try test_allocator.alloc(layout.Layout, tuple_fields.len);
-    defer test_allocator.free(elem_layouts);
-    for (tuple_fields.items(.layout), 0..) |field_layout, i| {
-        elem_layouts[i] = layout_cache.getLayout(field_layout);
-    }
-    try std.testing.expectEqual(expected_elements.len, elem_layouts.len);
+    try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
-    // The tuple elements are stored sequentially in memory
-    var offset: usize = 0;
-    for (expected_elements, 0..) |expected_element, i| {
-        if (i != expected_element.index) continue; // Only check requested indices
-
-        const elem_layout = elem_layouts[i];
-        const elem_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
+    for (expected_elements) |expected_element| {
+        // Get the element at the specified index
+        const element = try tuple_accessor.getElement(expected_element.index);
 
         // Verify it's an integer
-        try std.testing.expect(elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .int);
+        try std.testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
 
-        // Get the integer value
-        const int_val = switch (elem_layout.data.scalar.data.int) {
-            .i64 => @as(i128, @as(*i64, @ptrCast(@alignCast(elem_ptr))).*),
-            .i32 => @as(i128, @as(*i32, @ptrCast(@alignCast(elem_ptr))).*),
-            else => unreachable,
-        };
+        // Get the integer value from the element
+        const int_val = element.asI128();
         try std.testing.expectEqual(expected_element.value, int_val);
-
-        offset += layout_cache.layoutSize(elem_layout);
     }
 }
 
@@ -348,6 +341,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer eval_stack.deinit();
 
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -375,10 +369,9 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 
     // Verify we got a record layout
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    try std.testing.expect(layout_val.tag == .record);
+    try std.testing.expect(result.layout.tag == .record);
 
-    const record_data = layout_cache.getRecordData(layout_val.data.record.idx);
+    const record_data = layout_cache.getRecordData(result.layout.data.record.idx);
     const sorted_fields = layout_cache.record_fields.sliceRange(record_data.getFields());
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
@@ -394,7 +387,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                 const field_layout = layout_cache.getLayout(sorted_field.layout);
                 try std.testing.expect(field_layout.tag == .scalar and field_layout.data.scalar.tag == .int);
 
-                const offset = layout_cache.getRecordFieldOffset(layout_val.data.record.idx, i);
+                const offset = layout_cache.getRecordFieldOffset(result.layout.data.record.idx, i);
                 const field_ptr = @as([*]u8, @ptrCast(result.ptr.?)) + offset;
                 const field_value = StackValue{
                     .layout = field_layout,
@@ -556,6 +549,7 @@ test "eval runtime error - returns crash error" {
 
     // Create layout store
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -589,6 +583,7 @@ test "eval tag - already primitive" {
 
     // Create layout store
     const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
     defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -611,8 +606,7 @@ test "eval tag - already primitive" {
 
     // If we get here, check if we have a valid result
     // True/False are optimized to scalar values in the current implementation
-    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-    try std.testing.expect(layout_val.tag == .scalar);
+    try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
 }
 
@@ -631,6 +625,7 @@ test "interpreter reuse across multiple evaluations" {
         var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
         defer eval_stack.deinit();
         const global_interner = try getGlobalFieldInterner();
+    std.debug.print("Creating layout cache with module_name='{}' at ptr {*} using global interner\n", .{std.zig.fmtEscapes(resources.module_env.module_name), resources.module_env});
     var layout_cache = try LayoutStore.initWithInterner(resources.module_env, &resources.module_env.types, global_interner);
         defer layout_cache.deinit(); // Don't destroy the global interner
 
@@ -657,9 +652,8 @@ test "interpreter reuse across multiple evaluations" {
         try std.testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
 
         // Verify the result
-        const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
-        try std.testing.expect(layout_val.tag == .scalar);
-        try std.testing.expect(layout_val.data.scalar.tag == .int);
+        try std.testing.expect(result.layout.tag == .scalar);
+        try std.testing.expect(result.layout.data.scalar.tag == .int);
         const value: *i128 = @ptrCast(@alignCast(result.ptr.?));
         try std.testing.expectEqual(expected_value, value.*);
     }

@@ -13,7 +13,6 @@ const types = @import("types");
 const CIR = can.CIR;
 
 test "field access reuses type variable" {
-    std.debug.print("\n=== Starting field access test ===\n", .{});
     const allocator = testing.allocator;
 
     // Simple function that accesses a field
@@ -39,12 +38,9 @@ test "field access reuses type variable" {
     try module_czer.canonicalizeFile();
 
     // Type check
-    std.debug.print("Starting type check...\n", .{});
     var module_checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
     defer module_checker.deinit();
-    std.debug.print("Checking defs...\n", .{});
     try module_checker.checkDefs();
-    std.debug.print("Type check complete\n", .{});
 
     // Find the getX function
     const defs = module_env.store.sliceDefs(module_env.all_defs);
@@ -81,40 +77,38 @@ test "field access reuses type variable" {
     const param_var = args[0];
     const param_resolved = module_env.types.resolveVar(param_var);
 
+    std.debug.print("\n=== Field Type Variable Reuse Test ===\n", .{});
+    std.debug.print("Function: getX = |record| record.x\n", .{});
+    std.debug.print("Expected: {{ x: a }} -> a (same 'a' in both places)\n", .{});
 
     // The parameter should be a record
     try testing.expect(param_resolved.desc.content == .structure);
     try testing.expect(param_resolved.desc.content.structure == .record_unbound);
 
     // Get the field type from the record
-    std.debug.print("\nGetting record fields...\n", .{});
     const record_fields = module_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
-    std.debug.print("Got {} fields\n", .{record_fields.len});
     try testing.expect(record_fields.len == 1);
 
-    std.debug.print("Accessing field items...\n", .{});
     const field_name = record_fields.items(.name)[0];
     const field_var = record_fields.items(.var_)[0];
-    std.debug.print("Getting field name string...\n", .{});
     const field_name_str = module_env.getIdent(field_name);
-    std.debug.print("Field name: {s}\n", .{field_name_str});
     try testing.expectEqualStrings("x", field_name_str);
 
     // Get the return type
     const return_var = func_type.ret;
 
     // THE KEY TEST: The field variable should BE the return variable!
-    std.debug.print("\nField var: {}, Return var: {}\n", .{ @intFromEnum(field_var), @intFromEnum(return_var) });
-    std.debug.print("Field resolved: {any}\n", .{module_env.types.resolveVar(field_var)});
-    std.debug.print("Return resolved: {any}\n", .{module_env.types.resolveVar(return_var)});
+    std.debug.print("Parameter type: {{ x: Var({}) }}\n", .{@intFromEnum(field_var)});
+    std.debug.print("Return type: Var({})\n", .{@intFromEnum(return_var)});
 
-    // They should be the same variable OR one should resolve to the other
-    const field_resolved = module_env.types.resolveVar(field_var);
-    const return_resolved = module_env.types.resolveVar(return_var);
-
-    if (@intFromEnum(field_resolved.var_) != @intFromEnum(return_resolved.var_)) {
-        std.debug.print("ERROR: Field and return types are different!\n", .{});
+    if (@intFromEnum(field_var) != @intFromEnum(return_var)) {
+        std.debug.print("\nBUG: Different type variables used!\n", .{});
+        std.debug.print("Field 'x' has type Var({})\n", .{@intFromEnum(field_var)});
+        std.debug.print("Return has type Var({})\n", .{@intFromEnum(return_var)});
+        std.debug.print("These should be the SAME variable for {{ x: a }} -> a\n", .{});
         return error.TypeVariableNotReused;
     }
 
+    std.debug.print("\nSUCCESS: Same type variable used in both places!\n", .{});
+    std.debug.print("Type is correctly: {{ x: a }} -> a\n", .{});
 }

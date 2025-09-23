@@ -435,19 +435,20 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     }
 
     // Format the result immediately while memory is still valid
-    if (result.layout.tag == .scalar) {
-        switch (result.layout.data.scalar.tag) {
+    const layout_val = interpreter.getLayoutForVar(result.type_var) catch unreachable;
+    if (layout_val.tag == .scalar) {
+        switch (layout_val.data.scalar.tag) {
             .bool => {
                 // Boolean values are stored as u8 (1 for True, 0 for False)
                 const bool_value: *u8 = @ptrCast(result.ptr.?);
                 return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
             },
             .int => {
-                const value = result.asI128();
+                const value = result.asI128(&interpreter);
                 return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
             },
             .frac => {
-                const precision = result.layout.data.scalar.data.frac;
+                const precision = layout_val.data.scalar.data.frac;
                 switch (precision) {
                     .f32 => {
                         const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
@@ -481,9 +482,9 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     }
 
     // Handle empty list specially
-    if (result.layout.tag == .list_of_zst) {
+    if (layout_val.tag == .list_of_zst) {
         return try self.allocator.dupe(u8, "<list_of_zst>");
     }
 
-    return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
+    return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(layout_val.tag)});
 }

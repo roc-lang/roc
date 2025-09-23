@@ -102,6 +102,7 @@ test "type checker bug: cross-module polymorphic call remains flex_var" {
     // BUG: The call expression's type should be concrete (Num or similar)
     // but instead it's still a flex_var because the type checker didn't
     // properly instantiate the polymorphic function at the call site
+    std.debug.print("\nCall expression type: {s}\n", .{@tagName(call_resolved.desc.content)});
 
     // This assertion SHOULD pass but currently fails, demonstrating the bug
     try testing.expect(call_resolved.desc.content != .flex_var);
@@ -185,6 +186,7 @@ test "type checker bug: even simpler cross-module polymorphic call" {
                 const result_var = ModuleEnv.varFrom(def.expr);
                 const result_resolved = main_env.types.resolveVar(result_var);
 
+                std.debug.print("\n'result' expression type: {s}\n", .{@tagName(result_resolved.desc.content)});
 
                 // BUG: This should be concrete (structure.num) but is flex_var
                 // The type checker should have instantiated first's return type

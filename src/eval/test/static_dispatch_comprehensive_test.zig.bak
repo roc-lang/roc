@@ -113,7 +113,7 @@ test "comprehensive static dispatch - all features" {
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();
 
-    const other_envs = [_]*ModuleEnv{&lib_env};
+    const other_envs = [_]*const ModuleEnv{&lib_env};
     var interpreter = try eval.Interpreter.initWithModules(
         allocator,
         &main_env,
@@ -142,7 +142,7 @@ test "comprehensive static dispatch - all features" {
     }
     try testing.expect(test1_expr_idx != null);
     const result1 = try interpreter.eval(test1_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 6), result1.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 6), result1.asI128());
 
     // Test 2: Multiple arguments - should return 6
     var test2_expr_idx: ?CIR.Expr.Idx = null;
@@ -159,7 +159,7 @@ test "comprehensive static dispatch - all features" {
     }
     try testing.expect(test2_expr_idx != null);
     const result2 = try interpreter.eval(test2_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 6), result2.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 6), result2.asI128());
 
     // Test 3: Get closure - should return a closure
     var test3_expr_idx: ?CIR.Expr.Idx = null;
@@ -168,18 +168,21 @@ test "comprehensive static dispatch - all features" {
         const pattern = main_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const name = main_env.getIdent(pattern.assign.ident);
+            std.debug.print("  Found def: {s}\n", .{name});
             if (std.mem.eql(u8, name, "test3")) {
                 test3_expr_idx = def.expr;
+                std.debug.print("  Found test3 at expr_idx: {}\n", .{def.expr});
                 break;
             }
         }
     }
     try testing.expect(test3_expr_idx != null);
     const result3 = try interpreter.eval(test3_expr_idx.?, test_env_instance.get_ops());
-    const layout_val3 = interpreter.getLayoutForVar(result3.type_var) catch unreachable;
-    if (layout_val3.tag == .scalar) {
+    std.debug.print("\n=== Test3 result: tag={s} ===\n", .{@tagName(result3.layout.tag)});
+    if (result3.layout.tag == .scalar) {
+        std.debug.print("  Got scalar value: {}\n", .{result3.asI128()});
     }
-    try testing.expect(layout_val3.tag == .closure);
+    try testing.expect(result3.layout.tag == .closure);
 
     // Test 4: Apply closure - should return 30
     var test4_expr_idx: ?CIR.Expr.Idx = null;
@@ -196,7 +199,7 @@ test "comprehensive static dispatch - all features" {
     }
     try testing.expect(test4_expr_idx != null);
     const result4 = try interpreter.eval(test4_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 30), result4.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 30), result4.asI128());
 
     // Test 5: Higher-order function - should return 101
     var test5_expr_idx: ?CIR.Expr.Idx = null;
@@ -213,6 +216,12 @@ test "comprehensive static dispatch - all features" {
     }
     try testing.expect(test5_expr_idx != null);
     const result5 = try interpreter.eval(test5_expr_idx.?, test_env_instance.get_ops());
-    try testing.expectEqual(@as(i128, 101), result5.asI128(&interpreter));
+    try testing.expectEqual(@as(i128, 101), result5.asI128());
 
+    std.debug.print("\n=== All static dispatch tests passed! ===\n", .{});
+    std.debug.print("✓ Simple function import and call\n", .{});
+    std.debug.print("✓ Multiple argument function\n", .{});
+    std.debug.print("✓ Closure-returning function\n", .{});
+    std.debug.print("✓ Applying imported closure\n", .{});
+    std.debug.print("✓ Higher-order function with imported functions\n", .{});
 }

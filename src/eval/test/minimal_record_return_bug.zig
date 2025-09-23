@@ -85,7 +85,6 @@ test "minimal - cross-module lambda returning record" {
     try main_checker.checkDefs();
 
     // First check the type in Lib module
-    std.debug.print("\n=== Checking func type in Lib module ===\n", .{});
     const lib_defs = lib_env.store.sliceDefs(lib_env.all_defs);
     for (lib_defs) |def_idx| {
         const def = lib_env.store.getDef(def_idx);
@@ -95,21 +94,13 @@ test "minimal - cross-module lambda returning record" {
             if (std.mem.eql(u8, name, "func")) {
                 const func_var = ModuleEnv.varFrom(def_idx);
                 const func_type = lib_env.types.resolveVar(func_var);
-                std.debug.print("  Lib func var: {}\n", .{func_var});
-                std.debug.print("  Lib func type: {s}\n", .{@tagName(func_type.desc.content)});
 
                 if (func_type.desc.content == .structure) {
                     const structure = func_type.desc.content.structure;
-                    std.debug.print("  Lib func structure: {s}\n", .{@tagName(structure)});
 
                     switch (structure) {
                         .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                            const ret_type = lib_env.types.resolveVar(func.ret);
-                            std.debug.print("  Lib func return var: {}\n", .{func.ret});
-                            std.debug.print("  Lib func return type: {s}\n", .{@tagName(ret_type.desc.content)});
-                            if (ret_type.desc.content == .structure) {
-                                std.debug.print("  Lib func return structure: {s}\n", .{@tagName(ret_type.desc.content.structure)});
-                            }
+                            _ = lib_env.types.resolveVar(func.ret);
                         },
                         else => {},
                     }
@@ -123,7 +114,6 @@ test "minimal - cross-module lambda returning record" {
     // Note: e_lookup_external expressions are correctly typed as nominal_type
     // which is a reference to an external symbol that gets resolved during evaluation.
     // We should check the actual usage of the function, not the import itself.
-    std.debug.print("\n=== Checking imported func usage in Main module ===\n", .{});
     const main_defs = main_env.store.sliceDefs(main_env.all_defs);
     for (main_defs) |def_idx| {
         const def = main_env.store.getDef(def_idx);
@@ -136,25 +126,20 @@ test "minimal - cross-module lambda returning record" {
                 // main = func(42)
                 // This should be a call expression
                 const expr = main_env.store.getExpr(def.expr);
-                std.debug.print("  Found main definition, expr type: {s}\n", .{@tagName(expr)});
 
                 if (expr == .e_call) {
                     // In e_call, the function is the first element in args
                     const args = main_env.store.exprSlice(expr.e_call.args);
                     if (args.len > 0) {
-                        const fn_expr = main_env.store.getExpr(args[0]);
-                        std.debug.print("    Call function expr type: {s}\n", .{@tagName(fn_expr)});
+                        _ = main_env.store.getExpr(args[0]);
                     }
 
                     // The result of main should be the number from the record
                     const main_var = ModuleEnv.varFrom(def_idx);
                     const main_type = main_env.types.resolveVar(main_var);
-                    std.debug.print("    Main result type: {s}\n", .{@tagName(main_type.desc.content)});
 
                     // We expect main to have type Num since it extracts .value from the record
                     if (main_type.desc.content != .structure or main_type.desc.content.structure != .num) {
-                        std.debug.print("\n!!! UNEXPECTED TYPE FOR main !!!\n", .{});
-                        std.debug.print("Expected main to have Num type but got: {s}\n", .{@tagName(main_type.desc.content)});
                         // Note: This is not necessarily an error - the type might not be fully resolved yet
                     }
                 }
@@ -211,18 +196,12 @@ test "even simpler - direct record literal type" {
                 const rec_var = ModuleEnv.varFrom(def_idx);
                 const rec_type = env.types.resolveVar(rec_var);
 
-                std.debug.print("\n=== Type of 'rec' (direct record literal) ===\n", .{});
-                std.debug.print("  Var: {}\n", .{rec_var});
-                std.debug.print("  Content: {s}\n", .{@tagName(rec_type.desc.content)});
 
                 if (rec_type.desc.content == .structure) {
                     const structure = rec_type.desc.content.structure;
-                    std.debug.print("  Structure type: {s}\n", .{@tagName(structure)});
 
                     // This should definitely be a record!
                     if (structure != .record and structure != .record_unbound) {
-                        std.debug.print("\n!!! BUG REPRODUCED (direct literal) !!!\n", .{});
-                        std.debug.print("Expected record literal to have record type, but got: {s}\n", .{@tagName(structure)});
                         return error.TestExpectedEqual;
                     }
                 }
